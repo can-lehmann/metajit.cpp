@@ -39,7 +39,7 @@ int main() {
   llvm::LLVMContext context;
   std::unique_ptr<llvm::Module> module = std::make_unique<llvm::Module>("my_module", context);
 
-  LLVMCodeGen cg(section, module.get());
+  LLVMCodeGen cg(section, module.get(), true);
 
   module->print(llvm::outs(), nullptr);
 

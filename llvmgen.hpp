@@ -22,19 +22,25 @@
 #include "llvm/IR/IRBuilder.h"
 
 #include "jitir.hpp"
+#include "jitir_llvmapi.hpp"
 
 #define dynmatch(Type, name, value) Type* name = dynamic_cast<Type*>(value)
 
 namespace metajit {
   class LLVMCodeGen {
   private:
+    bool _generating_extension = false;
     Section* _section;
     llvm::LLVMContext& _context;
     llvm::Module* _module = nullptr;
     llvm::Function* _function = nullptr;
     llvm::IRBuilder<> _builder;
+    LLVM_API _llvm_api; // Used for generating extension
 
     std::unordered_map<Value*, llvm::Value*> _values;
+    // Used for generating extension
+    std::unordered_map<Value*, llvm::Value*> _built;
+    std::unordered_map<Inst*, llvm::Value*> _is_const;
 
     llvm::Type* emit_type(Type type) {
       switch (type) {
@@ -116,12 +122,15 @@ namespace metajit {
 
       assert(false && "Unknown instruction");
     }
+
   public:
-    LLVMCodeGen(Section* section, llvm::Module* module):
+    LLVMCodeGen(Section* section, llvm::Module* module, bool generating_extension):
+        _generating_extension(generating_extension),
         _section(section),
         _context(module->getContext()),
         _module(module),
-        _builder(module->getContext()) {
+        _builder(module->getContext()),
+        _llvm_api(module) {
       
       std::vector<llvm::Type*> args;
       for (Type type : _section->inputs()) {
@@ -129,6 +138,10 @@ namespace metajit {
       }
 
       for (Type type : _section->outputs()) {
+        args.push_back(llvm::PointerType::get(_context, 0));
+      }
+
+      if (_generating_extension) {
         args.push_back(llvm::PointerType::get(_context, 0));
       }
 
@@ -144,6 +157,14 @@ namespace metajit {
         _builder.SetInsertPoint(llvm_block);
 
         for (Inst* inst : *block) {
+          if (_generating_extension) {
+            llvm::Value* jitir_builder = _function->getArg(_section->inputs().size() + _section->outputs().size());
+            std::vector<llvm::Value*> args;
+            for (Value* arg : inst->args()) {
+              args.push_back(_built.at(arg));
+            }
+            _built[inst] = build_build_inst(_builder, _llvm_api, inst, jitir_builder, args);
+          }
           _values[inst] = emit_inst(inst);
         } 
       }

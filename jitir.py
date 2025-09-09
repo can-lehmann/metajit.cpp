@@ -14,6 +14,62 @@
 
 from lwir import *
 
+class LLVMAPIPlugin:
+    def __init__(self, prefix, type_substitutions):
+        self.prefix = prefix
+        self.type_substitutions = type_substitutions
+
+    def run(self, ir):
+        code = f"class LLVM_API {{\n"
+        code += f"public:\n"
+        for inst in ir.insts:
+            code += f"  llvm::FunctionCallee {inst.format_builder_name(ir)};\n"
+        code += f"\n"
+        code += f"  LLVM_API(llvm::Module* module) {{\n"
+        code += f"    llvm::LLVMContext& context = module->getContext();\n"
+        for inst in ir.insts:
+            arg_types = ", ".join([
+                self.type_substitutions[arg.type]
+                for arg in inst.args
+            ])
+            code += f"    {inst.format_builder_name(ir)} = module->getOrInsertFunction(\n"
+            code += f"      \"{self.prefix}_{inst.format_builder_name(ir)}\",\n"
+            code += f"      llvm::FunctionType::get(\n"
+            code += f"        llvm::PointerType::get(context, 0),\n"
+            code += f"        std::vector<llvm::Type*>({{ {arg_types} }}),\n"
+            code += f"        false\n"
+            code += f"      )\n"
+            code += f"    );\n"
+        code += f"  }}\n"
+        code += f"}};\n"
+        return {"llvmapi": code}
+
+class BuildBuildInstPlugin:
+    def __init__(self, type_substitutions):
+        self.type_substitutions = type_substitutions
+
+    def run(self, ir):
+        code = f"llvm::Value* build_build_inst(llvm::IRBuilder<>& builder,\n"
+        code += f"                              LLVM_API& api,\n"
+        code += f"                              Inst* inst,\n"
+        code += f"                              llvm::Value* jitir_builder,\n"
+        code += f"                              std::vector<llvm::Value*> args) {{\n"
+        code += f"  llvm::LLVMContext& context = builder.GetInsertBlock()->getModule()->getContext();\n"
+        for inst in ir.insts:
+            name = inst.format_name(ir)
+            code += f"  if ({name}* i = dynamic_cast<{name}*>(inst)) {{\n"
+            code += f"    args.insert(args.begin(), jitir_builder);\n"
+            for arg in inst.args:
+                if not arg.type.is_value():
+                    code += f"    args.push_back(llvm::ConstantInt::get({self.type_substitutions[arg.type]}, (uint64_t)i->{arg.name}(), false));\n"
+            code += f"    assert(args.size() == {len(inst.args) + 1});\n"
+            code += f"    return builder.CreateCall(api.{inst.format_builder_name(ir)}, args);\n"
+            code += f"  }}\n"
+        code += f"  assert(false && \"Unknown instruction\");\n"
+        code += f"  return nullptr;\n"
+        code += f"}}\n"
+        return {"tracegen": code}
+
 def binop(name):
     return Inst(name,
         args = [Arg("a"), Arg("b")],
@@ -34,71 +90,105 @@ def cmp(name, type_checks):
         ]
     )
 
+jitir = IR(
+    insts = [
+        Inst("Const",
+            args = [Arg("value", Type("uint64_t"))],
+            type = "Type::Int64",
+            type_checks = []
+        ),
+        Inst("Input",
+            args = [Arg("id", Type("size_t")), Arg("type", Type("Type"))],
+            type = "type",
+            type_checks = []
+        ),
+        Inst("Output",
+            args = [Arg("value"), Arg("id", Type("size_t"))],
+            type = "Type::Void",
+            type_checks = []
+        ),
+        Inst("Select",
+            args = [Arg("cond"), Arg("a"), Arg("b")],
+            type = "a->type()",
+            type_checks = [
+                "cond->type() == Type::Bool",
+                "a->type() == b->type()"
+            ]
+        ),
+        Inst("Load",
+            args = [Arg("ptr"), Arg("type", Type("Type"))],
+            type = "type",
+            type_checks = ["ptr->type() == Type::Ptr"]
+        ),
+        Inst("Store",
+            args = [Arg("ptr"), Arg("value")],
+            type = "Type::Void",
+            type_checks = ["ptr->type() == Type::Ptr"]
+        ),
+        Inst("AddPtr",
+            args = [Arg("ptr"), Arg("offset")],
+            type = "Type::Ptr",
+            type_checks = [
+                "ptr->type() == Type::Ptr",
+                "is_int(offset->type())"
+            ]
+        ),
+        binop("Add"),
+        binop("Sub"),
+        binop("Mul"),
+        binop("And"),
+        binop("Or"),
+        binop("Xor"),
+        binop("ShrU"),
+        binop("ShrS"),
+        binop("Shl"),
+        cmp("Eq", type_checks = []),
+        cmp("LtU", type_checks = ["is_int(a->type())"]),
+        cmp("LtS", type_checks = ["is_int(a->type())"])
+    ]
+)
+
 lwir(
     template_path = "jitir.tmpl.hpp",
     output_path = "jitir.hpp",
-    ir = IR(
-        insts = [
-            Inst("Const",
-                args = [Arg("value", Type("uint64_t"))],
-                type = "Type::Int64",
-                type_checks = []
-            ),
-            Inst("Input",
-                args = [Arg("id", Type("size_t")), Arg("type", Type("Type"))],
-                type = "type",
-                type_checks = []
-            ),
-            Inst("Output",
-                args = [Arg("value"), Arg("id", Type("size_t"))],
-                type = "Type::Void",
-                type_checks = []
-            ),
-            Inst("Select",
-                args = [Arg("cond"), Arg("a"), Arg("b")],
-                type = "a->type()",
-                type_checks = [
-                    "cond->type() == Type::Bool",
-                    "a->type() == b->type()"
-                ]
-            ),
-            Inst("Load",
-                args = [Arg("ptr"), Arg("type", Type("Type"))],
-                type = "type",
-                type_checks = ["ptr->type() == Type::Ptr"]
-            ),
-            Inst("Store",
-                args = [Arg("ptr"), Arg("value")],
-                type = "Type::Void",
-                type_checks = ["ptr->type() == Type::Ptr"]
-            ),
-            Inst("AddPtr",
-                args = [Arg("ptr"), Arg("offset")],
-                type = "Type::Ptr",
-                type_checks = [
-                    "ptr->type() == Type::Ptr",
-                    "is_int(offset->type())"
-                ]
-            ),
-            binop("Add"),
-            binop("Sub"),
-            binop("Mul"),
-            binop("And"),
-            binop("Or"),
-            binop("Xor"),
-            binop("ShrU"),
-            binop("ShrS"),
-            binop("Shl"),
-            cmp("Eq", type_checks = []),
-            cmp("LtU", type_checks = ["is_int(a->type())"]),
-            cmp("LtS", type_checks = ["is_int(a->type())"])
-        ]
-    ),
+    ir = jitir,
     plugins = [
         InstPlugin([
             InstGetterPlugin(),
             InstWritePlugin()
         ]),
-        BuilderPlugin()
+        BuilderPlugin(),
+        CAPIPlugin(
+            prefix = "jitir",
+            builder_name = "::metajit::Builder",
+            type_substitutions = {
+                Type("size_t"): "uint64_t",
+                Type("uint64_t"): "uint64_t",
+                Type("Type"): "uint32_t",
+                ValueType(): "void*"
+            }
+        )
+    ]
+)
+
+llvm_type_substitutions = {
+    Type("size_t"): "llvm::Type::getInt64Ty(context)",
+    Type("uint64_t"): "llvm::Type::getInt64Ty(context)",
+    Type("Type"): "llvm::Type::getInt32Ty(context)",
+    ValueType(): "llvm::PointerType::get(context, 0)"
+}
+
+lwir(
+    template_path = "jitir_llvmapi.tmpl.hpp",
+    output_path = "jitir_llvmapi.hpp",
+    ir = jitir,
+    plugins = [
+        LLVMAPIPlugin(
+            prefix = "jitir",
+            type_substitutions = llvm_type_substitutions
+        ),
+        BuildBuildInstPlugin(
+            type_substitutions = llvm_type_substitutions
+        )
     ]
 )

@@ -64,6 +64,7 @@ namespace metajit {
       Value(type), _args(args) {}
 
     Value* arg(size_t index) const { return _args.at(index); }
+    const std::vector<Value*>& args() const { return _args; }
 
     virtual void write(std::ostream& stream) const = 0;
     void write_args(std::ostream& stream, bool& is_first) const {
@@ -205,4 +206,6 @@ namespace metajit {
     }
   };
 
+  ${capi}
 }
+
