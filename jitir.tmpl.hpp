@@ -19,7 +19,7 @@
 #include <cassert>
 #include <cinttypes>
 
-namespace jitir {
+namespace metajit {
   enum class Type {
     Void, Bool, Int8, Int16, Int32, Int64, Ptr
   };
@@ -30,7 +30,17 @@ namespace jitir {
            type == Type::Int32 ||
            type == Type::Int64;
   }
+}
 
+std::ostream& operator<<(std::ostream& stream, metajit::Type type) {
+  static const char* names[] = {
+    "Void", "Bool", "Int8", "Int16", "Int32", "Int64", "Ptr"
+  };
+  stream << names[(size_t) type];
+  return stream;
+}
+
+namespace metajit {
   class Value {
   private:
     Type _type;
@@ -51,9 +61,9 @@ namespace jitir {
     std::vector<Value*> _args;
   public:
     Inst(Type type, const std::vector<Value*>& args):
-      Value(value), _args(args) {}
+      Value(type), _args(args) {}
 
-    Value* arg(size_t index) const { return _args.at(arg); }
+    Value* arg(size_t index) const { return _args.at(index); }
 
     virtual void write(std::ostream& stream) const = 0;
     void write_args(std::ostream& stream, bool& is_first) const {
@@ -76,27 +86,123 @@ namespace jitir {
   public:
     Block() {}
 
+    auto begin() const { return _insts.begin(); }
+    auto end() const { return _insts.end(); }
+
     void add(Inst* inst) {
       _insts.push_back(inst);
     }
+
+    void autoname(size_t& next_name) {
+      for (Inst* inst : _insts) {
+        inst->set_name(next_name++);
+      }
+    }
+
+    void write(std::ostream& stream) {
+      for (Inst* inst : _insts) {
+        stream << "  ";
+        if (inst->type() != Type::Void) {
+          inst->write_arg(stream);
+          stream << " = ";
+        }
+        inst->write(stream);
+        stream << '\n';
+      }
+    }
   };
 
-  class Function {
+  class Section {
   private:
-    std::vector<Block*> _block;
+    std::vector<Block*> _blocks;
+    std::vector<Type> _inputs;
+    std::vector<Type> _outputs;
   public:
-    Function() {}
+    Section() {}
 
+    auto begin() const { return _blocks.begin(); }
+    auto end() const { return _blocks.end(); }
+
+    const std::vector<Type>& inputs() const { return _inputs; }
+    const std::vector<Type>& outputs() const { return _outputs; }
+
+    size_t add_input(Type type) {
+      _inputs.push_back(type);
+      return _inputs.size() - 1;
+    }
+
+    size_t add_output(Type type) {
+        _outputs.push_back(type);
+        return _outputs.size() - 1;
+    }
+
+    void add(Block* block) { _blocks.push_back(block); }
+
+    void autoname() {
+      size_t next_name = 0;
+      for (Block* block : _blocks) {
+        block->autoname(next_name);
+      }
+    }
+
+    void write(std::ostream& stream) {
+      autoname();
+      
+      stream << "section(";
+      bool is_first = true;
+      for (Type type : _inputs) {
+        if (is_first) {
+          is_first = false;
+        } else {
+          stream << ", ";
+        }
+        stream << type;
+      }
+      stream << ") -> (";
+      is_first = true;
+      for (Type type : _outputs) {
+        if (is_first) {
+          is_first = false;
+        } else {
+          stream << ", ";
+        }
+        stream << type;
+      }
+      stream << ") {\n";
+      for (Block* block : _blocks) {
+        block->write(stream);
+      }
+      stream << "}\n";
+    }
   };
 
   class Builder {
   private:
-    Block* _block;
+    Section* _section = nullptr;
+    Block* _block = nullptr;
   public:
-    Builder(Block* block): _block(block) {}
+    Builder(Section* section): _section(section) {}
+
+    void move_to_end(Block* block) { _block = block; }
     void insert(Inst* inst) { _block->add(inst); }
 
+    Block* build_block() {
+      Block* block = new Block();
+      _section->add(block);
+      return block;
+    }
+
     ${builder}
+
+    InputInst* build_input(Type type) {
+      size_t id = _section->add_input(type);
+      return build_input(id, type);
+    }
+
+    OutputInst* build_output(Value* value) {
+      size_t id = _section->add_output(value->type());
+      return build_output(value, id);
+    }
   };
 
 }
