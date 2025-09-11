@@ -189,13 +189,27 @@ namespace metajit {
         for (Inst* inst : *block) {
           if (_generating_extension) {
             llvm::Value* jitir_builder = _function->getArg(_section->inputs().size() + _section->outputs().size());
-            std::vector<llvm::Value*> args;
-            for (Value* arg : inst->args()) {
-              args.push_back(_built.at(arg));
+            if (dynmatch(BranchInst, branch, inst)) {
+              _builder.CreateCall(_llvm_api.build_guard, {
+                jitir_builder,
+                _built.at(branch->arg(0)),
+                _builder.CreateZExt(emit_arg(branch->arg(0)), llvm::Type::getInt32Ty(_context))
+              });
+              _values[inst] = emit_inst(inst);
+            } else if (!dynamic_cast<ExitInst*>(inst) && !dynamic_cast<JumpInst*>(inst)) {
+              _values[inst] = emit_inst(inst);
+
+              std::vector<llvm::Value*> args;
+              for (Value* arg : inst->args()) {
+                args.push_back(_built.at(arg));
+              }
+              _built[inst] = build_build_inst(_builder, _llvm_api, inst, jitir_builder, args); 
+            } else {
+              _values[inst] = emit_inst(inst);
             }
-            _built[inst] = build_build_inst(_builder, _llvm_api, inst, jitir_builder, args);
+          } else {
+            _values[inst] = emit_inst(inst);
           }
-          _values[inst] = emit_inst(inst);
         } 
       }
     }

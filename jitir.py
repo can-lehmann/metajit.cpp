@@ -20,29 +20,29 @@ class LLVMAPIPlugin:
         self.type_substitutions = type_substitutions
 
     def run(self, ir):
-        code = f"class LLVM_API {{\n"
-        code += f"public:\n"
+        defs = ""
         for inst in ir.insts:
-            code += f"  llvm::FunctionCallee {inst.format_builder_name(ir)};\n"
-        code += f"\n"
-        code += f"  LLVM_API(llvm::Module* module) {{\n"
-        code += f"    llvm::LLVMContext& context = module->getContext();\n"
+            defs += f"  llvm::FunctionCallee {inst.format_builder_name(ir)};\n"
+        
+        inits = ""
         for inst in ir.insts:
             arg_types = ["llvm::PointerType::get(context, 0)"] # Builder
             for arg in inst.args:
                 arg_types.append(self.type_substitutions[arg.type])
             arg_types = ", ".join(arg_types)
-            code += f"    {inst.format_builder_name(ir)} = module->getOrInsertFunction(\n"
-            code += f"      \"{self.prefix}_{inst.format_builder_name(ir)}\",\n"
-            code += f"      llvm::FunctionType::get(\n"
-            code += f"        llvm::PointerType::get(context, 0),\n"
-            code += f"        std::vector<llvm::Type*>({{ {arg_types} }}),\n"
-            code += f"        false\n"
-            code += f"      )\n"
-            code += f"    );\n"
-        code += f"  }}\n"
-        code += f"}};\n"
-        return {"llvmapi": code}
+            inits += f"    {inst.format_builder_name(ir)} = module->getOrInsertFunction(\n"
+            inits += f"      \"{self.prefix}_{inst.format_builder_name(ir)}\",\n"
+            inits += f"      llvm::FunctionType::get(\n"
+            inits += f"        llvm::PointerType::get(context, 0),\n"
+            inits += f"        std::vector<llvm::Type*>({{ {arg_types} }}),\n"
+            inits += f"        false\n"
+            inits += f"      )\n"
+            inits += f"    );\n"
+        
+        return {
+            "llvmapi_defs": defs,
+            "llvmapi_inits": inits
+        }
 
 class BuildBuildInstPlugin:
     def __init__(self, type_substitutions):
@@ -68,26 +68,17 @@ class BuildBuildInstPlugin:
         code += f"  assert(false && \"Unknown instruction\");\n"
         code += f"  return nullptr;\n"
         code += f"}}\n"
-        return {"tracegen": code}
+        return {"build_build_inst": code}
 
 class MapSymbolsInstPlugin:
     def __init__(self, prefix):
         self.prefix = prefix
 
     def run(self, ir):
-        code = f"inline llvm::Error map_symbols(llvm::orc::LLJIT& jit) {{\n"
-        code += f"  llvm::orc::SymbolMap symbol_map;\n"
+        code = ""
         for inst in ir.insts:
-            code += f"  symbol_map.insert({{\n"
-            code += f"    jit.mangleAndIntern(\"{self.prefix}_{inst.format_builder_name(ir)}\"),\n"
-            code += f"    llvm::orc::ExecutorSymbolDef(\n"
-            code += f"      llvm::orc::ExecutorAddr((uint64_t)(void*)(&{self.prefix}_{inst.format_builder_name(ir)})),\n"
-            code += f"      llvm::JITSymbolFlags::Callable\n"
-            code += f"    )\n"
-            code += f"  }});\n"
-        code += f"  llvm::orc::JITDylib& dylib = jit.getMainJITDylib();\n"
-        code += f"  return dylib.define(llvm::orc::absoluteSymbols(std::move(symbol_map)));\n"
-        code += f"}}\n"
+            name = f"{self.prefix}_{inst.format_builder_name(ir)}"
+            code += f"map_symbol({name});\n"
         return {"map_symbols": code}
 
 def binop(name, type_checks = None):

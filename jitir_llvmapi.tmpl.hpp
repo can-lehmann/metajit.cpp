@@ -15,9 +15,69 @@
 // limitations under the License.
 
 namespace metajit {
-  ${llvmapi}
+  class LLVM_API {
+  public:
+    ${llvmapi_defs}
+    llvm::FunctionCallee build_guard;
 
-  ${tracegen}
+    LLVM_API(llvm::Module* module) {
+      llvm::LLVMContext& context = module->getContext();
+      ${llvmapi_inits}
 
-  ${map_symbols}
+      build_guard = module->getOrInsertFunction(
+        "jitir_build_guard",
+        llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          std::vector<llvm::Type*>({
+            llvm::PointerType::get(context, 0),
+            llvm::PointerType::get(context, 0),
+            llvm::Type::getInt32Ty(context)
+          }),
+          false
+        )
+      );
+    }
+  };
+
+  extern "C" {
+    void jitir_build_guard(void* builder_ptr, void* value_ptr, uint32_t expected) {
+      Builder& builder = *(Builder*)builder_ptr;
+      Value* value = (Value*)value_ptr;
+
+      Block* failure = builder.build_block();
+      Block* success = builder.build_block();
+      if (expected) {
+        builder.build_branch(value, success, failure);
+      } else {
+        builder.build_branch(value, failure, success);
+      }
+      
+      builder.move_to_end(failure);
+      builder.build_exit();
+
+      builder.move_to_end(success);
+    }
+  }
+
+  ${build_build_inst}
+
+  inline llvm::Error map_symbols(llvm::orc::LLJIT& jit) {
+    llvm::orc::SymbolMap symbol_map;
+
+    #define map_symbol(name) \
+      symbol_map.insert({ \
+        jit.mangleAndIntern(#name), \
+        llvm::orc::ExecutorSymbolDef( \
+          llvm::orc::ExecutorAddr((uint64_t)(void*)(&name)), \
+          llvm::JITSymbolFlags::Callable \
+        ) \
+      });
+
+    ${map_symbols}
+
+    map_symbol(jitir_build_guard)
+
+    llvm::orc::JITDylib& dylib = jit.getMainJITDylib();
+    return dylib.define(llvm::orc::absoluteSymbols(std::move(symbol_map)));
+  }
 }
