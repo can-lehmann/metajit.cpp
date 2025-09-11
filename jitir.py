@@ -70,13 +70,15 @@ class BuildBuildInstPlugin:
         code += f"}}\n"
         return {"tracegen": code}
 
-def binop(name):
+def binop(name, type_checks = None):
+    if type_checks is None:
+        type_checks = ["is_int(a->type())"]
     return Inst(name,
         args = [Arg("a"), Arg("b")],
         type = "a->type()",
         type_checks = [
             "a->type() == b->type()",
-            "is_int(a->type())"
+            *type_checks
         ]
     )
 
@@ -93,8 +95,8 @@ def cmp(name, type_checks):
 jitir = IR(
     insts = [
         Inst("Const",
-            args = [Arg("value", Type("uint64_t"))],
-            type = "Type::Int64",
+            args = [Arg("type", Type("Type")), Arg("value", Type("uint64_t"))],
+            type = "type",
             type_checks = []
         ),
         Inst("Input",
@@ -115,6 +117,14 @@ jitir = IR(
                 "a->type() == b->type()"
             ]
         ),
+        Inst("ResizeU",
+            args = [Arg("a"), Arg("type", Type("Type"))],
+            type = "type",
+            type_checks = [
+                "is_int_or_bool(a->type())",
+                "is_int_or_bool(type)"
+            ]
+        ),
         Inst("Load",
             args = [Arg("ptr"), Arg("type", Type("Type"))],
             type = "type",
@@ -130,21 +140,35 @@ jitir = IR(
             type = "Type::Ptr",
             type_checks = [
                 "ptr->type() == Type::Ptr",
-                "is_int(offset->type())"
+                "offset->type() == Type::Int64"
             ]
         ),
         binop("Add"),
         binop("Sub"),
         binop("Mul"),
-        binop("And"),
-        binop("Or"),
-        binop("Xor"),
+        binop("And", type_checks = ["is_int_or_bool(a->type())"]),
+        binop("Or", type_checks = ["is_int_or_bool(a->type())"]),
+        binop("Xor", type_checks = ["is_int_or_bool(a->type())"]),
         binop("ShrU"),
         binop("ShrS"),
         binop("Shl"),
         cmp("Eq", type_checks = []),
         cmp("LtU", type_checks = ["is_int(a->type())"]),
         cmp("LtS", type_checks = ["is_int(a->type())"]),
+        Inst("Branch",
+            args = [
+                Arg("cond"),
+                Arg("true_block", type=Type("Block*")),
+                Arg("false_block", type=Type("Block*"))
+            ],
+            type = "Type::Void",
+            type_checks = ["cond->type() == Type::Bool"]
+        ),
+        Inst("Jump",
+            args = [Arg("block", type=Type("Block*"))],
+            type = "Type::Void",
+            type_checks = []
+        ),
         Inst("Exit",
             args = [],
             type = "Type::Void",
@@ -160,7 +184,9 @@ lwir(
     plugins = [
         InstPlugin([
             InstGetterPlugin(),
-            InstWritePlugin()
+            InstWritePlugin(custom={
+                Type("Block*"): lambda value, stream: f"{value}->write_arg({stream});",
+            })
         ]),
         BuilderPlugin(),
         CAPIPlugin(
@@ -170,6 +196,7 @@ lwir(
                 Type("size_t"): "uint64_t",
                 Type("uint64_t"): "uint64_t",
                 Type("Type"): "uint32_t",
+                Type("Block*"): "void*",
                 ValueType(): "void*"
             }
         )
@@ -180,7 +207,8 @@ llvm_type_substitutions = {
     Type("size_t"): "llvm::Type::getInt64Ty(context)",
     Type("uint64_t"): "llvm::Type::getInt64Ty(context)",
     Type("Type"): "llvm::Type::getInt32Ty(context)",
-    ValueType(): "llvm::PointerType::get(context, 0)"
+    Type("Block*"): "llvm::PointerType::get(context, 0)",
+    ValueType(): "llvm::PointerType::get(context, 0)",
 }
 
 lwir(
