@@ -18,4 +18,6 @@ namespace metajit {
   ${llvmapi}
 
   ${tracegen}
+
+  ${map_symbols}
 }
