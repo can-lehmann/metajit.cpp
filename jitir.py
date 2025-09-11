@@ -144,7 +144,12 @@ jitir = IR(
         binop("Shl"),
         cmp("Eq", type_checks = []),
         cmp("LtU", type_checks = ["is_int(a->type())"]),
-        cmp("LtS", type_checks = ["is_int(a->type())"])
+        cmp("LtS", type_checks = ["is_int(a->type())"]),
+        Inst("Exit",
+            args = [],
+            type = "Type::Void",
+            type_checks = []
+        )
     ]
 )
 

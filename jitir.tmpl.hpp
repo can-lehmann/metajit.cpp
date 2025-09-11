@@ -19,6 +19,8 @@
 #include <cassert>
 #include <cinttypes>
 
+#define dynmatch(Type, name, value) Type* name = dynamic_cast<Type*>(value)
+
 namespace metajit {
   enum class Type {
     Void, Bool, Int8, Int16, Int32, Int64, Ptr
@@ -49,6 +51,8 @@ namespace metajit {
     Value(Type type): _type(type) {}
 
     Type type() const { return _type; }
+
+    size_t name() const { return _name; }
     void set_name(size_t name) { _name = name; }
 
     void write_arg(std::ostream& stream) {
@@ -118,14 +122,20 @@ namespace metajit {
     std::vector<Block*> _blocks;
     std::vector<Type> _inputs;
     std::vector<Type> _outputs;
+    size_t _name_count = 0;
   public:
     Section() {}
 
     auto begin() const { return _blocks.begin(); }
     auto end() const { return _blocks.end(); }
 
+    size_t size() const { return _blocks.size(); }
+    Block* operator[](size_t index) const { return _blocks.at(index); }
+
     const std::vector<Type>& inputs() const { return _inputs; }
     const std::vector<Type>& outputs() const { return _outputs; }
+
+    size_t name_count() const { return _name_count; }
 
     size_t add_input(Type type) {
       _inputs.push_back(type);
@@ -140,9 +150,9 @@ namespace metajit {
     void add(Block* block) { _blocks.push_back(block); }
 
     void autoname() {
-      size_t next_name = 0;
+      _name_count = 0;
       for (Block* block : _blocks) {
-        block->autoname(next_name);
+        block->autoname(_name_count);
       }
     }
 
@@ -207,5 +217,25 @@ namespace metajit {
   };
 
   ${capi}
+
+
+  template<class T>
+  class ValueMap {
+  private:
+    std::vector<T> _data;
+  public:
+    ValueMap() {}
+    ValueMap(Section* section) { init(section); }
+
+    void init(Section* section) {
+      _data.resize(section->name_count(), T());
+    }
+
+    T& at(Value* value) { return _data.at(value->name()); }
+    T& operator[](Value* value) { return _data.at(value->name()); }
+
+    const T& at(Value* value) const { return _data.at(value->name()); }
+    const T& operator[](Value* value) const { return _data.at(value->name()); }
+  };
 }
 

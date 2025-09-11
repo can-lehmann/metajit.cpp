@@ -16,6 +16,7 @@
 
 #include "jitir.hpp"
 #include "llvmgen.hpp"
+#include "x86gen.hpp"
 
 int main() {
   using namespace metajit;
@@ -34,15 +35,25 @@ int main() {
     )
   );
 
+  builder.build_exit();
+
   section->write(std::cout);
 
-  llvm::LLVMContext context;
-  std::unique_ptr<llvm::Module> module = std::make_unique<llvm::Module>("my_module", context);
+  {
+    llvm::LLVMContext context;
+    std::unique_ptr<llvm::Module> module = std::make_unique<llvm::Module>("my_module", context);
 
-  LLVMCodeGen cg(section, module.get(), true);
+    LLVMCodeGen cg(section, module.get(), true);
 
-  module->print(llvm::outs(), nullptr);
+    module->print(llvm::outs(), nullptr);
+  }
 
+  {
+    X86CodeGen cg(section);
+    cg.save("asm.bin");
+
+  }
+  
   
 }
 

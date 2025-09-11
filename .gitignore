@@ -2,3 +2,4 @@ __pycache__
 jitir.hpp
 jitir_llvmapi.hpp
 main
+asm.bin

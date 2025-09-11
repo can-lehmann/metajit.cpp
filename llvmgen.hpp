@@ -14,8 +14,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <unordered_map>
-
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Instruction.h"
@@ -23,8 +21,6 @@
 
 #include "jitir.hpp"
 #include "jitir_llvmapi.hpp"
-
-#define dynmatch(Type, name, value) Type* name = dynamic_cast<Type*>(value)
 
 namespace metajit {
   class LLVMCodeGen {
@@ -37,10 +33,10 @@ namespace metajit {
     llvm::IRBuilder<> _builder;
     LLVM_API _llvm_api; // Used for generating extension
 
-    std::unordered_map<Value*, llvm::Value*> _values;
+    ValueMap<llvm::Value*> _values;
     // Used for generating extension
-    std::unordered_map<Value*, llvm::Value*> _built;
-    std::unordered_map<Inst*, llvm::Value*> _is_const;
+    ValueMap<llvm::Value*> _built;
+    ValueMap<llvm::Value*> _is_const;
 
     llvm::Type* emit_type(Type type) {
       switch (type) {
@@ -120,6 +116,10 @@ namespace metajit {
 
       #undef binop
 
+      else if (dynmatch(ExitInst, exit, inst)) {
+        return _builder.CreateRetVoid();
+      }
+
       assert(false && "Unknown instruction");
     }
 
@@ -151,6 +151,11 @@ namespace metajit {
         "func",
         module
       );
+
+      section->autoname();
+      _values.init(section);
+      _built.init(section);
+      _is_const.init(section);
 
       for (Block* block : *_section) {
         llvm::BasicBlock* llvm_block = llvm::BasicBlock::Create(_context, "block", _function);
