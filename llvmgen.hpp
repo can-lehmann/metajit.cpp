@@ -14,6 +14,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <map>
+
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Instruction.h"
@@ -23,7 +25,7 @@
 #include "jitir_llvmapi.hpp"
 
 namespace metajit {
-  class LLVMCodeGen {
+  class LLVMCodeGen: public Pass<LLVMCodeGen> {
   private:
     bool _generating_extension = false;
     Section* _section;
@@ -33,6 +35,7 @@ namespace metajit {
     llvm::IRBuilder<> _builder;
     LLVM_API _llvm_api; // Used for generating extension
 
+    std::map<Block*, llvm::BasicBlock*> _blocks;
     ValueMap<llvm::Value*> _values;
     // Used for generating extension
     ValueMap<llvm::Value*> _built;
@@ -75,6 +78,11 @@ namespace metajit {
           emit_arg(select->arg(1)),
           emit_arg(select->arg(2))
         );
+      } else if (dynmatch(ResizeUInst, resize_u, inst)) {
+        return _builder.CreateZExtOrTrunc(
+          emit_arg(resize_u->arg(0)),
+          emit_type(resize_u->type())
+        );
       } else if (dynmatch(LoadInst, load, inst)) {
         return _builder.CreateLoad(
           emit_type(load->type()),
@@ -116,15 +124,29 @@ namespace metajit {
 
       #undef binop
 
-      else if (dynmatch(ExitInst, exit, inst)) {
+      else if (dynmatch(BranchInst, branch, inst)) {
+        return _builder.CreateCondBr(
+          emit_arg(branch->cond()),
+          _blocks.at(branch->true_block()),
+          _blocks.at(branch->false_block())
+        );
+      } else if (dynmatch(JumpInst, jump, inst)) {
+        return _builder.CreateBr(_blocks.at(jump->block()));
+      } else if (dynmatch(ExitInst, exit, inst)) {
         return _builder.CreateRetVoid();
       }
 
+      inst->write(std::cerr);
+      std::cerr << std::endl;
       assert(false && "Unknown instruction");
     }
 
   public:
-    LLVMCodeGen(Section* section, llvm::Module* module, bool generating_extension):
+    LLVMCodeGen(Section* section,
+                llvm::Module* module,
+                const std::string& name,
+                bool generating_extension = false):
+        Pass(section),
         _generating_extension(generating_extension),
         _section(section),
         _context(module->getContext()),
@@ -148,7 +170,7 @@ namespace metajit {
       _function = llvm::Function::Create(
         llvm::FunctionType::get(llvm::Type::getVoidTy(_context), args, false),
         llvm::Function::ExternalLinkage,
-        "func",
+        name,
         module
       );
 
@@ -158,8 +180,11 @@ namespace metajit {
       _is_const.init(section);
 
       for (Block* block : *_section) {
-        llvm::BasicBlock* llvm_block = llvm::BasicBlock::Create(_context, "block", _function);
-        _builder.SetInsertPoint(llvm_block);
+        _blocks[block] = llvm::BasicBlock::Create(_context, "block", _function);
+      }
+
+      for (Block* block : *_section) {
+        _builder.SetInsertPoint(_blocks.at(block));
 
         for (Inst* inst : *block) {
           if (_generating_extension) {

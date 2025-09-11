@@ -110,7 +110,7 @@ jitir = IR(
             type_checks = []
         ),
         Inst("Select",
-            args = [Arg("cond"), Arg("a"), Arg("b")],
+            args = [Arg("cond", getter=Getter.Always), Arg("a"), Arg("b")],
             type = "a->type()",
             type_checks = [
                 "cond->type() == Type::Bool",
@@ -126,17 +126,26 @@ jitir = IR(
             ]
         ),
         Inst("Load",
-            args = [Arg("ptr"), Arg("type", Type("Type"))],
+            args = [
+                Arg("ptr", getter=Getter.Always),
+                Arg("type", Type("Type"))
+            ],
             type = "type",
             type_checks = ["ptr->type() == Type::Ptr"]
         ),
         Inst("Store",
-            args = [Arg("ptr"), Arg("value")],
+            args = [
+                Arg("ptr", getter=Getter.Always),
+                Arg("value", getter=Getter.Always)
+            ],
             type = "Type::Void",
             type_checks = ["ptr->type() == Type::Ptr"]
         ),
         Inst("AddPtr",
-            args = [Arg("ptr"), Arg("offset")],
+            args = [
+                Arg("ptr", getter=Getter.Always),
+                Arg("offset", getter=Getter.Always)
+            ],
             type = "Type::Ptr",
             type_checks = [
                 "ptr->type() == Type::Ptr",
@@ -157,7 +166,7 @@ jitir = IR(
         cmp("LtS", type_checks = ["is_int(a->type())"]),
         Inst("Branch",
             args = [
-                Arg("cond"),
+                Arg("cond", getter=Getter.Always),
                 Arg("true_block", type=Type("Block*")),
                 Arg("false_block", type=Type("Block*"))
             ],
