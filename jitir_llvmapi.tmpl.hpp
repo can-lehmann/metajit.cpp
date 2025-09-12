@@ -44,13 +44,21 @@ namespace metajit {
       Builder& builder = *(Builder*)builder_ptr;
       Value* value = (Value*)value_ptr;
 
+      if (dynmatch(ConstInst, constant, value)) {
+        if ((constant->value() && expected) || (!constant->value() && !expected)) {
+          return; // Always true
+        }
+      }
+
       Block* failure = builder.build_block();
       Block* success = builder.build_block();
-      if (expected) {
-        builder.build_branch(value, success, failure);
-      } else {
-        builder.build_branch(value, failure, success);
+
+      Block* a = success;
+      Block* b = failure;
+      if (!expected) {
+        std::swap(a, b);
       }
+      builder.build_branch(value, a, b);
       
       builder.move_to_end(failure);
       builder.build_exit();

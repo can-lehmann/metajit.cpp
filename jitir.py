@@ -110,8 +110,17 @@ jitir = IR(
             type = "type",
             type_checks = []
         ),
+        Inst("Freeze",
+            args = [Arg("a")],
+            type = "a->type()",
+            type_checks = []
+        ),
         Inst("Input",
-            args = [Arg("id", Type("size_t")), Arg("type", Type("Type"))],
+            args = [
+                Arg("id", Type("size_t")),
+                Arg("type", Type("Type")),
+                Arg("flags", Type("InputFlags"))
+            ],
             type = "type",
             type_checks = []
         ),
@@ -139,7 +148,9 @@ jitir = IR(
         Inst("Load",
             args = [
                 Arg("ptr", getter=Getter.Always),
-                Arg("type", Type("Type"))
+                Arg("type", Type("Type")),
+                Arg("flags", Type("LoadFlags")),
+                Arg("aliasing", Type("AliasingInfo*"))
             ],
             type = "type",
             type_checks = ["ptr->type() == Type::Ptr"]
@@ -147,7 +158,8 @@ jitir = IR(
         Inst("Store",
             args = [
                 Arg("ptr", getter=Getter.Always),
-                Arg("value", getter=Getter.Always)
+                Arg("value", getter=Getter.Always),
+                Arg("aliasing", Type("AliasingInfo*"))
             ],
             type = "Type::Void",
             type_checks = ["ptr->type() == Type::Ptr"]
@@ -206,17 +218,21 @@ lwir(
             InstGetterPlugin(),
             InstWritePlugin(custom={
                 Type("Block*"): lambda value, stream: f"{value}->write_arg({stream});",
+                Type("AliasingInfo*"): lambda value, stream: f"if ({value}) {{ {value}->write({stream}); }} else {{ {stream} << \"none\"; }}",
             })
         ]),
         BuilderPlugin(),
         CAPIPlugin(
             prefix = "jitir",
-            builder_name = "::metajit::Builder",
+            builder_name = "::metajit::TraceBuilder",
             type_substitutions = {
                 Type("size_t"): "uint64_t",
                 Type("uint64_t"): "uint64_t",
                 Type("Type"): "uint32_t",
+                Type("LoadFlags"): "uint32_t",
+                Type("InputFlags"): "uint32_t",
                 Type("Block*"): "void*",
+                Type("AliasingInfo*"): "uint64_t", # Needs to be passed by LLVM IR
                 ValueType(): "void*"
             }
         )
@@ -227,7 +243,10 @@ llvm_type_substitutions = {
     Type("size_t"): "llvm::Type::getInt64Ty(context)",
     Type("uint64_t"): "llvm::Type::getInt64Ty(context)",
     Type("Type"): "llvm::Type::getInt32Ty(context)",
+    Type("LoadFlags"): "llvm::Type::getInt32Ty(context)",
+    Type("InputFlags"): "llvm::Type::getInt32Ty(context)",
     Type("Block*"): "llvm::PointerType::get(context, 0)",
+    Type("AliasingInfo*"): "llvm::Type::getInt64Ty(context)",
     ValueType(): "llvm::PointerType::get(context, 0)",
 }
 

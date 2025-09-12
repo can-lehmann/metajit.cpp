@@ -163,6 +163,118 @@ namespace metajit {
     }
   };
 
+  template <class Self>
+  class BaseFlags {
+  protected:
+    uint32_t _flags = 0;
+  public:
+    BaseFlags(uint32_t flags = 0): _flags(flags) {}
+
+    explicit operator uint32_t() const {
+      return _flags;
+    }
+
+    explicit operator uint64_t() const {
+      return _flags;
+    }
+
+    bool has(Self flag) const {
+      return (_flags & flag._flags) != 0;
+    }
+  };
+
+  class LoadFlags final: public BaseFlags<LoadFlags> {
+  public:
+    enum : uint32_t {
+      None = 0,
+      Pure = 1 << 0
+    };
+
+    using BaseFlags<LoadFlags>::BaseFlags;
+
+    void write(std::ostream& stream) const {
+      stream << "{";
+      bool is_first = true;
+      #define write_flag(name) \
+        if (_flags & name) { \
+          if (!is_first) { stream << ", "; } \
+          is_first = false; \
+          stream << #name; \
+        }
+      
+      write_flag(Pure)
+
+      #undef write_flag
+      stream << "}";
+    }
+  };
+
+  class InputFlags final: public BaseFlags<InputFlags> {
+  public:
+    enum : uint32_t {
+      None = 0,
+      AssumeConst = 1 << 0
+    };
+
+    using BaseFlags<InputFlags>::BaseFlags;
+
+    void write(std::ostream& stream) const {
+      stream << "{";
+      bool is_first = true;
+      #define write_flag(name) \
+        if (_flags & name) { \
+          if (!is_first) { stream << ", "; } \
+          is_first = false; \
+          stream << #name; \
+        }
+      
+      write_flag(AssumeConst)
+
+      #undef write_flag
+      stream << "}";
+    }
+  };
+
+  // TODO: Refcount
+  class AliasingInfo {
+  private:
+    std::set<size_t> _groups;
+  public:
+    AliasingInfo() {}
+    AliasingInfo(const std::set<size_t>& groups): _groups(groups) {}
+
+    void add_group(size_t group) {
+      _groups.insert(group);
+    }
+
+    const std::set<size_t>& groups() const {
+      return _groups;
+    }
+
+    void write(std::ostream& stream) const {
+      stream << "{";
+      bool is_first = true;
+      for (size_t group : _groups) {
+        if (!is_first) { stream << ", "; }
+        is_first = false;
+        stream << group;
+      }
+      stream << "}";
+    }
+  };
+}
+
+std::ostream& operator<<(std::ostream& stream, metajit::LoadFlags flags) {
+  flags.write(stream);
+  return stream;
+}
+
+std::ostream& operator<<(std::ostream& stream, metajit::InputFlags flags) {
+  flags.write(stream);
+  return stream;
+}
+
+namespace metajit {
   ${insts}
 
   class Section {
@@ -267,9 +379,9 @@ namespace metajit {
 
     ${builder}
 
-    InputInst* build_input(Type type) {
+    InputInst* build_input(Type type, InputFlags flags = InputFlags()) {
       size_t id = _section->add_input(type);
-      return build_input(id, type);
+      return build_input(id, type, flags);
     }
 
     OutputInst* build_output(Value* value) {
@@ -334,6 +446,17 @@ namespace metajit {
       return build_xor(a, b);
     }
 
+    Value* fold_select(Value* cond, Value* true_value, Value* false_value) {
+      if (dynmatch(ConstInst, const_cond, cond)) {
+        if (const_cond->value() != 0) {
+          return true_value;
+        } else {
+          return false_value;
+        }
+      }
+      return build_select(cond, true_value, false_value);
+    }
+
     Value* fold_add_ptr(Value* ptr, Value* offset) {
       if (dynmatch(ConstInst, constant, offset)) {
         if (constant->value() == 0) {
@@ -395,6 +518,151 @@ namespace metajit {
       }
       return build_shr_s(a, b);
     }
+  };
+
+  class TraceBuilder: public Builder {
+  private:
+    // We perform optimizations during trace generation
+    
+    struct Pointer {
+      Value* base = nullptr;
+      uint64_t offset;
+
+      Pointer(): base(nullptr), offset(0) {}
+      Pointer(Value* _base, uint64_t _offset): base(_base), offset(_offset) {}
+
+      Pointer operator+(uint64_t other) const {
+        if (base == nullptr) {
+          return Pointer();
+        }
+        return Pointer(base, offset + other);
+      }
+    };
+
+    struct GroupState {
+      Value* base = nullptr;
+      std::map<size_t, Value*> stores;
+
+      GroupState() {}
+
+      Value* load(const Pointer& pointer, Type type) {
+        if (base == pointer.base &&
+            base != nullptr &&
+            pointer.base != nullptr &&
+            stores.find(pointer.offset) != stores.end() &&
+            stores.at(pointer.offset)->type() == type) {
+          return stores.at(pointer.offset);
+        }
+        return nullptr;
+      }
+
+      void store(const Pointer& pointer, Value* value) {
+        if (pointer.base == nullptr) {
+          base = nullptr;
+          stores.clear();
+          return;
+        }
+
+        if (base != pointer.base) {
+          base = pointer.base;
+          stores.clear();
+        }
+        // TODO: Overlapping
+        stores[pointer.offset] = value;
+      }
+    };
+
+    std::unordered_map<Value*, Pointer> _pointers;
+    std::unordered_map<size_t, GroupState> _memory;
+    std::unordered_map<size_t, InputInst*> _inputs;
+
+    Pointer pointer(Value* value) {
+      if (_pointers.find(value) == _pointers.end()) {
+        _pointers[value] = Pointer(value, 0);
+      }
+      return _pointers.at(value);
+    }
+
+    Value* load(Pointer pointer, Type type, AliasingInfo* aliasing) {
+      Value* same_value;
+      bool has_same_value = false;
+      for (size_t group : aliasing->groups()) {
+        Value* value = _memory[group].load(pointer, type);
+        if (has_same_value) {
+          if (value != same_value) {
+            same_value = nullptr;
+            break;
+          }
+        } else {
+          same_value = value;
+        }
+      }
+
+      return same_value;
+    }
+  public:
+    using Builder::Builder;
+
+    // Use folding versions so that we get short-circuit behavior
+
+    Value* build_select(Value* cond, Value* true_value, Value* false_value) {
+      return Builder::fold_select(cond, true_value, false_value);
+    }
+
+    Value* build_and(Value* a, Value* b) {
+      return Builder::fold_and(a, b);
+    }
+
+    Value* build_or(Value* a, Value* b) {
+      return Builder::fold_or(a, b);
+    }
+
+    // We deduplicate input building to track pointers
+
+    Value* build_input(size_t id, Type type, InputFlags flags = InputFlags()) {
+      if (_inputs.find(id) == _inputs.end()) {
+        _inputs[id] = Builder::build_input(id, type, flags);
+      }
+      assert(_inputs.at(id)->type() == type);
+      return _inputs.at(id);
+    }
+
+    // We override add_ptr to track pointers
+
+    Value* build_add_ptr(Value* ptr, Value* offset) {
+      Value* result = Builder::fold_add_ptr(ptr, offset);
+
+      if (dynmatch(ConstInst, constant, offset)) {
+        _pointers[result] = pointer(ptr) + constant->value();
+      }
+
+      return result;
+    }
+
+    // We override load/store to do simple load/store forwarding
+
+    Value* build_load(Value* ptr, Type type, LoadFlags flags, AliasingInfo* aliasing) {
+      if (aliasing) {
+        if (Value* value = load(pointer(ptr), type, aliasing)) {
+          return value;
+        }
+      }
+
+      return Builder::build_load(ptr, type, flags, aliasing);
+    }
+
+    Value* build_store(Value* ptr, Value* value, AliasingInfo* aliasing) {
+      if (aliasing == nullptr) {
+        _memory.clear();
+      } else {
+        for (size_t group : aliasing->groups()) {
+          _memory[group].store(pointer(ptr), value);
+        }
+      }
+
+      return Builder::build_store(ptr, value, aliasing);
+    }
+
   };
 
   ${capi}
