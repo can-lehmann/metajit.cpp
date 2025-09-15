@@ -251,6 +251,15 @@ namespace metajit {
       return _groups;
     }
 
+    bool could_alias(const AliasingInfo* other) const {
+      for (size_t group : _groups) {
+        if (other->_groups.find(group) != other->_groups.end()) {
+          return true;
+        }
+      }
+      return false;
+    }
+
     void write(std::ostream& stream) const {
       stream << "{";
       bool is_first = true;
@@ -400,6 +409,46 @@ namespace metajit {
 
     // Folding
 
+    Value* fold_add(Value* a, Value* b) {
+      if (dynamic_cast<ConstInst*>(a)) {
+        std::swap(a, b);
+      }
+
+      if (dynmatch(ConstInst, const_b, b)) {
+        if (const_b->value() == 0) {
+          return a;
+        }
+      }
+
+      return build_add(a, b);
+    }
+
+    Value* fold_sub(Value* a, Value* b) {
+      if (dynmatch(ConstInst, const_b, b)) {
+        if (const_b->value() == 0) {
+          return a;
+        }
+      }
+
+      return build_sub(a, b);
+    }
+
+    Value* fold_mul(Value* a, Value* b) {
+      if (dynamic_cast<ConstInst*>(a)) {
+        std::swap(a, b);
+      }
+
+      if (dynmatch(ConstInst, const_b, b)) {
+        if (const_b->value() == 0) {
+          return b;
+        } else if (const_b->value() == 1) {
+          return a;
+        }
+      }
+
+      return build_mul(a, b);
+    }
+
     Value* fold_and(Value* a, Value* b) {
       if (dynamic_cast<ConstInst*>(a)) {
         std::swap(a, b);
@@ -520,25 +569,37 @@ namespace metajit {
     }
   };
 
+  struct Pointer {
+    Value* base = nullptr;
+    uint64_t offset;
+
+    Pointer(): base(nullptr), offset(0) {}
+    Pointer(Value* _base, uint64_t _offset): base(_base), offset(_offset) {}
+
+    Pointer operator+(uint64_t other) const {
+      if (base == nullptr) {
+        return Pointer();
+      }
+      return Pointer(base, offset + other);
+    }
+
+    bool operator==(const Pointer& other) const {
+      return base == other.base && offset == other.offset;
+    }
+
+    bool operator!=(const Pointer& other) const {
+      return !(*this == other);
+    }
+
+    bool operator<(const Pointer& other) const {
+      return base < other.base || (base == other.base && offset < other.offset);
+    }
+  };
+
   class TraceBuilder: public Builder {
   private:
     // We perform optimizations during trace generation
     
-    struct Pointer {
-      Value* base = nullptr;
-      uint64_t offset;
-
-      Pointer(): base(nullptr), offset(0) {}
-      Pointer(Value* _base, uint64_t _offset): base(_base), offset(_offset) {}
-
-      Pointer operator+(uint64_t other) const {
-        if (base == nullptr) {
-          return Pointer();
-        }
-        return Pointer(base, offset + other);
-      }
-    };
-
     struct GroupState {
       Value* base = nullptr;
       std::map<size_t, Value*> stores;
@@ -603,7 +664,19 @@ namespace metajit {
   public:
     using Builder::Builder;
 
-    // Use folding versions so that we get short-circuit behavior
+    // Use folding versions so that we get short-circuit behavior and simplifications
+
+    Value* build_add(Value* a, Value* b) {
+      return Builder::fold_add(a, b);
+    }
+
+    Value* build_sub(Value* a, Value* b) {
+      return Builder::fold_sub(a, b);
+    }
+
+    Value* build_mul(Value* a, Value* b) {
+      return Builder::fold_mul(a, b);
+    }
 
     Value* build_select(Value* cond, Value* true_value, Value* false_value) {
       return Builder::fold_select(cond, true_value, false_value);
@@ -615,6 +688,10 @@ namespace metajit {
 
     Value* build_or(Value* a, Value* b) {
       return Builder::fold_or(a, b);
+    }
+
+    Value* build_xor(Value* a, Value* b) {
+      return Builder::fold_xor(a, b);
     }
 
     // We deduplicate input building to track pointers
@@ -730,6 +807,97 @@ namespace metajit {
         std::vector<Inst*> insts = block->move_insts();
         for (Inst* inst : insts) {
           if (used[inst]) {
+            block->add(inst);
+          } else {
+            delete inst;
+          }
+        }
+      }
+    }
+  };
+
+  class DeadStoreElim: public Pass<DeadStoreElim> {
+  private:
+    ValueMap<Pointer> _pointers;
+
+    struct Interval {
+      size_t min;
+      size_t max; // Exclusive
+
+      Interval(size_t offset, Type type) {
+        min = offset;
+        max = offset + type_size(type);
+      }
+
+      bool intersects(const Interval& other) const {
+        return max > other.min && min < other.max;
+      }
+    };
+
+    bool could_alias(LoadInst* load, StoreInst* store) {
+      if (load->aliasing() != nullptr &&
+          store->aliasing() != nullptr &&
+          !load->aliasing()->could_alias(store->aliasing())) {
+        return false;
+      }
+
+      Pointer load_ptr = _pointers[load->ptr()];
+      Pointer store_ptr = _pointers[store->ptr()];
+
+      if (load_ptr.base != store_ptr.base) {
+        return true;
+      }
+
+      Interval load_interval(load_ptr.offset, load->type());
+      Interval store_interval(store_ptr.offset, store->value()->type());
+
+      return load_interval.intersects(store_interval);
+    }
+  public:
+    DeadStoreElim(Section* section): Pass(section) {
+      section->autoname();
+      _pointers.init(section);
+      
+      for (Block* block : *section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(AddPtrInst, add_ptr, inst)) {
+            if (dynmatch(ConstInst, constant, add_ptr->arg(1))) {
+              _pointers[inst] = _pointers[add_ptr->arg(0)] + constant->value();
+            } else {
+              _pointers[inst] = Pointer(inst, 0);
+            }
+          } else {
+            _pointers[inst] = Pointer(inst, 0);
+          }
+        }
+      }
+
+      for (Block* block : *section) {
+        std::set<Inst*> unused;
+        std::map<Pointer, StoreInst*> last_store;
+
+        std::vector<Inst*> insts = block->move_insts();
+
+        for (Inst* inst : insts) {
+          if (dynmatch(StoreInst, store, inst)) {
+            Pointer pointer = _pointers[store->ptr()];
+            last_store[pointer] = store;
+            unused.insert(inst);
+          } else if (dynmatch(LoadInst, load, inst)) {
+            for (const auto& [pointer, store] : last_store) {
+              if (could_alias(load, store)) {
+                unused.erase(store);
+              }
+            }
+          }
+        }
+
+        for (const auto& [pointer, store] : last_store) {
+          unused.erase(store);
+        }
+
+        for (Inst* inst : insts) {
+          if (unused.find(inst) == unused.end()) {
             block->add(inst);
           } else {
             delete inst;
