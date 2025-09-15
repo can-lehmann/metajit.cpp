@@ -19,6 +19,7 @@ namespace metajit {
   public:
     ${llvmapi_defs}
     llvm::FunctionCallee build_guard;
+    llvm::FunctionCallee is_const_inst;
 
     LLVM_API(llvm::Module* module) {
       llvm::LLVMContext& context = module->getContext();
@@ -32,6 +33,17 @@ namespace metajit {
             llvm::PointerType::get(context, 0),
             llvm::PointerType::get(context, 0),
             llvm::Type::getInt32Ty(context)
+          }),
+          false
+        )
+      );
+
+      is_const_inst = module->getOrInsertFunction(
+        "jitir_is_const_inst",
+        llvm::FunctionType::get(
+          llvm::Type::getInt32Ty(context),
+          std::vector<llvm::Type*>({
+            llvm::PointerType::get(context, 0)
           }),
           false
         )
@@ -65,6 +77,11 @@ namespace metajit {
 
       builder.move_to_end(success);
     }
+
+    uint32_t jitir_is_const_inst(void* value_ptr) {
+      Value* value = (Value*)value_ptr;
+      return dynamic_cast<ConstInst*>(value) != nullptr;
+    }
   }
 
   ${build_build_inst}
@@ -84,6 +101,9 @@ namespace metajit {
     ${map_symbols}
 
     map_symbol(jitir_build_guard)
+    map_symbol(jitir_is_const_inst)
+
+    #undef map_symbol
 
     llvm::orc::JITDylib& dylib = jit.getMainJITDylib();
     return dylib.define(llvm::orc::absoluteSymbols(std::move(symbol_map)));

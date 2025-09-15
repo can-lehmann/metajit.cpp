@@ -282,7 +282,18 @@ namespace metajit {
               _values[inst] = emit_inst(inst);
               _is_const[inst] = llvm::ConstantInt::getTrue(_context);
 
-              _built[inst] = _builder.CreateCall(
+              llvm::BasicBlock* when_const = llvm::BasicBlock::Create(_context, "when_const", _function);
+              llvm::BasicBlock* when_not_const = llvm::BasicBlock::Create(_context, "when_not_const", _function);
+              llvm::BasicBlock* cont = llvm::BasicBlock::Create(_context, "cont", _function);
+
+              _builder.CreateCondBr(is_const(freeze->arg(0)), when_const, when_not_const);
+
+              _builder.SetInsertPoint(when_const);
+              _builder.CreateBr(cont);
+
+              _builder.SetInsertPoint(when_not_const);
+
+              llvm::Value* built_const = _builder.CreateCall(
                 _llvm_api.build_const,
                 {
                   jitir_builder,
@@ -298,11 +309,19 @@ namespace metajit {
                   {
                     jitir_builder,
                     _built.at(freeze->arg(0)),
-                    _built.at(inst)
+                    built_const
                   }
                 ),
                 llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), 1)
               });
+
+              _builder.CreateBr(cont);
+
+              _builder.SetInsertPoint(cont);
+              llvm::PHINode* phi = _builder.CreatePHI(llvm::PointerType::get(_context, 0), 2);
+              phi->addIncoming(_built.at(freeze->arg(0)), when_const);
+              phi->addIncoming(built_const, when_not_const);
+              _built[inst] = phi;
             } else if (!dynamic_cast<ExitInst*>(inst) && !dynamic_cast<JumpInst*>(inst)) {
               _values[inst] = emit_inst(inst);
               _is_const[inst] = emit_const_prop(inst);
@@ -341,6 +360,11 @@ namespace metajit {
                 _built[inst] = phi;
               } else {
                 _built[inst] = build_build_inst(_builder, _llvm_api, inst, jitir_builder, args);
+              }
+
+              if (dynamic_cast<LoadInst*>(inst)) {
+                llvm::Value* is_const_inst = _builder.CreateCall(_llvm_api.is_const_inst, {_built.at(inst)});
+                _is_const[inst] = _builder.CreateTrunc(is_const_inst, llvm::Type::getInt1Ty(_context));
               }
             } else {
               _values[inst] = emit_inst(inst);
