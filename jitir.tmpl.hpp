@@ -107,8 +107,14 @@ namespace metajit {
     Inst(Type type, const std::vector<Value*>& args):
       Value(type), _args(args) {}
 
-    Value* arg(size_t index) const { return _args.at(index); }
     const std::vector<Value*>& args() const { return _args; }
+    size_t arg_count() const { return _args.size(); }
+    Value* arg(size_t index) const { return _args.at(index); }
+
+    void set_arg(size_t index, Value* value) {
+      assert(value->type() == _args.at(index)->type());
+      _args[index] = value;
+    }
 
     virtual void write(std::ostream& stream) const = 0;
     void write_args(std::ostream& stream, bool& is_first) const {
@@ -517,7 +523,10 @@ namespace metajit {
         } else {
           return false_value;
         }
+      } else if (true_value == false_value) {
+        return true_value;
       }
+
       return build_select(cond, true_value, false_value);
     }
 
@@ -781,21 +790,40 @@ namespace metajit {
     }
 
     T& at(Value* value) {
-      assert(value->name() < _size);  
+      assert(value->name() < _size);
       return _data[value->name()];
     }
 
     T& operator[](Value* value) { return at(value); }
+
+    const T& at(Value* value) const {
+      assert(value->name() < _size);
+      return _data[value->name()];
+    }
+
+    const T& operator[](Value* value) const { return at(value); }
   };
 
   template <class Self>
   class Pass {
+  private:
+    std::set<Inst*> _removed;
   public:
     Pass(Section* section) {}
+
+    ~Pass() {
+      for (Inst* inst : _removed) {
+        delete inst;
+      }
+    }
 
     template <class... Args>
     static void run(Section* section, Args... args) {
       Self self(section, args...);
+    }
+
+    void remove(Inst* inst) {
+      _removed.insert(inst);
     }
   };
 
@@ -824,7 +852,7 @@ namespace metajit {
           if (used[inst]) {
             block->add(inst);
           } else {
-            delete inst;
+            remove(inst);
           }
         }
       }
@@ -915,14 +943,14 @@ namespace metajit {
           if (unused.find(inst) == unused.end()) {
             block->add(inst);
           } else {
-            delete inst;
+            remove(inst);
           }
         }
       }
     }
   };
 
-  class KnownBits: public Pass<KnownBits> {
+  class KnownBits {
   public:
     struct Bits {
       Type type = Type::Void;
@@ -931,7 +959,9 @@ namespace metajit {
       
       Bits() {}
       Bits(Type _type, uint64_t _mask, uint64_t _value):
-        type(_type), mask(_mask), value(_value) {}
+        type(_type),
+        mask(_mask & type_mask(_type)),
+        value(_value & type_mask(_type)) {}
 
       std::optional<bool> at(size_t bit) const {
         if (mask & (uint64_t(1) << bit)) {
@@ -1014,8 +1044,7 @@ namespace metajit {
     Section* _section;
     ValueMap<Bits> _values;
   public:
-    KnownBits(Section* section): Pass(section), _section(section) {
-      section->autoname();
+    KnownBits(Section* section): _section(section) {
       _values.init(section);
 
       for (Block* block : *section) {
@@ -1053,11 +1082,49 @@ namespace metajit {
       }
     }
 
+    Bits at(Value* value) const {
+      return _values.at(value);
+    }
+
     void write(std::ostream& stream) {
       InfoWriter info_writer([&](std::ostream& stream, Value* value){
         _values[value].write(stream);
       });
       _section->write(stream, &info_writer);
+    }
+  };
+
+  class Simplify: public Pass<Simplify> {
+  public:
+    Simplify(Section* section): Pass(section) {
+      section->autoname();
+      KnownBits known_bits(section);
+      ValueMap<Value*> substs(section);
+
+      for (Block* block : *section) {
+        std::vector<Inst*> insts = block->move_insts();
+        for (Inst* inst : insts) {
+          for (size_t it = 0; it < inst->arg_count(); it++) {
+            Value* arg = inst->arg(it);
+            if (substs[arg]) {
+              inst->set_arg(it, substs[arg]);
+            }
+          }
+
+          if (dynmatch(AndInst, and_inst, inst)) {
+            KnownBits::Bits a = known_bits.at(and_inst->arg(0));
+            KnownBits::Bits b = known_bits.at(and_inst->arg(1));
+              
+            if (b.is_const() && ((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
+              substs[inst] = and_inst->arg(0);
+              remove(inst);
+              continue;
+            }
+          }
+
+          block->add(inst);
+        }
+      }
     }
   };
 }
