@@ -58,9 +58,12 @@ namespace metajit {
     switch (type) {
       case Type::Void: return 0;
       case Type::Bool: return 1;
-      case Type::Int64: return ~uint64_t(0);
       default:
-        return (uint64_t(1) << (type_size(type) * 8)) - 1;
+        if (type_size(type) >= 8) {
+          return ~uint64_t(0);
+        } else {
+          return (uint64_t(1) << (type_size(type) * 8)) - 1;
+        }
     }
   }
 }
@@ -1096,9 +1099,7 @@ namespace metajit {
     Section* _section;
     ValueMap<Bits> _values;
   public:
-    KnownBits(Section* section): _section(section) {
-      _values.init(section);
-
+    KnownBits(Section* section): _section(section), _values(section) {
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(ConstInst, constant, inst)) {
@@ -1146,10 +1147,112 @@ namespace metajit {
     }
   };
 
+  class UsedBits {
+  public:
+    struct Bits {
+      Type type = Type::Void;
+      uint64_t used = 0;
+
+      Bits() {}
+      Bits(Type _type, uint64_t _used):
+        type(_type), used(_used & type_mask(_type)) {}
+      
+      static Bits all(Type type) {
+        return Bits(type, type_mask(type));
+      }
+
+      bool at(size_t bit) const {
+        return (used & (uint64_t(1) << bit)) != 0;
+      }
+
+      void write(std::ostream& stream) const {
+        size_t bits = type == Type::Bool ? 1 : type_size(type) * 8;
+        for (size_t it = bits; it-- > 0; ) {
+          stream << (at(it) ? 'U' : '_');
+        }
+      }
+    };
+  private:
+    Section* _section;
+    ValueMap<Bits> _values;
+
+    void use(Value* value, uint64_t used) {
+      if (_values[value].type != value->type()) {
+        assert(_values[value].type == Type::Void);
+        _values[value] = Bits(value->type(), 0);
+      }
+      _values[value].used |= used & type_mask(value->type());
+    }
+
+    void use(Value* value, const Bits& used) {
+      use(value, used.used);
+    }
+  public:
+    UsedBits(Section* section): _section(section), _values(section) {
+      for (size_t block_id = section->size(); block_id-- > 0; ) {
+        Block* block = (*section)[block_id];
+        for (size_t inst_id = block->size(); inst_id-- > 0; ) {
+          Inst* inst = block->at(inst_id);
+
+          if (_values[inst].type != inst->type()) {
+            assert(_values[inst].type == Type::Void);
+            _values[inst] = Bits(inst->type(), 0);
+          }
+          
+          if (dynmatch(ResizeUInst, resize_u, inst)) {
+            use(resize_u->arg(0), _values[inst].used);
+          } else if (dynmatch(AndInst, and_inst, inst)) {
+            if (dynmatch(ConstInst, const_b, and_inst->arg(1))) {
+              use(and_inst->arg(0), _values[inst].used & const_b->value());
+            } else {
+              use(and_inst->arg(0), _values[inst]);
+            }
+            use(and_inst->arg(1), _values[inst]);
+          } else if (dynamic_cast<OrInst*>(inst) ||
+                     dynamic_cast<XorInst*>(inst)) {
+            // Element-wise instructions
+            for (Value* arg : inst->args()) {
+              use(arg, _values[inst]);
+            }
+          } else if (dynmatch(SelectInst, select, inst)) {
+            if (_values[inst].used != 0) {
+              use(select->cond(), Bits::all(select->cond()->type()));
+            }
+            use(select->arg(1), _values[inst]);
+            use(select->arg(2), _values[inst]);
+          } else {
+            if (has_side_effect(inst) || is_terminator(inst) || _values[inst].used != 0) {
+              for (Value* arg : inst->args()) {
+                use(arg, Bits::all(arg->type()));
+              }
+            } else {
+              for (Value* arg : inst->args()) {
+                use(arg, 0);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    Bits at(Value* value) const {
+      return _values.at(value);
+    }
+
+    void write(std::ostream& stream) {
+      InfoWriter info_writer([&](std::ostream& stream, Value* value){
+        _values[value].write(stream);
+      });
+      _section->write(stream, &info_writer);
+    }
+  };
+
   class Simplify: public Pass<Simplify> {
   public:
     Simplify(Section* section): Pass(section) {
       KnownBits known_bits(section);
+      UsedBits used_bits(section);
+
       ValueMap<Value*> substs(section);
 
       for (Block* block : *section) {
@@ -1165,8 +1268,13 @@ namespace metajit {
           if (dynmatch(AndInst, and_inst, inst)) {
             KnownBits::Bits a = known_bits.at(and_inst->arg(0));
             KnownBits::Bits b = known_bits.at(and_inst->arg(1));
-              
+            UsedBits::Bits used = used_bits.at(inst);
+
             if (b.is_const() && ((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
+              substs[inst] = and_inst->arg(0);
+              remove(inst);
+              continue;
+            } else if (b.is_const() && (used.used & ~b.value) == 0) {
               substs[inst] = and_inst->arg(0);
               remove(inst);
               continue;
