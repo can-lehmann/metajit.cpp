@@ -18,6 +18,7 @@
 #include <vector>
 #include <cassert>
 #include <cinttypes>
+#include <functional>
 
 #define dynmatch(Type, name, value) Type* name = dynamic_cast<Type*>(value)
 
@@ -89,6 +90,16 @@ namespace metajit {
     }
   };
 
+  struct InfoWriter {
+  public:
+    using ValueFn = std::function<void(std::ostream&, Value*)>;
+
+    ValueFn value = nullptr;
+
+    InfoWriter() {}
+    InfoWriter(const ValueFn& _value): value(_value) {}
+  };
+
   class Inst: public Value {
   private:
     std::vector<Value*> _args;
@@ -145,7 +156,7 @@ namespace metajit {
       }
     }
 
-    void write(std::ostream& stream) {
+    void write(std::ostream& stream, InfoWriter* info_writer = nullptr) {
       stream << "b" << _name << ":\n";
       for (Inst* inst : _insts) {
         stream << "  ";
@@ -154,6 +165,10 @@ namespace metajit {
           stream << " = ";
         }
         inst->write(stream);
+        if (info_writer && info_writer->value) {
+          stream << " ; ";
+          info_writer->value(stream, inst);
+        }
         stream << '\n';
       }
     }
@@ -329,7 +344,7 @@ namespace metajit {
       }
     }
 
-    void write(std::ostream& stream) {
+    void write(std::ostream& stream, InfoWriter* info_writer = nullptr) {
       autoname();
       
       stream << "section(";
@@ -354,7 +369,7 @@ namespace metajit {
       }
       stream << ") {\n";
       for (Block* block : _blocks) {
-        block->write(stream);
+        block->write(stream, info_writer);
       }
       stream << "}\n";
     }
@@ -904,6 +919,145 @@ namespace metajit {
           }
         }
       }
+    }
+  };
+
+  class KnownBits: public Pass<KnownBits> {
+  public:
+    struct Bits {
+      Type type = Type::Void;
+      uint64_t mask = 0;
+      uint64_t value = 0;
+      
+      Bits() {}
+      Bits(Type _type, uint64_t _mask, uint64_t _value):
+        type(_type), mask(_mask), value(_value) {}
+
+      std::optional<bool> at(size_t bit) const {
+        if (mask & (uint64_t(1) << bit)) {
+          return (value & (uint64_t(1) << bit)) != 0;
+        }
+        return {};
+      }
+
+      bool is_const() const {
+        return mask == type_mask(type);
+      }
+
+      Bits operator&(const Bits& other) const {
+        return Bits(
+          type,
+          (mask & other.mask) | (mask & ~value) | (other.mask & ~other.value),
+          value & other.value
+        );
+      }
+
+      Bits operator|(const Bits& other) const {
+        return Bits(
+          type,
+          (mask & other.mask) | (mask & value) | (other.mask & other.value),
+          value | other.value
+        );
+      }
+
+      Bits shl(size_t shift) const {
+        return Bits(
+          type,
+          ((mask << shift) | ((uint64_t(1) << shift) - 1)) & type_mask(type),
+          (value << shift) & type_mask(type)
+        );
+      }
+
+      Bits shr_u(size_t shift) const {
+        return Bits(
+          type,
+          (mask >> shift) | (type_mask(type) & ~(type_mask(type) >> shift)),
+          value >> shift
+        );
+      }
+
+      #define shift_by_const(name) \
+        Bits name(const Bits& other) const { \
+          if (other.is_const()) { \
+            return name(other.value); \
+          } \
+          return Bits(type, 0, 0); \
+        }
+      
+      shift_by_const(shl)
+      shift_by_const(shr_u)
+
+      #undef shift_by_const
+
+      Bits resize_u(Type to) const {
+        return Bits(
+          to,
+          (mask & type_mask(type) & type_mask(to)) | (type_mask(to) & ~type_mask(type)),
+          value & type_mask(type) & type_mask(to)
+        );
+      }
+
+      void write(std::ostream& stream) const {
+        size_t bits = type == Type::Bool ? 1 : type_size(type) * 8;
+        for (size_t it = bits; it-- > 0; ) {
+          std::optional<bool> bit = at(it);
+          if (bit.has_value()) {
+            stream << (bit.value() ? '1' : '0');
+          } else {
+            stream << '_';
+          }
+        }
+      }   
+    };
+
+  private:
+    Section* _section;
+    ValueMap<Bits> _values;
+  public:
+    KnownBits(Section* section): Pass(section), _section(section) {
+      section->autoname();
+      _values.init(section);
+
+      for (Block* block : *section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(ConstInst, constant, inst)) {
+            _values[inst] = Bits(
+              constant->type(),
+              type_mask(constant->type()),
+              constant->value()
+            );
+          } else if (dynmatch(ResizeUInst, resize_u, inst)) {
+            Bits a = _values[resize_u->arg(0)];
+            _values[inst] = a.resize_u(resize_u->type());
+          }
+
+          #define binop(name, expr) \
+            else if (dynmatch(name, binop, inst)) { \
+              Bits a = _values[binop->arg(0)]; \
+              Bits b = _values[binop->arg(1)]; \
+              _values[inst] = expr; \
+            }
+          
+          binop(AndInst, a & b)
+          binop(OrInst, a | b)
+          
+          binop(ShlInst, a.shl(b))
+          binop(ShrUInst, a.shr_u(b))
+
+          #undef binop
+
+          else {
+            _values[inst] = Bits(inst->type(), 0, 0);
+          }
+        }
+      }
+    }
+
+    void write(std::ostream& stream) {
+      InfoWriter info_writer([&](std::ostream& stream, Value* value){
+        _values[value].write(stream);
+      });
+      _section->write(stream, &info_writer);
     }
   };
 }
