@@ -19,6 +19,8 @@
 #include <cassert>
 #include <cinttypes>
 #include <functional>
+#include <unordered_map>
+#include <unordered_set>
 
 #define dynmatch(Type, name, value) Type* name = dynamic_cast<Type*>(value)
 
@@ -620,6 +622,20 @@ namespace metajit {
     }
   };
 
+    struct Interval {
+    size_t min;
+    size_t max; // Exclusive
+
+    Interval(size_t offset, Type type) {
+      min = offset;
+      max = offset + type_size(type);
+    }
+
+    bool intersects(const Interval& other) const {
+      return max > other.min && min < other.max;
+    }
+  };
+
   class TraceBuilder: public Builder {
   private:
     // We perform optimizations during trace generation
@@ -658,6 +674,7 @@ namespace metajit {
     };
 
     std::unordered_map<Value*, Pointer> _pointers;
+    std::unordered_set<LoadInst*> _valid_loads;
     std::unordered_map<size_t, GroupState> _memory;
     std::unordered_map<size_t, InputInst*> _inputs;
 
@@ -684,6 +701,26 @@ namespace metajit {
       }
 
       return same_value;
+    }
+
+    bool could_alias(LoadInst* load, Value* ptr, Type type, AliasingInfo* aliasing) {
+      if (load->aliasing() != nullptr &&
+          aliasing != nullptr && 
+          !load->aliasing()->could_alias(aliasing)) {
+        return false;
+      }
+
+      Pointer load_ptr = pointer(load->ptr());
+      Pointer store_ptr = pointer(ptr);
+
+      if (load_ptr.base != store_ptr.base) {
+        return true;
+      }
+
+      Interval load_interval(load_ptr.offset, load->type());
+      Interval store_interval(store_ptr.offset, type);
+
+      return load_interval.intersects(store_interval);
     }
   public:
     using Builder::Builder;
@@ -749,7 +786,9 @@ namespace metajit {
         }
       }
 
-      return Builder::build_load(ptr, type, flags, aliasing);
+      LoadInst* load = Builder::build_load(ptr, type, flags, aliasing);
+      _valid_loads.insert(load);
+      return load;
     }
 
     Value* build_store(Value* ptr, Value* value, AliasingInfo* aliasing) {
@@ -759,6 +798,25 @@ namespace metajit {
         for (size_t group : aliasing->groups()) {
           _memory[group].store(pointer(ptr), value);
         }
+      }
+
+      bool noop_store = false;
+      for (auto it = _valid_loads.begin(); it != _valid_loads.end(); ) {
+        LoadInst* load = *it;
+        if (load == value && pointer(load->ptr()) == pointer(ptr)) {
+          noop_store = true;
+          it++;
+          continue;
+        }
+        if (could_alias(load, ptr, value->type(), aliasing)) {
+          it = _valid_loads.erase(it);
+        } else {
+          it++;
+        }
+      }
+
+      if (noop_store) {
+        return nullptr;
       }
 
       return Builder::build_store(ptr, value, aliasing);
@@ -809,7 +867,9 @@ namespace metajit {
   private:
     std::set<Inst*> _removed;
   public:
-    Pass(Section* section) {}
+    Pass(Section* section) {
+      section->autoname();
+    }
 
     ~Pass() {
       for (Inst* inst : _removed) {
@@ -830,7 +890,6 @@ namespace metajit {
   class DeadCodeElim: public Pass<DeadCodeElim> {
   public:
     DeadCodeElim(Section* section): Pass(section) {
-      section->autoname();
       ValueMap<bool> used(section);
 
       for (size_t block_id = section->size(); block_id-- > 0; ) {
@@ -859,48 +918,11 @@ namespace metajit {
     }
   };
 
-  class DeadStoreElim: public Pass<DeadStoreElim> {
+  class PointerAnalysis {
   private:
     ValueMap<Pointer> _pointers;
-
-    struct Interval {
-      size_t min;
-      size_t max; // Exclusive
-
-      Interval(size_t offset, Type type) {
-        min = offset;
-        max = offset + type_size(type);
-      }
-
-      bool intersects(const Interval& other) const {
-        return max > other.min && min < other.max;
-      }
-    };
-
-    bool could_alias(LoadInst* load, StoreInst* store) {
-      if (load->aliasing() != nullptr &&
-          store->aliasing() != nullptr &&
-          !load->aliasing()->could_alias(store->aliasing())) {
-        return false;
-      }
-
-      Pointer load_ptr = _pointers[load->ptr()];
-      Pointer store_ptr = _pointers[store->ptr()];
-
-      if (load_ptr.base != store_ptr.base) {
-        return true;
-      }
-
-      Interval load_interval(load_ptr.offset, load->type());
-      Interval store_interval(store_ptr.offset, store->value()->type());
-
-      return load_interval.intersects(store_interval);
-    }
   public:
-    DeadStoreElim(Section* section): Pass(section) {
-      section->autoname();
-      _pointers.init(section);
-      
+    PointerAnalysis(Section* section): _pointers(section) {
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(AddPtrInst, add_ptr, inst)) {
@@ -914,7 +936,37 @@ namespace metajit {
           }
         }
       }
+    }
+    
+    Pointer at(Value* value) const { return _pointers.at(value); }
+    Pointer operator[](Value* value) const { return at(value); }
+  };
 
+  class DeadStoreElim: public Pass<DeadStoreElim> {
+  private:
+    bool could_alias(LoadInst* load, StoreInst* store) {
+      if (load->aliasing() != nullptr &&
+          store->aliasing() != nullptr &&
+          !load->aliasing()->could_alias(store->aliasing())) {
+        return false;
+      }
+
+      Pointer load_ptr = _pointer_analysis[load->ptr()];
+      Pointer store_ptr = _pointer_analysis[store->ptr()];
+
+      if (load_ptr.base != store_ptr.base) {
+        return true;
+      }
+
+      Interval load_interval(load_ptr.offset, load->type());
+      Interval store_interval(store_ptr.offset, store->value()->type());
+
+      return load_interval.intersects(store_interval);
+    }
+
+    PointerAnalysis _pointer_analysis;
+  public:
+    DeadStoreElim(Section* section): Pass(section), _pointer_analysis(section) {
       for (Block* block : *section) {
         std::set<Inst*> unused;
         std::map<Pointer, StoreInst*> last_store;
@@ -923,7 +975,7 @@ namespace metajit {
 
         for (Inst* inst : insts) {
           if (dynmatch(StoreInst, store, inst)) {
-            Pointer pointer = _pointers[store->ptr()];
+            Pointer pointer = _pointer_analysis[store->ptr()];
             last_store[pointer] = store;
             unused.insert(inst);
           } else if (dynmatch(LoadInst, load, inst)) {
@@ -1097,7 +1149,6 @@ namespace metajit {
   class Simplify: public Pass<Simplify> {
   public:
     Simplify(Section* section): Pass(section) {
-      section->autoname();
       KnownBits known_bits(section);
       ValueMap<Value*> substs(section);
 
