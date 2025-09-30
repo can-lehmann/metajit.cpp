@@ -403,6 +403,9 @@ namespace metajit {
   public:
     Builder(Section* section): _section(section) {}
 
+    Section* section() const { return _section; }
+    Block* block() const { return _block; }
+
     void move_to_end(Block* block) { _block = block; }
     void insert(Inst* inst) { _block->add(inst); }
 
