@@ -178,6 +178,8 @@ jitir = IR(
         binop("Add"),
         binop("Sub"),
         binop("Mul"),
+        binop("ModS"),
+        binop("ModU"),
         binop("And", type_checks = ["is_int_or_bool(a->type())"]),
         binop("Or", type_checks = ["is_int_or_bool(a->type())"]),
         binop("Xor", type_checks = ["is_int_or_bool(a->type())"]),

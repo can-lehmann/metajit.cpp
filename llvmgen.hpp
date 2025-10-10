@@ -116,6 +116,8 @@ namespace metajit {
       binop(Add, Add)
       binop(Sub, Sub)
       binop(Mul, Mul)
+      binop(ModS, SRem)
+      binop(ModU, URem)
       binop(And, And)
       binop(Or, Or)
       binop(Xor, Xor)

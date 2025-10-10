@@ -620,6 +620,14 @@ namespace metajit {
       return build_mul(a, b);
     }
 
+    Value* fold_mod_s(Value* a, Value* b) {
+      return build_mod_s(a, b);
+    }
+
+    Value* fold_mod_u(Value* a, Value* b) {
+      return build_mod_u(a, b);
+    }
+
     Value* fold_and(Value* a, Value* b) {
       if (dynamic_cast<ConstInst*>(a)) {
         std::swap(a, b);
@@ -694,6 +702,14 @@ namespace metajit {
         return ptr;
       }
       return fold_add_ptr(ptr, build_const(Type::Int64, offset));
+    }
+
+    Value* fold_add_ptr(Value* ptr, Value* index, size_t stride) {
+      Value* offset = index;
+      if (stride != 1) {
+        offset = fold_mul(index, build_const(Type::Int64, stride));
+      }
+      return fold_add_ptr(ptr, offset);
     }
 
     Value* fold_resize_u(Value* a, Type type) {
