@@ -90,7 +90,7 @@ namespace metajit {
     size_t name() const { return _name; }
     void set_name(size_t name) { _name = name; }
 
-    void write_arg(std::ostream& stream) {
+    void write_arg(std::ostream& stream) const {
       stream << '%' << _name;
     }
   };
@@ -105,6 +105,8 @@ namespace metajit {
     InfoWriter(const ValueFn& _value): value(_value) {}
   };
 
+  class Block;
+
   class Inst: public Value {
   private:
     std::vector<Value*> _args;
@@ -117,7 +119,7 @@ namespace metajit {
     Value* arg(size_t index) const { return _args.at(index); }
 
     void set_arg(size_t index, Value* value) {
-      assert(value->type() == _args.at(index)->type());
+      assert(!value || !_args.at(index) || value->type() == _args.at(index)->type());
       _args[index] = value;
     }
 
@@ -129,9 +131,17 @@ namespace metajit {
         } else {
           stream << ", ";
         }
-        arg->write_arg(stream);
+        if (arg == nullptr) {
+          stream << "<NULL>";
+        } else {
+          arg->write_arg(stream);
+        }
       }
     }
+
+    bool has_side_effect() const;
+    bool is_terminator() const;
+    std::vector<Block*> successor_blocks() const;
   };
 
   class Block {
@@ -160,6 +170,9 @@ namespace metajit {
       _insts.clear();
       return insts;
     }
+
+    Inst* terminator() const;
+    std::vector<Block*> successors() const;
 
     void autoname(size_t& next_name) {
       for (Inst* inst : _insts) {
@@ -312,6 +325,91 @@ std::ostream& operator<<(std::ostream& stream, metajit::InputFlags flags) {
 namespace metajit {
   ${insts}
 
+  class PhiInst: public Inst {
+  private:
+    std::vector<Block*> _blocks;
+  public:
+    PhiInst(Type type, size_t incoming_count):
+      Inst(type, std::vector<Value*>(incoming_count, nullptr)),
+      _blocks(incoming_count, nullptr) {}
+
+    Block* block(size_t index) const {
+      return _blocks.at(index);
+    }
+
+    void set_incoming(size_t index, Value* value, Block* from) {
+      set_arg(index, value);
+      _blocks[index] = from;
+    }
+
+    void write(std::ostream& stream) const override {
+      stream << "phi ";
+      bool is_first = true;
+      for (size_t it = 0; it < arg_count(); it++) {
+        if (is_first) {
+          is_first = false;
+        } else {
+          stream << ", ";
+        }
+        _blocks[it]->write_arg(stream);
+        stream << " -> ";
+        arg(it)->write_arg(stream);
+      }
+    }
+
+    bool verify(const std::set<Block*>& incoming,
+                std::ostream& errors) const {
+      
+      std::set<Block*> blocks;
+      blocks.insert(_blocks.begin(), _blocks.end());
+
+      if (blocks != incoming) {
+        errors << "Phi node ";
+        write_arg(errors);
+        errors << " has incorrect incoming blocks\n";
+        return true;
+      }
+      return false;
+    }
+  };
+
+  bool Inst::has_side_effect() const {
+    return dynamic_cast<const StoreInst*>(this) ||
+           dynamic_cast<const OutputInst*>(this);
+  }
+
+  bool Inst::is_terminator() const {
+    return dynamic_cast<const BranchInst*>(this) ||
+           dynamic_cast<const JumpInst*>(this) ||
+           dynamic_cast<const ExitInst*>(this);
+  }
+
+  std::vector<Block*> Inst::successor_blocks() const {
+    if (dynmatch(const BranchInst, branch, this)) {
+      return { branch->true_block(), branch->false_block() };
+    } else if (dynmatch(const JumpInst, jump, this)) {
+      return { jump->block() };
+    } else {
+      return {};
+    }
+  }
+
+  Inst* Block::terminator() const {
+    if (!_insts.empty() && _insts.back()->is_terminator()) {
+      return _insts.back();
+    } else {
+      return nullptr;
+    }
+  }
+
+  std::vector<Block*> Block::successors() const {
+    if (Inst* terminator = this->terminator()) {
+      return terminator->successor_blocks();
+    } else {
+      return {};
+    }
+  }
+
   class Section {
   private:
     std::vector<Block*> _blocks;
@@ -384,17 +482,55 @@ namespace metajit {
       }
       stream << "}\n";
     }
+
+    bool verify(std::ostream& errors) const {
+      std::map<Block*, std::set<Block*>> incoming;
+      for (Block* block : *this) {
+        if (!block->terminator()) {
+          errors << "Block ";
+          block->write_arg(errors);
+          errors << " has no terminator\n";
+          return true;
+        }
+
+        for (Block* succ : block->successors()) {
+          incoming[succ].insert(block);
+        }
+      }
+
+      std::set<Value*> defined;
+      for (Block* block : *this) {
+        for (Inst* inst : *block) {
+          for (Value* arg : inst->args()) {
+            if (arg == nullptr) {
+              errors << "Instruction ";
+              inst->write_arg(errors);
+              errors << " has null argument\n";
+              return true;
+            }
+
+            if (defined.find(arg) == defined.end()) {
+              errors << "Instruction ";
+              inst->write_arg(errors);
+              errors << " uses undefined value ";
+              arg->write_arg(errors);
+              errors << "\n";
+              return true;
+            }
+          }
+
+          if (dynmatch(PhiInst, phi, inst)) {
+            if (phi->verify(incoming[block], errors)) {
+              return true;
+            }
+          }
+
+          defined.insert(inst);
+        }
+      }
+      return false;
+    }
   };
-
-  inline bool has_side_effect(Inst* inst) {
-    return dynamic_cast<StoreInst*>(inst) || dynamic_cast<OutputInst*>(inst);
-  }
-
-  inline bool is_terminator(Inst* inst) {
-    return dynamic_cast<BranchInst*>(inst) ||
-           dynamic_cast<JumpInst*>(inst) ||
-           dynamic_cast<ExitInst*>(inst);
-  }
 
   class Builder {
   private:
@@ -434,6 +570,12 @@ namespace metajit {
     ShlInst* build_shl(Value* a, size_t shift) {
       assert(shift <= type_size(a->type()) * 8);
       return build_shl(a, build_const(a->type(), shift));
+    }
+
+    PhiInst* build_phi(Type type, size_t incoming_count) {
+      PhiInst* phi = new PhiInst(type, incoming_count);
+      insert(phi);
+      return phi;
     }
 
     // Folding
@@ -628,7 +770,7 @@ namespace metajit {
     }
   };
 
-    struct Interval {
+  struct Interval {
     size_t min;
     size_t max; // Exclusive
 
@@ -832,7 +974,6 @@ namespace metajit {
 
   ${capi}
 
-
   template<class T>
   class ValueMap {
   private:
@@ -902,7 +1043,7 @@ namespace metajit {
         Block* block = (*section)[block_id];
         for (size_t inst_id = block->size(); inst_id-- > 0; ) {
           Inst* inst = block->at(inst_id);
-          if (has_side_effect(inst) || is_terminator(inst) || used[inst]) {
+          if (inst->has_side_effect() || inst->is_terminator() || used[inst]) {
             used[inst] = true;
             for (Value* arg : inst->args()) {
               used[arg] = true;
@@ -1224,7 +1365,7 @@ namespace metajit {
             use(select->arg(1), _values[inst]);
             use(select->arg(2), _values[inst]);
           } else {
-            if (has_side_effect(inst) || is_terminator(inst) || _values[inst].used != 0) {
+            if (inst->has_side_effect() || inst->is_terminator() || _values[inst].used != 0) {
               for (Value* arg : inst->args()) {
                 use(arg, Bits::all(arg->type()));
               }

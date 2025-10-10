@@ -36,6 +36,8 @@ namespace metajit {
     LLVM_API _llvm_api; // Used for generating extension
 
     std::map<Block*, llvm::BasicBlock*> _blocks;
+    std::map<Block*, llvm::BasicBlock*> _end_blocks;
+
     ValueMap<llvm::Value*> _values;
     // Used for generating extension
     ValueMap<llvm::Value*> _built;
@@ -136,6 +138,18 @@ namespace metajit {
         return _builder.CreateBr(_blocks.at(jump->block()));
       } else if (dynmatch(ExitInst, exit, inst)) {
         return _builder.CreateRetVoid();
+      } else if (dynmatch(PhiInst, phi, inst)) {
+        llvm::PHINode* phi_node = _builder.CreatePHI(
+          emit_type(phi->type()),
+          phi->arg_count()
+        );
+        for (size_t it = 0; it < phi->arg_count(); it++) {
+          phi_node->addIncoming(
+            emit_arg(phi->arg(it)),
+            _end_blocks.at(phi->block(it))
+          );
+        }
+        return phi_node;
       }
 
       inst->write(std::cerr);
@@ -214,6 +228,18 @@ namespace metajit {
         ));
 
         return res;
+      } else if (dynmatch(PhiInst, phi, inst)) {
+        llvm::PHINode* phi_node = _builder.CreatePHI(
+          llvm::Type::getInt1Ty(_context),
+          phi->arg_count()
+        );
+        for (size_t it = 0; it < phi->arg_count(); it++) {
+          phi_node->addIncoming(
+            is_const(phi->arg(it)),
+            _end_blocks.at(phi->block(it))
+          );
+        }
+        return phi_node;
       } else {
         llvm::Value* all_const = llvm::ConstantInt::getTrue(_context);
         for (Value* arg : inst->args()) {
@@ -275,9 +301,32 @@ namespace metajit {
               _builder.CreateCall(_llvm_api.build_guard, {
                 jitir_builder,
                 _built.at(branch->arg(0)),
-                _builder.CreateZExt(emit_arg(branch->arg(0)), llvm::Type::getInt32Ty(_context))
+                _builder.CreateZExt(
+                  emit_arg(branch->arg(0)),
+                  llvm::Type::getInt32Ty(_context)
+                )
               });
               _values[inst] = emit_inst(inst);
+            } else if (dynamic_cast<JumpInst*>(inst) ||
+                       dynamic_cast<ExitInst*>(inst)) {
+              _values[inst] = emit_inst(inst);
+            } else if (dynmatch(PhiInst, phi, inst)) {
+              _values[inst] = emit_inst(inst);
+              _is_const[inst] = emit_const_prop(inst);
+              
+              llvm::PHINode* phi_node = _builder.CreatePHI(
+                llvm::PointerType::get(_context, 0),
+                phi->arg_count()
+              );
+
+              for (size_t it = 0; it < phi->arg_count(); it++) {
+                phi_node->addIncoming(
+                  _built.at(phi->arg(it)),
+                  _end_blocks.at(phi->block(it))
+                );
+              }
+
+              _built[inst] = phi_node;
             } else if (dynmatch(FreezeInst, freeze, inst)) {
               _values[inst] = emit_inst(inst);
               _is_const[inst] = llvm::ConstantInt::getTrue(_context);
@@ -322,7 +371,7 @@ namespace metajit {
               phi->addIncoming(_built.at(freeze->arg(0)), when_const);
               phi->addIncoming(built_const, when_not_const);
               _built[inst] = phi;
-            } else if (!dynamic_cast<ExitInst*>(inst) && !dynamic_cast<JumpInst*>(inst)) {
+            } else {
               _values[inst] = emit_inst(inst);
               _is_const[inst] = emit_const_prop(inst);
               
@@ -366,13 +415,13 @@ namespace metajit {
                 llvm::Value* is_const_inst = _builder.CreateCall(_llvm_api.is_const_inst, {_built.at(inst)});
                 _is_const[inst] = _builder.CreateTrunc(is_const_inst, llvm::Type::getInt1Ty(_context));
               }
-            } else {
-              _values[inst] = emit_inst(inst);
             }
           } else {
             _values[inst] = emit_inst(inst);
           }
-        } 
+        }
+        
+        _end_blocks[block] = _builder.GetInsertBlock();
       }
     }
   };
