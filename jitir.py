@@ -195,7 +195,7 @@ jitir = IR(
                 Arg("ptr", getter=Getter.Always),
                 Arg("type", Type("Type")),
                 Arg("flags", Type("LoadFlags")),
-                Arg("aliasing", Type("AliasingInfo*"))
+                Arg("aliasing", Type("AliasingGroup"))
             ],
             type = "type",
             type_checks = ["ptr->type() == Type::Ptr"]
@@ -204,7 +204,7 @@ jitir = IR(
             args = [
                 Arg("ptr", getter=Getter.Always),
                 Arg("value", getter=Getter.Always),
-                Arg("aliasing", Type("AliasingInfo*"))
+                Arg("aliasing", Type("AliasingGroup"))
             ],
             type = "Type::Void",
             type_checks = ["ptr->type() == Type::Ptr"]
@@ -266,7 +266,6 @@ lwir(
             InstGetterPlugin(),
             InstWritePlugin(custom={
                 Type("Block*"): lambda value, stream: f"{value}->write_arg({stream});",
-                Type("AliasingInfo*"): lambda value, stream: f"if ({value}) {{ {value}->write({stream}); }} else {{ {stream} << \"none\"; }}",
             })
         ]),
         AllocatorBuilderPlugin(),
@@ -280,7 +279,7 @@ lwir(
                 Type("LoadFlags"): "uint32_t",
                 Type("InputFlags"): "uint32_t",
                 Type("Block*"): "void*",
-                Type("AliasingInfo*"): "uint64_t", # Needs to be passed by LLVM IR
+                Type("AliasingGroup"): "uint32_t", # Needs to be passed by LLVM IR
                 ValueType(): "void*"
             }
         )
@@ -294,7 +293,7 @@ llvm_type_substitutions = {
     Type("LoadFlags"): "llvm::Type::getInt32Ty(context)",
     Type("InputFlags"): "llvm::Type::getInt32Ty(context)",
     Type("Block*"): "llvm::PointerType::get(context, 0)",
-    Type("AliasingInfo*"): "llvm::Type::getInt64Ty(context)",
+    Type("AliasingGroup"): "llvm::Type::getInt32Ty(context)",
     ValueType(): "llvm::PointerType::get(context, 0)",
 }
 

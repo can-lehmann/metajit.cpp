@@ -30,11 +30,7 @@ namespace metajit {
   private:
     struct Chunk {
       Chunk* next = nullptr;
-      size_t offset = 0;
-
       uint8_t data[0];
-
-      void* ptr() { return data + offset; }
     };
 
     static constexpr size_t CHUNK_SIZE = 1024 * 1024; // 1 MiB
@@ -43,27 +39,12 @@ namespace metajit {
     Chunk* _first = nullptr;
     Chunk* _current = nullptr;
 
+    size_t _left = 0;
+    uint8_t* _ptr = nullptr;
+
     inline size_t align_pad(void* ptr, size_t align) {
       size_t delta = (uintptr_t) ptr % align;
       return delta ? align - delta : 0;
-    }
-
-    void find_fitting_chunk(size_t size, size_t align) {
-      assert(size <= USABLE_SIZE);
-
-      Chunk* chunk = _current;
-      while (chunk) {
-        if (USABLE_SIZE - chunk->offset - align_pad(chunk->ptr(), align) >= size) {
-          _current = chunk;
-          return;
-        }
-        chunk = chunk->next;
-      }
-
-      chunk = (Chunk*) malloc(CHUNK_SIZE);
-      new (chunk) Chunk();
-      _current->next = chunk;
-      _current = chunk;
     }
   public:
     ArenaAllocator() {
@@ -82,30 +63,36 @@ namespace metajit {
     }
 
     void* alloc(size_t size, size_t align) {
-      find_fitting_chunk(size, align);
-      _current->offset += align_pad(_current->ptr(), align);
-      void* ptr = _current->ptr();
-      _current->offset += size;
+      assert(size <= USABLE_SIZE);
+
+      size_t align_padding = align_pad(_ptr, align);
+
+      if (__builtin_expect(_left - align_padding < size, 0)) {
+        if (_current->next) {
+          _current = _current->next;
+        } else {
+          Chunk* chunk = (Chunk*) malloc(CHUNK_SIZE);
+          new (chunk) Chunk();
+          _current->next = chunk;
+          _current = chunk;  
+        }
+        _left = USABLE_SIZE;
+        _ptr = _current->data;
+        align_padding = align_pad(_ptr, align);
+      }
+
+      _ptr += align_padding;
+      _left -= align_padding;
+      void* ptr = (void*) _ptr;
+      _ptr += size;
+      _left -= size; 
       return ptr;
     }
 
     void dealloc_all() {
-      Chunk* chunk = _first;
-      while (chunk) {
-        chunk->offset = 0;
-        chunk = chunk->next;
-      }
       _current = _first;
-    }
-
-    void print_stats(std::ostream& stream) const {
-      Chunk* chunk = _first;
-      size_t it = 0;
-      while (chunk) {
-        stream << "Chunk #" << it << ": " << chunk->offset << "/" << USABLE_SIZE << "\n";
-        chunk = chunk->next;
-        it++;
-      }
+      _ptr = _first->data;
+      _left = USABLE_SIZE;
     }
   };
 
@@ -420,43 +407,6 @@ namespace metajit {
       stream << "}";
     }
   };
-
-  // TODO: Refcount
-  class AliasingInfo {
-  private:
-    std::set<size_t> _groups;
-  public:
-    AliasingInfo() {}
-    AliasingInfo(const std::set<size_t>& groups): _groups(groups) {}
-
-    void add_group(size_t group) {
-      _groups.insert(group);
-    }
-
-    const std::set<size_t>& groups() const {
-      return _groups;
-    }
-
-    bool could_alias(const AliasingInfo* other) const {
-      for (size_t group : _groups) {
-        if (other->_groups.find(group) != other->_groups.end()) {
-          return true;
-        }
-      }
-      return false;
-    }
-
-    void write(std::ostream& stream) const {
-      stream << "{";
-      bool is_first = true;
-      for (size_t group : _groups) {
-        if (!is_first) { stream << ", "; }
-        is_first = false;
-        stream << group;
-      }
-      stream << "}";
-    }
-  };
 }
 
 std::ostream& operator<<(std::ostream& stream, metajit::LoadFlags flags) {
@@ -470,6 +420,8 @@ std::ostream& operator<<(std::ostream& stream, metajit::InputFlags flags) {
 }
 
 namespace metajit {
+  using AliasingGroup = int32_t;
+
   ${insts}
 
   class PhiInst: public Inst {
@@ -997,40 +949,31 @@ namespace metajit {
     };
 
     std::unordered_map<Value*, Pointer> _pointers;
-    std::unordered_set<LoadInst*> _valid_loads;
-    std::unordered_map<size_t, GroupState> _memory;
+    
+    std::unordered_map<AliasingGroup, std::unordered_set<LoadInst*>> _valid_loads;
+    std::unordered_map<AliasingGroup, LoadInst*> _exact_loads;
+
+    std::unordered_map<AliasingGroup, GroupState> _memory;
+    std::unordered_map<AliasingGroup, Value*> _exact_memory;
+
     std::unordered_map<size_t, InputInst*> _inputs;
 
     Pointer pointer(Value* value) {
-      if (_pointers.find(value) == _pointers.end()) {
-        _pointers[value] = Pointer(value, 0);
+      auto it = _pointers.find(value);
+      if (it == _pointers.end()) {
+        return Pointer(value, 0);
+      } else {
+        return it->second;
       }
-      return _pointers.at(value);
     }
 
-    Value* load(Pointer pointer, Type type, AliasingInfo* aliasing) {
-      Value* same_value;
-      bool has_same_value = false;
-      for (size_t group : aliasing->groups()) {
-        Value* value = _memory[group].load(pointer, type);
-        if (has_same_value) {
-          if (value != same_value) {
-            same_value = nullptr;
-            break;
-          }
-        } else {
-          same_value = value;
-        }
-      }
-
-      return same_value;
-    }
-
-    bool could_alias(LoadInst* load, Value* ptr, Type type, AliasingInfo* aliasing) {
-      if (load->aliasing() != nullptr &&
-          aliasing != nullptr && 
-          !load->aliasing()->could_alias(aliasing)) {
+    bool could_alias(LoadInst* load, Value* ptr, Type type, AliasingGroup aliasing) {
+      if (load->aliasing() != aliasing) {
         return false;
+      }
+
+      if (aliasing < 0) {
+        return true; // Exact aliasing
       }
 
       Pointer load_ptr = pointer(load->ptr());
@@ -1102,47 +1045,62 @@ namespace metajit {
 
     // We override load/store to do simple load/store forwarding
 
-    Value* build_load(Value* ptr, Type type, LoadFlags flags, AliasingInfo* aliasing) {
-      if (aliasing) {
-        if (Value* value = load(pointer(ptr), type, aliasing)) {
+    Value* build_load(Value* ptr, Type type, LoadFlags flags, AliasingGroup aliasing) {
+      if (aliasing < 0) {
+        if (Value* value = _exact_memory[aliasing]) {
           return value;
         }
-      }
+        if (LoadInst* load = _exact_loads[aliasing]) {
+          return load;
+        }
 
-      LoadInst* load = Builder::build_load(ptr, type, flags, aliasing);
-      _valid_loads.insert(load);
-      return load;
+        LoadInst* load = Builder::build_load(ptr, type, flags, aliasing);
+        _exact_loads[aliasing] = load;
+        _exact_memory[aliasing] = load;
+        return load;
+      } else {
+        if (Value* value = _memory[aliasing].load(pointer(ptr), type)) {
+          return value;
+        }
+
+        LoadInst* load = Builder::build_load(ptr, type, flags, aliasing);
+        _valid_loads[aliasing].insert(load);
+        return load;
+      }
     }
 
-    Value* build_store(Value* ptr, Value* value, AliasingInfo* aliasing) {
-      if (aliasing == nullptr) {
-        _memory.clear();
+    Value* build_store(Value* ptr, Value* value, AliasingGroup aliasing) {
+      if (aliasing < 0) {
+        if (_exact_memory[aliasing] == value) {
+          return nullptr;
+        }
+        _exact_memory[aliasing] = value;
+        _exact_loads.erase(aliasing);
+        return Builder::build_store(ptr, value, aliasing);
       } else {
-        for (size_t group : aliasing->groups()) {
-          _memory[group].store(pointer(ptr), value);
-        }
-      }
+        _memory[aliasing].store(pointer(ptr), value);
 
-      bool noop_store = false;
-      for (auto it = _valid_loads.begin(); it != _valid_loads.end(); ) {
-        LoadInst* load = *it;
-        if (load == value && pointer(load->ptr()) == pointer(ptr)) {
-          noop_store = true;
-          it++;
-          continue;
+        bool noop_store = false;
+        for (auto it = _valid_loads[aliasing].begin(); it != _valid_loads[aliasing].end(); ) {
+          LoadInst* load = *it;
+          if (load == value && pointer(load->ptr()) == pointer(ptr)) {
+            noop_store = true;
+            it++;
+            continue;
+          }
+          if (could_alias(load, ptr, value->type(), aliasing)) {
+            it = _valid_loads[aliasing].erase(it);
+          } else {
+            it++;
+          }
         }
-        if (could_alias(load, ptr, value->type(), aliasing)) {
-          it = _valid_loads.erase(it);
-        } else {
-          it++;
+
+        if (noop_store) {
+          return nullptr;
         }
-      }
 
-      if (noop_store) {
-        return nullptr;
+        return Builder::build_store(ptr, value, aliasing);
       }
-
-      return Builder::build_store(ptr, value, aliasing);
     }
 
   };
@@ -1267,10 +1225,12 @@ namespace metajit {
   class DeadStoreElim: public Pass<DeadStoreElim> {
   private:
     bool could_alias(LoadInst* load, StoreInst* store) {
-      if (load->aliasing() != nullptr &&
-          store->aliasing() != nullptr &&
-          !load->aliasing()->could_alias(store->aliasing())) {
+      if (load->aliasing() != store->aliasing()) {
         return false;
+      }
+
+      if (load->aliasing() < 0) {
+        return true; // Exact aliasing
       }
 
       Pointer load_ptr = _pointer_analysis[load->ptr()];
