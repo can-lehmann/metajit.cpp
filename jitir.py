@@ -81,6 +81,51 @@ class MapSymbolsInstPlugin:
             code += f"map_symbol({name});\n"
         return {"map_symbols": code}
 
+class AllocatorBuilderPlugin(BuilderPlugin):
+    def __init__(self):
+        super().__init__(allocator = self.allocator)
+    
+    def allocator(self, inst, ir):
+        name = inst.format_name(ir)
+        arg_count = 0
+        for arg in inst.args:
+            if arg.type.is_value():
+                arg_count += 1
+        size = f"sizeof({name}) + sizeof(Value*) * {arg_count}"
+        return f"({name}*) _section->allocator().alloc({size}, alignof({name}))"
+
+class InstTrailingConstructorPlugin:
+    def run(self, inst, ir):
+        name = inst.format_name(ir)
+        base = inst.base or ir.inst_base
+
+        init_list = []
+        arg_init = ""
+        arg_count = 0
+        for arg in inst.args:
+            match arg.type:
+                case ValueType():
+                    arg_init += f".with({arg_count}, {arg.name})"
+                    arg_count += 1
+                case Type():
+                    init_list.append(f"_{arg.name}({arg.name})")
+                case _:
+                    assert False, f"Unknown type: {arg.type}"
+        
+        arg_init = f"Span<Value*>::trailing(this, {arg_count})" + arg_init
+
+        init_list = [f"{base}({inst.type}, {arg_init})"] + init_list
+        init_list = ", ".join(init_list)
+        
+        ctor_args = ", ".join(inst.format_formal_args(ir))
+        code = f"  {name}({ctor_args}): {init_list} {{\n"
+        for check in inst.type_checks:
+            code += f"    assert({check});\n"
+        code += f"  }}\n"
+        code += "\n"
+
+        return code
+
 def binop(name, type_checks = None):
     if type_checks is None:
         type_checks = ["is_int(a->type())"]
@@ -217,13 +262,14 @@ lwir(
     ir = jitir,
     plugins = [
         InstPlugin([
+            InstTrailingConstructorPlugin(),
             InstGetterPlugin(),
             InstWritePlugin(custom={
                 Type("Block*"): lambda value, stream: f"{value}->write_arg({stream});",
                 Type("AliasingInfo*"): lambda value, stream: f"if ({value}) {{ {value}->write({stream}); }} else {{ {stream} << \"none\"; }}",
             })
         ]),
-        BuilderPlugin(),
+        AllocatorBuilderPlugin(),
         CAPIPlugin(
             prefix = "jitir",
             builder_name = "::metajit::TraceBuilder",

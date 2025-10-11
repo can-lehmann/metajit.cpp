@@ -25,6 +25,103 @@
 #define dynmatch(Type, name, value) Type* name = dynamic_cast<Type*>(value)
 
 namespace metajit {
+
+  class ArenaAllocator {
+  private:
+    struct Chunk {
+      Chunk* next = nullptr;
+      size_t offset = 0;
+
+      uint8_t data[0];
+
+      void* ptr() { return data + offset; }
+    };
+
+    static constexpr size_t CHUNK_SIZE = 1024 * 1024; // 1 MiB
+    static constexpr size_t USABLE_SIZE = CHUNK_SIZE - sizeof(Chunk);
+
+    Chunk* _first = nullptr;
+    Chunk* _current = nullptr;
+
+    inline size_t align_pad(void* ptr, size_t align) {
+      size_t delta = (uintptr_t) ptr % align;
+      return delta ? align - delta : 0;
+    }
+
+    void find_fitting_chunk(size_t size, size_t align) {
+      assert(size <= USABLE_SIZE);
+
+      Chunk* chunk = _current;
+      while (chunk) {
+        if (USABLE_SIZE - chunk->offset - align_pad(chunk->ptr(), align) >= size) {
+          _current = chunk;
+          return;
+        }
+        chunk = chunk->next;
+      }
+
+      chunk = (Chunk*) malloc(CHUNK_SIZE);
+      new (chunk) Chunk();
+      _current->next = chunk;
+      _current = chunk;
+    }
+  public:
+    ArenaAllocator() {
+      _first = (Chunk*) malloc(CHUNK_SIZE);
+      new (_first) Chunk();
+      _current = _first;
+    }
+
+    ~ArenaAllocator() {
+      Chunk* chunk = _first;
+      while (chunk) {
+        Chunk* next = chunk->next;
+        free(chunk);
+        chunk = next;
+      }
+    }
+
+    void* alloc(size_t size, size_t align) {
+      find_fitting_chunk(size, align);
+      _current->offset += align_pad(_current->ptr(), align);
+      void* ptr = _current->ptr();
+      _current->offset += size;
+      return ptr;
+    }
+
+    void dealloc_all() {
+      Chunk* chunk = _first;
+      while (chunk) {
+        chunk->offset = 0;
+        chunk = chunk->next;
+      }
+      _current = _first;
+    }
+
+    void print_stats(std::ostream& stream) const {
+      Chunk* chunk = _first;
+      size_t it = 0;
+      while (chunk) {
+        stream << "Chunk #" << it << ": " << chunk->offset << "/" << USABLE_SIZE << "\n";
+        chunk = chunk->next;
+        it++;
+      }
+    }
+  };
+
+  // WARNING: Does not deallocate, only use for testing
+  class MallocAllocator {
+  public:
+    MallocAllocator() {}
+    ~MallocAllocator() {}
+
+    void* alloc(size_t size, size_t align) {
+      return malloc(size);
+    }
+  };
+
+  using Allocator = ArenaAllocator;
+
   enum class Type {
     Void, Bool, Int8, Int16, Int32, Int64, Ptr
   };
@@ -106,15 +203,65 @@ namespace metajit {
   };
 
   class Block;
+  
+  template <class T>
+  class Span {
+  private:
+    T* _data;
+    size_t _size = 0;
+  public:
+    Span(T* data, size_t size): _data(data), _size(size) {}
+    
+    template <class Ptr>
+    static Span<T> offset(Ptr* base, size_t offset, size_t size) {
+      return Span<T>((T*) ((uint8_t*) base + offset), size);
+    }
+
+    template <class Ptr>
+    static Span<T> trailing(Ptr* base, size_t size) {
+      return Span<T>((T*) ((uint8_t*) base + sizeof(Ptr)), size);
+    }
+
+    T* data() const { return _data; }
+
+    size_t size() const { return _size; }
+    
+    inline T at(size_t index) const {
+      assert(index < _size);
+      return _data[index];
+    }
+
+    inline T& at(size_t index) {
+      assert(index < _size);
+      return _data[index];
+    }
+
+    inline T operator[](size_t index) const { return at(index); }
+    inline T& operator[](size_t index) { return at(index); }
+
+    T* begin() const { return _data; }
+    T* end() const { return _data + _size; }
+
+    Span zeroed() const {
+      memset(_data, 0, sizeof(T) * _size);
+      return *this;
+    }
+
+    Span with(size_t index, const T& value) const {
+      assert(index < _size);
+      _data[index] = value;
+      return *this;
+    }
+  };
 
   class Inst: public Value {
   private:
-    std::vector<Value*> _args;
+    Span<Value*> _args;
   public:
-    Inst(Type type, const std::vector<Value*>& args):
+    Inst(Type type, const Span<Value*>& args):
       Value(type), _args(args) {}
 
-    const std::vector<Value*>& args() const { return _args; }
+    const Span<Value*>& args() const { return _args; }
     size_t arg_count() const { return _args.size(); }
     Value* arg(size_t index) const { return _args.at(index); }
 
@@ -327,11 +474,11 @@ namespace metajit {
 
   class PhiInst: public Inst {
   private:
-    std::vector<Block*> _blocks;
+    Span<Block*> _blocks;
   public:
     PhiInst(Type type, size_t incoming_count):
-      Inst(type, std::vector<Value*>(incoming_count, nullptr)),
-      _blocks(incoming_count, nullptr) {}
+      Inst(type, Span<Value*>::trailing(this, incoming_count).zeroed()),
+      _blocks(Span<Block*>::offset(this, sizeof(PhiInst) + sizeof(Value*) * incoming_count, incoming_count).zeroed()) {}
 
     Block* block(size_t index) const {
       return _blocks.at(index);
@@ -412,12 +559,15 @@ namespace metajit {
 
   class Section {
   private:
+    Allocator& _allocator;
     std::vector<Block*> _blocks;
     std::vector<Type> _inputs;
     std::vector<Type> _outputs;
     size_t _name_count = 0;
   public:
-    Section() {}
+    Section(Allocator& allocator): _allocator(allocator) {}
+
+    Allocator& allocator() const { return _allocator; }
 
     auto begin() const { return _blocks.begin(); }
     auto end() const { return _blocks.end(); }
@@ -546,7 +696,10 @@ namespace metajit {
     void insert(Inst* inst) { _block->add(inst); }
 
     Block* build_block() {
-      Block* block = new Block();
+      Block* block = (Block*) _section->allocator().alloc(
+        sizeof(Block), alignof(Block)
+      );
+      new (block) Block();
       _section->add(block);
       return block;
     }
@@ -573,7 +726,13 @@ namespace metajit {
     }
 
     PhiInst* build_phi(Type type, size_t incoming_count) {
-      PhiInst* phi = new PhiInst(type, incoming_count);
+      PhiInst* phi = (PhiInst*) _section->allocator().alloc(
+        sizeof(PhiInst) +
+        sizeof(Value*) * incoming_count +
+        sizeof(Block*) * incoming_count,
+        alignof(PhiInst)
+      );
+      new (phi) PhiInst(type, incoming_count);
       insert(phi);
       return phi;
     }
@@ -1046,7 +1205,7 @@ namespace metajit {
     }
 
     void remove(Inst* inst) {
-      _removed.insert(inst);
+      //_removed.insert(inst);
     }
   };
 
