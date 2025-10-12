@@ -150,11 +150,6 @@ def cmp(name, type_checks):
 
 jitir = IR(
     insts = [
-        Inst("Const",
-            args = [Arg("type", Type("Type")), Arg("value", Type("uint64_t"))],
-            type = "type",
-            type_checks = []
-        ),
         Inst("Freeze",
             args = [Arg("a")],
             type = "a->type()",
@@ -220,16 +215,6 @@ jitir = IR(
             type_checks = [
                 "ptr->type() == Type::Ptr",
                 "offset->type() == Type::Int64"
-            ]
-        ),
-        Inst("AddPtrConst",
-            args = [
-                Arg("ptr", getter=Getter.Always),
-                Arg("offset", Type("uint64_t"))
-            ],
-            type = "Type::Ptr",
-            type_checks = [
-                "ptr->type() == Type::Ptr"
             ]
         ),
         binop("Add"),

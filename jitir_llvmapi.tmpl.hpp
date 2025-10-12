@@ -14,16 +14,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "llvm/ExecutionEngine/Orc/LLJIT.h"
+
 namespace metajit {
   class LLVM_API {
   public:
     ${llvmapi_defs}
+    llvm::FunctionCallee build_const;
+    llvm::FunctionCallee build_const_fast;
     llvm::FunctionCallee build_guard;
     llvm::FunctionCallee is_const_inst;
 
     LLVM_API(llvm::Module* module) {
       llvm::LLVMContext& context = module->getContext();
       ${llvmapi_inits}
+
+      llvm::FunctionType* build_const_type = llvm::FunctionType::get(
+        llvm::PointerType::get(context, 0),
+        std::vector<llvm::Type*>({
+          llvm::PointerType::get(context, 0),
+          llvm::Type::getInt32Ty(context),
+          llvm::Type::getInt64Ty(context)
+        }),
+        false
+      );
+
+      build_const = module->getOrInsertFunction("jitir_build_const", build_const_type);
+      build_const_fast = module->getOrInsertFunction("jitir_build_const_fast", build_const_type);
 
       build_guard = module->getOrInsertFunction(
         "jitir_build_guard",
@@ -52,11 +69,21 @@ namespace metajit {
   };
 
   extern "C" {
+    void* jitir_build_const(void* builder_ptr, uint32_t type, uint64_t value) {
+      Builder& builder = *(Builder*)builder_ptr;
+      return (void*) builder.build_const((Type) type, value);
+    }
+
+    void* jitir_build_const_fast(void* builder_ptr, uint32_t type, uint64_t value) {
+      Builder& builder = *(Builder*)builder_ptr;
+      return (void*) builder.build_const_fast((Type) type, value);
+    }
+
     void jitir_build_guard(void* builder_ptr, void* value_ptr, uint32_t expected) {
       Builder& builder = *(Builder*)builder_ptr;
       Value* value = (Value*)value_ptr;
 
-      if (dynmatch(ConstInst, constant, value)) {
+      if (dynmatch(Const, constant, value)) {
         if ((constant->value() && expected) || (!constant->value() && !expected)) {
           return; // Always true
         }
@@ -80,7 +107,7 @@ namespace metajit {
 
     uint32_t jitir_is_const_inst(void* value_ptr) {
       Value* value = (Value*)value_ptr;
-      return dynamic_cast<ConstInst*>(value) != nullptr;
+      return dynamic_cast<Const*>(value) != nullptr;
     }
   }
 
@@ -100,6 +127,8 @@ namespace metajit {
 
     ${map_symbols}
 
+    map_symbol(jitir_build_const)
+    map_symbol(jitir_build_const_fast)
     map_symbol(jitir_build_guard)
     map_symbol(jitir_is_const_inst)
 

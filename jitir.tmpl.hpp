@@ -21,6 +21,9 @@
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
+#include <set>
+#include <map>
+#include <optional>
 
 #define dynmatch(Type, name, value) Type* name = dynamic_cast<Type*>(value)
 
@@ -174,8 +177,33 @@ namespace metajit {
     size_t name() const { return _name; }
     void set_name(size_t name) { _name = name; }
 
-    void write_arg(std::ostream& stream) const {
+    virtual void write_arg(std::ostream& stream) const {
       stream << '%' << _name;
+    }
+  };
+
+  class Const final: public Value {
+  private:
+    uint64_t _value = 0;
+  public:
+    Const(Type type, uint64_t value): Value(type), _value(value) {}
+    uint64_t value() const { return _value; }
+
+    void write_arg(std::ostream& stream) const override {
+      stream << _value;
+    }
+  };
+
+  class Context {
+  private:
+    Allocator _const_allocator;
+  public:
+    Context() {}
+
+    Const* build_const(Type type, uint64_t value) {
+      Const* constant = (Const*) _const_allocator.alloc(sizeof(Const), alignof(Const));
+      new (constant) Const(type, value);
+      return constant;
     }
   };
 
@@ -657,14 +685,17 @@ namespace metajit {
 
   class Section {
   private:
+    Context& _context;
     Allocator& _allocator;
     std::vector<Block*> _blocks;
     std::vector<Type> _inputs;
     std::vector<Type> _outputs;
     size_t _name_count = 0;
   public:
-    Section(Allocator& allocator): _allocator(allocator) {}
+    Section(Context& context, Allocator& allocator):
+      _context(context), _allocator(allocator) {}
 
+    Context& context() const { return _context; }
     Allocator& allocator() const { return _allocator; }
 
     auto begin() const { return _blocks.begin(); }
@@ -757,7 +788,8 @@ namespace metajit {
               return true;
             }
 
-            if (defined.find(arg) == defined.end()) {
+            if (dynamic_cast<const Inst*>(arg) &&
+                defined.find(arg) == defined.end()) {
               errors << "Instruction ";
               inst->write_arg(errors);
               errors << " uses undefined value ";
@@ -802,6 +834,16 @@ namespace metajit {
       return block;
     }
 
+    Const* build_const(Type type, uint64_t value) {
+      return _section->context().build_const(type, value);
+    }
+
+    Const* build_const_fast(Type type, uint64_t value) {
+      Const* constant = (Const*) _section->allocator().alloc(sizeof(Const), alignof(Const));
+      new (constant) Const(type, value);
+      return constant;
+    }
+
     ${builder}
 
     InputInst* build_input(Type type, InputFlags flags = InputFlags()) {
@@ -834,11 +876,11 @@ namespace metajit {
     // Folding
 
     Value* fold_add(Value* a, Value* b) {
-      if (dynamic_cast<ConstInst*>(a)) {
+      if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
       }
 
-      if (dynmatch(ConstInst, const_b, b)) {
+      if (dynmatch(Const, const_b, b)) {
         if (const_b->value() == 0) {
           return a;
         }
@@ -848,7 +890,7 @@ namespace metajit {
     }
 
     Value* fold_sub(Value* a, Value* b) {
-      if (dynmatch(ConstInst, const_b, b)) {
+      if (dynmatch(Const, const_b, b)) {
         if (const_b->value() == 0) {
           return a;
         }
@@ -858,11 +900,11 @@ namespace metajit {
     }
 
     Value* fold_mul(Value* a, Value* b) {
-      if (dynamic_cast<ConstInst*>(a)) {
+      if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
       }
 
-      if (dynmatch(ConstInst, const_b, b)) {
+      if (dynmatch(Const, const_b, b)) {
         if (const_b->value() == 0) {
           return b;
         } else if (const_b->value() == 1) {
@@ -882,12 +924,12 @@ namespace metajit {
     }
 
     Value* fold_and(Value* a, Value* b) {
-      if (dynamic_cast<ConstInst*>(a)) {
+      if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
       }
 
-      if (dynmatch(ConstInst, const_b, b)) {
-        if (dynmatch(ConstInst, const_a, a)) {
+      if (dynmatch(Const, const_b, b)) {
+        if (dynmatch(Const, const_a, a)) {
           uint64_t result = const_a->value() & const_b->value();
           return build_const(a->type(), result);
         } else if (const_b->value() == type_mask(a->type())) {
@@ -900,11 +942,11 @@ namespace metajit {
     }
 
     Value* fold_or(Value* a, Value* b) {
-      if (dynamic_cast<ConstInst*>(a)) {
+      if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
       }
 
-      if (dynmatch(ConstInst, constant, b)) {
+      if (dynmatch(Const, constant, b)) {
         if (constant->value() == 0) {
           return a;
         } else if (constant->value() == type_mask(a->type())) {
@@ -915,11 +957,11 @@ namespace metajit {
     }
 
     Value* fold_xor(Value* a, Value* b) {
-      if (dynamic_cast<ConstInst*>(a)) {
+      if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
       }
 
-      if (dynmatch(ConstInst, constant, b)) {
+      if (dynmatch(Const, constant, b)) {
         if (constant->value() == 0) {
           return a;
         }
@@ -927,8 +969,28 @@ namespace metajit {
       return build_xor(a, b);
     }
 
+    Value* fold_eq(Value* a, Value* b) {
+      if (dynamic_cast<Const*>(a)) {
+        std::swap(a, b);
+      }
+
+      if (a == b) {
+        return build_const(Type::Bool, 1);
+      }
+
+      return build_eq(a, b);
+    }
+
+    Value* fold_lt_s(Value* a, Value* b) {
+      return build_lt_s(a, b);
+    }
+
+    Value* fold_lt_u(Value* a, Value* b) {
+      return build_lt_u(a, b);
+    }
+
     Value* fold_select(Value* cond, Value* true_value, Value* false_value) {
-      if (dynmatch(ConstInst, const_cond, cond)) {
+      if (dynmatch(Const, const_cond, cond)) {
         if (const_cond->value() != 0) {
           return true_value;
         } else {
@@ -942,24 +1004,19 @@ namespace metajit {
     }
 
     Value* fold_add_ptr(Value* ptr, Value* offset) {
-      if (dynmatch(ConstInst, constant, offset)) {
+      if (dynmatch(Const, constant, offset)) {
         if (constant->value() == 0) {
           return ptr;
-        } else {
-          return fold_add_ptr_const(ptr, constant->value());
+        } else if (dynmatch(AddPtrInst, add_ptr, ptr)) {
+          if (dynmatch(Const, inner_const, add_ptr->offset())) {
+            return build_add_ptr(
+              add_ptr->ptr(),
+              build_const(Type::Int64, inner_const->value() + constant->value())
+            );
+          }
         }
       }
       return build_add_ptr(ptr, offset);
-    }
-
-    Value* fold_add_ptr_const(Value* ptr, uint64_t offset) {
-      if (offset == 0) {
-        return ptr;
-      } else if (dynmatch(AddPtrConstInst, add_ptr, ptr)) {
-        ptr = add_ptr->ptr();
-        offset += add_ptr->offset();
-      }
-      return build_add_ptr_const(ptr, offset);
     }
 
     Value* fold_add_ptr(Value* ptr, uint64_t offset) {
@@ -980,7 +1037,7 @@ namespace metajit {
     Value* fold_resize_u(Value* a, Type type) {
       if (a->type() == type) {
         return a;
-      } else if (dynmatch(ConstInst, constant, a)) {
+      } else if (dynmatch(Const, constant, a)) {
         uint64_t value = constant->value() & type_mask(type);
         return build_const(type, value);
       }
@@ -988,8 +1045,8 @@ namespace metajit {
     }
 
     Value* fold_shl(Value* a, Value* b) {
-      if (dynmatch(ConstInst, const_b, b)) {
-        if (dynmatch(ConstInst, const_a, a)) {
+      if (dynmatch(Const, const_b, b)) {
+        if (dynmatch(Const, const_a, a)) {
           uint64_t result = const_a->value() << const_b->value();
           result &= type_mask(a->type());
           return build_const(a->type(), result);
@@ -1006,7 +1063,7 @@ namespace metajit {
     }
 
     Value* fold_shr_u(Value* a, Value* b) {
-      if (dynmatch(ConstInst, constant, b)) {
+      if (dynmatch(Const, constant, b)) {
         if (constant->value() == 0) {
           return a;
         }
@@ -1015,7 +1072,7 @@ namespace metajit {
     }
 
     Value* fold_shr_s(Value* a, Value* b) {
-      if (dynmatch(ConstInst, constant, b)) {
+      if (dynmatch(Const, constant, b)) {
         if (constant->value() == 0) {
           return a;
         }
@@ -1180,10 +1237,6 @@ namespace metajit {
       return Builder::fold_add_ptr(ptr, offset);
     }
 
-    Value* build_add_ptr_const(Value* ptr, uint64_t offset) {
-      return Builder::fold_add_ptr_const(ptr, offset);
-    }
-
     // We deduplicate input building to track pointers
 
     Value* build_input(size_t id, Type type, InputFlags flags = InputFlags()) {
@@ -1197,9 +1250,11 @@ namespace metajit {
     // We override load/store to do simple load/store forwarding
 
     Value* build_load(Value* ptr, Type type, LoadFlags flags, AliasingGroup aliasing, uint64_t offset) {
-      if (dynmatch(AddPtrConstInst, add_ptr, ptr)) {
-        ptr = add_ptr->ptr();
-        offset += add_ptr->offset();
+      if (dynmatch(AddPtrInst, add_ptr, ptr)) {
+        if (dynmatch(Const, const_offset, add_ptr->offset())) {
+          ptr = add_ptr->ptr();
+          offset += const_offset->value();
+        }
       }
 
       if (aliasing < 0) {
@@ -1226,9 +1281,11 @@ namespace metajit {
     }
 
     Value* build_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
-      if (dynmatch(AddPtrConstInst, add_ptr, ptr)) {
-        ptr = add_ptr->ptr();
-        offset += add_ptr->offset();
+      if (dynmatch(AddPtrInst, add_ptr, ptr)) {
+        if (dynmatch(Const, const_offset, add_ptr->offset())) {
+          ptr = add_ptr->ptr();
+          offset += const_offset->value();
+        }
       }
 
       if (aliasing < 0) {
@@ -1501,7 +1558,7 @@ namespace metajit {
     KnownBits(Section* section): _section(section), _values(section) {
       for (Block* block : *section) {
         for (Inst* inst : *block) {
-          if (dynmatch(ConstInst, constant, inst)) {
+          if (dynmatch(Const, constant, inst)) {
             _values[inst] = Bits(
               constant->type(),
               type_mask(constant->type()),
@@ -1599,7 +1656,7 @@ namespace metajit {
           if (dynmatch(ResizeUInst, resize_u, inst)) {
             use(resize_u->arg(0), _values[inst].used);
           } else if (dynmatch(AndInst, and_inst, inst)) {
-            if (dynmatch(ConstInst, const_b, and_inst->arg(1))) {
+            if (dynmatch(Const, const_b, and_inst->arg(1))) {
               use(and_inst->arg(0), _values[inst].used & const_b->value());
             } else {
               use(and_inst->arg(0), _values[inst]);

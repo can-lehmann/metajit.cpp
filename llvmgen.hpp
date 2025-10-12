@@ -81,6 +81,14 @@ namespace metajit {
     }
 
     llvm::Value* emit_arg(Value* value) {
+      if (dynmatch(Const, constant, value)) {
+        return llvm::ConstantInt::get(
+          emit_type(constant->type()),
+          constant->value(),
+          false
+        );
+      }
+
       return _values.at(value);
     }
 
@@ -97,13 +105,7 @@ namespace metajit {
     }
 
     llvm::Value* emit_inst(Inst* inst) {
-      if (dynmatch(ConstInst, constant, inst)) {
-        return llvm::ConstantInt::get(
-          emit_type(constant->type()),
-          constant->value(),
-          false
-        );
-      } else if (dynmatch(FreezeInst, freeze, inst)) {
+      if (dynmatch(FreezeInst, freeze, inst)) {
         return emit_arg(freeze->arg(0));
       } else if (dynmatch(InputInst, input, inst)) {
         return _function->getArg(input->id());
@@ -137,11 +139,6 @@ namespace metajit {
           llvm::Type::getInt8Ty(_context),
           emit_arg(add_ptr->arg(0)),
           {emit_arg(add_ptr->arg(1))}
-        );
-      } else if (dynmatch(AddPtrConstInst, add_ptr_const, inst)) {
-        return emit_add_offset(
-          emit_arg(add_ptr_const->arg(0)),
-          add_ptr_const->offset()
         );
       }
 
@@ -200,6 +197,10 @@ namespace metajit {
     }
 
     llvm::Value* is_const(Value* value) {
+      if (dynmatch(Const, constant, value)) {
+        return llvm::ConstantInt::getTrue(_context);
+      }
+
       return _is_const.at(value);
     }
 
@@ -211,7 +212,7 @@ namespace metajit {
     }
 
     llvm::Value* emit_const_prop(Inst* inst) {
-      if (dynamic_cast<ConstInst*>(inst) || dynamic_cast<FreezeInst*>(inst)) {
+      if (dynamic_cast<FreezeInst*>(inst)) {
         return llvm::ConstantInt::getTrue(_context);
       } else if (dynmatch(InputInst, input, inst)) {
         if (input->flags().has(InputFlags::AssumeConst)) {
@@ -292,6 +293,19 @@ namespace metajit {
     }
 
     llvm::Value* emit_built_arg(Value* value) {
+      if (dynmatch(Const, constant, value)) {
+        llvm::Value* addr = llvm::ConstantInt::get(
+          llvm::IntegerType::get(_context, sizeof(void*) * 8),
+          (uint64_t)(void*) constant,
+          false
+        );
+
+        return _builder.CreateIntToPtr(
+          addr,
+          llvm::PointerType::get(_context, 0)
+        );
+      }
+
       return _builder.CreateLoad(
         llvm::PointerType::get(_context, 0),
         _built.at(value)
@@ -413,7 +427,7 @@ namespace metajit {
                 },
                 [&](){
                   llvm::Value* built_const = _builder.CreateCall(
-                    _llvm_api.build_const,
+                    _llvm_api.build_const_fast,
                     {
                       _jitir_builder,
                       llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
@@ -455,12 +469,12 @@ namespace metajit {
                 _builder.CreateStore(built, _built.at(inst));
               };
 
-              if (is_int_or_bool(inst->type()) && !dynamic_cast<ConstInst*>(inst) && !is_never_const(inst)) {
+              if (is_int_or_bool(inst->type()) && !is_never_const(inst)) {
                 emit_branch(
                   is_const(inst),
                   [&](){
                     llvm::Value* built = _builder.CreateCall(
-                      _llvm_api.build_const,
+                      _llvm_api.build_const_fast,
                       {
                         _jitir_builder,
                         llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
