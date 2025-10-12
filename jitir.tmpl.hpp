@@ -1558,21 +1558,15 @@ namespace metajit {
     KnownBits(Section* section): _section(section), _values(section) {
       for (Block* block : *section) {
         for (Inst* inst : *block) {
-          if (dynmatch(Const, constant, inst)) {
-            _values[inst] = Bits(
-              constant->type(),
-              type_mask(constant->type()),
-              constant->value()
-            );
-          } else if (dynmatch(ResizeUInst, resize_u, inst)) {
-            Bits a = _values[resize_u->arg(0)];
+          if (dynmatch(ResizeUInst, resize_u, inst)) {
+            Bits a = at(resize_u->arg(0));
             _values[inst] = a.resize_u(resize_u->type());
           }
 
           #define binop(name, expr) \
             else if (dynmatch(name, binop, inst)) { \
-              Bits a = _values[binop->arg(0)]; \
-              Bits b = _values[binop->arg(1)]; \
+              Bits a = at(binop->arg(0)); \
+              Bits b = at(binop->arg(1)); \
               _values[inst] = expr; \
             }
           
@@ -1592,6 +1586,14 @@ namespace metajit {
     }
 
     Bits at(Value* value) const {
+      if (dynmatch(Const, constant, value)) {
+        return Bits(
+          constant->type(),
+          type_mask(constant->type()),
+          constant->value()
+        );
+      }
+      
       return _values.at(value);
     }
 
