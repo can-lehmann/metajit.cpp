@@ -38,10 +38,10 @@ namespace metajit {
     std::map<Block*, llvm::BasicBlock*> _blocks;
     std::map<Block*, llvm::BasicBlock*> _end_blocks;
 
-    ValueMap<llvm::Value*> _values;
+    InstMap<llvm::Value*> _values;
     // Used for generating extension
-    ValueMap<llvm::Value*> _built;
-    ValueMap<llvm::Value*> _is_const;
+    InstMap<llvm::Value*> _built;
+    InstMap<llvm::Value*> _is_const;
     llvm::Value* _jitir_builder = nullptr;
 
     void emit_branch(llvm::Value* cond,
@@ -87,9 +87,12 @@ namespace metajit {
           constant->value(),
           false
         );
+      } else if (dynmatch(Inst, inst, value)) {
+        return _values.at(inst);
+      } else {
+        assert(false && "Unknown value");
+        return nullptr;
       }
-
-      return _values.at(value);
     }
 
     llvm::Value* emit_add_offset(llvm::Value* ptr, uint64_t offset) {
@@ -199,9 +202,12 @@ namespace metajit {
     llvm::Value* is_const(Value* value) {
       if (dynmatch(Const, constant, value)) {
         return llvm::ConstantInt::getTrue(_context);
+      } else if (dynmatch(Inst, inst, value)) {
+        return _is_const.at(inst);
+      } else {
+        assert(false && "Unknown value");
+        return nullptr;
       }
-
-      return _is_const.at(value);
     }
 
     bool is_never_const(Value* value) {
@@ -304,12 +310,15 @@ namespace metajit {
           addr,
           llvm::PointerType::get(_context, 0)
         );
+      } else if (dynmatch(Inst, inst, value)) {
+        return _builder.CreateLoad(
+          llvm::PointerType::get(_context, 0),
+          _built.at(inst)
+        );
+      } else {
+        assert(false && "Unknown value");
+        return nullptr;
       }
-
-      return _builder.CreateLoad(
-        llvm::PointerType::get(_context, 0),
-        _built.at(value)
-      );
     }
 
   public:

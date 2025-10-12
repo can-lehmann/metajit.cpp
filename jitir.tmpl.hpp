@@ -167,19 +167,13 @@ namespace metajit {
   class Value {
   private:
     Type _type;
-    size_t _name;
   public:
     Value(Type type): _type(type) {}
     virtual ~Value() {}
 
     Type type() const { return _type; }
 
-    size_t name() const { return _name; }
-    void set_name(size_t name) { _name = name; }
-
-    virtual void write_arg(std::ostream& stream) const {
-      stream << '%' << _name;
-    }
+    virtual void write_arg(std::ostream& stream) const = 0;
   };
 
   class Const final: public Value {
@@ -205,16 +199,6 @@ namespace metajit {
       new (constant) Const(type, value);
       return constant;
     }
-  };
-
-  struct InfoWriter {
-  public:
-    using ValueFn = std::function<void(std::ostream&, Value*)>;
-
-    ValueFn value = nullptr;
-
-    InfoWriter() {}
-    InfoWriter(const ValueFn& _value): value(_value) {}
   };
 
   class Block;
@@ -408,6 +392,7 @@ namespace metajit {
   class Inst: public Value, public LinkedListItem<Inst> {
   private:
     Span<Value*> _args;
+    size_t _name = 0;
   public:
     Inst(Type type, const Span<Value*>& args):
       Value(type), _args(args) {}
@@ -420,6 +405,9 @@ namespace metajit {
       assert(!value || !_args.at(index) || value->type() == _args.at(index)->type());
       _args[index] = value;
     }
+
+    size_t name() const { return _name; }
+    void set_name(size_t name) { _name = name; }
 
     virtual void write(std::ostream& stream) const = 0;
     void write_args(std::ostream& stream, bool& is_first) const {
@@ -437,9 +425,23 @@ namespace metajit {
       }
     }
 
+    void write_arg(std::ostream& stream) const override {
+      stream << '%' << _name;
+    }
+
     bool has_side_effect() const;
     bool is_terminator() const;
     std::vector<Block*> successor_blocks() const;
+  };
+
+  struct InfoWriter {
+  public:
+    using InstFn = std::function<void(std::ostream&, Inst*)>;
+
+    InstFn inst = nullptr;
+
+    InfoWriter() {}
+    InfoWriter(const InstFn& _inst): inst(_inst) {}
   };
 
   class Block {
@@ -485,9 +487,9 @@ namespace metajit {
           stream << " = ";
         }
         inst->write(stream);
-        if (info_writer && info_writer->value) {
+        if (info_writer && info_writer->inst) {
           stream << " ; ";
-          info_writer->value(stream, inst);
+          info_writer->inst(stream, inst);
         }
         stream << '\n';
       }
@@ -1326,18 +1328,18 @@ namespace metajit {
   ${capi}
 
   template<class T>
-  class ValueMap {
+  class InstMap {
   private:
     T* _data = nullptr;
     size_t _size = 0;
   public:
-    ValueMap() {}
-    ValueMap(Section* section) { init(section); }
+    InstMap() {}
+    InstMap(Section* section) { init(section); }
 
-    ValueMap(const ValueMap<T>&) = delete;
-    ValueMap<T>& operator=(const ValueMap<T>&) = delete;
+    InstMap(const InstMap<T>&) = delete;
+    InstMap<T>& operator=(const InstMap<T>&) = delete;
 
-    ~ValueMap() { if (_data) { delete[] _data; } }
+    ~InstMap() { if (_data) { delete[] _data; } }
 
     void init(Section* section) {
       assert(_data == nullptr);
@@ -1345,19 +1347,19 @@ namespace metajit {
       _data = new T[_size]();
     }
 
-    T& at(Value* value) {
-      assert(value->name() < _size);
-      return _data[value->name()];
+    T& at(Inst* inst) {
+      assert(inst->name() < _size);
+      return _data[inst->name()];
     }
 
-    T& operator[](Value* value) { return at(value); }
+    T& operator[](Inst* inst) { return at(inst); }
 
-    const T& at(Value* value) const {
-      assert(value->name() < _size);
-      return _data[value->name()];
+    const T& at(Inst* inst) const {
+      assert(inst->name() < _size);
+      return _data[inst->name()];
     }
 
-    const T& operator[](Value* value) const { return at(value); }
+    const T& operator[](Inst* inst) const { return at(inst); }
   };
 
   template <class Self>
@@ -1388,7 +1390,7 @@ namespace metajit {
   class DeadCodeElim: public Pass<DeadCodeElim> {
   public:
     DeadCodeElim(Section* section): Pass(section) {
-      ValueMap<bool> used(section);
+      InstMap<bool> used(section);
 
       for (size_t block_id = section->size(); block_id-- > 0; ) {
         Block* block = (*section)[block_id];
@@ -1396,7 +1398,9 @@ namespace metajit {
           if (inst->has_side_effect() || inst->is_terminator() || used[inst]) {
             used[inst] = true;
             for (Value* arg : inst->args()) {
-              used[arg] = true;
+              if (dynmatch(Inst, inst, arg)) {
+                used[inst] = true;
+              }
             }
           }
         }
@@ -1455,7 +1459,7 @@ namespace metajit {
         }
 
         block->filter_inplace([&](Inst* inst) {
-          return unused.find(inst) != unused.end();
+          return unused.find(inst) == unused.end();
         });
       }
     }
@@ -1553,7 +1557,7 @@ namespace metajit {
 
   private:
     Section* _section;
-    ValueMap<Bits> _values;
+    InstMap<Bits> _values;
   public:
     KnownBits(Section* section): _section(section), _values(section) {
       for (Block* block : *section) {
@@ -1592,14 +1596,17 @@ namespace metajit {
           type_mask(constant->type()),
           constant->value()
         );
+      } else if (dynmatch(Inst, inst, value)) {
+        return _values.at(inst);
+      } else {
+        assert(false); // Unreachable
+        return Bits();
       }
-      
-      return _values.at(value);
     }
 
     void write(std::ostream& stream) {
-      InfoWriter info_writer([&](std::ostream& stream, Value* value){
-        _values[value].write(stream);
+      InfoWriter info_writer([&](std::ostream& stream, Inst* inst){
+        _values[inst].write(stream);
       });
       _section->write(stream, &info_writer);
     }
@@ -1632,14 +1639,16 @@ namespace metajit {
     };
   private:
     Section* _section;
-    ValueMap<Bits> _values;
+    InstMap<Bits> _values;
 
     void use(Value* value, uint64_t used) {
-      if (_values[value].type != value->type()) {
-        assert(_values[value].type == Type::Void);
-        _values[value] = Bits(value->type(), 0);
+      if (dynmatch(Inst, inst, value)) {
+        if (_values[inst].type != value->type()) {
+          assert(_values[inst].type == Type::Void);
+          _values[inst] = Bits(value->type(), 0);
+        }
+        _values[inst].used |= used & type_mask(value->type());
       }
-      _values[value].used |= used & type_mask(value->type());
     }
 
     void use(Value* value, const Bits& used) {
@@ -1692,12 +1701,17 @@ namespace metajit {
     }
 
     Bits at(Value* value) const {
-      return _values.at(value);
+      if (dynmatch(Inst, inst, value)) {
+        return _values.at(inst);
+      } else {
+        assert(false); // Unreachable
+        return Bits();
+      }
     }
 
     void write(std::ostream& stream) {
-      InfoWriter info_writer([&](std::ostream& stream, Value* value){
-        _values[value].write(stream);
+      InfoWriter info_writer([&](std::ostream& stream, Inst* inst){
+        _values[inst].write(stream);
       });
       _section->write(stream, &info_writer);
     }
@@ -1709,7 +1723,7 @@ namespace metajit {
       KnownBits known_bits(section);
       UsedBits used_bits(section);
 
-      ValueMap<Value*> substs(section);
+      InstMap<Value*> substs(section);
 
       for (Block* block : *section) {
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
@@ -1717,8 +1731,10 @@ namespace metajit {
 
           for (size_t it = 0; it < inst->arg_count(); it++) {
             Value* arg = inst->arg(it);
-            if (substs[arg]) {
-              inst->set_arg(it, substs[arg]);
+            if (dynmatch(Inst, inst_arg, arg)) {
+              if (substs[inst_arg]) {
+                inst->set_arg(it, substs[inst_arg]);
+              }
             }
           }
 
