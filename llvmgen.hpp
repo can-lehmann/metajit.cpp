@@ -42,6 +42,29 @@ namespace metajit {
     // Used for generating extension
     ValueMap<llvm::Value*> _built;
     ValueMap<llvm::Value*> _is_const;
+    llvm::Value* _jitir_builder = nullptr;
+
+    void emit_branch(llvm::Value* cond,
+                     const std::function<void()>& emit_then,
+                     const std::function<void()>& emit_else,
+                     llvm::Twine name = "") {
+
+      llvm::BasicBlock* then_block = llvm::BasicBlock::Create(_context, name + "then", _function);
+      llvm::BasicBlock* else_block = llvm::BasicBlock::Create(_context, name + "else", _function);
+      llvm::BasicBlock* cont_block = llvm::BasicBlock::Create(_context, name + "cont", _function);
+
+      _builder.CreateCondBr(cond, then_block, else_block);
+
+      _builder.SetInsertPoint(then_block);
+      emit_then();
+      _builder.CreateBr(cont_block);
+
+      _builder.SetInsertPoint(else_block);
+      emit_else();
+      _builder.CreateBr(cont_block);
+
+      _builder.SetInsertPoint(cont_block);
+    }
 
     llvm::Type* emit_type(Type type) {
       switch (type) {
@@ -268,6 +291,13 @@ namespace metajit {
       }
     }
 
+    llvm::Value* emit_built_arg(Value* value) {
+      return _builder.CreateLoad(
+        llvm::PointerType::get(_context, 0),
+        _built.at(value)
+      );
+    }
+
   public:
     LLVMCodeGen(Section* section,
                 llvm::Module* module,
@@ -306,20 +336,56 @@ namespace metajit {
       _built.init(section);
       _is_const.init(section);
 
+      llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(_context, "entry", _function);
       for (Block* block : *_section) {
         _blocks[block] = llvm::BasicBlock::Create(_context, "block", _function);
       }
 
-      for (Block* block : *_section) {
-        _builder.SetInsertPoint(_blocks.at(block));
+      _builder.SetInsertPoint(entry_block);
 
+      if (_generating_extension) {
+        _jitir_builder = _function->getArg(_section->inputs().size() + _section->outputs().size());
+
+        for (Block* block : *section) {
+          for (Inst* inst : *block) {
+            _built[inst] = _builder.CreateAlloca(
+              llvm::PointerType::get(_context, 0),
+              nullptr,
+              "built"
+            );
+          }
+        }
+      }
+
+      _builder.CreateBr(_blocks.at(section->entry()));
+
+      for (Block* block : *_section) {
+        if (_generating_extension) {
+          for (Inst* inst : *block) {
+            if (dynmatch(PhiInst, phi, inst)) {
+              for (size_t it = 0; it < phi->arg_count(); it++) {
+                llvm::BasicBlock* from_block = _end_blocks.at(phi->block(it));
+                llvm::Instruction* terminator = from_block->getTerminator();
+                assert(terminator);
+                terminator->removeFromParent();
+                _builder.SetInsertPoint(from_block);
+                _builder.CreateStore(emit_built_arg(phi->arg(it)), _built.at(inst));
+                _builder.Insert(terminator);
+                _end_blocks.at(phi->block(it)) = _builder.GetInsertBlock();
+              }
+            } else {
+              break;
+            }
+          }
+        }
+
+        _builder.SetInsertPoint(_blocks.at(block));
         for (Inst* inst : *block) {
           if (_generating_extension) {
-            llvm::Value* jitir_builder = _function->getArg(_section->inputs().size() + _section->outputs().size());
             if (dynmatch(BranchInst, branch, inst)) {
               _builder.CreateCall(_llvm_api.build_guard, {
-                jitir_builder,
-                _built.at(branch->arg(0)),
+                _jitir_builder,
+                emit_built_arg(branch->arg(0)),
                 _builder.CreateZExt(
                   emit_arg(branch->arg(0)),
                   llvm::Type::getInt32Ty(_context)
@@ -332,106 +398,86 @@ namespace metajit {
             } else if (dynmatch(PhiInst, phi, inst)) {
               _values[inst] = emit_inst(inst);
               _is_const[inst] = emit_const_prop(inst);
-              
-              llvm::PHINode* phi_node = _builder.CreatePHI(
-                llvm::PointerType::get(_context, 0),
-                phi->arg_count()
-              );
 
-              for (size_t it = 0; it < phi->arg_count(); it++) {
-                phi_node->addIncoming(
-                  _built.at(phi->arg(it)),
-                  _end_blocks.at(phi->block(it))
-                );
-              }
-
-              _built[inst] = phi_node;
             } else if (dynmatch(FreezeInst, freeze, inst)) {
               _values[inst] = emit_inst(inst);
               _is_const[inst] = llvm::ConstantInt::getTrue(_context);
 
-              llvm::BasicBlock* when_const = llvm::BasicBlock::Create(_context, "when_const", _function);
-              llvm::BasicBlock* when_not_const = llvm::BasicBlock::Create(_context, "when_not_const", _function);
-              llvm::BasicBlock* cont = llvm::BasicBlock::Create(_context, "cont", _function);
+              emit_branch(
+                is_const(freeze->arg(0)),
+                [&](){
+                  _builder.CreateStore(
+                    emit_built_arg(freeze->arg(0)),
+                    _built.at(inst)
+                  );
+                },
+                [&](){
+                  llvm::Value* built_const = _builder.CreateCall(
+                    _llvm_api.build_const,
+                    {
+                      _jitir_builder,
+                      llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
+                      _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
+                    }
+                  );
 
-              _builder.CreateCondBr(is_const(freeze->arg(0)), when_const, when_not_const);
+                  _builder.CreateCall(_llvm_api.build_guard, {
+                    _jitir_builder,
+                    _builder.CreateCall(
+                      _llvm_api.build_eq,
+                      {
+                        _jitir_builder,
+                        emit_built_arg(freeze->arg(0)),
+                        built_const
+                      }
+                    ),
+                    llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), 1)
+                  });
 
-              _builder.SetInsertPoint(when_const);
-              _builder.CreateBr(cont);
-
-              _builder.SetInsertPoint(when_not_const);
-
-              llvm::Value* built_const = _builder.CreateCall(
-                _llvm_api.build_const,
-                {
-                  jitir_builder,
-                  llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
-                  _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
-                }
+                  _builder.CreateStore(
+                    built_const,
+                    _built.at(inst)
+                  );
+                },
+                "freeze_"
               );
-
-              _builder.CreateCall(_llvm_api.build_guard, {
-                jitir_builder,
-                _builder.CreateCall(
-                  _llvm_api.build_eq,
-                  {
-                    jitir_builder,
-                    _built.at(freeze->arg(0)),
-                    built_const
-                  }
-                ),
-                llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), 1)
-              });
-
-              _builder.CreateBr(cont);
-
-              _builder.SetInsertPoint(cont);
-              llvm::PHINode* phi = _builder.CreatePHI(llvm::PointerType::get(_context, 0), 2);
-              phi->addIncoming(_built.at(freeze->arg(0)), when_const);
-              phi->addIncoming(built_const, when_not_const);
-              _built[inst] = phi;
             } else {
               _values[inst] = emit_inst(inst);
               _is_const[inst] = emit_const_prop(inst);
               
               std::vector<llvm::Value*> args;
               for (Value* arg : inst->args()) {
-                args.push_back(_built.at(arg));
+                args.push_back(emit_built_arg(arg));
               }
 
+              auto emit_else = [&](){
+                llvm::Value* built = build_build_inst(_builder, _llvm_api, inst, _jitir_builder, args);
+                _builder.CreateStore(built, _built.at(inst));
+              };
+
               if (is_int_or_bool(inst->type()) && !dynamic_cast<ConstInst*>(inst) && !is_never_const(inst)) {
-                llvm::BasicBlock* when_const = llvm::BasicBlock::Create(_context, "when_const", _function);
-                llvm::BasicBlock* when_not_const = llvm::BasicBlock::Create(_context, "when_not_const", _function);
-                llvm::BasicBlock* cont = llvm::BasicBlock::Create(_context, "cont", _function);
-
-                _builder.CreateCondBr(is_const(inst), when_const, when_not_const);
-
-                _builder.SetInsertPoint(when_const);
-                llvm::Value* built_const = _builder.CreateCall(
-                  _llvm_api.build_const,
-                  {
-                    jitir_builder,
-                    llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
-                    _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
-                  }
+                emit_branch(
+                  is_const(inst),
+                  [&](){
+                    llvm::Value* built = _builder.CreateCall(
+                      _llvm_api.build_const,
+                      {
+                        _jitir_builder,
+                        llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
+                        _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
+                      }
+                    );
+                    _builder.CreateStore(built, _built.at(inst));
+                  },
+                  emit_else,
+                  "const_"
                 );
-                _builder.CreateBr(cont);
-
-                _builder.SetInsertPoint(when_not_const);
-                llvm::Value* built_inst = build_build_inst(_builder, _llvm_api, inst, jitir_builder, args);
-                _builder.CreateBr(cont);
-
-                _builder.SetInsertPoint(cont);
-                llvm::PHINode* phi = _builder.CreatePHI(llvm::PointerType::get(_context, 0), 2);
-                phi->addIncoming(built_const, when_const);
-                phi->addIncoming(built_inst, when_not_const);
-                _built[inst] = phi;
               } else {
-                _built[inst] = build_build_inst(_builder, _llvm_api, inst, jitir_builder, args);
+                emit_else();
               }
 
               if (dynamic_cast<LoadInst*>(inst)) {
-                llvm::Value* is_const_inst = _builder.CreateCall(_llvm_api.is_const_inst, {_built.at(inst)});
+                llvm::Value* is_const_inst = _builder.CreateCall(_llvm_api.is_const_inst, {emit_built_arg(inst)});
                 _is_const[inst] = _builder.CreateTrunc(is_const_inst, llvm::Type::getInt1Ty(_context));
               }
             }
