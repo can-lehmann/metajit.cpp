@@ -61,6 +61,18 @@ namespace metajit {
       return _values.at(value);
     }
 
+    llvm::Value* emit_add_offset(llvm::Value* ptr, uint64_t offset) {
+      if (offset == 0) {
+        return ptr;
+      } else {
+        return _builder.CreateGEP(
+          llvm::Type::getInt8Ty(_context),
+          ptr,
+          {llvm::ConstantInt::get(llvm::Type::getInt64Ty(_context), offset)}
+        );
+      }
+    }
+
     llvm::Value* emit_inst(Inst* inst) {
       if (dynmatch(ConstInst, constant, inst)) {
         return llvm::ConstantInt::get(
@@ -90,18 +102,23 @@ namespace metajit {
       } else if (dynmatch(LoadInst, load, inst)) {
         return _builder.CreateLoad(
           emit_type(load->type()),
-          emit_arg(load->arg(0))
+          emit_add_offset(emit_arg(load->arg(0)), load->offset())
         );
       } else if (dynmatch(StoreInst, store, inst)) {
         return _builder.CreateStore(
           emit_arg(store->arg(1)),
-          emit_arg(store->arg(0))
+          emit_add_offset(emit_arg(store->arg(0)), store->offset())
         );
-      } else if (dynmatch(AddPtrInst, addptr, inst)) {
+      } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
         return _builder.CreateGEP(
           llvm::Type::getInt8Ty(_context),
-          emit_arg(addptr->arg(0)),
-          {emit_arg(addptr->arg(1))}
+          emit_arg(add_ptr->arg(0)),
+          {emit_arg(add_ptr->arg(1))}
+        );
+      } else if (dynmatch(AddPtrConstInst, add_ptr_const, inst)) {
+        return emit_add_offset(
+          emit_arg(add_ptr_const->arg(0)),
+          add_ptr_const->offset()
         );
       }
 

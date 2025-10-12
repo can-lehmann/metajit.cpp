@@ -195,7 +195,8 @@ jitir = IR(
                 Arg("ptr", getter=Getter.Always),
                 Arg("type", Type("Type")),
                 Arg("flags", Type("LoadFlags")),
-                Arg("aliasing", Type("AliasingGroup"))
+                Arg("aliasing", Type("AliasingGroup")),
+                Arg("offset", Type("uint64_t"))
             ],
             type = "type",
             type_checks = ["ptr->type() == Type::Ptr"]
@@ -204,7 +205,8 @@ jitir = IR(
             args = [
                 Arg("ptr", getter=Getter.Always),
                 Arg("value", getter=Getter.Always),
-                Arg("aliasing", Type("AliasingGroup"))
+                Arg("aliasing", Type("AliasingGroup")),
+                Arg("offset", Type("uint64_t"))
             ],
             type = "Type::Void",
             type_checks = ["ptr->type() == Type::Ptr"]
@@ -218,6 +220,16 @@ jitir = IR(
             type_checks = [
                 "ptr->type() == Type::Ptr",
                 "offset->type() == Type::Int64"
+            ]
+        ),
+        Inst("AddPtrConst",
+            args = [
+                Arg("ptr", getter=Getter.Always),
+                Arg("offset", Type("uint64_t"))
+            ],
+            type = "Type::Ptr",
+            type_checks = [
+                "ptr->type() == Type::Ptr"
             ]
         ),
         binop("Add"),

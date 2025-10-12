@@ -241,7 +241,143 @@ namespace metajit {
     }
   };
 
-  class Inst: public Value {
+  template <class T>
+  class LinkedListItem {
+  private:
+    T* _prev = nullptr;
+    T* _next = nullptr;
+  public:
+    LinkedListItem() {}
+
+    inline T* prev() const { return _prev; }
+    inline void set_prev(T* prev) { _prev = prev; }
+
+    inline T* next() const { return _next; }
+    inline void set_next(T* next) { _next = next; }
+  };
+
+  template <class T>
+  class Range {
+  private:
+    T _begin;
+    T _end;
+  public:
+    Range(const T& begin, const T& end): _begin(begin), _end(end) {}
+
+    T begin() const { return _begin; }
+    T end() const { return _end; }
+  };
+
+  template <class T>
+  class LinkedList {
+  private:
+    T* _first = nullptr;
+    T* _last = nullptr;
+  public:
+    LinkedList() {}
+
+    T* first() const { return _first; }
+    T* last() const { return _last; }
+
+    bool empty() const { return _first == nullptr; }
+
+    void add(T* item) {
+      assert(!item->prev() && !item->next());
+      item->set_prev(_last);
+      if (_last) {
+        _last->set_next(item);
+      } else {
+        _first = item;
+      }
+      _last = item;
+    }
+
+    void remove(T* item) {
+      if (item->prev()) {
+        item->prev()->set_next(item->next());
+      } else {
+        _first = item->next();
+      }
+      if (item->next()) {
+        item->next()->set_prev(item->prev());
+      } else {
+        _last = item->prev();
+      }
+      item->set_prev(nullptr);
+      item->set_next(nullptr);
+    }
+
+    class iterator {
+    private:
+      LinkedList* _list;
+      T* _item;
+    public:
+      iterator(LinkedList* list, T* item): _list(list), _item(item) {}
+      
+      T* operator*() const { return _item; }
+      
+      iterator& operator++() { 
+        _item = _item->next(); 
+        return *this;
+      }
+
+      iterator operator++(int) { 
+        iterator iter = *this;
+        ++(*this);
+        return iter;
+      }
+
+      bool operator==(const iterator& other) const { return _item == other._item; }
+      bool operator!=(const iterator& other) const { return !(*this == other); }
+
+      iterator erase() {
+        T* next = _item->next();
+        _list->remove(_item);
+        return iterator(_list, next);
+      }
+    };
+
+    iterator begin() { return iterator(this, _first); }
+    iterator end() { return iterator(this, nullptr); }
+    
+    class reverse_iterator {
+    private:
+      LinkedList* _list;
+      T* _item;
+    public:
+      reverse_iterator(LinkedList* list, T* item): _list(list), _item(item) {}
+
+      T* operator*() const { return _item; }
+
+      reverse_iterator& operator++() { 
+        _item = _item->prev(); 
+        return *this;
+      }
+
+      reverse_iterator operator++(int) { 
+        reverse_iterator iter = *this;
+        ++(*this);
+        return iter;
+      }
+
+      bool operator==(const reverse_iterator& other) const { return _item == other._item; }
+      bool operator!=(const reverse_iterator& other) const { return !(*this == other); }
+      
+      reverse_iterator erase() {
+        T* prev = _item->prev();
+        _list->remove(_item);
+        return reverse_iterator(_list, prev);
+      }
+    };
+
+    reverse_iterator rbegin() { return reverse_iterator(this, _last); }
+    reverse_iterator rend() { return reverse_iterator(this, nullptr); }
+
+    Range<iterator> range() { return Range<iterator>(begin(), end()); }
+    Range<reverse_iterator> rev_range() { return Range<reverse_iterator>(rbegin(), rend()); }
+  };
+
+  class Inst: public Value, public LinkedListItem<Inst> {
   private:
     Span<Value*> _args;
   public:
@@ -280,29 +416,27 @@ namespace metajit {
 
   class Block {
   private:
-    std::vector<Inst*> _insts;
+    LinkedList<Inst> _insts;
     size_t _name = 0;
   public:
     Block() {}
 
-    auto begin() const { return _insts.begin(); }
-    auto end() const { return _insts.end(); }
+    auto begin() { return _insts.begin(); }
+    auto end() { return _insts.end(); }
 
-    Inst* at(size_t index) const { return _insts.at(index); }
-    size_t size() const { return _insts.size(); }
+    auto rbegin() { return _insts.rbegin(); }
+    auto rend() { return _insts.rend(); }
+
+    auto range() { return _insts.range(); }
+    auto rev_range() { return _insts.rev_range(); }
+
+    bool empty() const { return _insts.empty(); }
 
     size_t name() const { return _name; }
     void set_name(size_t name) { _name = name; }
 
     void add(Inst* inst) {
-      _insts.push_back(inst);
-    }
-
-    std::vector<Inst*> move_insts() {
-      // TODO: How does this need to be implemented?
-      std::vector<Inst*> insts = std::move(_insts);
-      _insts.clear();
-      return insts;
+      _insts.add(inst);
     }
 
     Inst* terminator() const;
@@ -333,6 +467,18 @@ namespace metajit {
 
     void write_arg(std::ostream& stream) {
       stream << 'b' << _name;
+    }
+
+    template <class Fn>
+    void filter_inplace(Fn fn) {
+      for (auto it = begin(); it != end(); ) {
+        Inst* inst = *it;
+        if (fn(inst)) {
+          it++;
+        } else {
+          it = it.erase();
+        }
+      }
     }
   };
 
@@ -494,8 +640,8 @@ namespace metajit {
   }
 
   Inst* Block::terminator() const {
-    if (!_insts.empty() && _insts.back()->is_terminator()) {
-      return _insts.back();
+    if (!_insts.empty() && _insts.last()->is_terminator()) {
+      return _insts.last();
     } else {
       return nullptr;
     }
@@ -668,10 +814,6 @@ namespace metajit {
       return build_output(value, id);
     }
 
-    AddPtrInst* build_add_ptr(Value* ptr, uint64_t offset) {
-      return build_add_ptr(ptr, build_const(Type::Int64, offset));
-    }
-
     ShlInst* build_shl(Value* a, size_t shift) {
       assert(shift <= type_size(a->type()) * 8);
       return build_shl(a, build_const(a->type(), shift));
@@ -803,9 +945,21 @@ namespace metajit {
       if (dynmatch(ConstInst, constant, offset)) {
         if (constant->value() == 0) {
           return ptr;
+        } else {
+          return fold_add_ptr_const(ptr, constant->value());
         }
       }
       return build_add_ptr(ptr, offset);
+    }
+
+    Value* fold_add_ptr_const(Value* ptr, uint64_t offset) {
+      if (offset == 0) {
+        return ptr;
+      } else if (dynmatch(AddPtrConstInst, add_ptr, ptr)) {
+        ptr = add_ptr->ptr();
+        offset += add_ptr->offset();
+      }
+      return build_add_ptr_const(ptr, offset);
     }
 
     Value* fold_add_ptr(Value* ptr, uint64_t offset) {
@@ -911,63 +1065,67 @@ namespace metajit {
     }
   };
 
+  template <class T>
+  class ExpandingVector {
+  private:
+    std::vector<T> _data;
+  public:
+    ExpandingVector() {}
+
+    T& operator[](size_t index) {
+      if (index >= _data.size()) {
+        _data.resize(index + 1);
+      }
+      return _data[index];
+    }
+  };
+
   class TraceBuilder: public Builder {
   private:
     // We perform optimizations during trace generation
     
     struct GroupState {
       Value* base = nullptr;
-      std::map<size_t, Value*> stores;
+      std::map<uint64_t, Value*> stores;
 
       GroupState() {}
 
-      Value* load(const Pointer& pointer, Type type) {
-        if (base == pointer.base &&
+      Value* load(Value* _base, uint64_t offset, Type type) {
+        if (_base == base &&
+            _base != nullptr &&
             base != nullptr &&
-            pointer.base != nullptr &&
-            stores.find(pointer.offset) != stores.end() &&
-            stores.at(pointer.offset)->type() == type) {
-          return stores.at(pointer.offset);
+            stores.find(offset) != stores.end() &&
+            stores.at(offset)->type() == type) {
+          return stores.at(offset);
         }
         return nullptr;
       }
 
-      void store(const Pointer& pointer, Value* value) {
-        if (pointer.base == nullptr) {
+      void store(Value* _base, uint64_t offset, Value* value) {
+        if (_base == nullptr) {
           base = nullptr;
           stores.clear();
           return;
         }
 
-        if (base != pointer.base) {
-          base = pointer.base;
+        if (base != _base) {
+          base = _base;
           stores.clear();
         }
         // TODO: Overlapping
-        stores[pointer.offset] = value;
+        stores[offset] = value;
       }
     };
-
-    std::unordered_map<Value*, Pointer> _pointers;
     
     std::unordered_map<AliasingGroup, std::unordered_set<LoadInst*>> _valid_loads;
-    std::unordered_map<AliasingGroup, LoadInst*> _exact_loads;
+    ExpandingVector<LoadInst*> _exact_loads;
 
     std::unordered_map<AliasingGroup, GroupState> _memory;
-    std::unordered_map<AliasingGroup, Value*> _exact_memory;
+    ExpandingVector<Value*> _exact_memory;
 
     std::unordered_map<size_t, InputInst*> _inputs;
 
-    Pointer pointer(Value* value) {
-      auto it = _pointers.find(value);
-      if (it == _pointers.end()) {
-        return Pointer(value, 0);
-      } else {
-        return it->second;
-      }
-    }
-
-    bool could_alias(LoadInst* load, Value* ptr, Type type, AliasingGroup aliasing) {
+    bool could_alias(LoadInst* load, Value* ptr, Type type, AliasingGroup aliasing, uint64_t offset) {
       if (load->aliasing() != aliasing) {
         return false;
       }
@@ -976,15 +1134,12 @@ namespace metajit {
         return true; // Exact aliasing
       }
 
-      Pointer load_ptr = pointer(load->ptr());
-      Pointer store_ptr = pointer(ptr);
-
-      if (load_ptr.base != store_ptr.base) {
+      if (load->ptr() != ptr) {
         return true;
       }
 
-      Interval load_interval(load_ptr.offset, load->type());
-      Interval store_interval(store_ptr.offset, type);
+      Interval load_interval(load->offset(), load->type());
+      Interval store_interval(offset, type);
 
       return load_interval.intersects(store_interval);
     }
@@ -1021,6 +1176,14 @@ namespace metajit {
       return Builder::fold_xor(a, b);
     }
 
+    Value* build_add_ptr(Value* ptr, Value* offset) {
+      return Builder::fold_add_ptr(ptr, offset);
+    }
+
+    Value* build_add_ptr_const(Value* ptr, uint64_t offset) {
+      return Builder::fold_add_ptr_const(ptr, offset);
+    }
+
     // We deduplicate input building to track pointers
 
     Value* build_input(size_t id, Type type, InputFlags flags = InputFlags()) {
@@ -1031,64 +1194,62 @@ namespace metajit {
       return _inputs.at(id);
     }
 
-    // We override add_ptr to track pointers
-
-    Value* build_add_ptr(Value* ptr, Value* offset) {
-      Value* result = Builder::fold_add_ptr(ptr, offset);
-
-      if (dynmatch(ConstInst, constant, offset)) {
-        _pointers[result] = pointer(ptr) + constant->value();
-      }
-
-      return result;
-    }
-
     // We override load/store to do simple load/store forwarding
 
-    Value* build_load(Value* ptr, Type type, LoadFlags flags, AliasingGroup aliasing) {
+    Value* build_load(Value* ptr, Type type, LoadFlags flags, AliasingGroup aliasing, uint64_t offset) {
+      if (dynmatch(AddPtrConstInst, add_ptr, ptr)) {
+        ptr = add_ptr->ptr();
+        offset += add_ptr->offset();
+      }
+
       if (aliasing < 0) {
-        if (Value* value = _exact_memory[aliasing]) {
+        if (Value* value = _exact_memory[-aliasing]) {
           return value;
         }
-        if (LoadInst* load = _exact_loads[aliasing]) {
+        if (LoadInst* load = _exact_loads[-aliasing]) {
           return load;
         }
 
-        LoadInst* load = Builder::build_load(ptr, type, flags, aliasing);
-        _exact_loads[aliasing] = load;
-        _exact_memory[aliasing] = load;
+        LoadInst* load = Builder::build_load(ptr, type, flags, aliasing, offset);
+        _exact_loads[-aliasing] = load;
+        _exact_memory[-aliasing] = load;
         return load;
       } else {
-        if (Value* value = _memory[aliasing].load(pointer(ptr), type)) {
+        if (Value* value = _memory[aliasing].load(ptr, offset, type)) {
           return value;
         }
 
-        LoadInst* load = Builder::build_load(ptr, type, flags, aliasing);
+        LoadInst* load = Builder::build_load(ptr, type, flags, aliasing, offset);
         _valid_loads[aliasing].insert(load);
         return load;
       }
     }
 
-    Value* build_store(Value* ptr, Value* value, AliasingGroup aliasing) {
+    Value* build_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
+      if (dynmatch(AddPtrConstInst, add_ptr, ptr)) {
+        ptr = add_ptr->ptr();
+        offset += add_ptr->offset();
+      }
+
       if (aliasing < 0) {
-        if (_exact_memory[aliasing] == value) {
+        if (_exact_memory[-aliasing] == value) {
           return nullptr;
         }
-        _exact_memory[aliasing] = value;
-        _exact_loads.erase(aliasing);
-        return Builder::build_store(ptr, value, aliasing);
+        _exact_memory[-aliasing] = value;
+        _exact_loads[-aliasing] = nullptr;
+        return Builder::build_store(ptr, value, aliasing, offset);
       } else {
-        _memory[aliasing].store(pointer(ptr), value);
+        _memory[aliasing].store(ptr, offset, value);
 
         bool noop_store = false;
         for (auto it = _valid_loads[aliasing].begin(); it != _valid_loads[aliasing].end(); ) {
           LoadInst* load = *it;
-          if (load == value && pointer(load->ptr()) == pointer(ptr)) {
+          if (load == value && load->ptr() == ptr && load->offset() == offset) {
             noop_store = true;
             it++;
             continue;
           }
-          if (could_alias(load, ptr, value->type(), aliasing)) {
+          if (could_alias(load, ptr, value->type(), aliasing, offset)) {
             it = _valid_loads[aliasing].erase(it);
           } else {
             it++;
@@ -1099,7 +1260,7 @@ namespace metajit {
           return nullptr;
         }
 
-        return Builder::build_store(ptr, value, aliasing);
+        return Builder::build_store(ptr, value, aliasing, offset);
       }
     }
 
@@ -1174,8 +1335,7 @@ namespace metajit {
 
       for (size_t block_id = section->size(); block_id-- > 0; ) {
         Block* block = (*section)[block_id];
-        for (size_t inst_id = block->size(); inst_id-- > 0; ) {
-          Inst* inst = block->at(inst_id);
+        for (Inst* inst : block->rev_range()) {
           if (inst->has_side_effect() || inst->is_terminator() || used[inst]) {
             used[inst] = true;
             for (Value* arg : inst->args()) {
@@ -1186,40 +1346,11 @@ namespace metajit {
       }
 
       for (Block* block : *section) {
-        std::vector<Inst*> insts = block->move_insts();
-        for (Inst* inst : insts) {
-          if (used[inst]) {
-            block->add(inst);
-          } else {
-            remove(inst);
-          }
-        }
+        block->filter_inplace([&](Inst* inst) {
+          return used[inst];
+        });
       }
     }
-  };
-
-  class PointerAnalysis {
-  private:
-    ValueMap<Pointer> _pointers;
-  public:
-    PointerAnalysis(Section* section): _pointers(section) {
-      for (Block* block : *section) {
-        for (Inst* inst : *block) {
-          if (dynmatch(AddPtrInst, add_ptr, inst)) {
-            if (dynmatch(ConstInst, constant, add_ptr->arg(1))) {
-              _pointers[inst] = _pointers[add_ptr->arg(0)] + constant->value();
-            } else {
-              _pointers[inst] = Pointer(inst, 0);
-            }
-          } else {
-            _pointers[inst] = Pointer(inst, 0);
-          }
-        }
-      }
-    }
-    
-    Pointer at(Value* value) const { return _pointers.at(value); }
-    Pointer operator[](Value* value) const { return at(value); }
   };
 
   class DeadStoreElim: public Pass<DeadStoreElim> {
@@ -1233,31 +1364,24 @@ namespace metajit {
         return true; // Exact aliasing
       }
 
-      Pointer load_ptr = _pointer_analysis[load->ptr()];
-      Pointer store_ptr = _pointer_analysis[store->ptr()];
-
-      if (load_ptr.base != store_ptr.base) {
+      if (load->ptr() != store->ptr()) {
         return true;
       }
 
-      Interval load_interval(load_ptr.offset, load->type());
-      Interval store_interval(store_ptr.offset, store->value()->type());
+      Interval load_interval(load->offset(), load->type());
+      Interval store_interval(store->offset(), store->value()->type());
 
       return load_interval.intersects(store_interval);
     }
-
-    PointerAnalysis _pointer_analysis;
   public:
-    DeadStoreElim(Section* section): Pass(section), _pointer_analysis(section) {
+    DeadStoreElim(Section* section): Pass(section) {
       for (Block* block : *section) {
         std::set<Inst*> unused;
         std::map<Pointer, StoreInst*> last_store;
 
-        std::vector<Inst*> insts = block->move_insts();
-
-        for (Inst* inst : insts) {
+        for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst)) {
-            Pointer pointer = _pointer_analysis[store->ptr()];
+            Pointer pointer(store->ptr(), store->offset());
             last_store[pointer] = store;
             unused.insert(inst);
           } else if (dynmatch(LoadInst, load, inst)) {
@@ -1273,13 +1397,9 @@ namespace metajit {
           unused.erase(store);
         }
 
-        for (Inst* inst : insts) {
-          if (unused.find(inst) == unused.end()) {
-            block->add(inst);
-          } else {
-            remove(inst);
-          }
-        }
+        block->filter_inplace([&](Inst* inst) {
+          return unused.find(inst) != unused.end();
+        });
       }
     }
   };
@@ -1470,9 +1590,7 @@ namespace metajit {
     UsedBits(Section* section): _section(section), _values(section) {
       for (size_t block_id = section->size(); block_id-- > 0; ) {
         Block* block = (*section)[block_id];
-        for (size_t inst_id = block->size(); inst_id-- > 0; ) {
-          Inst* inst = block->at(inst_id);
-
+        for (Inst* inst : block->rev_range()) {
           if (_values[inst].type != inst->type()) {
             assert(_values[inst].type == Type::Void);
             _values[inst] = Bits(inst->type(), 0);
@@ -1535,8 +1653,9 @@ namespace metajit {
       ValueMap<Value*> substs(section);
 
       for (Block* block : *section) {
-        std::vector<Inst*> insts = block->move_insts();
-        for (Inst* inst : insts) {
+        for (auto inst_it = block->begin(); inst_it != block->end(); ) {
+          Inst* inst = *inst_it;
+
           for (size_t it = 0; it < inst->arg_count(); it++) {
             Value* arg = inst->arg(it);
             if (substs[arg]) {
@@ -1551,16 +1670,18 @@ namespace metajit {
 
             if (b.is_const() && ((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
               substs[inst] = and_inst->arg(0);
+              inst_it = inst_it.erase();
               remove(inst);
               continue;
             } else if (b.is_const() && (used.used & ~b.value) == 0) {
               substs[inst] = and_inst->arg(0);
+              inst_it = inst_it.erase();
               remove(inst);
               continue;
             }
           }
 
-          block->add(inst);
+          inst_it++;
         }
       }
     }
