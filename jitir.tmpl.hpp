@@ -163,6 +163,13 @@ std::ostream& operator<<(std::ostream& stream, metajit::Type type) {
   return stream;
 }
 
+template <>
+struct std::hash<metajit::Type> {
+  size_t operator()(const metajit::Type& type) const {
+    return std::hash<size_t>()((size_t) type);
+  }
+};
+
 namespace metajit {
   class Value {
   private:
@@ -174,6 +181,9 @@ namespace metajit {
     Type type() const { return _type; }
 
     virtual void write_arg(std::ostream& stream) const = 0;
+
+    virtual bool equals(const Value* other) const = 0;
+    virtual size_t hash() const = 0;
   };
 
   class Const final: public Value {
@@ -185,6 +195,20 @@ namespace metajit {
 
     void write_arg(std::ostream& stream) const override {
       stream << _value;
+    }
+
+    bool equals(const Value* other) const override {
+      if (typeid(*this) != typeid(*other)) {
+        return false;
+      }
+
+      const Const* const_other = (const Const*) other;
+      return type() == const_other->type() &&
+             value() == const_other->value();
+    }
+
+    size_t hash() const override {
+      return std::hash<uint64_t>()(_value) ^ std::hash<Type>()(type());
     }
   };
 
@@ -530,6 +554,14 @@ namespace metajit {
     bool has(Self flag) const {
       return (_flags & flag._flags) != 0;
     }
+
+    bool operator==(const Self& other) const {
+      return _flags == other._flags;
+    }
+
+    bool operator!=(const Self& other) const {
+      return !(*this == other);
+    }
   };
 
   class LoadFlags final: public BaseFlags<LoadFlags> {
@@ -585,6 +617,20 @@ namespace metajit {
   };
 }
 
+template <>
+struct std::hash<metajit::LoadFlags> {
+  size_t operator()(const metajit::LoadFlags& flags) const {
+    return std::hash<uint32_t>()((uint32_t) flags);
+  }
+};
+
+template <>
+struct std::hash<metajit::InputFlags> {
+  size_t operator()(const metajit::InputFlags& flags) const {
+    return std::hash<uint32_t>()((uint32_t) flags);
+  }
+};
+
 std::ostream& operator<<(std::ostream& stream, metajit::LoadFlags flags) {
   flags.write(stream);
   return stream;
@@ -630,6 +676,40 @@ namespace metajit {
         stream << " -> ";
         arg(it)->write_arg(stream);
       }
+    }
+
+    bool equals(const Value* other) const override {
+      if (typeid(*this) != typeid(*other)) {
+        return false;
+      }
+
+      const PhiInst* phi_other = (const PhiInst*) other;
+      if (type() != phi_other->type() ||
+          arg_count() != phi_other->arg_count()) {
+        return false;
+      }
+
+      for (size_t it = 0; it < arg_count(); it++) {
+        if (arg(it) != phi_other->arg(it) || 
+            block(it) != phi_other->block(it)) {
+          return false;
+        }
+      }
+
+      return true;
+    }
+
+    size_t hash() const override {
+      size_t hash = 2345678; // Some random seed
+      hash ^= std::hash<Type>()(type());
+      hash ^= std::hash<size_t>()(arg_count());
+
+      for (size_t it = 0; it < arg_count(); it++) {
+        hash ^= std::hash<Value*>()(arg(it));
+        hash ^= std::hash<Block*>()(block(it));
+      }
+
+      return hash;
     }
 
     bool verify(const std::set<Block*>& incoming,
@@ -1757,6 +1837,58 @@ namespace metajit {
           }
 
           inst_it++;
+        }
+      }
+    }
+  };
+
+  class CommonSubexprElim: public Pass<CommonSubexprElim> {
+  private:
+    struct Lookup {
+      Value* value = nullptr;
+
+      Lookup(Value* _value): value(_value) {}
+
+      bool operator==(const Lookup& other) const {
+        return value->equals(other.value);
+      }
+    };
+
+    struct LookupHash {
+      size_t operator()(const Lookup& lookup) const {
+        return lookup.value->hash();
+      }
+    };
+  public:
+    CommonSubexprElim(Section* section): Pass(section) {
+      std::unordered_map<Value*, Value*> substs;
+      for (Block* block : *section) {
+        std::unordered_map<Lookup, Value*, LookupHash> canon;
+
+        for (auto inst_it = block->begin(); inst_it != block->end(); ) {
+          Inst* inst = *inst_it;
+
+          for (size_t it = 0; it < inst->arg_count(); it++) {
+            Value* arg = inst->arg(it);
+            if (substs.find(arg) != substs.end()) {
+              inst->set_arg(it, substs.at(arg));
+            }
+          }
+
+          if (inst->has_side_effect() || inst->is_terminator()) {
+            inst_it++;
+            continue;
+          }
+          
+          Lookup lookup(inst);
+          if (canon.find(lookup) == canon.end()) {
+            canon[lookup] = inst;
+            inst_it++;
+          } else {
+            substs[inst] = canon.at(lookup);
+            inst_it = inst_it.erase();
+            remove(inst);
+          }
         }
       }
     }

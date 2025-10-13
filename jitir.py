@@ -263,7 +263,9 @@ lwir(
             InstGetterPlugin(),
             InstWritePlugin(custom={
                 Type("Block*"): lambda value, stream: f"{value}->write_arg({stream});",
-            })
+            }),
+            InstEqualsPlugin(),
+            InstHashPlugin()
         ]),
         AllocatorBuilderPlugin(),
         CAPIPlugin(
