@@ -15,6 +15,9 @@
 // limitations under the License.
 
 #include <map>
+#include <unordered_map>
+#include <queue>
+#include <fstream>
 
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Module.h"
@@ -315,6 +318,398 @@ namespace metajit {
       }
     }
 
+    // Codegen for the generating extension uses topological sorting.
+    // Cycles are broken by selecting an overapproximation.
+    // This is implemented using action groups where only one action of
+    // each group needs to be executed. Actions within groups are prioritized
+    // based on how much they overapproximate.
+    // We need to ensure that it is always possible to select an action from
+    // each group such that an acyclic execution order exists.
+
+    struct ActionGroup;
+
+    struct Action {
+      std::string name;
+      size_t priority = 0;
+      std::function<void()> func;
+      ActionGroup* group = nullptr;
+
+      Action(const std::string& _name,
+             size_t _priority,
+             const std::function<void()>& _func,
+             ActionGroup* _group):
+        name(_name), priority(_priority), func(_func), group(_group) {}
+    };
+
+    struct ActionGroup {
+      std::vector<Action*> actions;
+      std::vector<Action*> outgoing; // Actions that depend on this group
+      bool executed = false;
+
+      ~ActionGroup() {
+        for (Action* action : actions) {
+          delete action;
+        }
+      }
+
+      Action* add(const std::string& name,
+                  size_t priority,
+                  const std::vector<ActionGroup*>& dependencies,
+                  std::function<void()> func) {
+        
+        Action* action = new Action(name, priority, func, this);
+        actions.push_back(action);
+        for (ActionGroup* group : dependencies) {
+          if (group) {
+            group->outgoing.push_back(action);
+          }
+        }
+        return action;
+      }
+    };
+
+    class ActionQueue {
+    private:
+      std::vector<ActionGroup*> _groups;
+    public:
+      ActionQueue() {}
+      ActionQueue(const ActionQueue&) = delete;
+      ActionQueue& operator=(const ActionQueue&) = delete;
+
+      ~ActionQueue() {
+        for (ActionGroup* group : _groups) {
+          delete group;
+        }
+      }
+
+      ActionGroup* add() {
+        ActionGroup* group = new ActionGroup();
+        _groups.push_back(group);
+        return group;
+      }
+    
+    private:
+      void write_escaped(std::ostream& stream, const std::string& str) {
+        for (char chr : str) {
+          switch (chr) {
+            case '\n': stream << "\\n"; break;
+            case '\r': stream << "\\r"; break;
+            case '\t': stream << "\\t"; break;
+            case '"': stream << "\\\""; break;
+            case '\\': stream << "\\\\"; break;
+            default:
+              stream << chr;
+          }
+        }
+      }
+    public:
+      void write_dot(std::ostream& stream) {
+        stream << "digraph {\n";
+
+        size_t id = 0;
+        std::unordered_map<ActionGroup*, size_t> ids;
+        std::unordered_map<Action*, size_t> action_indices;
+        for (ActionGroup* group : _groups) {
+          stream << "group" << id << " [shape=record, label=\"";
+          for (size_t it = 0; it < group->actions.size(); it++) {
+            if (it != 0) {
+              stream << "|";
+            }
+            Action* action = group->actions[it];
+            stream << "<f" << it << "> ";
+            write_escaped(stream, action->name);
+            action_indices[action] = it;
+          }
+          stream << "\"];\n";
+          ids[group] = id;
+          id++;
+        }
+
+        for (ActionGroup* group : _groups) {
+          for (Action* action : group->outgoing) {
+            stream << "group" << ids[group];
+            stream << ":f" << action_indices[action];
+            stream << " -> group" << ids[action->group];
+            stream << ";\n";
+          }
+        }
+
+        stream << "}\n";
+      }
+
+      void save_dot(const std::string& path) {
+        std::ofstream file(path);
+        assert(file.is_open());
+        write_dot(file);
+      }
+
+      void run() {
+        std::unordered_map<Action*, size_t> incoming;
+        for (ActionGroup* group : _groups) {
+          for (Action* action : group->outgoing) {
+            incoming[action]++;
+          }
+        }
+
+        std::priority_queue<std::pair<size_t, Action*>> queue;
+        
+        for (ActionGroup* group : _groups) {
+          for (Action* action : group->actions) {
+            if (incoming[action] == 0) {
+              queue.push({action->priority, action});
+            }
+          }
+        }
+
+        while (!queue.empty()) {
+          Action* action = queue.top().second;
+          queue.pop();
+          if (action->group->executed) {
+            continue;
+          }
+          action->func();
+          action->group->executed = true;
+
+          for (Action* next : action->group->outgoing) {
+            incoming[next]--;
+            if (incoming[next] == 0) {
+              queue.push({next->priority, next});
+            }
+          }
+        }
+
+        if (_groups.size() > 0) {
+          save_dot("action_queue.dot");
+        }
+
+        for (ActionGroup* group : _groups) {
+          assert(group->executed);
+        }
+      }
+    };
+
+    void emit_build_inst(Inst* inst) {
+      if (_comments &&
+          !dynamic_cast<CommentInst*>(inst) &&
+          !dynamic_cast<PhiInst*>(inst)) {
+        std::ostringstream comment_stream;
+        inst->write_arg(comment_stream);
+        comment_stream << " = ";
+        inst->write(comment_stream);
+        _builder.CreateCall(_llvm_api.build_comment, {
+          _jitir_builder,
+          _builder.CreateGlobalString(comment_stream.str())
+        });
+      }
+
+      if (dynmatch(FreezeInst, freeze, inst)) {
+        emit_branch(
+          is_const(freeze->arg(0)),
+          [&](){
+            _builder.CreateStore(
+              emit_built_arg(freeze->arg(0)),
+              _built.at(inst)
+            );
+          },
+          [&](){
+            llvm::Value* built_const = _builder.CreateCall(
+              _llvm_api.build_const_fast,
+              {
+                _jitir_builder,
+                llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
+                _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
+              }
+            );
+
+            _builder.CreateCall(_llvm_api.build_guard, {
+              _jitir_builder,
+              _builder.CreateCall(
+                _llvm_api.build_eq,
+                {
+                  _jitir_builder,
+                  emit_built_arg(freeze->arg(0)),
+                  built_const
+                }
+              ),
+              llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), 1)
+            });
+
+            _builder.CreateStore(
+              built_const,
+              _built.at(inst)
+            );
+          },
+          "freeze_"
+        );
+        return;
+      }
+
+      std::vector<llvm::Value*> args;
+      for (Value* arg : inst->args()) {
+        args.push_back(emit_built_arg(arg));
+      }
+
+      if (is_int_or_bool(inst->type())) {
+        auto trace_const = [&](){
+          if (_trace_capabilities.can_trace_const(inst)) {
+            llvm::Value* built = _builder.CreateCall(
+              _llvm_api.build_const_fast,
+              {
+                _jitir_builder,
+                llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
+                _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
+              }
+            );
+            _builder.CreateStore(built, _built.at(inst));
+          }
+        };
+        if (_trace_capabilities.can_trace_const(inst) && !_trace_capabilities.can_trace_inst(inst)) {
+          // This only happens for always const values, so we do not need to check is_const(inst)
+          trace_const();
+        } else {
+          emit_branch(
+            is_const(inst),
+            trace_const,
+            [&](){
+              if (_trace_capabilities.can_trace_inst(inst)) {
+                llvm::Value* built = build_build_inst(_builder, _llvm_api, inst, _jitir_builder, args);
+                _builder.CreateStore(built, _built.at(inst));
+
+                if (dynmatch(LoadInst, load, inst)) {
+                  llvm::Value* is_const_inst = _builder.CreateCall(_llvm_api.is_const_inst, {emit_built_arg(inst)});
+                  _builder.CreateStore(_builder.CreateTrunc(is_const_inst, llvm::Type::getInt1Ty(_context)), _is_const.at(inst));
+                }
+              }
+            },
+            "const_"
+          );
+        }
+      } else {
+        if (_trace_capabilities.any(inst)) {
+          llvm::Value* built = build_build_inst(_builder, _llvm_api, inst, _jitir_builder, args);
+          _builder.CreateStore(built, _built.at(inst));
+
+          if (dynmatch(LoadInst, load, inst)) {
+            llvm::Value* is_const_inst = _builder.CreateCall(_llvm_api.is_const_inst, {emit_built_arg(inst)});
+            _builder.CreateStore(_builder.CreateTrunc(is_const_inst, llvm::Type::getInt1Ty(_context)), _is_const.at(inst));
+          }
+        }
+      }
+    }
+
+    void emit_generating_extension(Block* block) {
+      for (Inst* inst : *block) {
+        if (dynmatch(PhiInst, phi, inst)) {
+          for (size_t it = 0; it < phi->arg_count(); it++) {
+            llvm::BasicBlock* from_block = _end_blocks.at(phi->block(it));
+            llvm::Instruction* terminator = from_block->getTerminator();
+            assert(terminator);
+            terminator->removeFromParent();
+            _builder.SetInsertPoint(from_block);
+            _builder.CreateStore(is_const(phi->arg(it)), _is_const.at(inst));
+            _builder.CreateStore(emit_built_arg(phi->arg(it)), _built.at(inst));
+            _builder.Insert(terminator);
+            _end_blocks.at(phi->block(it)) = _builder.GetInsertBlock();
+
+            _builder.SetInsertPoint(_blocks.at(block));
+            _values[inst] = emit_inst(inst);
+          }
+        } else {
+          break;
+        }
+      }
+      
+      ActionQueue queue;
+
+      std::unordered_map<Value*, ActionGroup*> emit_groups;
+      std::unordered_map<Value*, ActionGroup*> const_groups;
+      ActionGroup* last_emit_group = nullptr;
+      ActionGroup* last_build_group = nullptr;
+      
+      for (Inst* inst : *block) {
+        if (dynamic_cast<PhiInst*>(inst) ||
+            dynamic_cast<BranchInst*>(inst) ||
+            dynamic_cast<JumpInst*>(inst) ||
+            dynamic_cast<ExitInst*>(inst)) {
+          continue;
+        }
+
+        std::ostringstream name_stream;
+        inst->write(name_stream);
+        std::string name = name_stream.str();
+
+        ActionGroup* emit_group = queue.add();
+        ActionGroup* build_group = queue.add();
+        ActionGroup* const_group = queue.add();
+
+        std::vector<ActionGroup*> emit_deps;
+        for (Value* arg : inst->args()) {
+          if (emit_groups.find(arg) != emit_groups.end()) {
+            emit_deps.push_back(emit_groups.at(arg));
+          }
+        }
+        if (inst->has_side_effect() || dynamic_cast<LoadInst*>(inst)) {
+          emit_deps.push_back(last_emit_group);
+        }
+
+        emit_group->add("emit\n" + name, 0, emit_deps, [inst, this](){
+          _values[inst] = emit_inst(inst);  
+        });
+
+        std::vector<ActionGroup*> const_deps;
+        const_deps.push_back(emit_group);
+        for (Value* arg : inst->args()) {
+          if (const_groups.find(arg) != const_groups.end()) {
+            const_deps.push_back(const_groups.at(arg));
+          }
+        }
+
+        const_group->add("const\n" + name, 0, const_deps, [inst, this](){
+          _builder.CreateStore(emit_const_prop(inst), _is_const.at(inst));
+        });
+
+        build_group->add("build\n" + name, 0, {const_group, last_build_group}, [inst, this](){
+          emit_build_inst(inst);
+        });
+
+        emit_groups[inst] = emit_group;
+        
+        if (inst->has_side_effect() || dynamic_cast<LoadInst*>(inst)) {
+          last_emit_group = emit_group;
+        }
+
+        if (dynmatch(LoadInst, load, inst)) {
+          const_groups[inst] = build_group;
+        } else {
+          const_groups[inst] = const_group;
+        }
+
+        last_build_group = build_group;
+      }
+
+      _builder.SetInsertPoint(_blocks.at(block));
+      queue.run();
+
+      Inst* inst = block->terminator();
+      assert(inst);
+      if (dynmatch(BranchInst, branch, inst)) {
+        _builder.CreateCall(_llvm_api.build_guard, {
+          _jitir_builder,
+          emit_built_arg(branch->arg(0)),
+          _builder.CreateZExt(
+            emit_arg(branch->arg(0)),
+            llvm::Type::getInt32Ty(_context)
+          )
+        });
+        _values[inst] = emit_inst(inst);
+      } else if (dynamic_cast<JumpInst*>(inst) ||
+                  dynamic_cast<ExitInst*>(inst)) {
+        _values[inst] = emit_inst(inst);
+      } else {
+        assert(false && "Unknown terminator");
+      }
+    }
+
   public:
     LLVMCodeGen(Section* section,
                 llvm::Module* module,
@@ -400,155 +795,10 @@ namespace metajit {
 
       for (Block* block : *_section) {
         if (_generating_extension) {
+          emit_generating_extension(block);
+        } else {
+          _builder.SetInsertPoint(_blocks.at(block));
           for (Inst* inst : *block) {
-            if (dynmatch(PhiInst, phi, inst)) {
-              for (size_t it = 0; it < phi->arg_count(); it++) {
-                llvm::BasicBlock* from_block = _end_blocks.at(phi->block(it));
-                llvm::Instruction* terminator = from_block->getTerminator();
-                assert(terminator);
-                terminator->removeFromParent();
-                _builder.SetInsertPoint(from_block);
-                _builder.CreateStore(is_const(phi->arg(it)), _is_const.at(inst));
-                _builder.CreateStore(emit_built_arg(phi->arg(it)), _built.at(inst));
-                _builder.Insert(terminator);
-                _end_blocks.at(phi->block(it)) = _builder.GetInsertBlock();
-              }
-            } else {
-              break;
-            }
-          }
-        }
-
-        _builder.SetInsertPoint(_blocks.at(block));
-        for (Inst* inst : *block) {
-          if (_generating_extension) {
-            if (_comments &&
-                !dynamic_cast<CommentInst*>(inst) &&
-                !dynamic_cast<PhiInst*>(inst)) {
-              std::ostringstream comment_stream;
-              inst->write_arg(comment_stream);
-              comment_stream << " = ";
-              inst->write(comment_stream);
-              _builder.CreateCall(_llvm_api.build_comment, {
-                _jitir_builder,
-                _builder.CreateGlobalString(comment_stream.str())
-              });
-            }
-
-            if (dynmatch(BranchInst, branch, inst)) {
-              _builder.CreateCall(_llvm_api.build_guard, {
-                _jitir_builder,
-                emit_built_arg(branch->arg(0)),
-                _builder.CreateZExt(
-                  emit_arg(branch->arg(0)),
-                  llvm::Type::getInt32Ty(_context)
-                )
-              });
-              _values[inst] = emit_inst(inst);
-            } else if (dynamic_cast<JumpInst*>(inst) ||
-                       dynamic_cast<ExitInst*>(inst)) {
-              _values[inst] = emit_inst(inst);
-            } else if (dynmatch(PhiInst, phi, inst)) {
-              _values[inst] = emit_inst(inst);
-            } else if (dynmatch(FreezeInst, freeze, inst)) {
-              _values[inst] = emit_inst(inst);
-              _builder.CreateStore(llvm::ConstantInt::getTrue(_context), _is_const.at(inst));
-
-              emit_branch(
-                is_const(freeze->arg(0)),
-                [&](){
-                  _builder.CreateStore(
-                    emit_built_arg(freeze->arg(0)),
-                    _built.at(inst)
-                  );
-                },
-                [&](){
-                  llvm::Value* built_const = _builder.CreateCall(
-                    _llvm_api.build_const_fast,
-                    {
-                      _jitir_builder,
-                      llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
-                      _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
-                    }
-                  );
-
-                  _builder.CreateCall(_llvm_api.build_guard, {
-                    _jitir_builder,
-                    _builder.CreateCall(
-                      _llvm_api.build_eq,
-                      {
-                        _jitir_builder,
-                        emit_built_arg(freeze->arg(0)),
-                        built_const
-                      }
-                    ),
-                    llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), 1)
-                  });
-
-                  _builder.CreateStore(
-                    built_const,
-                    _built.at(inst)
-                  );
-                },
-                "freeze_"
-              );
-            } else {
-              _values[inst] = emit_inst(inst);
-              _builder.CreateStore(emit_const_prop(inst), _is_const.at(inst));
-              
-              std::vector<llvm::Value*> args;
-              for (Value* arg : inst->args()) {
-                args.push_back(emit_built_arg(arg));
-              }
-
-              if (is_int_or_bool(inst->type())) {
-                auto trace_const = [&](){
-                  if (_trace_capabilities.can_trace_const(inst)) {
-                    llvm::Value* built = _builder.CreateCall(
-                      _llvm_api.build_const_fast,
-                      {
-                        _jitir_builder,
-                        llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
-                        _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
-                      }
-                    );
-                    _builder.CreateStore(built, _built.at(inst));
-                  }
-                };
-                if (_trace_capabilities.can_trace_const(inst) && !_trace_capabilities.can_trace_inst(inst)) {
-                  // This only happens for always const values, so we do not need to check is_const(inst)
-                  trace_const();
-                } else {
-                  emit_branch(
-                    is_const(inst),
-                    trace_const,
-                    [&](){
-                      if (_trace_capabilities.can_trace_inst(inst)) {
-                        llvm::Value* built = build_build_inst(_builder, _llvm_api, inst, _jitir_builder, args);
-                        _builder.CreateStore(built, _built.at(inst));
-
-                        if (dynmatch(LoadInst, load, inst)) {
-                          llvm::Value* is_const_inst = _builder.CreateCall(_llvm_api.is_const_inst, {emit_built_arg(inst)});
-                          _builder.CreateStore(_builder.CreateTrunc(is_const_inst, llvm::Type::getInt1Ty(_context)), _is_const.at(inst));
-                        }
-                      }
-                    },
-                    "const_"
-                  );
-                }
-              } else {
-                if (_trace_capabilities.any(inst)) {
-                  llvm::Value* built = build_build_inst(_builder, _llvm_api, inst, _jitir_builder, args);
-                  _builder.CreateStore(built, _built.at(inst));
-
-                  if (dynmatch(LoadInst, load, inst)) {
-                    llvm::Value* is_const_inst = _builder.CreateCall(_llvm_api.is_const_inst, {emit_built_arg(inst)});
-                    _builder.CreateStore(_builder.CreateTrunc(is_const_inst, llvm::Type::getInt1Ty(_context)), _is_const.at(inst));
-                  }
-                }
-              }
-            }
-          } else {
             _values[inst] = emit_inst(inst);
           }
         }
