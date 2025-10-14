@@ -844,7 +844,9 @@ namespace metajit {
       stream << "}\n";
     }
 
-    bool verify(std::ostream& errors) const {
+    bool verify(std::ostream& errors) {
+      autoname();
+
       std::map<Block*, std::set<Block*>> incoming;
       for (Block* block : *this) {
         if (!block->terminator()) {
@@ -1891,6 +1893,201 @@ namespace metajit {
           }
         }
       }
+    }
+  };
+
+  class Uses {
+  public:
+    struct Use {
+      Inst* inst = nullptr;
+      size_t index = 0;
+
+      Use() {}
+      Use(Inst* _inst, size_t _index):
+        inst(_inst), index(_index) {}
+    };
+  private:
+    Section* _section;
+    InstMap<std::vector<Use>> _uses;
+  public:
+    Uses(Section* section): _section(section), _uses(section) {
+      for (Block* block : *section) {
+        for (Inst* inst : *block) {
+          for (size_t it = 0; it < inst->arg_count(); it++) {
+            if (dynmatch(Inst, arg_inst, inst->arg(it))) {
+              _uses[arg_inst].emplace_back(inst, it);
+            }
+          }
+        }
+      }
+    }
+
+    const std::vector<Use>& at(Inst* inst) const {
+      return _uses.at(inst);
+    }
+  };
+
+  class ConstnessAnalysis {
+  public:
+    static const size_t ALWAYS = 0;
+  private:
+    Section* _section;
+    InstMap<size_t> _groups;
+    size_t _next_group = 1;
+  public:
+    ConstnessAnalysis(Section* section): _section(section), _groups(section) {
+      for (Block* block : *section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(FreezeInst, freeze, inst)) {
+            _groups[inst] = ALWAYS;
+          } else if (dynmatch(LoadInst, load, inst)) {
+            if (load->flags().has(LoadFlags::Pure)) {
+              _groups[inst] = at(load->ptr());
+            } else {
+              _groups[inst] = _next_group++;
+            }
+          } else if (dynmatch(InputInst, input, inst)) {
+            if (input->flags().has(InputFlags::AssumeConst)) {
+              _groups[inst] = ALWAYS;
+            } else {
+              _groups[inst] = _next_group++;
+            }
+          } else if (inst->has_side_effect() || inst->is_terminator()) {
+            _groups[inst] = _next_group++;
+          } else {
+            size_t group = ALWAYS;
+            for (Value* arg : inst->args()) {
+              size_t arg_group = at(arg);
+              if (arg_group != ALWAYS && arg_group != group) {
+                if (group == ALWAYS) {
+                  group = arg_group;
+                } else {
+                  group = _next_group;
+                }
+              }
+            }
+
+            // Instructions for which we implement short-circuiting
+            // inside the generating extension may be const even though
+            // not all arguments are const. This means they need to be
+            // in a separate group.
+            if (dynamic_cast<AndInst*>(inst) ||
+                dynamic_cast<OrInst*>(inst) ||
+                dynamic_cast<SelectInst*>(inst) ||
+                dynamic_cast<LoadInst*>(inst)) {
+              if (group != ALWAYS) {
+                group = _next_group;
+              }
+            }
+
+            if (group == _next_group) {
+              _next_group++;
+            }
+
+            _groups[inst] = group;
+          }
+        }
+      }
+    }
+
+    size_t at(Value* value) const {
+      if (dynmatch(Const, constant, value)) {
+        return ALWAYS;
+      } else if (dynmatch(Inst, inst, value)) {
+        return _groups.at(inst);
+      } else {
+        assert(false); // Unreachable
+        return 0;
+      }
+    }
+
+    void write(std::ostream& stream) {
+      InfoWriter info_writer([&](std::ostream& stream, Inst* inst) {
+        size_t group = _groups.at(inst);
+        if (group == ALWAYS) {
+          stream << "always";
+        } else {
+          stream << group;
+        }
+      });
+      _section->write(stream, &info_writer);
+    }
+  };
+
+  class TraceCapabilities {
+  private:
+    Section* _section;
+    ConstnessAnalysis& _constness;
+    InstMap<bool> _can_trace_inst;
+    InstMap<bool> _can_trace_const;
+
+    void used_by(Inst* inst, Inst* by) {
+      if (_can_trace_inst.at(by)) {
+        if (_constness.at(by) != _constness.at(inst) ||
+            (is_int_or_bool(inst->type()) && !is_int_or_bool(by->type()))) {
+          _can_trace_const[inst] = true;
+        }
+        if (_constness.at(inst) != ConstnessAnalysis::ALWAYS) {
+          _can_trace_inst[inst] = true;
+        }
+      }
+
+      // Phis cannot generate new constants, so all arguments need to be const traceable
+      if (dynmatch(PhiInst, phi, by)) {
+        if (_can_trace_const.at(by)) {
+          _can_trace_const[inst] = true;
+        }
+      }
+    }
+  public:
+    TraceCapabilities(Section* section, ConstnessAnalysis& constness):
+        _section(section),
+        _constness(constness),
+        _can_trace_inst(section),
+        _can_trace_const(section) {
+    
+      for (size_t block_id = section->size(); block_id-- > 0; ) {
+        Block* block = (*section)[block_id];
+        for (Inst* inst : block->rev_range()) {
+          if (inst->has_side_effect() ||
+              inst->is_terminator() ||
+              dynamic_cast<FreezeInst*>(inst)) {
+            _can_trace_inst[inst] = true;
+            _can_trace_const[inst] = true;
+          }
+
+          for (Value* arg : inst->args()) {
+            if (dynmatch(Inst, arg_inst, arg)) {
+              used_by(arg_inst, inst);
+            }
+          }
+        }
+      }
+    }
+
+    bool can_trace_const(Inst* inst) const {
+      return _can_trace_const[inst];
+    }
+
+    bool can_trace_inst(Inst* inst) const {
+      return _can_trace_inst[inst];
+    }
+
+    bool any(Inst* inst) const {
+      return can_trace_const(inst) || can_trace_inst(inst);
+    }
+
+    void write(std::ostream& stream) {
+      InfoWriter info_writer([&](std::ostream& stream, Inst* inst) {
+        if (can_trace_const(inst)) {
+          stream << "trace_const ";
+        }
+        if (can_trace_inst(inst)) {
+          stream << "trace_inst ";
+        }
+        stream << "group=" << _constness.at(inst);
+      });
+      _section->write(stream, &info_writer);
     }
   };
 }

@@ -249,7 +249,12 @@ jitir = IR(
             args = [],
             type = "Type::Void",
             type_checks = []
-        )
+        ),
+        Inst("Comment",
+            args = [Arg("text", Type("const char*"))],
+            type = "Type::Void",
+            type_checks = []
+        ),
     ]
 )
 
@@ -261,9 +266,14 @@ lwir(
         InstPlugin([
             InstTrailingConstructorPlugin(),
             InstGetterPlugin(),
-            InstWritePlugin(custom={
-                Type("Block*"): lambda value, stream: f"{value}->write_arg({stream});",
-            }),
+            InstWritePlugin(
+                custom={
+                    Type("Block*"): lambda value, stream: f"{value}->write_arg({stream});",
+                },
+                overrides={
+                    "Comment": lambda stream: "stream << \"; \"; stream << _text;"
+                }
+            ),
             InstEqualsPlugin(),
             InstHashPlugin()
         ]),
@@ -279,6 +289,7 @@ lwir(
                 Type("InputFlags"): "uint32_t",
                 Type("Block*"): "void*",
                 Type("AliasingGroup"): "uint32_t", # Needs to be passed by LLVM IR
+                Type("const char*"): "const char*",
                 ValueType(): "void*"
             }
         )
@@ -293,6 +304,7 @@ llvm_type_substitutions = {
     Type("InputFlags"): "llvm::Type::getInt32Ty(context)",
     Type("Block*"): "llvm::PointerType::get(context, 0)",
     Type("AliasingGroup"): "llvm::Type::getInt32Ty(context)",
+    Type("const char*"): "llvm::PointerType::get(context, 0)",
     ValueType(): "llvm::PointerType::get(context, 0)",
 }
 
