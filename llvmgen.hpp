@@ -44,6 +44,7 @@ namespace metajit {
     std::map<Block*, llvm::BasicBlock*> _end_blocks;
 
     // Used for generating extension
+    Uses _uses;
     ConstnessAnalysis _constness;
     TraceCapabilities _trace_capabilities;
 
@@ -51,6 +52,7 @@ namespace metajit {
     // Used for generating extension
     InstMap<llvm::Value*> _built;
     InstMap<llvm::Value*> _is_const;
+    InstMap<llvm::Value*> _is_used;
     llvm::Value* _jitir_builder = nullptr;
 
     void emit_branch(llvm::Value* cond,
@@ -295,6 +297,51 @@ namespace metajit {
       }
     }
 
+    llvm::Value* is_used(Inst* inst) {
+      return _builder.CreateLoad(
+        llvm::Type::getInt1Ty(_context),
+        _is_used.at(inst)
+      );
+    }
+
+    llvm::Value* emit_used(Inst* inst) {
+      if (inst->has_side_effect() || inst->is_terminator()) {
+        return llvm::ConstantInt::getTrue(_context);
+      } else {
+        llvm::Value* used = llvm::ConstantInt::getFalse(_context);
+        for (Uses::Use use : _uses.at(inst)) {
+          llvm::Value* use_used = is_used(use.inst);
+          
+          use_used = _builder.CreateAnd(
+            use_used,
+            _builder.CreateNot(is_const(use.inst))
+          );
+
+          if (dynmatch(SelectInst, select, use.inst)) {
+            if (use.index > 0) {
+              llvm::Value* branch_used = emit_arg(select->arg(0));
+              if (branch_used) {
+                if (use.index == 2) {
+                  branch_used = _builder.CreateNot(branch_used);
+                }
+                use_used = _builder.CreateAnd(
+                  use_used,
+                  _builder.CreateSelect(
+                    is_const(select->arg(0)),
+                    branch_used,
+                    llvm::ConstantInt::getTrue(_context)
+                  )
+                );
+              }
+            }
+          }
+
+          used = _builder.CreateOr(used, use_used);
+        }
+        return used;
+      }
+    }
+
     llvm::Value* emit_built_arg(Value* value) {
       if (dynmatch(Const, constant, value)) {
         llvm::Value* addr = llvm::ConstantInt::get(
@@ -333,6 +380,8 @@ namespace metajit {
       size_t priority = 0;
       std::function<void()> func;
       ActionGroup* group = nullptr;
+      
+      std::optional<size_t> executed;
 
       Action(const std::string& _name,
              size_t _priority,
@@ -342,9 +391,20 @@ namespace metajit {
     };
 
     struct ActionGroup {
+      std::string name;
       std::vector<Action*> actions;
-      std::vector<Action*> outgoing; // Actions that depend on this group
-      bool executed = false;
+      
+      // Actions that depend on this group
+      std::vector<Action*> outgoing;
+      std::vector<Action*> optional_outgoing;
+
+      std::optional<size_t> executed;
+
+      ActionGroup() {}
+      ActionGroup(const std::string& _name): name(_name) {}
+
+      ActionGroup(const ActionGroup&) = delete;
+      ActionGroup& operator=(const ActionGroup&) = delete;
 
       ~ActionGroup() {
         for (Action* action : actions) {
@@ -355,6 +415,7 @@ namespace metajit {
       Action* add(const std::string& name,
                   size_t priority,
                   const std::vector<ActionGroup*>& dependencies,
+                  const std::vector<ActionGroup*>& optional_dependencies,
                   std::function<void()> func) {
         
         Action* action = new Action(name, priority, func, this);
@@ -362,6 +423,11 @@ namespace metajit {
         for (ActionGroup* group : dependencies) {
           if (group) {
             group->outgoing.push_back(action);
+          }
+        }
+        for (ActionGroup* group : optional_dependencies) {
+          if (group) {
+            group->optional_outgoing.push_back(action);
           }
         }
         return action;
@@ -382,8 +448,8 @@ namespace metajit {
         }
       }
 
-      ActionGroup* add() {
-        ActionGroup* group = new ActionGroup();
+      ActionGroup* add(const std::string& name = "") {
+        ActionGroup* group = new ActionGroup(name);
         _groups.push_back(group);
         return group;
       }
@@ -397,6 +463,11 @@ namespace metajit {
             case '\t': stream << "\\t"; break;
             case '"': stream << "\\\""; break;
             case '\\': stream << "\\\\"; break;
+            case '{': stream << "\\{"; break;
+            case '}': stream << "\\}"; break;
+            case '<': stream << "\\<"; break;
+            case '>': stream << "\\>"; break;
+            case '|': stream << "\\|"; break;
             default:
               stream << chr;
           }
@@ -410,17 +481,24 @@ namespace metajit {
         std::unordered_map<ActionGroup*, size_t> ids;
         std::unordered_map<Action*, size_t> action_indices;
         for (ActionGroup* group : _groups) {
-          stream << "group" << id << " [shape=record, label=\"";
+          stream << "group" << id << " [shape=record, label=\"{";
+          if (group->name.empty()) {
+            stream << "(unnamed)";
+          } else {
+            write_escaped(stream, group->name);
+          }
           for (size_t it = 0; it < group->actions.size(); it++) {
-            if (it != 0) {
-              stream << "|";
-            }
+            stream << "|";
             Action* action = group->actions[it];
-            stream << "<f" << it << "> ";
-            write_escaped(stream, action->name);
+            stream << "<a" << it << "> ";
+            std::string label = action->name;
+            if (action->executed.has_value()) {
+              label += "\n(executed at " + std::to_string(action->executed.value()) + ")";
+            }
+            write_escaped(stream, label);
             action_indices[action] = it;
           }
-          stream << "\"];\n";
+          stream << "}\"];\n";
           ids[group] = id;
           id++;
         }
@@ -428,9 +506,27 @@ namespace metajit {
         for (ActionGroup* group : _groups) {
           for (Action* action : group->outgoing) {
             stream << "group" << ids[group];
-            stream << ":f" << action_indices[action];
             stream << " -> group" << ids[action->group];
+            //stream << ":a" << action_indices[action];
             stream << ";\n";
+            if (action->executed.has_value() && group->executed.has_value()) {
+              assert(action->executed.value() >= group->executed.value());
+            }
+          }
+
+          for (Action* action : group->optional_outgoing) {
+            stream << "group" << ids[group];
+            stream << " -> group" << ids[action->group];
+            //stream << ":a" << action_indices[action];
+            stream << " [style=dashed";
+            if (action->executed.has_value() && group->executed.has_value()) {
+              if (action->executed.value() < group->executed.value()) {
+                stream << ", color=red, weight=0, constraint=false";
+              } else {
+                stream << ", color=green";
+              }
+            }
+            stream << "];\n";
           }
         }
 
@@ -445,45 +541,92 @@ namespace metajit {
 
       void run() {
         std::unordered_map<Action*, size_t> incoming;
+        std::unordered_map<Action*, size_t> optional_incoming;
+        std::unordered_map<Action*, size_t> fulfilled_optional;
         for (ActionGroup* group : _groups) {
           for (Action* action : group->outgoing) {
             incoming[action]++;
           }
+          for (Action* action : group->optional_outgoing) {
+            optional_incoming[action]++;
+          }
         }
 
-        std::priority_queue<std::pair<size_t, Action*>> queue;
+        struct Entry {
+          Action* action;
+          double optional_fraction;
+
+          Entry(Action* _action,
+                size_t fulfilled_optional,
+                size_t optional_incoming):
+              action(_action) {
+            if (optional_incoming == 0) {
+              optional_fraction = 1.0;
+            } else {
+              optional_fraction = (double)fulfilled_optional / (double)optional_incoming;
+            }
+          }
+          
+          bool operator<(const Entry& other) const {
+            if ((optional_fraction == 1.0) != (other.optional_fraction == 1.0)) {
+              return optional_fraction < other.optional_fraction;
+            }
+            return action->priority < other.action->priority;
+          }
+        };
+
+        std::priority_queue<Entry> queue;
+
+        #define push_action(action) \
+          queue.push(Entry(action, fulfilled_optional[action], optional_incoming[action]));
         
         for (ActionGroup* group : _groups) {
           for (Action* action : group->actions) {
             if (incoming[action] == 0) {
-              queue.push({action->priority, action});
+              push_action(action);
             }
           }
         }
 
+        size_t step = 0;
         while (!queue.empty()) {
-          Action* action = queue.top().second;
+          Action* action = queue.top().action;
           queue.pop();
           if (action->group->executed) {
             continue;
           }
           action->func();
-          action->group->executed = true;
+          action->executed = step;
+          action->group->executed = step;
+          step++;
+
+          for (Action* next : action->group->optional_outgoing) {
+            if (!next->group->executed.has_value()) {
+              fulfilled_optional[next]++;
+              if (incoming[next] == 0) {
+                push_action(next);
+              } 
+            }
+          }
 
           for (Action* next : action->group->outgoing) {
-            incoming[next]--;
-            if (incoming[next] == 0) {
-              queue.push({next->priority, next});
+            if (!next->group->executed.has_value()) {
+              incoming[next]--;
+              if (incoming[next] == 0) {
+                push_action(next);
+              }
             }
           }
         }
+
+        #undef push_action
 
         if (_groups.size() > 0) {
           save_dot("action_queue.dot");
         }
 
         for (ActionGroup* group : _groups) {
-          assert(group->executed);
+          assert(group->executed.has_value());
         }
       }
     };
@@ -502,99 +645,106 @@ namespace metajit {
         });
       }
 
-      if (dynmatch(FreezeInst, freeze, inst)) {
-        emit_branch(
-          is_const(freeze->arg(0)),
-          [&](){
-            _builder.CreateStore(
-              emit_built_arg(freeze->arg(0)),
-              _built.at(inst)
-            );
-          },
-          [&](){
-            llvm::Value* built_const = _builder.CreateCall(
-              _llvm_api.build_const_fast,
-              {
-                _jitir_builder,
-                llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
-                _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
-              }
-            );
-
-            _builder.CreateCall(_llvm_api.build_guard, {
-              _jitir_builder,
-              _builder.CreateCall(
-                _llvm_api.build_eq,
-                {
-                  _jitir_builder,
+      emit_branch(
+        is_used(inst),
+        [&](){
+          if (dynmatch(FreezeInst, freeze, inst)) {
+            emit_branch(
+              is_const(freeze->arg(0)),
+              [&](){
+                _builder.CreateStore(
                   emit_built_arg(freeze->arg(0)),
-                  built_const
-                }
-              ),
-              llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), 1)
-            });
+                  _built.at(inst)
+                );
+              },
+              [&](){
+                llvm::Value* built_const = _builder.CreateCall(
+                  _llvm_api.build_const_fast,
+                  {
+                    _jitir_builder,
+                    llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
+                    _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
+                  }
+                );
 
-            _builder.CreateStore(
-              built_const,
-              _built.at(inst)
+                _builder.CreateCall(_llvm_api.build_guard, {
+                  _jitir_builder,
+                  _builder.CreateCall(
+                    _llvm_api.build_eq,
+                    {
+                      _jitir_builder,
+                      emit_built_arg(freeze->arg(0)),
+                      built_const
+                    }
+                  ),
+                  llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), 1)
+                });
+
+                _builder.CreateStore(
+                  built_const,
+                  _built.at(inst)
+                );
+              },
+              "freeze_"
             );
-          },
-          "freeze_"
-        );
-        return;
-      }
-
-      std::vector<llvm::Value*> args;
-      for (Value* arg : inst->args()) {
-        args.push_back(emit_built_arg(arg));
-      }
-
-      if (is_int_or_bool(inst->type())) {
-        auto trace_const = [&](){
-          if (_trace_capabilities.can_trace_const(inst)) {
-            llvm::Value* built = _builder.CreateCall(
-              _llvm_api.build_const_fast,
-              {
-                _jitir_builder,
-                llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
-                _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
-              }
-            );
-            _builder.CreateStore(built, _built.at(inst));
+            return;
           }
-        };
-        if (_trace_capabilities.can_trace_const(inst) && !_trace_capabilities.can_trace_inst(inst)) {
-          // This only happens for always const values, so we do not need to check is_const(inst)
-          trace_const();
-        } else {
-          emit_branch(
-            is_const(inst),
-            trace_const,
-            [&](){
-              if (_trace_capabilities.can_trace_inst(inst)) {
-                llvm::Value* built = build_build_inst(_builder, _llvm_api, inst, _jitir_builder, args);
+
+          std::vector<llvm::Value*> args;
+          for (Value* arg : inst->args()) {
+            args.push_back(emit_built_arg(arg));
+          }
+
+          if (is_int_or_bool(inst->type())) {
+            auto trace_const = [&](){
+              if (_trace_capabilities.can_trace_const(inst)) {
+                llvm::Value* built = _builder.CreateCall(
+                  _llvm_api.build_const_fast,
+                  {
+                    _jitir_builder,
+                    llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
+                    _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
+                  }
+                );
                 _builder.CreateStore(built, _built.at(inst));
-
-                if (dynmatch(LoadInst, load, inst)) {
-                  llvm::Value* is_const_inst = _builder.CreateCall(_llvm_api.is_const_inst, {emit_built_arg(inst)});
-                  _builder.CreateStore(_builder.CreateTrunc(is_const_inst, llvm::Type::getInt1Ty(_context)), _is_const.at(inst));
-                }
               }
-            },
-            "const_"
-          );
-        }
-      } else {
-        if (_trace_capabilities.any(inst)) {
-          llvm::Value* built = build_build_inst(_builder, _llvm_api, inst, _jitir_builder, args);
-          _builder.CreateStore(built, _built.at(inst));
+            };
+            if (_trace_capabilities.can_trace_const(inst) && !_trace_capabilities.can_trace_inst(inst)) {
+              // This only happens for always const values, so we do not need to check is_const(inst)
+              trace_const();
+            } else {
+              emit_branch(
+                is_const(inst),
+                trace_const,
+                [&](){
+                  if (_trace_capabilities.can_trace_inst(inst)) {
+                    llvm::Value* built = build_build_inst(_builder, _llvm_api, inst, _jitir_builder, args);
+                    _builder.CreateStore(built, _built.at(inst));
 
-          if (dynmatch(LoadInst, load, inst)) {
-            llvm::Value* is_const_inst = _builder.CreateCall(_llvm_api.is_const_inst, {emit_built_arg(inst)});
-            _builder.CreateStore(_builder.CreateTrunc(is_const_inst, llvm::Type::getInt1Ty(_context)), _is_const.at(inst));
+                    if (dynmatch(LoadInst, load, inst)) {
+                      llvm::Value* is_const_inst = _builder.CreateCall(_llvm_api.is_const_inst, {emit_built_arg(inst)});
+                      _builder.CreateStore(_builder.CreateTrunc(is_const_inst, llvm::Type::getInt1Ty(_context)), _is_const.at(inst));
+                    }
+                  }
+                },
+                "const_"
+              );
+            }
+          } else {
+            if (_trace_capabilities.any(inst)) {
+              llvm::Value* built = build_build_inst(_builder, _llvm_api, inst, _jitir_builder, args);
+              _builder.CreateStore(built, _built.at(inst));
+
+              if (dynmatch(LoadInst, load, inst)) {
+                llvm::Value* is_const_inst = _builder.CreateCall(_llvm_api.is_const_inst, {emit_built_arg(inst)});
+                _builder.CreateStore(_builder.CreateTrunc(is_const_inst, llvm::Type::getInt1Ty(_context)), _is_const.at(inst));
+              }
+            }
           }
-        }
-      }
+        },
+        [&](){},
+        "used_"
+      );
     }
 
     void emit_generating_extension(Block* block) {
@@ -623,14 +773,15 @@ namespace metajit {
 
       std::unordered_map<Value*, ActionGroup*> emit_groups;
       std::unordered_map<Value*, ActionGroup*> const_groups;
+      std::unordered_map<Value*, ActionGroup*> used_groups;
       ActionGroup* last_emit_group = nullptr;
       ActionGroup* last_build_group = nullptr;
-      
+
+      constexpr const size_t PRIO_MAX = 100;
+      constexpr const size_t PRIO_OVERAPPROX_USED = 50;
+
       for (Inst* inst : *block) {
-        if (dynamic_cast<PhiInst*>(inst) ||
-            dynamic_cast<BranchInst*>(inst) ||
-            dynamic_cast<JumpInst*>(inst) ||
-            dynamic_cast<ExitInst*>(inst)) {
+        if (dynamic_cast<PhiInst*>(inst) || inst->is_terminator()) {
           continue;
         }
 
@@ -638,9 +789,10 @@ namespace metajit {
         inst->write(name_stream);
         std::string name = name_stream.str();
 
-        ActionGroup* emit_group = queue.add();
-        ActionGroup* build_group = queue.add();
-        ActionGroup* const_group = queue.add();
+        ActionGroup* emit_group = queue.add(name);
+        ActionGroup* const_group = queue.add(name);
+        ActionGroup* used_group = queue.add(name);
+        ActionGroup* build_group = queue.add(name);
 
         std::vector<ActionGroup*> emit_deps;
         for (Value* arg : inst->args()) {
@@ -652,7 +804,7 @@ namespace metajit {
           emit_deps.push_back(last_emit_group);
         }
 
-        emit_group->add("emit\n" + name, 0, emit_deps, [inst, this](){
+        emit_group->add("emit", PRIO_MAX, emit_deps, {}, [inst, this](){
           _values[inst] = emit_inst(inst);  
         });
 
@@ -664,11 +816,12 @@ namespace metajit {
           }
         }
 
-        const_group->add("const\n" + name, 0, const_deps, [inst, this](){
+        const_group->add("const", PRIO_MAX, const_deps, {}, [inst, this](){
           _builder.CreateStore(emit_const_prop(inst), _is_const.at(inst));
         });
 
-        build_group->add("build\n" + name, 0, {const_group, last_build_group}, [inst, this](){
+        std::vector<ActionGroup*> build_deps = {const_group, used_group, last_build_group};
+        build_group->add("build", PRIO_MAX, build_deps, {}, [inst, this](){
           emit_build_inst(inst);
         });
 
@@ -684,7 +837,76 @@ namespace metajit {
           const_groups[inst] = const_group;
         }
 
+        used_groups[inst] = used_group;
+
         last_build_group = build_group;
+      }
+
+      std::unordered_map<Inst*, bool> always_used;
+      for (Inst* inst : block->rev_range()) {
+        if (dynamic_cast<PhiInst*>(inst) || inst->is_terminator()) {
+          continue;
+        }
+
+        always_used[inst] = false;
+        if (inst->has_side_effect()) {
+          always_used[inst] = true;
+        } else {
+          for (Uses::Use use : _uses.at(inst)) {
+            if (always_used.find(use.inst) == always_used.end()) {
+              always_used[use.inst] = true; // Used outside of current block
+            } else if (always_used.at(use.inst) && !dynamic_cast<SelectInst*>(use.inst)) {
+              always_used[inst] = true;
+            }
+          }
+        }
+      }
+            
+      for (Inst* inst : *block) {
+        if (dynamic_cast<PhiInst*>(inst) || inst->is_terminator()) {
+          continue;
+        }
+
+        ActionGroup* used_group = used_groups[inst];
+
+        if (always_used.at(inst)) {
+          used_group->add("always used", PRIO_MAX, {}, {}, [inst, this](){
+            _builder.CreateStore(
+              llvm::ConstantInt::getTrue(_context),
+              _is_used.at(inst)
+            );
+          });
+        } else {
+          std::vector<ActionGroup*> used_deps;
+
+          for (Uses::Use use : _uses.at(inst)) {
+            if (used_groups.find(use.inst) != used_groups.end()) {
+              used_deps.push_back(used_groups.at(use.inst));
+            }
+
+            if (const_groups.find(use.inst) != const_groups.end()) {
+              used_deps.push_back(const_groups.at(use.inst));
+            }
+
+            if (dynmatch(SelectInst, select, use.inst)) {
+              if (use.index > 0 && emit_groups.find(select->cond()) != emit_groups.end()) {
+                used_deps.push_back(emit_groups.at(select->cond()));
+                used_deps.push_back(const_groups.at(select->cond()));
+              }
+            }
+          }
+
+          size_t prio = PRIO_MAX;
+          if (dynmatch(LoadInst, load, inst)) {
+            prio++;
+          }
+          used_group->add("used", prio, {}, used_deps, [inst, this](){
+            _builder.CreateStore(
+              emit_used(inst),
+              _is_used.at(inst)
+            );
+          });
+        }
       }
 
       _builder.SetInsertPoint(_blocks.at(block));
@@ -722,6 +944,7 @@ namespace metajit {
         _module(module),
         _builder(module->getContext()),
         _llvm_api(module),
+        _uses(section),
         _constness(section),
         _trace_capabilities(section, _constness) {
       
@@ -747,8 +970,9 @@ namespace metajit {
 
       section->autoname();
       _values.init(section);
-      _built.init(section);
       _is_const.init(section);
+      _is_used.init(section);
+      _built.init(section);
 
       llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(_context, "entry", _function);
       for (Block* block : *_section) {
@@ -768,9 +992,22 @@ namespace metajit {
               "is_const"
             );
 
+            // False is always a valid overapproximation
             _builder.CreateStore(
               llvm::ConstantInt::getFalse(_context),
               _is_const.at(inst)
+            );
+
+            _is_used[inst] = _builder.CreateAlloca(
+              llvm::Type::getInt1Ty(_context),
+              nullptr,
+              "is_used"
+            );
+
+            // True is always a valid overapproximation 
+            _builder.CreateStore(
+              llvm::ConstantInt::getTrue(_context),
+              _is_used.at(inst)
             );
 
             _built[inst] = _builder.CreateAlloca(
