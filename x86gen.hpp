@@ -20,111 +20,415 @@
 #include "jitir.hpp"
 
 namespace metajit {
-  struct X86Inst {
+  class Reg {
+  public:
     enum class Kind {
-      Mov32, MovImm32, Add, IMul, Ret
+      Invalid, Virtual, Physical
+    };
+  private:
+    Kind _kind = Kind::Invalid;
+    size_t _id = 0;
+  public:
+    Reg() {}
+    Reg(Kind kind, size_t id): _kind(kind), _id(id) {}
+
+    Kind kind() const { return _kind; }
+    size_t id() const { return _id; }
+
+    bool is_invalid() const {
+      return _kind == Kind::Invalid;
+    }
+
+    bool operator==(const Reg& other) const {
+      return _id == other._id;
+    }
+
+    bool operator!=(const Reg& other) const {
+      return !(*this == other);
+    }
+
+    void write(std::ostream& stream) const {
+      switch (_kind) {
+        case Kind::Invalid:
+          stream << "<INVALID>";
+        break;
+        case Kind::Virtual:
+          stream << "v" << _id;
+        break;
+        case Kind::Physical:
+          stream << "p" << _id;
+        break;
+      }
+    }
+  };
+}
+
+std::ostream& operator<<(std::ostream& stream, const metajit::Reg& reg) {
+  reg.write(stream);
+  return stream;
+}
+
+namespace metajit {
+  class X86Inst: public LinkedListItem<X86Inst> {
+  public:
+    enum class Kind {
+      #define x86_inst(name, ...) name,
+      #include "x86insts.inc.hpp"
     };
 
     struct Mem {
-      Value* base = nullptr;
+      Reg base;
       size_t scale = 0;
-      Value* index = nullptr;
+      Reg index;
       int32_t disp = 0;
 
       Mem() {}
-      Mem(Value* _base): base(_base) {}
-      Mem(Value* _base, int32_t _disp): base(_base), disp(_disp) {}
+      Mem(Reg _base): base(_base) {}
+      Mem(Reg _base, int32_t _disp): base(_base), disp(_disp) {}
+      Mem(Reg _base, size_t _scale, Reg _index, int32_t _disp):
+        base(_base), scale(_scale), index(_index), disp(_disp) {}
+
+      void write(std::ostream& stream) const {
+        stream << "[" << base;
+        if (scale != 0) {
+          stream << " + " << index << " * " << scale;
+        }
+        if (disp != 0) {
+          stream << " + " << disp;
+        }
+        stream << "]";
+      }
     };
 
-    using ModRM = std::variant<Value*, Mem>;
-
-    Kind kind;
-    Value* a = nullptr;
-    ModRM b = nullptr;
-    uint32_t imm = 0;
-
-    X86Inst() = default;
-    X86Inst(Kind _kind): kind(_kind) {}
-    X86Inst(Kind _kind, Value* _a, ModRM _b):
-      kind(_kind), a(_a), b(_b) {}
-    X86Inst(Kind _kind, ModRM _b, uint32_t _imm):
-      kind(_kind), b(_b), imm(_imm) {}
+    using RM = std::variant<std::monostate, Reg, Mem>;
+    using Imm = std::variant<std::monostate, uint64_t, X86Inst*>;
+  private:
+    Kind _kind;
+    Reg _reg;
+    RM _rm;
+    Imm _imm;
+  public:
+    X86Inst(Kind kind): _kind(kind) {}
     
-    bool has_imm() const {
-      return kind == Kind::MovImm32;
-    }
+    Kind kind() const { return _kind; }
+    Reg reg() const { return _reg; }
+    RM rm() const { return _rm; }
+    Imm imm() const { return _imm; }
 
-    bool has_modrm() const {
-      return kind == Kind::Mov32 || kind == Kind::MovImm32 || kind == Kind::Add;
+    X86Inst& set_reg(Reg reg) { _reg = reg; return *this; }
+    X86Inst& set_rm(const RM& rm) { _rm = rm; return *this; }
+    X86Inst& set_imm(const Imm& imm) { _imm = imm; return *this; }
+
+    void write(std::ostream& stream) {
+      switch (_kind) {
+        #define x86_inst(name, lowercase) \
+          case Kind::name: stream << #lowercase; break;
+        #include "x86insts.inc.hpp"
+      }
+
+      if (!_reg.is_invalid()) {
+        stream << " reg=" << _reg;
+      }
+
+      if (std::holds_alternative<Reg>(_rm)) {
+        stream << " rm=" << std::get<Reg>(_rm);
+      } else if (std::holds_alternative<Mem>(_rm)) {
+        Mem mem = std::get<Mem>(_rm);
+        stream << " rm=";
+        mem.write(stream);
+      }
+
+      if (std::holds_alternative<uint64_t>(_imm)) {
+        stream << " imm=" << std::get<uint64_t>(_imm);
+      } else if (std::holds_alternative<X86Inst*>(_imm)) {
+        stream << " imm=<INST>";
+      }
     }
   };
 
-  class X86CodeGen {
+  class X86InstBuilder {
+  private:
+    Allocator& _allocator;
+    LinkedList<X86Inst>& _list;
+
+    X86Inst& build(X86Inst::Kind kind) {
+      X86Inst* inst = (X86Inst*) _allocator.alloc(sizeof(X86Inst), alignof(X86Inst));
+      new (inst) X86Inst(kind);
+      _list.add(inst);
+      return *inst;
+    }
+  public:
+    X86InstBuilder(Allocator& allocator, LinkedList<X86Inst>& list):
+      _allocator(allocator), _list(list) {}
+
+    #define binop_x86_inst(kind, name) \
+      X86Inst* name(Reg dst, X86Inst::RM src) { \
+        return &build(X86Inst::Kind::kind).set_reg(dst).set_rm(src); \
+      }
+    
+    #define rev_binop_x86_inst(kind, name) \
+      X86Inst* name(X86Inst::RM dst, Reg src) { \
+        return &build(X86Inst::Kind::kind).set_rm(dst).set_reg(src); \
+      }
+    
+    #define imm_binop_x86_inst(kind, name) \
+      X86Inst* name(X86Inst::RM dst, X86Inst::Imm imm) { \
+        return &build(X86Inst::Kind::kind).set_rm(dst).set_imm(imm); \
+      }
+
+    #include "x86insts.inc.hpp"
+
+    X86Inst* mov64_imm(Reg dst, X86Inst::Imm imm) {
+      return &build(X86Inst::Kind::Mov64Imm).set_reg(dst).set_imm(imm);
+    }
+    
+    X86Inst* lea64(Reg dst, X86Inst::Mem src) {
+      return &build(X86Inst::Kind::Lea64).set_reg(dst).set_rm(src);
+    }
+
+    X86Inst* sete8(X86Inst::RM dst) {
+      return &build(X86Inst::Kind::SetE8).set_rm(dst);
+    }
+
+    X86Inst* setl8(X86Inst::RM dst) {
+      return &build(X86Inst::Kind::SetL8).set_rm(dst);
+    }
+
+    X86Inst* setb8(X86Inst::RM dst) {
+      return &build(X86Inst::Kind::SetB8).set_rm(dst);
+    }
+
+    X86Inst* ret() {
+      return &build(X86Inst::Kind::Ret);
+    }
+  };
+
+  class X86CodeGen: public Pass<X86CodeGen> {
   private:
     Section* _section;
-    ValueMap<std::vector<X86Inst>> _isel;
-    ValueMap<size_t> _regs;
-    ValueMap<bool> _used;
+    LinkedList<X86Inst> _insts;
+    X86InstBuilder _builder;
+
+    InstMap<std::vector<X86Inst>> _isel;
+
+    InstMap<Reg> _vregs;
+    size_t _next_vreg = 0;
+
+    Reg vreg() {
+      return Reg(Reg::Kind::Virtual, _next_vreg++);
+    }
+
+    Reg vreg(Value* value) {
+      if (dynmatch(Const, constant, value)) {
+        Reg reg = vreg();
+        _builder.mov64_imm(reg, constant->value());
+        return reg;
+      } else if (dynmatch(Inst, inst, value)) {
+        if (_vregs.at(inst).is_invalid()) {
+          _vregs[inst] = vreg();
+        }
+        return _vregs.at(inst);
+      } else {
+        assert(false && "Unknown value");
+        return Reg();
+      }
+    }
+
+    void build_add(Reg dst, Value* a, Value* b) {
+      X86Inst::Mem mem;
+      if (dynmatch(Const, constant_b, b)) {
+        mem = X86Inst::Mem(
+          vreg(a),
+          constant_b->value() // TODO: Check if fits in 32 bits
+        );      
+      } else {
+        mem = X86Inst::Mem(
+          vreg(a),
+          1,
+          vreg(b),
+          0
+        );
+      }
+
+      _builder.lea64(dst, mem);
+    }
+
+    void build_cmp(Value* a, Value* b) {
+      if (dynmatch(Const, constant_b, b)) {
+        switch (type_size(a->type())) {
+          case 1: _builder.cmp8_imm(vreg(a), constant_b->value()); break;
+          case 2: _builder.cmp16_imm(vreg(a), constant_b->value()); break;
+          case 4: _builder.cmp32_imm(vreg(a), constant_b->value()); break;
+          case 8: _builder.cmp64_imm(vreg(a), constant_b->value()); break;
+          default: assert(false && "Unsupported comparison type");
+        }
+        return;
+      }
+
+      switch (type_size(a->type())) {
+        case 1: _builder.cmp8(vreg(a), vreg(b)); break;
+        case 2: _builder.cmp16(vreg(a), vreg(b)); break;
+        case 4: _builder.cmp32(vreg(a), vreg(b)); break;
+        case 8: _builder.cmp64(vreg(a), vreg(b)); break;
+        default: assert(false && "Unsupported comparison type");
+      }
+    }
+
+    void isel(Inst* inst) {
+      if (dynmatch(FreezeInst, freeze, inst)) {
+        _builder.mov64(vreg(inst), vreg(freeze->arg(0)));
+      } else if (dynmatch(InputInst, input, inst)) {
+      } else if (dynmatch(OutputInst, input, inst)) {
+      } else if (dynmatch(SelectInst, select, inst)) {
+        _builder.mov64(vreg(inst), vreg(select->arg(1)));
+
+        if (dynmatch(Inst, pred_inst, select->arg(0))) {
+          if (dynamic_cast<EqInst*>(pred_inst) ||
+              dynamic_cast<LtSInst*>(pred_inst) ||
+              dynamic_cast<LtUInst*>(pred_inst)) {
+            build_cmp(pred_inst->arg(0), pred_inst->arg(1));
+            if (dynamic_cast<EqInst*>(pred_inst)) {
+              _builder.cmove64(vreg(inst), vreg(select->arg(2)));
+            } else if (dynamic_cast<LtSInst*>(pred_inst)) {
+              _builder.cmovl64(vreg(inst), vreg(select->arg(2)));
+            } else if (dynamic_cast<LtUInst*>(pred_inst)) {
+              _builder.cmovb64(vreg(inst), vreg(select->arg(2)));
+            } else {
+              assert(false);
+            }
+            return;
+          }
+        }
+        
+        _builder.test64(vreg(select->arg(0)), vreg(select->arg(0)));
+        _builder.cmovz64(vreg(inst), vreg(select->arg(2)));
+      } else if (dynmatch(ResizeUInst, resize_u, inst)) {
+        _builder.mov64(vreg(inst), vreg(resize_u->arg(0)));
+      } else if (dynmatch(LoadInst, load, inst)) {
+        X86Inst::Mem mem(vreg(load->arg(0)), load->offset());
+        switch (type_size(load->type())) {
+          case 1: _builder.mov8(vreg(inst), mem); break;
+          case 2: _builder.mov16(vreg(inst), mem); break;
+          case 4: _builder.mov32(vreg(inst), mem); break;
+          case 8: _builder.mov64(vreg(inst), mem); break;
+          default:
+            assert(false && "Unsupported load type");
+        }
+      } else if (dynmatch(StoreInst, store, inst)) {
+        X86Inst::Mem mem(vreg(store->arg(0)), store->offset());
+        switch (type_size(store->arg(1)->type())) {
+          case 1: _builder.mov8_mem(mem, vreg(store->arg(1))); break;
+          case 2: _builder.mov16_mem(mem, vreg(store->arg(1))); break;
+          case 4: _builder.mov32_mem(mem, vreg(store->arg(1))); break;
+          case 8: _builder.mov64_mem(mem, vreg(store->arg(1))); break;
+          default:
+            assert(false && "Unsupported store type");
+        }
+      } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
+        build_add(vreg(inst), add_ptr->ptr(), add_ptr->offset());
+      } else if (dynmatch(AddInst, add, inst)) {
+        build_add(vreg(inst), add->arg(0), add->arg(1));
+      } else if (dynmatch(SubInst, sub, inst)) {
+        _builder.mov64(vreg(inst), vreg(sub->arg(0)));
+
+        if (dynmatch(Const, constant_b, sub->arg(1))) {
+          _builder.sub64_imm(vreg(inst), constant_b->value());
+          return;
+        }
+
+        _builder.sub64(vreg(inst), vreg(sub->arg(1)));
+      } else if (dynmatch(MulInst, mul, inst)) {
+        _builder.mov64(vreg(inst), vreg(mul->arg(0)));
+        _builder.imul64(vreg(inst), vreg(mul->arg(1)));
+      } else if (dynmatch(ModSInst, mod_s, inst)) {
+        assert(false && "Not implemented");
+      } else if (dynmatch(ModUInst, mod_u, inst)) {
+        assert(false && "Not implemented");
+      } else if (dynmatch(AndInst, and_inst, inst)) {
+        _builder.mov64(vreg(inst), vreg(and_inst->arg(0)));
+
+        if (dynmatch(Const, constant_b, and_inst->arg(1))) {
+          _builder.and64_imm(vreg(inst), constant_b->value());
+          return;
+        }
+
+        _builder.and64(vreg(inst), vreg(and_inst->arg(1)));
+      } else if (dynmatch(OrInst, or_inst, inst)) {
+        _builder.mov64(vreg(inst), vreg(or_inst->arg(0)));
+
+        if (dynmatch(Const, constant_b, or_inst->arg(1))) {
+          _builder.or64_imm(vreg(inst), constant_b->value());
+          return;
+        }
+
+        _builder.or64(vreg(inst), vreg(or_inst->arg(1)));
+      } else if (dynmatch(XorInst, xor_inst, inst)) {
+        _builder.mov64(vreg(inst), vreg(xor_inst->arg(0)));
+
+        if (dynmatch(Const, constant_b, xor_inst->arg(1))) {
+          _builder.xor64_imm(vreg(inst), constant_b->value());
+          return;
+        }
+
+        _builder.xor64(vreg(inst), vreg(xor_inst->arg(1)));
+      } else if (dynmatch(ShrUInst, shr_u, inst)) {
+        _builder.mov64(vreg(inst), vreg(xor_inst->arg(0)));
+        _builder.shr64(vreg(inst), vreg(xor_inst->arg(1)));
+      } else if (dynmatch(ShrSInst, shr_s, inst)) {
+        _builder.mov64(vreg(inst), vreg(xor_inst->arg(0)));
+        _builder.sar64(vreg(inst), vreg(xor_inst->arg(1)));
+      } else if (dynamic_cast<EqInst*>(inst) ||
+                 dynamic_cast<LtSInst*>(inst) ||
+                 dynamic_cast<LtUInst*>(inst)) {
+        build_cmp(inst->arg(0), inst->arg(1));
+        if (dynamic_cast<EqInst*>(inst)) {
+          _builder.sete8(vreg(inst));
+        } else if (dynamic_cast<LtSInst*>(inst)) {
+          _builder.setl8(vreg(inst));
+        } else if (dynamic_cast<LtUInst*>(inst)) {
+          _builder.setb8(vreg(inst));
+        } else {
+          assert(false);
+        }
+      } else if (dynmatch(BranchInst, branch, inst)) {
+        assert(false && "Not implemented");
+      } else if (dynmatch(ExitInst, exit, inst)) {
+        _builder.ret();
+      } else {
+        inst->write(std::cerr);
+        std::cerr << std::endl;
+        assert(false && "Unknown instruction");
+      }
+    }
 
     void isel() {
       for (Block* block : *_section) {
         for (Inst* inst : *block) {
-          if (dynmatch(ConstInst, constant, inst)) {
-            _isel[inst] = {X86Inst(X86Inst::Kind::MovImm32, inst, constant->value())};
-          } else if (dynmatch(InputInst, input, inst)) {
-            _isel[inst] = {};
-          } else if (dynmatch(OutputInst, input, inst)) {
-            _isel[inst] = {};
-          } else if (dynmatch(LoadInst, load, inst)) {
-            X86Inst::Kind opcode;
-            switch (load->type()) {
-              case Type::Int32: opcode = X86Inst::Kind::Mov32; break;
-              default: assert(false && "Unsupported load type");
-            }
-            _isel[inst] = {
-              X86Inst(opcode, inst, X86Inst::Mem(load->arg(0)))
-            };
-          } else if (dynmatch(AddInst, add, inst)) {
-            _isel[inst] = {
-              X86Inst(X86Inst::Kind::Mov32, inst, add->arg(0)),
-              X86Inst(X86Inst::Kind::Add, inst, add->arg(1))
-            };
-          } else if (dynmatch(MulInst, mul, inst)) {
-            _isel[inst] = {
-              X86Inst(X86Inst::Kind::Mov32, inst, mul->arg(0)),
-              X86Inst(X86Inst::Kind::IMul, inst, mul->arg(1))
-            };
-          } else if (dynmatch(ExitInst, exit, inst)) {
-            _isel[inst] = {
-              X86Inst(X86Inst::Kind::Ret)
-            };
-          } else {
-            inst->write(std::cerr);
-            std::cerr << std::endl;
-            assert(false && "Unknown instruction");
-          }
+          isel(inst);
         }
       }
     }
 
-    void regalloc() {
-      for (Block* block : *_section) {
-        for (Inst* inst : *block) {
-          _regs[inst] = inst->name(); // TODO
-        }
-      }
-    }
   public:
-    X86CodeGen(Section* section): _section(section) {
+    X86CodeGen(Section* section):
+        Pass(section),
+        _section(section),
+        _builder(section->allocator(), _insts) {
+      
       section->autoname();
       _isel.init(section);
-      _regs.init(section);
-      _used.init(section);
+      _vregs.init(section);
 
       isel();
-      regalloc();
+
+      std::cout << "x86:" << std::endl;
+      for (X86Inst* inst : _insts) {
+        inst->write(std::cout);
+        std::cout << std::endl;
+      }
     }
 
+    /*
     void emit(std::vector<uint8_t>& buffer) {
       for (Block* block : *_section) {
         for (Inst* inst : *block) {
@@ -229,5 +533,6 @@ namespace metajit {
       }
       file.write((const char*) buffer.data(), buffer.size());
     }
+    */
   };
 }
