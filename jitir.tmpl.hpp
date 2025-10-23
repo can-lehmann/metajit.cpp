@@ -328,6 +328,22 @@ namespace metajit {
       _last = item;
     }
 
+    void insert_before(T* before, T* item) {
+      assert(!item->prev() && !item->next());
+      if (before == nullptr) {
+        add(item);
+      } else {
+        item->set_next(before);
+        item->set_prev(before->prev());
+        if (before->prev()) {
+          before->prev()->set_next(item);
+        } else {
+          _first = item;
+        }
+        before->set_prev(item);
+      }
+    }
+
     void remove(T* item) {
       if (item->prev()) {
         item->prev()->set_next(item->next());

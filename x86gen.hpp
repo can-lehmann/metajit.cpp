@@ -35,9 +35,9 @@ namespace metajit {
     Kind kind() const { return _kind; }
     size_t id() const { return _id; }
 
-    bool is_invalid() const {
-      return _kind == Kind::Invalid;
-    }
+    bool is_invalid() const { return _kind == Kind::Invalid; }
+    bool is_virtual() const { return _kind == Kind::Virtual; }
+    bool is_physical() const { return _kind == Kind::Physical; }
 
     bool operator==(const Reg& other) const {
       return _id == other._id;
@@ -119,9 +119,70 @@ namespace metajit {
     X86Inst& set_rm(const RM& rm) { _rm = rm; return *this; }
     X86Inst& set_imm(const Imm& imm) { _imm = imm; return *this; }
 
-    void write(std::ostream& stream) {
+    bool is_64_bit() const {
       switch (_kind) {
-        #define x86_inst(name, lowercase) \
+        #define x86_inst(name, lowercase, usedef, is_64_bit, ...) \
+          case Kind::name: return is_64_bit;
+        #include "x86insts.inc.hpp"
+      }
+      return false;
+    }
+
+    template <class Fn>
+    void visit_regs(const Fn& fn) {
+      if (!_reg.is_invalid()) {
+        fn(_reg);
+      }
+
+      if (std::holds_alternative<Reg>(_rm)) {
+        fn(std::get<Reg>(_rm));
+      } else if (std::holds_alternative<Mem>(_rm)) {
+        Mem& mem = std::get<Mem>(_rm);
+        fn(mem.base);
+        if (!mem.index.is_invalid()) {
+          fn(mem.index);
+        }
+      }
+    }
+
+    template <class UseFn, class DefFn>
+    void visit_usedef(const UseFn& use_fn, const DefFn& def_fn) const {
+      RM reg = std::monostate();
+      if (!_reg.is_invalid()) {
+        reg = _reg;
+      }
+      RM rm = _rm;
+
+      auto use = [&](RM rm) {
+        if (std::holds_alternative<Reg>(rm)) {
+          use_fn(std::get<Reg>(rm));
+        } else if (std::holds_alternative<Mem>(rm)) {
+          Mem mem = std::get<Mem>(rm);
+          use_fn(mem.base);
+          if (!mem.index.is_invalid()) {
+            use_fn(mem.index);
+          }
+        }
+      };
+
+      auto def = [&](RM rm) {
+        if (std::holds_alternative<Reg>(rm)) {
+          def_fn(std::get<Reg>(rm));
+        } else {
+          use(rm);
+        }
+      };
+
+      switch (_kind) {
+        #define x86_inst(name, lowercase, usedef, ...) \
+          case Kind::name: usedef; break;
+        #include "x86insts.inc.hpp"
+      }
+    }
+
+    void write(std::ostream& stream, bool usedef = true) const {
+      switch (_kind) {
+        #define x86_inst(name, lowercase, ...) \
           case Kind::name: stream << #lowercase; break;
         #include "x86insts.inc.hpp"
       }
@@ -143,6 +204,14 @@ namespace metajit {
       } else if (std::holds_alternative<X86Inst*>(_imm)) {
         stream << " imm=<INST>";
       }
+
+      if (usedef) {
+        stream << "\t;";
+
+        auto use = [&](Reg reg){ stream << " use " << reg; };
+        auto def = [&](Reg reg){ stream << " def " << reg; };
+        visit_usedef(use, def);
+      }
     }
   };
 
@@ -150,28 +219,35 @@ namespace metajit {
   private:
     Allocator& _allocator;
     LinkedList<X86Inst>& _list;
+    X86Inst* _insert_pos = nullptr;
 
     X86Inst& build(X86Inst::Kind kind) {
       X86Inst* inst = (X86Inst*) _allocator.alloc(sizeof(X86Inst), alignof(X86Inst));
       new (inst) X86Inst(kind);
-      _list.add(inst);
+      _list.insert_before(_insert_pos, inst);
       return *inst;
     }
   public:
     X86InstBuilder(Allocator& allocator, LinkedList<X86Inst>& list):
-      _allocator(allocator), _list(list) {}
+      _allocator(allocator),
+      _list(list),
+      _insert_pos(nullptr) {}
+    
+    void move_before(X86Inst* inst) {
+      _insert_pos = inst;
+    }
 
-    #define binop_x86_inst(kind, name) \
+    #define binop_x86_inst(kind, name, ...) \
       X86Inst* name(Reg dst, X86Inst::RM src) { \
         return &build(X86Inst::Kind::kind).set_reg(dst).set_rm(src); \
       }
     
-    #define rev_binop_x86_inst(kind, name) \
+    #define rev_binop_x86_inst(kind, name, ...) \
       X86Inst* name(X86Inst::RM dst, Reg src) { \
         return &build(X86Inst::Kind::kind).set_rm(dst).set_reg(src); \
       }
     
-    #define imm_binop_x86_inst(kind, name) \
+    #define imm_binop_x86_inst(kind, name, ...) \
       X86Inst* name(X86Inst::RM dst, X86Inst::Imm imm) { \
         return &build(X86Inst::Kind::kind).set_rm(dst).set_imm(imm); \
       }
@@ -402,9 +478,145 @@ namespace metajit {
     }
 
     void isel() {
-      for (Block* block : *_section) {
-        for (Inst* inst : *block) {
-          isel(inst);
+      for (size_t block_id = _section->size(); block_id-- > 0; ) {
+        Block* block = (*_section)[block_id];
+        for (Inst* inst : block->rev_range()) {
+          _builder.move_before(_insts.first());
+          if (inst->has_side_effect() ||
+              inst->is_terminator() ||
+              !_vregs.at(inst).is_invalid()) {
+            isel(inst);
+          }
+        }
+      }
+    }
+
+    class PhysicalRegSet {
+    private:
+      uint16_t _regs = 0;
+    public:
+      PhysicalRegSet() {
+        _regs = ~0;
+        erase(4); // ESP
+        erase(5); // EBP
+      }
+
+      void insert(size_t reg_id) {
+        _regs |= (1 << reg_id);
+      }
+
+      void erase(size_t reg_id) {
+        _regs &= ~(1 << reg_id);
+      }
+
+      Reg get_any(bool support64bit) {
+        uint16_t regs = _regs;
+        if (!support64bit) {
+          regs &= 0x00FF;
+        }
+        if (regs == 0) {
+          return Reg();
+        }
+        return Reg(Reg::Kind::Physical, __builtin_ctz(regs));
+      }
+    };
+
+    bool is_reg_mov(X86Inst* inst) {
+      if (inst->kind() == X86Inst::Kind::Mov8 ||
+          inst->kind() == X86Inst::Kind::Mov16 ||
+          inst->kind() == X86Inst::Kind::Mov32 ||
+          inst->kind() == X86Inst::Kind::Mov64) {
+        return std::holds_alternative<Reg>(inst->rm());
+      }
+      return false;
+    }
+
+    void regalloc() {
+      std::vector<bool> supports64bit(_next_vreg, true);
+      for (X86Inst* inst : _insts) {
+        if (!inst->is_64_bit()) {
+          inst->visit_regs([&](Reg reg) {
+            supports64bit[reg.id()] = false;
+          });
+        }
+      }
+
+      std::vector<Reg> mapping(_next_vreg, Reg());
+      PhysicalRegSet available_regs;
+
+      for (X86Inst* inst : _insts.rev_range()) {
+        if (is_reg_mov(inst)) {
+          Reg src_reg = std::get<Reg>(inst->rm());
+          Reg dst_reg = inst->reg();
+          if (src_reg.is_virtual() &&
+              dst_reg.is_virtual() &&
+              mapping[src_reg.id()].is_invalid() &&
+              !(!supports64bit[src_reg.id()] && mapping[dst_reg.id()].id() >= 8)) {
+            mapping[src_reg.id()] = mapping[dst_reg.id()];
+            continue;
+          }
+        }
+
+        auto def = [&](Reg reg){
+          size_t id = reg.id();
+          if (reg.is_virtual()) {
+            id = mapping[id].id();
+          }
+          available_regs.insert(id);
+        };
+
+        inst->visit_usedef([&](Reg reg){}, def);
+
+        auto use_physical = [&](Reg reg){
+          if (reg.is_physical()) {
+            available_regs.erase(reg.id());
+          } else if (reg.is_virtual()) {
+            if (!mapping[reg.id()].is_invalid()) {
+              available_regs.erase(mapping[reg.id()].id());
+            }
+          }
+        };
+
+        inst->visit_usedef(use_physical, [&](Reg reg){});
+
+        auto use_virtual = [&](Reg reg){
+          if (reg.is_virtual() && mapping[reg.id()].is_invalid()) {
+            Reg physical_reg = available_regs.get_any(supports64bit[reg.id()]);
+            assert(!physical_reg.is_invalid());
+            mapping[reg.id()] = physical_reg;
+            available_regs.erase(physical_reg.id());
+          }
+        };
+
+        inst->visit_usedef(use_virtual, [&](Reg reg){});
+      }
+
+      for (X86Inst* inst : _insts) {
+        inst->visit_regs([&](Reg& reg){
+          if (reg.is_virtual()) {
+            reg = mapping[reg.id()];
+          }
+        });
+      }
+    }
+
+    bool is_noop(X86Inst* inst) {
+      if (is_reg_mov(inst)) {
+        if (std::holds_alternative<Reg>(inst->rm())) {
+          Reg src_reg = std::get<Reg>(inst->rm());
+          return src_reg == inst->reg();
+        }
+      }
+      return false;
+    }
+
+    void remove_noops() {
+      for (auto it = _insts.begin(); it != _insts.end(); ) {
+        X86Inst* inst = *it;
+        if (is_noop(inst)) {
+          it = it.erase();
+        } else {
+          ++it;
         }
       }
     }
@@ -420,6 +632,8 @@ namespace metajit {
       _vregs.init(section);
 
       isel();
+      regalloc();
+      remove_noops();
 
       std::cout << "x86:" << std::endl;
       for (X86Inst* inst : _insts) {
