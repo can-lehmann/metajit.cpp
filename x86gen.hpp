@@ -123,6 +123,7 @@ namespace metajit {
     RM rm() const { return _rm; }
     Imm imm() const { return _imm; }
 
+    X86Inst& set_kind(Kind kind) { _kind = kind; return *this; }
     X86Inst& set_reg(Reg reg) { _reg = reg; return *this; }
     X86Inst& set_rm(const RM& rm) { _rm = rm; return *this; }
     X86Inst& set_imm(const Imm& imm) { _imm = imm; return *this; }
@@ -262,7 +263,7 @@ namespace metajit {
 
     #include "x86insts.inc.hpp"
 
-    X86Inst* mov64_imm(Reg dst, X86Inst::Imm imm) {
+    X86Inst* mov64_imm64(Reg dst, X86Inst::Imm imm) {
       return &build(X86Inst::Kind::Mov64Imm).set_reg(dst).set_imm(imm);
     }
     
@@ -302,10 +303,32 @@ namespace metajit {
       return Reg::virt(_next_vreg++);
     }
 
+    bool is_sext_imm32(Const* constant) {
+      if (type_size(constant->type()) == 8) {
+        uint64_t value = constant->value();
+        return (value >> 31) == 0 || (value >> 31) == 0x1fffffffULL;
+      } else {
+        return true;
+      }
+    }
+
     Reg vreg(Value* value) {
       if (dynmatch(Const, constant, value)) {
         Reg reg = vreg();
-        _builder.mov64_imm(reg, constant->value());
+        switch (type_size(constant->type())) {
+          case 1: _builder.mov8_imm(reg, constant->value()); break;
+          case 2: _builder.mov16_imm(reg, constant->value()); break;
+          case 4: _builder.mov32_imm(reg, constant->value()); break;
+          case 8:
+            if (is_sext_imm32(constant)) {
+              _builder.mov64_imm(reg, constant->value());
+            } else {
+              _builder.mov64_imm64(reg, constant->value());
+            }
+          break;
+          default:
+            assert(false && "Unsupported constant type");
+        }
         return reg;
       } else if (dynmatch(Inst, inst, value)) {
         if (_vregs.at(inst).is_invalid()) {
@@ -321,11 +344,15 @@ namespace metajit {
     void build_add(Reg dst, Value* a, Value* b) {
       X86Inst::Mem mem;
       if (dynmatch(Const, constant_b, b)) {
-        mem = X86Inst::Mem(
-          vreg(a),
-          constant_b->value() // TODO: Check if fits in 32 bits
-        );      
-      } else {
+        if (is_sext_imm32(constant_b)) {
+          mem = X86Inst::Mem(
+            vreg(a),
+            constant_b->value()
+          );
+        }
+      } 
+
+      if (mem.base.is_invalid()) {
         mem = X86Inst::Mem(
           vreg(a),
           1,
@@ -339,14 +366,16 @@ namespace metajit {
 
     void build_cmp(Value* a, Value* b) {
       if (dynmatch(Const, constant_b, b)) {
-        switch (type_size(a->type())) {
-          case 1: _builder.cmp8_imm(vreg(a), constant_b->value()); break;
-          case 2: _builder.cmp16_imm(vreg(a), constant_b->value()); break;
-          case 4: _builder.cmp32_imm(vreg(a), constant_b->value()); break;
-          case 8: _builder.cmp64_imm(vreg(a), constant_b->value()); break;
-          default: assert(false && "Unsupported comparison type");
+        if (is_sext_imm32(constant_b)) {
+          switch (type_size(a->type())) {
+            case 1: _builder.cmp8_imm(vreg(a), constant_b->value()); break;
+            case 2: _builder.cmp16_imm(vreg(a), constant_b->value()); break;
+            case 4: _builder.cmp32_imm(vreg(a), constant_b->value()); break;
+            case 8: _builder.cmp64_imm(vreg(a), constant_b->value()); break;
+            default: assert(false && "Unsupported comparison type");
+          }
+          return;
         }
-        return;
       }
 
       switch (type_size(a->type())) {
@@ -416,8 +445,10 @@ namespace metajit {
         _builder.mov64(vreg(inst), vreg(sub->arg(0)));
 
         if (dynmatch(Const, constant_b, sub->arg(1))) {
-          _builder.sub64_imm(vreg(inst), constant_b->value());
-          return;
+          if (is_sext_imm32(constant_b)) {
+            _builder.sub64_imm(vreg(inst), constant_b->value());
+            return;
+          }
         }
 
         _builder.sub64(vreg(inst), vreg(sub->arg(1)));
@@ -432,8 +463,10 @@ namespace metajit {
         _builder.mov64(vreg(inst), vreg(and_inst->arg(0)));
 
         if (dynmatch(Const, constant_b, and_inst->arg(1))) {
-          _builder.and64_imm(vreg(inst), constant_b->value());
-          return;
+          if (is_sext_imm32(constant_b)) {
+            _builder.and64_imm(vreg(inst), constant_b->value());
+            return;
+          }
         }
 
         _builder.and64(vreg(inst), vreg(and_inst->arg(1)));
@@ -441,8 +474,10 @@ namespace metajit {
         _builder.mov64(vreg(inst), vreg(or_inst->arg(0)));
 
         if (dynmatch(Const, constant_b, or_inst->arg(1))) {
-          _builder.or64_imm(vreg(inst), constant_b->value());
-          return;
+          if (is_sext_imm32(constant_b)) {
+            _builder.or64_imm(vreg(inst), constant_b->value());
+            return;
+          }
         }
 
         _builder.or64(vreg(inst), vreg(or_inst->arg(1)));
@@ -450,8 +485,10 @@ namespace metajit {
         _builder.mov64(vreg(inst), vreg(xor_inst->arg(0)));
 
         if (dynmatch(Const, constant_b, xor_inst->arg(1))) {
-          _builder.xor64_imm(vreg(inst), constant_b->value());
-          return;
+          if (is_sext_imm32(constant_b)) {
+            _builder.xor64_imm(vreg(inst), constant_b->value());
+            return;
+          }
         }
 
         _builder.xor64(vreg(inst), vreg(xor_inst->arg(1)));
@@ -604,12 +641,32 @@ namespace metajit {
       return false;
     }
 
-    void remove_noops() {
+    void peephole() {
       for (auto it = _insts.begin(); it != _insts.end(); ) {
         X86Inst* inst = *it;
         if (is_noop(inst)) {
           it = it.erase();
         } else {
+          if (((inst->kind() == X86Inst::Kind::Mov8Imm ||
+                inst->kind() == X86Inst::Kind::Mov16Imm ||
+                inst->kind() == X86Inst::Kind::Mov32Imm ||
+                inst->kind() == X86Inst::Kind::Mov64Imm) &&
+               std::holds_alternative<Reg>(inst->rm())) ||
+              inst->kind() == X86Inst::Kind::Mov64Imm64) {
+            if (std::holds_alternative<uint64_t>(inst->imm())) {
+              uint64_t value = std::get<uint64_t>(inst->imm());
+              if (value == 0) {
+                // Replace with xor reg, reg
+                inst->set_kind(X86Inst::Kind::Xor64);
+                inst->set_imm(std::monostate());
+                if (inst->kind() == X86Inst::Kind::Mov64Imm64) {
+                  inst->set_rm(inst->reg());
+                } else {
+                  inst->set_reg(std::get<Reg>(inst->rm()));
+                }
+              }
+            }
+          }
           ++it;
         }
       }
@@ -627,15 +684,9 @@ namespace metajit {
 
       isel();
       regalloc();
-      remove_noops();
-
-      std::cout << "x86:" << std::endl;
-      for (X86Inst* inst : _insts) {
-        inst->write(std::cout);
-        std::cout << std::endl;
-      }
-
+      write(std::cout);
       save("x86codegen.bin");
+      peephole();
     }
 
     void emit(std::vector<uint8_t>& buffer) {
@@ -784,6 +835,13 @@ namespace metajit {
         assert(false && "Failed to open file for writing");
       }
       file.write((const char*) buffer.data(), buffer.size());
+    }
+
+    void write(std::ostream& stream) {
+      for (X86Inst* inst : _insts) {
+        inst->write(stream);
+        stream << std::endl;
+      }
     }
   };
 }
