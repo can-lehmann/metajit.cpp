@@ -32,6 +32,14 @@ namespace metajit {
     Reg() {}
     Reg(Kind kind, size_t id): _kind(kind), _id(id) {}
 
+    static Reg phys(size_t id) {
+      return Reg(Kind::Physical, id);
+    }
+
+    static Reg virt(size_t id) {
+      return Reg(Kind::Virtual, id);
+    }
+
     Kind kind() const { return _kind; }
     size_t id() const { return _id; }
 
@@ -291,7 +299,7 @@ namespace metajit {
     size_t _next_vreg = 0;
 
     Reg vreg() {
-      return Reg(Reg::Kind::Virtual, _next_vreg++);
+      return Reg::virt(_next_vreg++);
     }
 
     Reg vreg(Value* value) {
@@ -509,15 +517,11 @@ namespace metajit {
         _regs &= ~(1 << reg_id);
       }
 
-      Reg get_any(bool support64bit) {
-        uint16_t regs = _regs;
-        if (!support64bit) {
-          regs &= 0x00FF;
-        }
-        if (regs == 0) {
+      Reg get_any() {
+        if (_regs == 0) {
           return Reg();
         }
-        return Reg(Reg::Kind::Physical, __builtin_ctz(regs));
+        return Reg::phys(__builtin_ctz(_regs));
       }
     };
 
@@ -532,15 +536,6 @@ namespace metajit {
     }
 
     void regalloc() {
-      std::vector<bool> supports64bit(_next_vreg, true);
-      for (X86Inst* inst : _insts) {
-        if (!inst->is_64_bit()) {
-          inst->visit_regs([&](Reg reg) {
-            supports64bit[reg.id()] = false;
-          });
-        }
-      }
-
       std::vector<Reg> mapping(_next_vreg, Reg());
       PhysicalRegSet available_regs;
 
@@ -550,8 +545,7 @@ namespace metajit {
           Reg dst_reg = inst->reg();
           if (src_reg.is_virtual() &&
               dst_reg.is_virtual() &&
-              mapping[src_reg.id()].is_invalid() &&
-              !(!supports64bit[src_reg.id()] && mapping[dst_reg.id()].id() >= 8)) {
+              mapping[src_reg.id()].is_invalid()) {
             mapping[src_reg.id()] = mapping[dst_reg.id()];
             continue;
           }
@@ -581,7 +575,7 @@ namespace metajit {
 
         auto use_virtual = [&](Reg reg){
           if (reg.is_virtual() && mapping[reg.id()].is_invalid()) {
-            Reg physical_reg = available_regs.get_any(supports64bit[reg.id()]);
+            Reg physical_reg = available_regs.get_any();
             assert(!physical_reg.is_invalid());
             mapping[reg.id()] = physical_reg;
             available_regs.erase(physical_reg.id());
@@ -640,99 +634,143 @@ namespace metajit {
         inst->write(std::cout);
         std::cout << std::endl;
       }
+
+      save("x86codegen.bin");
     }
 
-    /*
     void emit(std::vector<uint8_t>& buffer) {
-      for (Block* block : *_section) {
-        for (Inst* inst : *block) {
-          for (const X86Inst& x86inst : _isel[inst]) {
-            switch (x86inst.kind) {
-              case X86Inst::Kind::Mov32: buffer.push_back(0x8b); break; // mov r32, r/m32
-              case X86Inst::Kind::MovImm32: buffer.push_back(0xc7); break; // mov r/m32, imm32
-              case X86Inst::Kind::Add: buffer.push_back(0x03); break; // add r32, r/m32
-              case X86Inst::Kind::IMul: buffer.push_back(0x0f); buffer.push_back(0xaf); break; // imul r32, r/m32
-              case X86Inst::Kind::Ret: buffer.push_back(0xc3); break; // ret
-              default: assert(false && "Unknown x86 instruction");
-            }
-             
-            if (x86inst.has_modrm()) {
-              // Encode ModRM byte
-              uint8_t mod = 0;
-              uint8_t reg = _regs[x86inst.a] & 0b111;
-              uint8_t rm = 0;
-              if (std::holds_alternative<Value*>(x86inst.b)) {
-                Value* val = std::get<Value*>(x86inst.b);
-                mod = 0b11;
-                rm = _regs.at(val) & 0b111;
+      for (X86Inst* inst : _insts) {
+        Reg reg = inst->reg();
+        X86Inst::RM rm = inst->rm();
+        std::optional<uint64_t> imm;
+        if (std::holds_alternative<uint64_t>(inst->imm())) {
+          imm = std::get<uint64_t>(inst->imm());
+        } else if (std::holds_alternative<X86Inst*>(inst->imm())) {
+          imm = 0; // Inserted later
+        }
 
+        auto byte = [&](uint8_t value) {
+          buffer.push_back(value);
+        };
 
-                uint8_t modrm = mod << 6 | reg << 3 | rm;
-                buffer.push_back(modrm);
-              } else if (std::holds_alternative<X86Inst::Mem>(x86inst.b)) {
-                X86Inst::Mem mem = std::get<X86Inst::Mem>(x86inst.b);
-
-                if (mem.disp == 0) {
-                  mod = 0b00;
-                } else if (mem.disp >= -128 && mem.disp <= 127) {
-                  mod = 0b01;
-                } else {
-                  mod = 0b10;
-                }
-
-                if ((mem.index == nullptr || mem.scale == 0) && (_regs.at(mem.base) & 0b111) != 0b100) {
-                  rm = _regs.at(mem.base) & 0b111;
-
-                  uint8_t modrm = mod << 6 | reg << 3 | rm;
-                  buffer.push_back(modrm);
-                } else {
-                  rm = 0b100; // SIB
-
-                  uint8_t modrm = mod << 6 | reg << 3 | rm;
-                  buffer.push_back(modrm);
-                
-                  uint8_t scale = 0;
-                  uint8_t index = 0b100; // none
-                  uint8_t base = _regs.at(mem.base) & 0b111; // none
-
-                  switch (mem.scale) {
-                    case 0: break;
-                    case 1: scale = 0b00; break;
-                    case 2: scale = 0b01; break;
-                    case 4: scale = 0b10; break;
-                    case 8: scale = 0b11; break;
-                    default: assert(false && "Invalid scale");
-                  }
-
-                  if (mem.scale != 0 && mem.index != nullptr) {
-                    index = _regs.at(mem.index) & 0b111;
-                  }
-
-                  uint8_t sib = scale << 6 | index << 3 | base;
-                  buffer.push_back(sib);
-                }
-
-                if (mem.disp != 0) {
-                  if (mem.disp >= -128 && mem.disp <= 127) {
-                    buffer.push_back(mem.disp & 0xff);
-                  } else {
-                    buffer.push_back(mem.disp & 0xff);
-                    buffer.push_back((mem.disp >> 8) & 0xff);
-                    buffer.push_back((mem.disp >> 16) & 0xff);
-                    buffer.push_back((mem.disp >> 24) & 0xff);
-                  }
-                }
-              }
-            }
-
-            if (x86inst.has_imm()) {
-              // Encode immediate value (little-endian)
-              buffer.push_back(x86inst.imm & 0xff);
-              buffer.push_back((x86inst.imm >> 8) & 0xff);
-              buffer.push_back((x86inst.imm >> 16) & 0xff);
-              buffer.push_back((x86inst.imm >> 24) & 0xff);
+        auto rex = [&](bool w = false) {
+          uint8_t rex = 0x40;
+          if (w) {
+            rex |= 0x08;
+          }
+          rex |= ((reg.id() >> 3) & 1) << 2; // R
+          if (std::holds_alternative<Reg>(rm)) {
+            rex |= ((std::get<Reg>(rm).id() >> 3) & 1); // B
+          } else if (std::holds_alternative<X86Inst::Mem>(rm)) {
+            X86Inst::Mem mem = std::get<X86Inst::Mem>(rm);
+            rex |= ((mem.base.id() >> 3) & 1); // B
+            if (!mem.index.is_invalid()) {
+              rex |= ((mem.index.id() >> 3) & 1) << 1; // X
             }
           }
+          byte(rex);
+        };
+
+        auto rex_w = [&]() {
+          rex(true);
+        };
+
+        auto rex_opt = [&]() {
+          bool need_rex = false;
+          if (reg.id() >= 8) {
+            need_rex = true;
+          } else if (std::holds_alternative<Reg>(rm)) {
+            if (std::get<Reg>(rm).id() >= 8) {
+              need_rex = true;
+            }
+          } else if (std::holds_alternative<X86Inst::Mem>(rm)) {
+            X86Inst::Mem mem = std::get<X86Inst::Mem>(rm);
+            if (mem.base.id() >= 8) {
+              need_rex = true;
+            }
+            if (!mem.index.is_invalid() && mem.index.id() >= 8) {
+              need_rex = true;
+            }
+          }
+
+          if (need_rex) {
+            rex();
+          }
+        };
+
+        auto modrm = [&]() {
+          // Encode ModRM byte
+          uint8_t modrm = 0;
+          modrm |= (reg.id() & 0b111) << 3; // reg
+          if (std::holds_alternative<Reg>(rm)) {
+            modrm |= 0b11 << 6; // mod
+            modrm |= std::get<Reg>(rm).id() & 0b111; // r/m
+            byte(modrm);
+          } else if (std::holds_alternative<X86Inst::Mem>(rm)) {
+            X86Inst::Mem mem = std::get<X86Inst::Mem>(rm);
+
+            if (mem.disp == 0) {
+              modrm |= 0b00 << 6;
+            } else if (mem.disp >= -128 && mem.disp <= 127) {
+              modrm |= 0b01 << 6;
+            } else {
+              modrm |= 0b10 << 6;
+            }
+
+            if (mem.scale == 0 && (mem.base.id() & 0b111) != 0b100) {
+              modrm |= mem.base.id() & 0b111;
+              byte(modrm);
+            } else {
+              modrm |= 0b100; // SIB
+              byte(modrm);
+
+              uint8_t scale = 0;
+              uint8_t index = 0b100; // none
+              uint8_t base = mem.base.id() & 0b111; // none
+
+              switch (mem.scale) {
+                case 0: break;
+                case 1: scale = 0b00; break;
+                case 2: scale = 0b01; break;
+                case 4: scale = 0b10; break;
+                case 8: scale = 0b11; break;
+                default: assert(false && "Invalid scale");
+              }
+
+              if (mem.scale != 0 && !mem.index.is_invalid()) {
+                index = mem.index.id() & 0b111;
+              }
+
+              uint8_t sib = scale << 6 | index << 3 | base;
+              byte(sib);
+            }
+
+            if (mem.disp != 0) {
+              if (mem.disp >= -128 && mem.disp <= 127) {
+                byte(mem.disp & 0xff);
+              } else {
+                byte(mem.disp & 0xff);
+                byte((mem.disp >> 8) & 0xff);
+                byte((mem.disp >> 16) & 0xff);
+                byte((mem.disp >> 24) & 0xff);
+              }
+            }
+          }
+        };
+
+        auto imm_n = [&](size_t size) {
+          assert(imm.has_value());
+          for (size_t it = 0; it < size; it++) {
+            byte((imm.value() >> (it * 8)) & 0xff);
+          }
+        };
+
+        switch (inst->kind()) {
+          #define x86_inst(name, lowercase, usedef, is_64_bit, opcode, ...) \
+            case X86Inst::Kind::name: opcode; break;
+          #include "x86insts.inc.hpp"
+
+          default: assert(false && "Unknown x86 instruction");
         }
       }
     }
@@ -747,6 +785,5 @@ namespace metajit {
       }
       file.write((const char*) buffer.data(), buffer.size());
     }
-    */
   };
 }
