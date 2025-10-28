@@ -292,7 +292,7 @@ namespace metajit {
     InputFlags flags() const { return _flags; }
 
     void write_arg(std::ostream& stream) const override {
-      stream << "input" << _index;
+      stream << "%input" << _index;
     }
 
     bool equals(const Value* other) const override {
@@ -868,8 +868,8 @@ namespace metajit {
           stream << ", ";
         }
         stream << input->type() << " ";
-        stream << input->flags() << " ";
         input->write_arg(stream);
+        stream << " " << input->flags();
       }
       stream << ") {\n";
       for (Block* block : _blocks) {
