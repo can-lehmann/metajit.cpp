@@ -1887,6 +1887,7 @@ namespace metajit {
   public:
     CommonSubexprElim(Section* section): Pass(section) {
       std::unordered_map<Value*, Value*> substs;
+      std::unordered_map<Lookup, Const*, LookupHash> consts;
       for (Block* block : *section) {
         std::unordered_map<Lookup, Value*, LookupHash> canon;
 
@@ -1897,6 +1898,14 @@ namespace metajit {
             Value* arg = inst->arg(it);
             if (substs.find(arg) != substs.end()) {
               inst->set_arg(it, substs.at(arg));
+            } else if (dynmatch(Const, constant, arg)) {
+              Lookup lookup(constant);
+              if (consts.find(lookup) != consts.end()) {
+                inst->set_arg(it, consts.at(lookup));
+                substs[constant] = consts.at(lookup);
+              } else {
+                consts[lookup] = constant;
+              }
             }
           }
 
