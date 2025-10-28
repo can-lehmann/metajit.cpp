@@ -98,6 +98,8 @@ namespace metajit {
           constant->value(),
           false
         );
+      } else if (dynmatch(Input, input, value)) {
+        return _function->getArg(input->index());
       } else if (dynmatch(Inst, inst, value)) {
         return _values.at(inst);
       } else {
@@ -121,12 +123,6 @@ namespace metajit {
     llvm::Value* emit_inst(Inst* inst) {
       if (dynmatch(FreezeInst, freeze, inst)) {
         return emit_arg(freeze->arg(0));
-      } else if (dynmatch(InputInst, input, inst)) {
-        return _function->getArg(input->id());
-      } else if (dynmatch(OutputInst, output, inst)) {
-        llvm::Value* ptr = _function->getArg(_section->inputs().size() + output->id());
-        _builder.CreateStore(emit_arg(output->arg(0)), ptr);
-        return nullptr;
       } else if (dynmatch(SelectInst, select, inst)) {
         return _builder.CreateSelect(
           emit_arg(select->arg(0)),
@@ -215,6 +211,12 @@ namespace metajit {
     llvm::Value* is_const(Value* value) {
       if (dynmatch(Const, constant, value)) {
         return llvm::ConstantInt::getTrue(_context);
+      } else if (dynmatch(Input, input, value)) {
+        if (input->flags().has(InputFlags::AssumeConst)) {
+          return llvm::ConstantInt::getTrue(_context);
+        } else {
+          return llvm::ConstantInt::getFalse(_context);
+        }
       } else if (dynmatch(Inst, inst, value)) {
         return _builder.CreateLoad(
           llvm::Type::getInt1Ty(_context),
@@ -229,12 +231,6 @@ namespace metajit {
     llvm::Value* emit_const_prop(Inst* inst) {
       if (dynamic_cast<FreezeInst*>(inst)) {
         return llvm::ConstantInt::getTrue(_context);
-      } else if (dynmatch(InputInst, input, inst)) {
-        if (input->flags().has(InputFlags::AssumeConst)) {
-          return llvm::ConstantInt::getTrue(_context);
-        } else {
-          return llvm::ConstantInt::getFalse(_context);
-        }
       } else if (dynmatch(LoadInst, load, inst)) {
         if (load->flags().has(LoadFlags::Pure)) {
           return is_const(load->arg(0));
@@ -353,6 +349,17 @@ namespace metajit {
         return _builder.CreateIntToPtr(
           addr,
           llvm::PointerType::get(_context, 0)
+        );
+      } else if (dynmatch(Input, input, value)) {
+        return _builder.CreateCall(
+          _llvm_api.get_input,
+          {
+            _jitir_builder,
+            llvm::ConstantInt::get(
+              llvm::Type::getInt64Ty(_context),
+              input->index()
+            )
+          }
         );
       } else if (dynmatch(Inst, inst, value)) {
         return _builder.CreateLoad(
@@ -949,12 +956,8 @@ namespace metajit {
         _trace_capabilities(section, _constness) {
       
       std::vector<llvm::Type*> args;
-      for (Type type : _section->inputs()) {
-        args.push_back(emit_type(type));
-      }
-
-      for (Type type : _section->outputs()) {
-        args.push_back(llvm::PointerType::get(_context, 0));
+      for (Input* input : _section->inputs()) {
+        args.push_back(emit_type(input->type()));
       }
 
       if (_generating_extension) {
@@ -982,7 +985,7 @@ namespace metajit {
       _builder.SetInsertPoint(entry_block);
 
       if (_generating_extension) {
-        _jitir_builder = _function->getArg(_section->inputs().size() + _section->outputs().size());
+        _jitir_builder = _function->getArg(_section->inputs().size());
 
         for (Block* block : *section) {
           for (Inst* inst : *block) {

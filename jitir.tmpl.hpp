@@ -112,6 +112,74 @@ namespace metajit {
 
   using Allocator = ArenaAllocator;
 
+  template <class Self>
+  class BaseFlags {
+  protected:
+    uint32_t _flags = 0;
+  public:
+    BaseFlags(uint32_t flags = 0): _flags(flags) {}
+
+    explicit operator uint32_t() const {
+      return _flags;
+    }
+
+    explicit operator uint64_t() const {
+      return _flags;
+    }
+
+    bool has(Self flag) const {
+      return (_flags & flag._flags) != 0;
+    }
+
+    bool operator==(const Self& other) const {
+      return _flags == other._flags;
+    }
+
+    bool operator!=(const Self& other) const {
+      return !(*this == other);
+    }
+  };
+
+    class InputFlags final: public BaseFlags<InputFlags> {
+  public:
+    enum : uint32_t {
+      None = 0,
+      AssumeConst = 1 << 0
+    };
+
+    using BaseFlags<InputFlags>::BaseFlags;
+
+    void write(std::ostream& stream) const {
+      stream << "{";
+      bool is_first = true;
+      #define write_flag(name) \
+        if (_flags & name) { \
+          if (!is_first) { stream << ", "; } \
+          is_first = false; \
+          stream << #name; \
+        }
+      
+      write_flag(AssumeConst)
+
+      #undef write_flag
+      stream << "}";
+    }
+  };
+}
+
+template <>
+struct std::hash<metajit::InputFlags> {
+  size_t operator()(const metajit::InputFlags& flags) const {
+    return std::hash<uint32_t>()((uint32_t) flags);
+  }
+};
+
+std::ostream& operator<<(std::ostream& stream, metajit::InputFlags flags) {
+  flags.write(stream);
+  return stream;
+}
+
+namespace metajit {
   enum class Type {
     Void, Bool, Int8, Int16, Int32, Int64, Ptr
   };
@@ -209,6 +277,36 @@ namespace metajit {
 
     size_t hash() const override {
       return std::hash<uint64_t>()(_value) ^ std::hash<Type>()(type());
+    }
+  };
+
+  class Input final: public Value {
+  private:
+    size_t _index = 0;
+    InputFlags _flags;
+  public:
+    Input(Type type, size_t index, InputFlags flags):
+      Value(type), _index(index), _flags(flags) {}
+
+    size_t index() const { return _index; }
+    InputFlags flags() const { return _flags; }
+
+    void write_arg(std::ostream& stream) const override {
+      stream << "input" << _index;
+    }
+
+    bool equals(const Value* other) const override {
+      if (typeid(*this) != typeid(*other)) {
+        return false;
+      }
+
+      const Input* input_other = (const Input*) other;
+      return type() == input_other->type() &&
+             index() == input_other->index();
+    }
+
+    size_t hash() const override {
+      return std::hash<size_t>()(_index);
     }
   };
 
@@ -552,34 +650,6 @@ namespace metajit {
     }
   };
 
-  template <class Self>
-  class BaseFlags {
-  protected:
-    uint32_t _flags = 0;
-  public:
-    BaseFlags(uint32_t flags = 0): _flags(flags) {}
-
-    explicit operator uint32_t() const {
-      return _flags;
-    }
-
-    explicit operator uint64_t() const {
-      return _flags;
-    }
-
-    bool has(Self flag) const {
-      return (_flags & flag._flags) != 0;
-    }
-
-    bool operator==(const Self& other) const {
-      return _flags == other._flags;
-    }
-
-    bool operator!=(const Self& other) const {
-      return !(*this == other);
-    }
-  };
-
   class LoadFlags final: public BaseFlags<LoadFlags> {
   public:
     enum : uint32_t {
@@ -605,32 +675,6 @@ namespace metajit {
       stream << "}";
     }
   };
-
-  class InputFlags final: public BaseFlags<InputFlags> {
-  public:
-    enum : uint32_t {
-      None = 0,
-      AssumeConst = 1 << 0
-    };
-
-    using BaseFlags<InputFlags>::BaseFlags;
-
-    void write(std::ostream& stream) const {
-      stream << "{";
-      bool is_first = true;
-      #define write_flag(name) \
-        if (_flags & name) { \
-          if (!is_first) { stream << ", "; } \
-          is_first = false; \
-          stream << #name; \
-        }
-      
-      write_flag(AssumeConst)
-
-      #undef write_flag
-      stream << "}";
-    }
-  };
 }
 
 template <>
@@ -640,19 +684,7 @@ struct std::hash<metajit::LoadFlags> {
   }
 };
 
-template <>
-struct std::hash<metajit::InputFlags> {
-  size_t operator()(const metajit::InputFlags& flags) const {
-    return std::hash<uint32_t>()((uint32_t) flags);
-  }
-};
-
 std::ostream& operator<<(std::ostream& stream, metajit::LoadFlags flags) {
-  flags.write(stream);
-  return stream;
-}
-
-std::ostream& operator<<(std::ostream& stream, metajit::InputFlags flags) {
   flags.write(stream);
   return stream;
 }
@@ -745,8 +777,7 @@ namespace metajit {
   };
 
   bool Inst::has_side_effect() const {
-    return dynamic_cast<const StoreInst*>(this) ||
-           dynamic_cast<const OutputInst*>(this);
+    return dynamic_cast<const StoreInst*>(this);
   }
 
   bool Inst::is_terminator() const {
@@ -786,8 +817,7 @@ namespace metajit {
     Context& _context;
     Allocator& _allocator;
     std::vector<Block*> _blocks;
-    std::vector<Type> _inputs;
-    std::vector<Type> _outputs;
+    std::vector<Input*> _inputs;
     size_t _name_count = 0;
   public:
     Section(Context& context, Allocator& allocator):
@@ -804,19 +834,15 @@ namespace metajit {
 
     Block* entry() const { return _blocks.at(0); }
 
-    const std::vector<Type>& inputs() const { return _inputs; }
-    const std::vector<Type>& outputs() const { return _outputs; }
+    const std::vector<Input*>& inputs() const { return _inputs; }
 
     size_t name_count() const { return _name_count; }
 
-    size_t add_input(Type type) {
-      _inputs.push_back(type);
-      return _inputs.size() - 1;
-    }
-
-    size_t add_output(Type type) {
-        _outputs.push_back(type);
-        return _outputs.size() - 1;
+    Input* add_input(Type type, InputFlags flags = InputFlags()) {
+      Input* input = (Input*) _allocator.alloc(sizeof(Input), alignof(Input));
+      new (input) Input(type, _inputs.size(), flags);
+      _inputs.push_back(input);
+      return input;
     }
 
     void add(Block* block) { _blocks.push_back(block); }
@@ -835,23 +861,15 @@ namespace metajit {
       
       stream << "section(";
       bool is_first = true;
-      for (Type type : _inputs) {
+      for (Input* input : _inputs) {
         if (is_first) {
           is_first = false;
         } else {
           stream << ", ";
         }
-        stream << type;
-      }
-      stream << ") -> (";
-      is_first = true;
-      for (Type type : _outputs) {
-        if (is_first) {
-          is_first = false;
-        } else {
-          stream << ", ";
-        }
-        stream << type;
+        stream << input->type() << " ";
+        stream << input->flags() << " ";
+        input->write_arg(stream);
       }
       stream << ") {\n";
       for (Block* block : _blocks) {
@@ -878,6 +896,11 @@ namespace metajit {
       }
 
       std::set<Value*> defined;
+
+      for (Input* input : _inputs) {
+        defined.insert(input);
+      }
+
       for (Block* block : *this) {
         for (Inst* inst : *block) {
           for (Value* arg : inst->args()) {
@@ -946,14 +969,8 @@ namespace metajit {
 
     ${builder}
 
-    InputInst* build_input(Type type, InputFlags flags = InputFlags()) {
-      size_t id = _section->add_input(type);
-      return build_input(id, type, flags);
-    }
-
-    OutputInst* build_output(Value* value) {
-      size_t id = _section->add_output(value->type());
-      return build_output(value, id);
+    Input* build_input(Type type, InputFlags flags = InputFlags()) {
+      return _section->add_input(type, flags);
     }
 
     ShlInst* build_shl(Value* a, size_t shift) {
@@ -1280,8 +1297,6 @@ namespace metajit {
     std::unordered_map<AliasingGroup, GroupState> _memory;
     ExpandingVector<Value*> _exact_memory;
 
-    std::unordered_map<size_t, InputInst*> _inputs;
-
     bool could_alias(LoadInst* load, Value* ptr, Type type, AliasingGroup aliasing, uint64_t offset) {
       if (load->aliasing() != aliasing) {
         return false;
@@ -1335,16 +1350,6 @@ namespace metajit {
 
     Value* build_add_ptr(Value* ptr, Value* offset) {
       return Builder::fold_add_ptr(ptr, offset);
-    }
-
-    // We deduplicate input building to track pointers
-
-    Value* build_input(size_t id, Type type, InputFlags flags = InputFlags()) {
-      if (_inputs.find(id) == _inputs.end()) {
-        _inputs[id] = Builder::build_input(id, type, flags);
-      }
-      assert(_inputs.at(id)->type() == type);
-      return _inputs.at(id);
     }
 
     // We override load/store to do simple load/store forwarding
@@ -1694,6 +1699,8 @@ namespace metajit {
           type_mask(constant->type()),
           constant->value()
         );
+      } else if (dynmatch(Input, input, value)) {
+        return Bits(input->type(), 0, 0);
       } else if (dynmatch(Inst, inst, value)) {
         return _values.at(inst);
       } else {
@@ -1949,9 +1956,19 @@ namespace metajit {
   private:
     Section* _section;
     InstMap<size_t> _groups;
+    std::vector<size_t> _inputs;
     size_t _next_group = 1;
   public:
     ConstnessAnalysis(Section* section): _section(section), _groups(section) {
+      _inputs.reserve(section->inputs().size());
+      for (Input* input : section->inputs()) {
+        if (input->flags().has(InputFlags::AssumeConst)) {
+          _inputs[input->index()] = ALWAYS;
+        } else {
+          _inputs[input->index()] = _next_group++;
+        }
+      }
+
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(FreezeInst, freeze, inst)) {
@@ -1959,12 +1976,6 @@ namespace metajit {
           } else if (dynmatch(LoadInst, load, inst)) {
             if (load->flags().has(LoadFlags::Pure)) {
               _groups[inst] = at(load->ptr());
-            } else {
-              _groups[inst] = _next_group++;
-            }
-          } else if (dynmatch(InputInst, input, inst)) {
-            if (input->flags().has(InputFlags::AssumeConst)) {
-              _groups[inst] = ALWAYS;
             } else {
               _groups[inst] = _next_group++;
             }
@@ -2009,6 +2020,8 @@ namespace metajit {
     size_t at(Value* value) const {
       if (dynmatch(Const, constant, value)) {
         return ALWAYS;
+      } else if (dynmatch(Input, input, value)) {
+        return _inputs[input->index()];
       } else if (dynmatch(Inst, inst, value)) {
         return _groups.at(inst);
       } else {

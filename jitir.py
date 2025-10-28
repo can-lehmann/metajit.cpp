@@ -155,20 +155,6 @@ jitir = IR(
             type = "a->type()",
             type_checks = []
         ),
-        Inst("Input",
-            args = [
-                Arg("id", Type("size_t")),
-                Arg("type", Type("Type")),
-                Arg("flags", Type("InputFlags"))
-            ],
-            type = "type",
-            type_checks = []
-        ),
-        Inst("Output",
-            args = [Arg("value"), Arg("id", Type("size_t"))],
-            type = "Type::Void",
-            type_checks = []
-        ),
         Inst("Select",
             args = [Arg("cond", getter=Getter.Always), Arg("a"), Arg("b")],
             type = "a->type()",
