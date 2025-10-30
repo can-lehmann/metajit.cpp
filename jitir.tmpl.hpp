@@ -1645,6 +1645,22 @@ namespace metajit {
         );
       }
 
+      Bits select(const Bits& a, const Bits& b) const {
+        if (is_const()) {
+          if (value != 0) {
+            return a;
+          } else {
+            return b;
+          }
+        }
+        
+        return Bits(
+          a.type,
+          a.mask & b.mask,
+          a.value
+        );
+      }
+
       void write(std::ostream& stream) const {
         size_t bits = type == Type::Bool ? 1 : type_size(type) * 8;
         for (size_t it = bits; it-- > 0; ) {
@@ -1668,6 +1684,11 @@ namespace metajit {
           if (dynmatch(ResizeUInst, resize_u, inst)) {
             Bits a = at(resize_u->arg(0));
             _values[inst] = a.resize_u(resize_u->type());
+          } else if (dynmatch(SelectInst, select, inst)) {
+            Bits cond = at(select->cond());
+            Bits a = at(select->arg(1));
+            Bits b = at(select->arg(2));
+            _values[inst] = cond.select(a, b);
           }
 
           #define binop(name, expr) \
