@@ -81,6 +81,10 @@ binop_x86_inst(Shl64, shl64, binop_usedef, true, { reg = Reg::phys(4); rex_w(); 
 binop_x86_inst(Shr64, shr64, binop_usedef, true, { reg = Reg::phys(5); rex_w(); byte(0xd3); modrm(); })
 binop_x86_inst(Sar64, sar64, binop_usedef, true, { reg = Reg::phys(7); rex_w(); byte(0xd3); modrm(); })
 
+imm_binop_x86_inst(Shl64Imm, shl64_imm, imm_usedef, true, { reg = Reg::phys(4); rex_w(); byte(0xc1); modrm(); imm_n(1); })
+imm_binop_x86_inst(Shr64Imm, shr64_imm, imm_usedef, true, { reg = Reg::phys(5); rex_w(); byte(0xc1); modrm(); imm_n(1); })
+imm_binop_x86_inst(Sar64Imm, sar64_imm, imm_usedef, true, { reg = Reg::phys(7); rex_w(); byte(0xc1); modrm(); imm_n(1); })
+
 binop_x86_inst(Cmp8, cmp8, cmp_usedef, false, { rex(); byte(0x38); modrm(); })
 binop_x86_inst(Cmp16, cmp16, cmp_usedef, false, { rex_opt(); byte(0x39); modrm(); })
 binop_x86_inst(Cmp32, cmp32, cmp_usedef, false, { rex_opt(); byte(0x39); modrm(); })

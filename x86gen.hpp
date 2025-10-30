@@ -500,6 +500,20 @@ namespace metajit {
         }
       } else if (dynmatch(StoreInst, store, inst)) {
         X86Inst::Mem mem(vreg(store->arg(0)), store->offset());
+        if (dynmatch(Const, constant_value, store->arg(1))) {
+          switch (type_size(store->arg(1)->type())) {
+            case 1: _builder.mov8_imm(mem, constant_value->value()); return;
+            case 2: _builder.mov16_imm(mem, constant_value->value()); return;
+            case 4: _builder.mov32_imm(mem, constant_value->value()); return;
+            case 8:
+              if (is_sext_imm32(constant_value)) {
+                _builder.mov64_imm(mem, constant_value->value());
+                return;
+              }
+            default:
+              assert(false && "Unsupported store type");
+          }
+        }
         switch (type_size(store->arg(1)->type())) {
           case 1: _builder.mov8_mem(mem, vreg(store->arg(1))); break;
           case 2: _builder.mov16_mem(mem, vreg(store->arg(1))); break;
@@ -565,12 +579,30 @@ namespace metajit {
         _builder.xor64(vreg(inst), vreg(xor_inst->arg(1)));
       } else if (dynmatch(ShlInst, shl, inst)) {
         _builder.mov64(vreg(inst), vreg(shl->arg(0)));
+
+        if (dynmatch(Const, constant_b, shl->arg(1))) {
+          _builder.shl64_imm(vreg(inst), constant_b->value());
+          return;
+        }
+
         _builder.shl64(vreg(inst), vreg(shl->arg(1)));
       } else if (dynmatch(ShrUInst, shr_u, inst)) {
         _builder.mov64(vreg(inst), vreg(shr_u->arg(0)));
+
+        if (dynmatch(Const, constant_b, shr_u->arg(1))) {
+          _builder.shr64_imm(vreg(inst), constant_b->value());
+          return;
+        }
+
         _builder.shr64(vreg(inst), vreg(shr_u->arg(1)));
       } else if (dynmatch(ShrSInst, shr_s, inst)) {
         _builder.mov64(vreg(inst), vreg(shr_s->arg(0)));
+
+        if (dynmatch(Const, constant_b, shr_s->arg(1))) {
+          _builder.sar64_imm(vreg(inst), constant_b->value());
+          return;
+        }
+
         _builder.sar64(vreg(inst), vreg(shr_s->arg(1)));
       } else if (dynamic_cast<EqInst*>(inst) ||
                  dynamic_cast<LtSInst*>(inst) ||
