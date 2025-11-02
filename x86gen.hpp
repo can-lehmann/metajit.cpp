@@ -215,7 +215,7 @@ namespace metajit {
       }
     }
 
-    void write(std::ostream& stream, bool usedef = true) const;
+    void write(std::ostream& stream) const;
   };
 
   class X86Block {
@@ -252,7 +252,7 @@ namespace metajit {
     }
   };
 
-  void X86Inst::write(std::ostream& stream, bool usedef) const {
+  void X86Inst::write(std::ostream& stream) const {
     switch (_kind) {
       #define x86_inst(name, lowercase, ...) \
         case Kind::name: stream << #lowercase; break;
@@ -275,14 +275,6 @@ namespace metajit {
       stream << " imm=" << std::get<uint64_t>(_imm);
     } else if (std::holds_alternative<X86Block*>(_imm)) {
       stream << " imm=b" << std::get<X86Block*>(_imm)->name();
-    }
-
-    if (usedef) {
-      stream << "\t;";
-
-      auto use = [&](Reg reg){ stream << " use " << reg; };
-      auto def = [&](Reg reg){ stream << " def " << reg; };
-      visit_usedef(use, def);
     }
   }
 
@@ -708,7 +700,8 @@ namespace metajit {
 
       std::vector<bool> used_vregs(_next_vreg, false);
       std::vector<bool> used_pregs(16, false);
-      for (X86Block* block : _blocks) {
+      for (size_t block_it = _blocks.size(); block_it-- > 0; ) {
+        X86Block* block = _blocks[block_it];
         for (X86Inst* inst : block->rev_range()) {
           inst->visit_regs([&](RegArg& reg) {
             if (reg.is_virtual()) {
@@ -806,7 +799,17 @@ namespace metajit {
                   }
                 }
               }
+            } else if (inst->kind() == X86Inst::Kind::Jmp &&
+                       inst->next() == nullptr &&
+                       std::holds_alternative<X86Block*>(inst->imm()) &&
+                       block->name() + 1 < _blocks.size()) {
+              X86Block* target_block = std::get<X86Block*>(inst->imm());
+              if (target_block == _blocks[block->name() + 1]) {
+                it = it.erase();
+                continue;
+              }
             }
+
             ++it;
           }
         }
@@ -833,20 +836,38 @@ namespace metajit {
 
       isel();
       regalloc();
-      write(std::cout);
       peephole();
       save("x86codegen.bin");
     }
 
+    struct Label {
+      size_t pos = 0;
+      size_t size = 0;
+      size_t ref = 0;
+      X86Block* to = nullptr;
+
+      Label() {}
+    };
+
     void emit(std::vector<uint8_t>& buffer) {
+      std::vector<Label> labels;
+      std::vector<size_t> offsets(_blocks.size(), 0);
       for (X86Block* block : _blocks) {
+        offsets[block->name()] = buffer.size();
         for (X86Inst* inst : *block) {
-          emit(inst, buffer);
+          emit(inst, buffer, labels);
+        }
+      }
+
+      for (const Label& label : labels) {
+        int64_t value = offsets[label.to->name()] - label.ref;
+        for (size_t it = 0; it < label.size; it++) {
+          buffer[label.pos + it] = (value >> (it * 8)) & 0xff;
         }
       }
     }
-    
-    void emit(X86Inst* inst, std::vector<uint8_t>& buffer) {
+
+    void emit(X86Inst* inst, std::vector<uint8_t>& buffer, std::vector<Label>& labels) {
       Reg reg = inst->reg();
       X86Inst::RM rm = inst->rm();
       std::optional<uint64_t> imm;
@@ -966,6 +987,14 @@ namespace metajit {
       };
 
       auto imm_n = [&](size_t size) {
+        if (std::holds_alternative<X86Block*>(inst->imm())) {
+          Label label;
+          label.pos = buffer.size();
+          label.size = size;
+          label.ref = buffer.size() + size;
+          label.to = std::get<X86Block*>(inst->imm());
+          labels.push_back(label);
+        }
         assert(imm.has_value());
         for (size_t it = 0; it < size; it++) {
           byte((imm.value() >> (it * 8)) & 0xff);

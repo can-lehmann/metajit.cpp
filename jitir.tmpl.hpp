@@ -318,7 +318,7 @@ namespace metajit {
 
     Const* build_const(Type type, uint64_t value) {
       Const* constant = (Const*) _const_allocator.alloc(sizeof(Const), alignof(Const));
-      new (constant) Const(type, value);
+      new (constant) Const(type, value & type_mask(type));
       return constant;
     }
   };
@@ -843,6 +843,10 @@ namespace metajit {
       new (input) Input(type, _inputs.size(), flags);
       _inputs.push_back(input);
       return input;
+    }
+
+    Input* input(size_t index) const {
+      return _inputs.at(index);
     }
 
     void add(Block* block) { _blocks.push_back(block); }
@@ -1426,6 +1430,14 @@ namespace metajit {
       }
     }
 
+    void init_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
+      if (aliasing < 0) {
+        _exact_memory[-aliasing] = value;
+      } else {
+        _memory[aliasing].store(ptr, offset, value);
+      }
+    }
+
   };
 
   ${capi}
@@ -1653,7 +1665,7 @@ namespace metajit {
             return b;
           }
         }
-        
+
         return Bits(
           a.type,
           a.mask & b.mask,

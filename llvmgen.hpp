@@ -242,9 +242,9 @@ namespace metajit {
         llvm::Value* true_const = is_const(select->arg(1));
         llvm::Value* false_const = is_const(select->arg(2));
         llvm::Value* cond = emit_arg(select->arg(0));
-        return _builder.CreateSelect(cond_const,
-          _builder.CreateSelect(cond, true_const, false_const), // Short-circuit
-          _builder.CreateAnd(true_const, false_const)
+        return _builder.CreateAnd(
+          cond_const,
+          _builder.CreateSelect(cond, true_const, false_const) // Short-circuit
         );
       } else if (dynmatch(AndInst, and_inst, inst)) {
         llvm::Value* a_const = is_const(and_inst->arg(0));
