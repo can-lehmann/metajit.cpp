@@ -141,6 +141,8 @@ namespace metajit {
     RegArg _reg;
     RM _rm;
     Imm _imm;
+    size_t _misc_count = 0;
+    RegArg* _misc = nullptr;
   public:
     X86Inst(Kind kind): _kind(kind) {}
     
@@ -148,11 +150,18 @@ namespace metajit {
     RegArg reg() const { return _reg; }
     RM rm() const { return _rm; }
     Imm imm() const { return _imm; }
+    size_t misc_count() const { return _misc_count; }
+    RegArg* misc() const { return _misc; }
 
     X86Inst& set_kind(Kind kind) { _kind = kind; return *this; }
     X86Inst& set_reg(RegArg reg) { _reg = reg; return *this; }
     X86Inst& set_rm(const RM& rm) { _rm = rm; return *this; }
     X86Inst& set_imm(const Imm& imm) { _imm = imm; return *this; }
+    X86Inst& set_misc(size_t count, RegArg* regs) {
+      _misc_count = count;
+      _misc = regs;
+      return *this;
+    }
 
     bool is_64_bit() const {
       switch (_kind) {
@@ -176,6 +185,12 @@ namespace metajit {
         fn(mem.base);
         if (!mem.index.is_invalid()) {
           fn(mem.index);
+        }
+      }
+
+      if (_misc) {
+        for (size_t it = 0; it < _misc_count; it++) {
+          fn(_misc[it]);
         }
       }
     }
@@ -276,6 +291,17 @@ namespace metajit {
     } else if (std::holds_alternative<X86Block*>(_imm)) {
       stream << " imm=b" << std::get<X86Block*>(_imm)->name();
     }
+
+    if (_misc) {
+      stream << " misc=[";
+      for (size_t it = 0; it < _misc_count; it++) {
+        if (it != 0) {
+          stream << ", ";
+        }
+        stream << _misc[it];
+      }
+      stream << "]";
+    }
   }
 
   class X86InstBuilder {
@@ -346,6 +372,13 @@ namespace metajit {
 
     X86Inst* ret() {
       return &build(X86Inst::Kind::Ret);
+    }
+
+    X86Inst* div64(Reg a, Reg b, X86Inst::RM rm) {
+      RegArg* misc = (RegArg*) _allocator.alloc(sizeof(RegArg) * 2, alignof(RegArg));
+      misc[0] = a;
+      misc[1] = b;
+      return &build(X86Inst::Kind::Div64).set_rm(rm).set_misc(2, misc);
     }
   };
 
@@ -534,7 +567,11 @@ namespace metajit {
         _builder.imul64(vreg(inst), vreg(mul->arg(1)));
       } else if (dynmatch(ModUInst, mod_u, inst)) {
         vreg(inst->arg(0));
-        _builder.div(vreg(inst->arg(1)));
+        Reg rax = vreg();
+        Reg rdx = vreg(inst);
+        _builder.mov64(rax, vreg(inst->arg(1)));
+        _builder.mov64_imm(rdx, (uint64_t) 0);
+        _builder.div64(rdx, rax, vreg(inst->arg(1)));
         vreg(inst);
       } else if (dynmatch(AndInst, and_inst, inst)) {
         _builder.mov64(vreg(inst), vreg(and_inst->arg(0)));
@@ -773,6 +810,48 @@ namespace metajit {
       return false;
     }
 
+    class RegPermutation {
+    private:
+      X86InstBuilder& _builder;
+      uint8_t _from[16];
+      uint8_t _to[16];
+      std::vector<std::pair<uint8_t, uint8_t>> _swaps;
+    public:
+      RegPermutation(X86InstBuilder& builder): _builder(builder) {
+        for (size_t it = 0; it < 16; it++) {
+          _from[it] = it;
+          _to[it] = it;
+        }
+      }
+
+      void xchg(uint8_t a, uint8_t b) {
+        if (a == b) {
+          return;
+        }
+
+        _builder.xchg64(Reg::phys(a), Reg::phys(b));
+        _to[_from[a]] = b;
+        _to[_from[b]] = a;
+        std::swap(_from[a], _from[b]);
+        _swaps.push_back({a, b});
+      }
+
+      void xchg(Reg a, Reg b) {
+        xchg(a.id(), b.id());
+      }
+
+      Reg to(Reg reg) const {
+        return Reg::phys(_to[reg.id()]);
+      }
+
+      void reset() {
+        for (size_t it = _swaps.size(); it-- > 0; ) {
+          _builder.xchg64(Reg::phys(_swaps[it].first), Reg::phys(_swaps[it].second));
+        }
+        _swaps.clear();
+      }
+    };
+
     void peephole() {
       for (X86Block* block : _blocks) {
         for (auto it = block->begin(); it != block->end(); ) {
@@ -808,6 +887,17 @@ namespace metajit {
                 it = it.erase();
                 continue;
               }
+            } else if (inst->kind() == X86Inst::Kind::Div64) {
+              ++it;
+
+              RegPermutation perm(_builder);
+              _builder.move_before(inst);
+              perm.xchg(Reg::phys(0), perm.to(inst->misc()[1])); // RDX
+              perm.xchg(Reg::phys(2), perm.to(inst->misc()[0])); // RAX
+              inst->set_rm(perm.to(std::get<RegArg>(inst->rm())));
+              _builder.move_before(inst->next());
+              perm.reset();
+              continue;
             }
 
             ++it;

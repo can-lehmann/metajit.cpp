@@ -308,10 +308,12 @@ namespace metajit {
         for (Uses::Use use : _uses.at(inst)) {
           llvm::Value* use_used = is_used(use.inst);
           
-          use_used = _builder.CreateAnd(
-            use_used,
-            _builder.CreateNot(is_const(use.inst))
-          );
+          if (is_int_or_bool(use.inst->type())) {
+            use_used = _builder.CreateAnd(
+              use_used,
+              _builder.CreateNot(is_const(use.inst))
+            );
+          }
 
           if (dynmatch(SelectInst, select, use.inst)) {
             if (use.index > 0) {

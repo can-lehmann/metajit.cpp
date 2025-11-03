@@ -2098,7 +2098,8 @@ namespace metajit {
             (is_int_or_bool(inst->type()) && !is_int_or_bool(by->type()))) {
           _can_trace_const[inst] = true;
         }
-        if (_constness.at(inst) != ConstnessAnalysis::ALWAYS) {
+        if (_constness.at(inst) != ConstnessAnalysis::ALWAYS ||
+            !is_int_or_bool(inst->type())) {
           _can_trace_inst[inst] = true;
         }
       }
