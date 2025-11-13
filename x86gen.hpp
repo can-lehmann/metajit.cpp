@@ -69,34 +69,10 @@ namespace metajit {
       }
     }
   };
-
-  class RegArg: public Reg {
-  private:
-    bool _is_kill = false;
-  public:
-    using Reg::Reg;
-
-    RegArg(const Reg& reg): Reg(reg) {}
-
-    bool is_kill() const { return _is_kill; }
-    RegArg& set_kill(bool is_kill = true) { _is_kill = is_kill; return *this; }
-
-    void write(std::ostream& stream) const {
-      Reg::write(stream);
-      if (_is_kill) {
-        stream << "<kill>";
-      }
-    }
-  };
 }
 
 std::ostream& operator<<(std::ostream& stream, const metajit::Reg& reg) {
   reg.write(stream);
-  return stream;
-}
-
-std::ostream& operator<<(std::ostream& stream, const metajit::RegArg& reg_arg) {
-  reg_arg.write(stream);
   return stream;
 }
 
@@ -111,15 +87,15 @@ namespace metajit {
     };
 
     struct Mem {
-      RegArg base;
+      Reg base;
       size_t scale = 0;
-      RegArg index;
+      Reg index;
       int32_t disp = 0;
 
       Mem() {}
-      Mem(RegArg _base): base(_base) {}
-      Mem(RegArg _base, int32_t _disp): base(_base), disp(_disp) {}
-      Mem(RegArg _base, size_t _scale, RegArg _index, int32_t _disp):
+      Mem(Reg _base): base(_base) {}
+      Mem(Reg _base, int32_t _disp): base(_base), disp(_disp) {}
+      Mem(Reg _base, size_t _scale, Reg _index, int32_t _disp):
         base(_base), scale(_scale), index(_index), disp(_disp) {}
 
       void write(std::ostream& stream) const {
@@ -134,34 +110,38 @@ namespace metajit {
       }
     };
 
-    using RM = std::variant<std::monostate, RegArg, Mem>;
+    using RM = std::variant<std::monostate, Reg, Mem>;
     using Imm = std::variant<std::monostate, uint64_t, X86Block*>;
   private:
     Kind _kind;
-    RegArg _reg;
+    Reg _reg;
     RM _rm;
     Imm _imm;
     size_t _misc_count = 0;
-    RegArg* _misc = nullptr;
+    Reg* _misc = nullptr;
+    size_t _name = 0;
   public:
     X86Inst(Kind kind): _kind(kind) {}
     
     Kind kind() const { return _kind; }
-    RegArg reg() const { return _reg; }
+    Reg reg() const { return _reg; }
     RM rm() const { return _rm; }
     Imm imm() const { return _imm; }
     size_t misc_count() const { return _misc_count; }
-    RegArg* misc() const { return _misc; }
+    Reg* misc() const { return _misc; }
 
     X86Inst& set_kind(Kind kind) { _kind = kind; return *this; }
-    X86Inst& set_reg(RegArg reg) { _reg = reg; return *this; }
+    X86Inst& set_reg(Reg reg) { _reg = reg; return *this; }
     X86Inst& set_rm(const RM& rm) { _rm = rm; return *this; }
     X86Inst& set_imm(const Imm& imm) { _imm = imm; return *this; }
-    X86Inst& set_misc(size_t count, RegArg* regs) {
+    X86Inst& set_misc(size_t count, Reg* regs) {
       _misc_count = count;
       _misc = regs;
       return *this;
     }
+
+    size_t name() const { return _name; }
+    void set_name(size_t name) { _name = name; }
 
     bool is_64_bit() const {
       switch (_kind) {
@@ -178,8 +158,8 @@ namespace metajit {
         fn(_reg);
       }
 
-      if (std::holds_alternative<RegArg>(_rm)) {
-        fn(std::get<RegArg>(_rm));
+      if (std::holds_alternative<Reg>(_rm)) {
+        fn(std::get<Reg>(_rm));
       } else if (std::holds_alternative<Mem>(_rm)) {
         Mem& mem = std::get<Mem>(_rm);
         fn(mem.base);
@@ -204,8 +184,8 @@ namespace metajit {
       RM rm = _rm;
 
       auto use = [&](RM rm) {
-        if (std::holds_alternative<RegArg>(rm)) {
-          use_fn(std::get<RegArg>(rm));
+        if (std::holds_alternative<Reg>(rm)) {
+          use_fn(std::get<Reg>(rm));
         } else if (std::holds_alternative<Mem>(rm)) {
           Mem mem = std::get<Mem>(rm);
           use_fn(mem.base);
@@ -216,8 +196,8 @@ namespace metajit {
       };
 
       auto def = [&](RM rm) {
-        if (std::holds_alternative<RegArg>(rm)) {
-          def_fn(std::get<RegArg>(rm));
+        if (std::holds_alternative<Reg>(rm)) {
+          def_fn(std::get<Reg>(rm));
         } else {
           use(rm);
         }
@@ -236,6 +216,8 @@ namespace metajit {
   class X86Block {
   private:
     LinkedList<X86Inst> _insts;
+    X86Block* _backedges = nullptr; // If this block is a loop header, linked list of backedges
+    X86Block* _next_backedge = nullptr; // Next backedge in linked list
     size_t _name = 0;
   public:
     X86Block() {}
@@ -253,12 +235,33 @@ namespace metajit {
 
     auto rev_range() { return _insts.rev_range(); }
 
+    X86Block* backedges() const { return _backedges; }
+    X86Block* next_backedge() const { return _next_backedge; }
+
+    void add_backedge(X86Block* backedge) {
+      backedge->_next_backedge = _backedges;
+      _backedges = backedge;
+    }
+
     void insert_before(X86Inst* before, X86Inst* inst) {
       _insts.insert_before(before, inst);
     }
 
     void write(std::ostream& stream) {
-      stream << "b" << _name << ":\n";
+      stream << "b" << _name;
+      if (_backedges) {
+        stream << " loop(";
+        bool is_first = true;
+        for (X86Block* backedge = _backedges; backedge; backedge = backedge->_next_backedge) {
+          if (!is_first) {
+            stream << ", ";
+          }
+          stream << "b" << backedge->name();
+          is_first = false;
+        }
+        stream << ")";
+      }
+      stream << ":\n";
       for (X86Inst* inst : _insts) {
         stream << "  ";
         inst->write(stream);
@@ -278,8 +281,8 @@ namespace metajit {
       stream << " reg=" << _reg;
     }
 
-    if (std::holds_alternative<RegArg>(_rm)) {
-      stream << " rm=" << std::get<RegArg>(_rm);
+    if (std::holds_alternative<Reg>(_rm)) {
+      stream << " rm=" << std::get<Reg>(_rm);
     } else if (std::holds_alternative<Mem>(_rm)) {
       Mem mem = std::get<Mem>(_rm);
       stream << " rm=";
@@ -375,7 +378,7 @@ namespace metajit {
     }
 
     X86Inst* div64(Reg a, Reg b, X86Inst::RM rm) {
-      RegArg* misc = (RegArg*) _allocator.alloc(sizeof(RegArg) * 2, alignof(RegArg));
+      Reg* misc = (Reg*) _allocator.alloc(sizeof(Reg) * 2, alignof(Reg));
       misc[0] = a;
       misc[1] = b;
       return &build(X86Inst::Kind::Div64).set_rm(rm).set_misc(2, misc);
@@ -391,6 +394,7 @@ namespace metajit {
     InstMap<std::vector<X86Inst>> _isel;
 
     InstMap<Reg> _vregs;
+    std::vector<Reg> _input_vregs;
     std::vector<Reg> _input_pregs;
     size_t _next_vreg = 0;
 
@@ -426,7 +430,7 @@ namespace metajit {
         }
         return reg;
       } else if (dynmatch(Input, input, value)) {
-        return _input_pregs[input->index()];
+        return _input_vregs[input->index()];
       } else if (dynmatch(Inst, inst, value)) {
         if (_vregs.at(inst).is_invalid()) {
           _vregs[inst] = vreg();
@@ -726,75 +730,141 @@ namespace metajit {
           inst->kind() == X86Inst::Kind::Mov16 ||
           inst->kind() == X86Inst::Kind::Mov32 ||
           inst->kind() == X86Inst::Kind::Mov64) {
-        return std::holds_alternative<RegArg>(inst->rm());
+        return std::holds_alternative<Reg>(inst->rm());
       }
       return false;
     }
 
-    void regalloc() {
-      std::vector<Reg> mapping(_next_vreg, Reg());
-      PhysicalRegSet available_regs;
+    struct Interval {
+      size_t min = 0;
+      size_t max = 0;
 
-      std::vector<bool> used_vregs(_next_vreg, false);
-      std::vector<bool> used_pregs(16, false);
-      for (size_t block_it = _blocks.size(); block_it-- > 0; ) {
-        X86Block* block = _blocks[block_it];
-        for (X86Inst* inst : block->rev_range()) {
-          inst->visit_regs([&](RegArg& reg) {
-            if (reg.is_virtual()) {
-              if (!used_vregs[reg.id()]) {
-                used_vregs[reg.id()] = true;
-                reg.set_kill(true);
-              }
-            } else if (reg.is_physical()) {
-              if (!used_pregs[reg.id()]) {
-                used_pregs[reg.id()] = true;
-                reg.set_kill(true);
-              }
-            }
-          });
+      Interval(): min(~size_t(0)), max(0) {}
+
+      void incl(size_t value) {
+        if (value < min) {
+          min = value;
+        }
+        if (value > max) {
+          max = value;
         }
       }
 
-      for (Reg reg : _input_pregs) {
-        assert(reg.is_physical());
-        available_regs.erase(reg.id());
+      void write(std::ostream& stream) const {
+        stream << "[" << min << "; " << max << "]";
+      }
+    };
+
+    void autoname() {
+      size_t block_name = 0;
+      for (X86Block* block : _blocks) {
+        block->set_name(block_name++);
+      }
+
+      size_t inst_name = 0;
+      for (X86Block* block : _blocks) {
+        for (X86Inst* inst : *block) {
+          inst->set_name(inst_name++);
+          if (std::holds_alternative<X86Block*>(inst->imm())) {
+            X86Block* target = std::get<X86Block*>(inst->imm());
+            if (target->name() <= block->name()) {
+              target->add_backedge(block);
+            }
+          }
+        }
+      }
+    }
+
+    void regalloc() {
+      std::vector<Interval> intervals(_next_vreg, Interval());
+      
+      std::set<size_t> live;
+      for (size_t block_it = _blocks.size(); block_it-- > 0; ) {
+        X86Block* block = _blocks[block_it];
+        for (X86Inst* inst : block->rev_range()) {
+          inst->visit_usedef(
+            [&](Reg reg) {},
+            [&](Reg reg) {
+              assert(reg.is_virtual());
+              live.erase(reg.id());
+              intervals[reg.id()].incl(inst->name());
+            }
+          );
+
+          inst->visit_usedef(
+            [&](Reg reg) {
+              assert(reg.is_virtual());
+              live.insert(reg.id());
+              intervals[reg.id()].incl(inst->name());
+            },
+            [&](Reg reg) {}
+          );
+        }
+
+        for (X86Block* backedge = block->backedges(); backedge; backedge = backedge->next_backedge()) {
+          for (size_t id : live) {
+            intervals[id].incl(backedge->last()->name() + 1);
+          }
+        }
+      }
+
+      std::vector<size_t> kill_order;
+      kill_order.reserve(intervals.size());
+      for (size_t id = 0; id < intervals.size(); id++) {
+        kill_order.push_back(id);
+      }
+
+      std::sort(
+        kill_order.begin(),
+        kill_order.end(),
+        [&](size_t a, size_t b) {
+          return intervals[a].max < intervals[b].max;
+        }
+      );
+
+      std::vector<Reg> mapping(_next_vreg, Reg());
+      PhysicalRegSet available_regs;
+      size_t kill_index = 0;
+
+      for (Input* input : _section->inputs()) {
+        Reg phys_reg = _input_pregs[input->index()];
+        mapping[_input_vregs[input->index()].id()] = phys_reg;
+        available_regs.erase(phys_reg.id());
       }
 
       for (X86Block* block : _blocks) {
         for (X86Inst* inst : *block) {
+          while (kill_index < kill_order.size() &&
+                 intervals[kill_order[kill_index]].max <= inst->name()) {
+            size_t reg_id = kill_order[kill_index];
+            if (!mapping[reg_id].is_invalid()) {
+              available_regs.insert(mapping[reg_id].id());
+            }
+            kill_index++;
+          }
+
           if (is_reg_mov(inst)) {
-            RegArg src_reg = std::get<RegArg>(inst->rm());
-            RegArg dst_reg = inst->reg();
-            if (src_reg.is_virtual() &&
-                dst_reg.is_virtual() &&
-                src_reg.is_kill()) {
-              mapping[dst_reg.id()] = mapping[src_reg.id()];
-              src_reg.set_kill(false);
-              inst->set_rm(src_reg);
+            Reg src_reg = std::get<Reg>(inst->rm());
+            Reg dst_reg = inst->reg();
+            assert(src_reg.is_virtual() && dst_reg.is_virtual());
+            if (intervals[src_reg.id()].max == intervals[dst_reg.id()].min) {
+              Reg phys_reg = mapping[src_reg.id()];
+              mapping[dst_reg.id()] = phys_reg;
+              available_regs.erase(phys_reg.id());
             }
           }
 
-          inst->visit_regs([&](RegArg& reg) {
-            if (reg.is_virtual()) {
-              if (mapping[reg.id()].is_invalid()) {
-                Reg phys_reg = available_regs.get_any();
-                assert(!phys_reg.is_invalid() && "Ran out of physical registers");
-                mapping[reg.id()] = phys_reg;
-                available_regs.erase(phys_reg.id());
-              }
+          inst->visit_regs([&](Reg& reg) {
+            assert(reg.is_virtual());
 
-              RegArg phys_reg = mapping[reg.id()];
-              phys_reg.set_kill(reg.is_kill());
-              reg = phys_reg;
+            if (mapping[reg.id()].is_invalid()) {
+              Reg phys_reg = available_regs.get_any();
+              assert(!phys_reg.is_invalid() && "Ran out of physical registers");
+              mapping[reg.id()] = phys_reg;
+              available_regs.erase(phys_reg.id());
             }
-          });
 
-          inst->visit_regs([&](RegArg& reg) {
-            assert(reg.is_physical());
-            if (reg.is_kill()) {
-              available_regs.insert(reg.id());
-            }
+            reg = mapping[reg.id()];
           });
         }
       }
@@ -802,8 +872,8 @@ namespace metajit {
 
     bool is_noop(X86Inst* inst) {
       if (is_reg_mov(inst)) {
-        if (std::holds_alternative<RegArg>(inst->rm())) {
-          Reg src_reg = std::get<RegArg>(inst->rm());
+        if (std::holds_alternative<Reg>(inst->rm())) {
+          Reg src_reg = std::get<Reg>(inst->rm());
           return src_reg == inst->reg();
         }
       }
@@ -863,7 +933,7 @@ namespace metajit {
                   inst->kind() == X86Inst::Kind::Mov16Imm ||
                   inst->kind() == X86Inst::Kind::Mov32Imm ||
                   inst->kind() == X86Inst::Kind::Mov64Imm) &&
-                std::holds_alternative<RegArg>(inst->rm())) ||
+                std::holds_alternative<Reg>(inst->rm())) ||
                 inst->kind() == X86Inst::Kind::Mov64Imm64) {
               if (std::holds_alternative<uint64_t>(inst->imm())) {
                 uint64_t value = std::get<uint64_t>(inst->imm());
@@ -874,7 +944,7 @@ namespace metajit {
                   if (inst->kind() == X86Inst::Kind::Mov64Imm64) {
                     inst->set_rm(inst->reg());
                   } else {
-                    inst->set_reg(std::get<RegArg>(inst->rm()));
+                    inst->set_reg(std::get<Reg>(inst->rm()));
                   }
                 }
               }
@@ -894,7 +964,7 @@ namespace metajit {
               _builder.move_before(inst);
               perm.xchg(Reg::phys(0), perm.to(inst->misc()[1])); // RDX
               perm.xchg(Reg::phys(2), perm.to(inst->misc()[0])); // RAX
-              inst->set_rm(perm.to(std::get<RegArg>(inst->rm())));
+              inst->set_rm(perm.to(std::get<Reg>(inst->rm())));
               _builder.move_before(inst->next());
               perm.reset();
               continue;
@@ -913,6 +983,10 @@ namespace metajit {
         _builder(section->allocator(), nullptr),
         _input_pregs(input_pregs) {
       
+      for (Reg reg : input_pregs) {
+        _input_vregs.push_back(vreg());
+      }
+
       section->autoname();
       _isel.init(section);
       _vregs.init(section);
@@ -925,6 +999,7 @@ namespace metajit {
       }
 
       isel();
+      autoname();
       regalloc();
       peephole();
       save("x86codegen.bin");
@@ -977,8 +1052,8 @@ namespace metajit {
           rex |= 0x08;
         }
         rex |= ((reg.id() >> 3) & 1) << 2; // R
-        if (std::holds_alternative<RegArg>(rm)) {
-          rex |= ((std::get<RegArg>(rm).id() >> 3) & 1); // B
+        if (std::holds_alternative<Reg>(rm)) {
+          rex |= ((std::get<Reg>(rm).id() >> 3) & 1); // B
         } else if (std::holds_alternative<X86Inst::Mem>(rm)) {
           X86Inst::Mem mem = std::get<X86Inst::Mem>(rm);
           rex |= ((mem.base.id() >> 3) & 1); // B
@@ -997,8 +1072,8 @@ namespace metajit {
         bool need_rex = false;
         if (reg.id() >= 8) {
           need_rex = true;
-        } else if (std::holds_alternative<RegArg>(rm)) {
-          if (std::get<RegArg>(rm).id() >= 8) {
+        } else if (std::holds_alternative<Reg>(rm)) {
+          if (std::get<Reg>(rm).id() >= 8) {
             need_rex = true;
           }
         } else if (std::holds_alternative<X86Inst::Mem>(rm)) {
@@ -1020,9 +1095,9 @@ namespace metajit {
         // Encode ModRM byte
         uint8_t modrm = 0;
         modrm |= (reg.id() & 0b111) << 3; // reg
-        if (std::holds_alternative<RegArg>(rm)) {
+        if (std::holds_alternative<Reg>(rm)) {
           modrm |= 0b11 << 6; // mod
-          modrm |= std::get<RegArg>(rm).id() & 0b111; // r/m
+          modrm |= std::get<Reg>(rm).id() & 0b111; // r/m
           byte(modrm);
         } else if (std::holds_alternative<X86Inst::Mem>(rm)) {
           X86Inst::Mem mem = std::get<X86Inst::Mem>(rm);
