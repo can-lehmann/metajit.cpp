@@ -1051,8 +1051,21 @@ namespace metajit {
     Value* fold_mod_s(Value* a, Value* b) {
       return build_mod_s(a, b);
     }
+  
+  private:
+    bool is_power_of_two(uint64_t value) {
+      return value != 0 && (value & (value - 1)) == 0;
+    }
 
+  public:
     Value* fold_mod_u(Value* a, Value* b) {
+      if (dynmatch(Const, const_b, b)) {
+        if (is_power_of_two(const_b->value())) {
+          uint64_t mask = const_b->value() - 1;
+          return fold_and(a, build_const(a->type(), mask));
+        }
+      }
+
       return build_mod_u(a, b);
     }
 
@@ -1869,44 +1882,57 @@ namespace metajit {
 
   class Simplify: public Pass<Simplify> {
   public:
-    Simplify(Section* section): Pass(section) {
-      KnownBits known_bits(section);
-      UsedBits used_bits(section);
+    Simplify(Section* section, size_t max_iters): Pass(section) {
+      bool changed = true;
+      for (size_t iter = 0; changed && iter < max_iters; iter++) {
+        changed = false;
 
-      InstMap<Value*> substs(section);
+        section->autoname();
 
-      for (Block* block : *section) {
-        for (auto inst_it = block->begin(); inst_it != block->end(); ) {
-          Inst* inst = *inst_it;
+        KnownBits known_bits(section);
+        UsedBits used_bits(section);
 
-          for (size_t it = 0; it < inst->arg_count(); it++) {
-            Value* arg = inst->arg(it);
-            if (dynmatch(Inst, inst_arg, arg)) {
-              if (substs[inst_arg]) {
-                inst->set_arg(it, substs[inst_arg]);
+        InstMap<Value*> substs(section);
+
+        bool used_known_bits = false;
+        bool used_used_bits = false;
+        for (Block* block : *section) {
+          for (auto inst_it = block->begin(); inst_it != block->end(); ) {
+            Inst* inst = *inst_it;
+
+            for (size_t it = 0; it < inst->arg_count(); it++) {
+              Value* arg = inst->arg(it);
+              if (dynmatch(Inst, inst_arg, arg)) {
+                if (substs[inst_arg]) {
+                  inst->set_arg(it, substs[inst_arg]);
+                }
               }
             }
-          }
 
-          if (dynmatch(AndInst, and_inst, inst)) {
-            KnownBits::Bits a = known_bits.at(and_inst->arg(0));
-            KnownBits::Bits b = known_bits.at(and_inst->arg(1));
-            UsedBits::Bits used = used_bits.at(inst);
+            if (dynmatch(AndInst, and_inst, inst)) {
+              KnownBits::Bits a = known_bits.at(and_inst->arg(0));
+              KnownBits::Bits b = known_bits.at(and_inst->arg(1));
+              UsedBits::Bits used = used_bits.at(inst);
 
-            if (b.is_const() && ((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
-              substs[inst] = and_inst->arg(0);
-              inst_it = inst_it.erase();
-              remove(inst);
-              continue;
-            } else if (b.is_const() && (used.used & ~b.value) == 0) {
-              substs[inst] = and_inst->arg(0);
-              inst_it = inst_it.erase();
-              remove(inst);
-              continue;
+              if (!used_used_bits && b.is_const() && ((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
+                substs[inst] = and_inst->arg(0);
+                inst_it = inst_it.erase();
+                remove(inst);
+                used_known_bits = true;
+                changed = true;
+                continue;
+              } else if (!used_known_bits && b.is_const() && (used.used & ~b.value) == 0) {
+                substs[inst] = and_inst->arg(0);
+                inst_it = inst_it.erase();
+                remove(inst);
+                used_used_bits = true;
+                changed = true;
+                continue;
+              }
             }
-          }
 
-          inst_it++;
+            inst_it++;
+          }
         }
       }
     }

@@ -108,6 +108,10 @@ namespace metajit {
         }
         stream << "]";
       }
+
+      bool is_invalid() const {
+        return base.is_invalid();
+      }
     };
 
     using RM = std::variant<std::monostate, Reg, Mem>;
@@ -391,12 +395,39 @@ namespace metajit {
     std::vector<X86Block*> _blocks;
     X86InstBuilder _builder;
 
+    InstMap<void*> _memory_deps;
+
     InstMap<std::vector<X86Inst>> _isel;
 
     InstMap<Reg> _vregs;
     std::vector<Reg> _input_vregs;
     std::vector<Reg> _input_pregs;
     size_t _next_vreg = 0;
+
+    void memory_deps() {
+      for (Block* block : *_section) {
+        std::unordered_map<AliasingGroup, void*> last_store;
+        for (Inst* inst : *block) {
+          #define find_dep(inst) \
+            void* dep = (void*) block; \
+            if (last_store.find(inst->aliasing()) != last_store.end()) { \
+              dep = (void*) last_store.at(inst->aliasing()); \
+            } \
+            _memory_deps[inst] = dep;
+          
+          if (dynmatch(LoadInst, load, inst)) {
+            find_dep(load);
+          } else if (dynmatch(StoreInst, store, inst)) {
+            find_dep(store);
+            last_store[store->aliasing()] = store;
+          } else {
+            _memory_deps[inst] = nullptr;
+          }
+
+          #undef find_dep
+        }
+      }
+    }
 
     Reg vreg() {
       return Reg::virt(_next_vreg++);
@@ -451,9 +482,22 @@ namespace metajit {
             constant_b->value()
           );
         }
-      } 
+      } else if (dynmatch(MulInst, mul, b)) {
+        if (dynmatch(Const, constant_scale, mul->arg(1))) {
+          if (constant_scale->value() == 2 ||
+              constant_scale->value() == 4 ||
+              constant_scale->value() == 8) {
+            mem = X86Inst::Mem(
+              vreg(a),
+              constant_scale->value(),
+              vreg(mul->arg(0)),
+              0
+            );
+          }
+        }
+      }
 
-      if (mem.base.is_invalid()) {
+      if (mem.is_invalid()) {
         mem = X86Inst::Mem(
           vreg(a),
           1,
@@ -539,8 +583,38 @@ namespace metajit {
                 _builder.mov64_imm(mem, constant_value->value());
                 return;
               }
+            break;
             default:
               assert(false && "Unsupported store type");
+          }
+        } else if (dynmatch(AddInst, add, store->arg(1))) {
+          LoadInst* load_arg = nullptr;
+          Value* other_arg = nullptr;
+
+          #define find_load(load_index, other_index) \
+            if (dynmatch(LoadInst, load, add->arg(load_index))) { \
+              bool exact_aliasing_matches = load->aliasing() == store->aliasing() && load->aliasing() < 0; \
+              bool ptr_offset_matches = load->arg(0) == store->arg(0) && load->offset() == store->offset(); \
+              if (_memory_deps.at(load) == _memory_deps.at(store) && (exact_aliasing_matches || ptr_offset_matches)) { \
+                load_arg = load; \
+                other_arg = add->arg(other_index); \
+              } \
+            }
+          
+          find_load(0, 1);
+          find_load(1, 0);
+
+          #undef find_load
+
+          if (load_arg) {
+            switch (type_size(store->arg(1)->type())) {
+              case 1: _builder.add8_mem(mem, vreg(other_arg)); return;
+              case 2: _builder.add16_mem(mem, vreg(other_arg)); return;
+              case 4: _builder.add32_mem(mem, vreg(other_arg)); return;
+              case 8: _builder.add64_mem(mem, vreg(other_arg)); return;
+              default:
+                assert(false && "Unsupported store type");
+            }
           }
         }
         switch (type_size(store->arg(1)->type())) {
@@ -988,6 +1062,7 @@ namespace metajit {
       }
 
       section->autoname();
+      _memory_deps.init(section);
       _isel.init(section);
       _vregs.init(section);
 
@@ -998,6 +1073,7 @@ namespace metajit {
         _blocks[block->name()] = x86_block;
       }
 
+      memory_deps();
       isel();
       autoname();
       regalloc();
