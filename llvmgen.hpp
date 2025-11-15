@@ -1029,10 +1029,6 @@ namespace metajit {
         }
       }
 
-      if (_generating_extension) {
-        _trace_capabilities.write(std::cerr);
-      }
-
       _builder.CreateBr(_blocks.at(section->entry()));
 
       for (Block* block : *_section) {

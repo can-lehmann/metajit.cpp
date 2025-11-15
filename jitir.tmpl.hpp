@@ -1005,6 +1005,18 @@ namespace metajit {
         if (const_b->value() == 0) {
           return a;
         }
+
+        if (dynmatch(AddInst, add_a, a)) {
+          if (dynmatch(Const, const_a_b, add_a->arg(1))) {
+            return fold_add(
+              add_a->arg(0),
+              build_const(
+                a->type(),
+                (const_a_b->value() + const_b->value()) & type_mask(a->type())
+              )
+            );
+          }
+        }
       }
 
       return build_add(a, b);
@@ -2042,8 +2054,7 @@ namespace metajit {
             // in a separate group.
             if (dynamic_cast<AndInst*>(inst) ||
                 dynamic_cast<OrInst*>(inst) ||
-                dynamic_cast<SelectInst*>(inst) ||
-                dynamic_cast<LoadInst*>(inst)) {
+                dynamic_cast<SelectInst*>(inst)) {
               if (group != ALWAYS) {
                 group = _next_group;
               }
