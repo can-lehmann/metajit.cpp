@@ -2032,19 +2032,20 @@ namespace metajit {
 
   class ConstnessAnalysis {
   public:
-    static const size_t ALWAYS = 0;
+    static constexpr size_t ALWAYS = 0;
   private:
     Section* _section;
     InstMap<size_t> _groups;
     std::vector<size_t> _inputs;
     size_t _next_group = 1;
   public:
-    ConstnessAnalysis(Section* section): _section(section), _groups(section) {
-      _inputs.reserve(section->inputs().size());
+    ConstnessAnalysis(Section* section):
+        _section(section),
+        _groups(section),
+        _inputs(section->inputs().size(), ALWAYS) {
+      
       for (Input* input : section->inputs()) {
-        if (input->flags().has(InputFlags::AssumeConst)) {
-          _inputs[input->index()] = ALWAYS;
-        } else {
+        if (!input->flags().has(InputFlags::AssumeConst)) {
           _inputs[input->index()] = _next_group++;
         }
       }

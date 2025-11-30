@@ -206,6 +206,7 @@ namespace metajit {
       inst->write(std::cerr);
       std::cerr << std::endl;
       assert(false && "Unknown instruction");
+      return nullptr;
     }
 
     llvm::Value* is_const(Value* value) {
@@ -284,6 +285,7 @@ namespace metajit {
         return res;
       } else if (dynmatch(PhiInst, phi, inst)) {
         assert(false);
+        return nullptr;
       } else {
         llvm::Value* all_const = llvm::ConstantInt::getTrue(_context);
         for (Value* arg : inst->args()) {
