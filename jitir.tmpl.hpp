@@ -140,7 +140,7 @@ namespace metajit {
     }
   };
 
-    class InputFlags final: public BaseFlags<InputFlags> {
+  class InputFlags final: public BaseFlags<InputFlags> {
   public:
     enum : uint32_t {
       None = 0,
@@ -996,6 +996,41 @@ namespace metajit {
 
     // Folding
 
+  private:
+    template <class Fn>
+    Value* fold_into_const_select(Value* value_a,
+                                  Const* const_b,
+                                  Type type,
+                                  const Fn& const_prop) {
+      
+      // For a binary operator # and constants a, b and c:
+      //   (cond ? a : b) # c => (cond ? (a # c) : (b # c))
+      // where both (a # c) and (b # c) are constant folded.
+      
+      if (dynmatch(SelectInst, const_select, value_a)) {
+        dynmatch(Const, true_const, const_select->arg(1));
+        dynmatch(Const, false_const, const_select->arg(2));
+
+        if (true_const && false_const) {
+          uint64_t true_prop = const_prop(true_const, const_b);
+          uint64_t false_prop = const_prop(false_const, const_b);
+
+          if (true_prop == false_prop) {
+            return build_const(type, true_prop);
+          } else {
+            return fold_select(
+              const_select->cond(),
+              build_const(type, true_prop),
+              build_const(type, false_prop)
+            );
+          }
+        }
+      }
+      return nullptr;
+    }
+  
+  public:
+
     Value* fold_add(Value* a, Value* b) {
       if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
@@ -1101,7 +1136,20 @@ namespace metajit {
       }
       return build_or(a, b);
     }
+  
+  private:
+    XorInst* is_not(Value* value) {
+      if (dynmatch(XorInst, xor_inst, value)) {
+        if (dynmatch(Const, const_arg, xor_inst->arg(1))) {
+          if (const_arg->value() == type_mask(value->type())) {
+            return xor_inst;
+          }
+        }
+      }
+      return nullptr;
+    }
 
+  public:
     Value* fold_xor(Value* a, Value* b) {
       if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
@@ -1110,6 +1158,11 @@ namespace metajit {
       if (dynmatch(Const, constant, b)) {
         if (constant->value() == 0) {
           return a;
+        } else if (constant->value() == type_mask(a->type())) {
+          // (a ^ -1) ^ -1 => a
+          if (XorInst* not_a = is_not(a)) {
+            return not_a->arg(0);
+          }
         }
       }
       return build_xor(a, b);
@@ -1121,7 +1174,19 @@ namespace metajit {
       }
 
       if (a == b) {
+        // (a == a) => 1
         return build_const(Type::Bool, 1);
+      }
+
+      if (dynmatch(Const, const_b, b)) {
+        // (cond ? a : b) == c => (cond ? (a == c) : (b == c))
+        Value* res = fold_into_const_select(a, const_b, Type::Bool, [](Const* a, Const* b){
+          return a->value() == b->value() ? 1 : 0;
+        });
+
+        if (res) {
+          return res;
+        }
       }
 
       return build_eq(a, b);
@@ -1145,6 +1210,27 @@ namespace metajit {
       } else if (true_value == false_value) {
         return true_value;
       }
+
+      if (XorInst* not_cond = is_not(cond)) {
+        // (cond ^ -1 ? a : b) => (cond ? b : a)
+        cond = not_cond->arg(0);
+        std::swap(true_value, false_value);
+      }
+
+      if (true_value->type() == Type::Bool) {
+        dynmatch(Const, true_const, true_value);
+        dynmatch(Const, false_const, false_value);
+        if (true_const && false_const) {
+          if (true_const->value() == 1 && false_const->value() == 0) {
+            // (cond ? 1 : 0) => cond
+            return cond;
+          } else if (true_const->value() == 0 && false_const->value() == 1) {
+            // (cond ? 0 : 1) => !cond
+            return fold_xor(cond, build_const(Type::Bool, 1));
+          }
+        }
+      }
+
 
       return build_select(cond, true_value, false_value);
     }
@@ -1361,6 +1447,14 @@ namespace metajit {
       return Builder::fold_mul(a, b);
     }
 
+    Value* build_mod_s(Value* a, Value* b) {
+      return Builder::fold_mod_s(a, b);
+    }
+
+    Value* build_mod_u(Value* a, Value* b) {
+      return Builder::fold_mod_u(a, b);
+    }
+
     Value* build_select(Value* cond, Value* true_value, Value* false_value) {
       return Builder::fold_select(cond, true_value, false_value);
     }
@@ -1379,6 +1473,34 @@ namespace metajit {
 
     Value* build_add_ptr(Value* ptr, Value* offset) {
       return Builder::fold_add_ptr(ptr, offset);
+    }
+
+    Value* build_eq(Value* a, Value* b) {
+      return Builder::fold_eq(a, b);
+    }
+
+    Value* build_lt_s(Value* a, Value* b) {
+      return Builder::fold_lt_s(a, b);
+    }
+
+    Value* build_lt_u(Value* a, Value* b) {
+      return Builder::fold_lt_u(a, b);
+    }
+
+    Value* build_resize_u(Value* a, Type type) {
+      return Builder::fold_resize_u(a, type);
+    }
+
+    Value* build_shl(Value* a, Value* b) {
+      return Builder::fold_shl(a, b);
+    }
+
+    Value* build_shr_u(Value* a, Value* b) {
+      return Builder::fold_shr_u(a, b);
+    }
+
+    Value* build_shr_s(Value* a, Value* b) {
+      return Builder::fold_shr_s(a, b);
     }
 
     // We override load/store to do simple load/store forwarding
@@ -1535,7 +1657,10 @@ namespace metajit {
       for (size_t block_id = section->size(); block_id-- > 0; ) {
         Block* block = (*section)[block_id];
         for (Inst* inst : block->rev_range()) {
-          if (inst->has_side_effect() || inst->is_terminator() || used[inst]) {
+          if (used[inst] ||
+              inst->has_side_effect() ||
+              inst->is_terminator() ||
+              dynamic_cast<CommentInst*>(inst)) {
             used[inst] = true;
             for (Value* arg : inst->args()) {
               if (dynmatch(Inst, inst, arg)) {
@@ -1817,6 +1942,16 @@ namespace metajit {
     void use(Value* value, const Bits& used) {
       use(value, used.used);
     }
+
+    void use_all(Value* value) {
+      use(value, Bits::all(value->type()));
+    }
+
+    void use_all_args(Inst* inst) {
+      for (Value* arg : inst->args()) {
+        use_all(arg);
+      }
+    }
   public:
     UsedBits(Section* section): _section(section), _values(section) {
       for (size_t block_id = section->size(); block_id-- > 0; ) {
@@ -1848,11 +1983,31 @@ namespace metajit {
             }
             use(select->arg(1), _values[inst]);
             use(select->arg(2), _values[inst]);
+          } else if (dynamic_cast<AddInst*>(inst) ||
+                     dynamic_cast<SubInst*>(inst) ||
+                     dynamic_cast<MulInst*>(inst)) {
+            uint64_t used = _values[inst].used;
+            for (size_t it = 1; it < 64; it *= 2) {
+              used |= used >> it;
+            }
+            for (Value* arg : inst->args()) {
+              use(arg, used);
+            }
+          } else if (dynamic_cast<ShrUInst*>(inst) ||
+                     dynamic_cast<ShrSInst*>(inst)) {
+            if (dynmatch(Const, const_b, inst->arg(1))) {
+              if (const_b->value() < type_size(inst->type()) * 8) {
+                use(inst->arg(0), (_values[inst].used << const_b->value()) & type_mask(inst->type()));  
+              } else {
+                use(inst->arg(0), 0);
+              }
+              use_all(inst->arg(1));
+            } else {
+              use_all_args(inst);
+            }
           } else {
             if (inst->has_side_effect() || inst->is_terminator() || _values[inst].used != 0) {
-              for (Value* arg : inst->args()) {
-                use(arg, Bits::all(arg->type()));
-              }
+              use_all_args(inst);
             } else {
               for (Value* arg : inst->args()) {
                 use(arg, 0);
@@ -1880,60 +2035,115 @@ namespace metajit {
     }
   };
 
-  class Simplify: public Pass<Simplify> {
+  class Uses {
   public:
-    Simplify(Section* section, size_t max_iters): Pass(section) {
+    struct Use {
+      Inst* inst = nullptr;
+      size_t index = 0;
+
+      Use() {}
+      Use(Inst* _inst, size_t _index):
+        inst(_inst), index(_index) {}
+    };
+  private:
+    Section* _section;
+    InstMap<std::vector<Use>> _uses;
+  public:
+    Uses(Section* section): _section(section), _uses(section) {
+      for (Block* block : *section) {
+        for (Inst* inst : *block) {
+          for (size_t it = 0; it < inst->arg_count(); it++) {
+            if (dynmatch(Inst, arg_inst, inst->arg(it))) {
+              _uses[arg_inst].emplace_back(inst, it);
+            }
+          }
+        }
+      }
+    }
+
+    const std::vector<Use>& at(Inst* inst) const {
+      return _uses.at(inst);
+    }
+  };
+
+  class Simplify: public Pass<Simplify> {
+  private:
+    Section* _section = nullptr;
+
+    template <class Fn>
+    bool substitute(const Fn& fn) {
+      InstMap<Value*> substs(_section);
+      bool changed = false;
+      for (Block* block : *_section) {
+        for (auto inst_it = block->begin(); inst_it != block->end(); ) {
+          Inst* inst = *inst_it;
+
+          for (size_t it = 0; it < inst->arg_count(); it++) {
+            Value* arg = inst->arg(it);
+            if (dynmatch(Inst, inst_arg, arg)) {
+              if (substs[inst_arg]) {
+                inst->set_arg(it, substs[inst_arg]);
+              }
+            }
+          }
+
+          Value* subst = fn(inst);
+          if (subst) {
+            substs[inst] = subst;
+            inst_it = inst_it.erase();
+            remove(inst);
+            changed = true;
+          } else {
+            inst_it++;
+          }
+        }
+      }
+      return changed;
+    }
+  public:
+    Simplify(Section* section, size_t max_iters): Pass(section), _section(section) {
       bool changed = true;
       for (size_t iter = 0; changed && iter < max_iters; iter++) {
         changed = false;
 
         section->autoname();
-
         KnownBits known_bits(section);
-        UsedBits used_bits(section);
 
-        InstMap<Value*> substs(section);
+        changed |= substitute([&](Inst* inst) -> Value* {
+          if (dynmatch(AndInst, and_inst, inst)) {
+            KnownBits::Bits a = known_bits.at(and_inst->arg(0));
+            KnownBits::Bits b = known_bits.at(and_inst->arg(1));
 
-        bool used_known_bits = false;
-        bool used_used_bits = false;
-        for (Block* block : *section) {
-          for (auto inst_it = block->begin(); inst_it != block->end(); ) {
-            Inst* inst = *inst_it;
-
-            for (size_t it = 0; it < inst->arg_count(); it++) {
-              Value* arg = inst->arg(it);
-              if (dynmatch(Inst, inst_arg, arg)) {
-                if (substs[inst_arg]) {
-                  inst->set_arg(it, substs[inst_arg]);
-                }
-              }
+            if (b.is_const() && ((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
+              return and_inst->arg(0);
             }
-
-            if (dynmatch(AndInst, and_inst, inst)) {
-              KnownBits::Bits a = known_bits.at(and_inst->arg(0));
-              KnownBits::Bits b = known_bits.at(and_inst->arg(1));
-              UsedBits::Bits used = used_bits.at(inst);
-
-              if (!used_used_bits && b.is_const() && ((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
-                substs[inst] = and_inst->arg(0);
-                inst_it = inst_it.erase();
-                remove(inst);
-                used_known_bits = true;
-                changed = true;
-                continue;
-              } else if (!used_known_bits && b.is_const() && (used.used & ~b.value) == 0) {
-                substs[inst] = and_inst->arg(0);
-                inst_it = inst_it.erase();
-                remove(inst);
-                used_used_bits = true;
-                changed = true;
-                continue;
-              }
-            }
-
-            inst_it++;
           }
-        }
+          return nullptr;
+        });
+
+        section->autoname();
+        UsedBits used_bits(section);
+        
+        changed |= substitute([&](Inst* inst) -> Value* {
+          if (dynmatch(AndInst, and_inst, inst)) {
+            UsedBits::Bits used = used_bits.at(inst);
+
+            if (dynmatch(Const, b, and_inst->arg(1))) {
+              if ((used.used & ~b->value()) == 0) {
+                return and_inst->arg(0);
+              }
+            }
+          } else if (dynmatch(OrInst, or_inst, inst)) {
+            UsedBits::Bits used = used_bits.at(inst);
+
+            if (dynmatch(Const, b, or_inst->arg(1))) {
+              if ((used.used & b->value()) == 0) {
+                return or_inst->arg(0);
+              }
+            }
+          }
+          return nullptr;
+        });
       }
     }
   };
@@ -1996,37 +2206,6 @@ namespace metajit {
           }
         }
       }
-    }
-  };
-
-  class Uses {
-  public:
-    struct Use {
-      Inst* inst = nullptr;
-      size_t index = 0;
-
-      Use() {}
-      Use(Inst* _inst, size_t _index):
-        inst(_inst), index(_index) {}
-    };
-  private:
-    Section* _section;
-    InstMap<std::vector<Use>> _uses;
-  public:
-    Uses(Section* section): _section(section), _uses(section) {
-      for (Block* block : *section) {
-        for (Inst* inst : *block) {
-          for (size_t it = 0; it < inst->arg_count(); it++) {
-            if (dynmatch(Inst, arg_inst, inst->arg(it))) {
-              _uses[arg_inst].emplace_back(inst, it);
-            }
-          }
-        }
-      }
-    }
-
-    const std::vector<Use>& at(Inst* inst) const {
-      return _uses.at(inst);
     }
   };
 

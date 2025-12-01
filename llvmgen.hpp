@@ -243,9 +243,21 @@ namespace metajit {
         llvm::Value* true_const = is_const(select->arg(1));
         llvm::Value* false_const = is_const(select->arg(2));
         llvm::Value* cond = emit_arg(select->arg(0));
-        return _builder.CreateAnd(
-          cond_const,
-          _builder.CreateSelect(cond, true_const, false_const) // Short-circuit
+        return _builder.CreateOr(
+          _builder.CreateAnd(
+            cond_const,
+            _builder.CreateSelect(cond, true_const, false_const) // Short-circuit
+          ),
+          _builder.CreateAnd(
+            _builder.CreateAnd(
+              true_const,
+              false_const
+            ),
+            _builder.CreateICmpEQ(
+              emit_arg(select->arg(1)),
+              emit_arg(select->arg(2))
+            )
+          )
         );
       } else if (dynmatch(AndInst, and_inst, inst)) {
         llvm::Value* a_const = is_const(and_inst->arg(0));
@@ -642,6 +654,18 @@ namespace metajit {
       }
     };
 
+    void emit_update_load_const(LoadInst* load) {
+      llvm::Value* is_const_load = _builder.CreateCall(_llvm_api.is_const_inst, {emit_built_arg(load)});
+      is_const_load = _builder.CreateTrunc(is_const_load, llvm::Type::getInt1Ty(_context));
+      if (load->flags().has(LoadFlags::Pure)) {
+        is_const_load = _builder.CreateOr(
+          is_const_load,
+          is_const(load->arg(0))
+        );
+      }
+      _builder.CreateStore(is_const_load, _is_const.at(load));
+    }
+
     void emit_build_inst(Inst* inst) {
       if (_comments &&
           !dynamic_cast<CommentInst*>(inst) &&
@@ -733,8 +757,7 @@ namespace metajit {
                     _builder.CreateStore(built, _built.at(inst));
 
                     if (dynmatch(LoadInst, load, inst)) {
-                      llvm::Value* is_const_inst = _builder.CreateCall(_llvm_api.is_const_inst, {emit_built_arg(inst)});
-                      _builder.CreateStore(_builder.CreateTrunc(is_const_inst, llvm::Type::getInt1Ty(_context)), _is_const.at(inst));
+                      emit_update_load_const(load);
                     }
                   }
                 },
@@ -747,8 +770,7 @@ namespace metajit {
               _builder.CreateStore(built, _built.at(inst));
 
               if (dynmatch(LoadInst, load, inst)) {
-                llvm::Value* is_const_inst = _builder.CreateCall(_llvm_api.is_const_inst, {emit_built_arg(inst)});
-                _builder.CreateStore(_builder.CreateTrunc(is_const_inst, llvm::Type::getInt1Ty(_context)), _is_const.at(inst));
+                emit_update_load_const(load);
               }
             }
           }
