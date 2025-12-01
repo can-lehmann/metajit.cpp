@@ -1082,7 +1082,6 @@ namespace metajit {
       autoname();
       regalloc();
       peephole();
-      save("x86codegen.bin");
     }
 
     struct Label {
