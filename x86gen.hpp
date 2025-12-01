@@ -17,6 +17,10 @@
 #include <variant>
 #include <fstream>
 
+#include <stdlib.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include "jitir.hpp"
 
 namespace metajit {
@@ -1266,6 +1270,31 @@ namespace metajit {
       for (X86Block* block : _blocks) {
         block->write(stream);
       }
+    }
+
+    void* deploy() {
+      std::vector<uint8_t> bytes;
+      emit(bytes);
+
+      void* buffer = mmap(
+        nullptr,
+        bytes.size(),
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0
+      );
+      assert(buffer != nullptr);
+
+      memcpy(buffer, bytes.data(), bytes.size());
+
+      if (mprotect(buffer, bytes.size(), PROT_READ | PROT_EXEC) == -1) {
+        std::cerr << "Failed to set memory protection: ";
+        std::cerr << strerrorname_np(errno) << " " << strerror(errno) << std::endl;
+        exit(1);
+      }
+
+      return buffer;
     }
   };
 }
