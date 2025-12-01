@@ -466,7 +466,8 @@ namespace metajit {
         return reg;
       } else if (dynmatch(Input, input, value)) {
         return _input_vregs[input->index()];
-      } else if (dynmatch(Inst, inst, value)) {
+      } else if (value->is_inst()) {
+        Inst* inst = (Inst*) value;
         if (_vregs.at(inst).is_invalid()) {
           _vregs[inst] = vreg();
         }
@@ -543,7 +544,8 @@ namespace metajit {
         _builder.mov64(vreg(inst), vreg(select->arg(2)));
 
         Reg a = vreg(select->arg(1)); // Ensure that cmp/test appear directly before cmov
-        if (dynmatch(Inst, pred_inst, select->arg(0))) {
+        if (select->arg(0)->is_inst()) {
+          Inst* pred_inst = (Inst*) select->arg(0);
           if (dynamic_cast<EqInst*>(pred_inst) ||
               dynamic_cast<LtSInst*>(pred_inst) ||
               dynamic_cast<LtUInst*>(pred_inst)) {
@@ -729,7 +731,8 @@ namespace metajit {
           assert(false);
         }
       } else if (dynmatch(BranchInst, branch, inst)) {
-        if (dynmatch(Inst, pred_inst, branch->arg(0))) {
+        if (branch->arg(0)->is_inst()) {
+          Inst* pred_inst = (Inst*) branch->arg(0);
           if (dynamic_cast<EqInst*>(pred_inst) ||
               dynamic_cast<LtSInst*>(pred_inst) ||
               dynamic_cast<LtUInst*>(pred_inst)) {

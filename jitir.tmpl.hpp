@@ -252,6 +252,8 @@ namespace metajit {
 
     virtual bool equals(const Value* other) const = 0;
     virtual size_t hash() const = 0;
+
+    virtual bool is_inst() const { return false; }
   };
 
   class Const final: public Value {
@@ -570,6 +572,8 @@ namespace metajit {
     bool has_side_effect() const;
     bool is_terminator() const;
     std::vector<Block*> successor_blocks() const;
+
+    bool is_inst() const override { return true; }
   };
 
   struct InfoWriter {
@@ -915,7 +919,7 @@ namespace metajit {
               return true;
             }
 
-            if (dynamic_cast<const Inst*>(arg) &&
+            if (arg->is_inst() &&
                 defined.find(arg) == defined.end()) {
               errors << "Instruction ";
               inst->write_arg(errors);
@@ -1663,8 +1667,8 @@ namespace metajit {
               dynamic_cast<CommentInst*>(inst)) {
             used[inst] = true;
             for (Value* arg : inst->args()) {
-              if (dynmatch(Inst, inst, arg)) {
-                used[inst] = true;
+              if (arg->is_inst()) {
+                used[(Inst*) arg] = true;
               }
             }
           }
@@ -1884,8 +1888,8 @@ namespace metajit {
         );
       } else if (dynmatch(Input, input, value)) {
         return Bits(input->type(), 0, 0);
-      } else if (dynmatch(Inst, inst, value)) {
-        return _values.at(inst);
+      } else if (value->is_inst()) {
+        return _values.at((Inst*) value);
       } else {
         assert(false); // Unreachable
         return Bits();
@@ -1930,7 +1934,8 @@ namespace metajit {
     InstMap<Bits> _values;
 
     void use(Value* value, uint64_t used) {
-      if (dynmatch(Inst, inst, value)) {
+      if (value->is_inst()) {
+        Inst* inst = (Inst*) value;
         if (_values[inst].type != value->type()) {
           assert(_values[inst].type == Type::Void);
           _values[inst] = Bits(value->type(), 0);
@@ -2019,8 +2024,8 @@ namespace metajit {
     }
 
     Bits at(Value* value) const {
-      if (dynmatch(Inst, inst, value)) {
-        return _values.at(inst);
+      if (value->is_inst()) {
+        return _values.at((Inst*) value);
       } else {
         assert(false); // Unreachable
         return Bits();
@@ -2053,8 +2058,9 @@ namespace metajit {
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           for (size_t it = 0; it < inst->arg_count(); it++) {
-            if (dynmatch(Inst, arg_inst, inst->arg(it))) {
-              _uses[arg_inst].emplace_back(inst, it);
+            Value* arg = inst->arg(it);
+            if (arg->is_inst()) {
+              _uses[(Inst*) arg].emplace_back(inst, it);
             }
           }
         }
@@ -2080,9 +2086,9 @@ namespace metajit {
 
           for (size_t it = 0; it < inst->arg_count(); it++) {
             Value* arg = inst->arg(it);
-            if (dynmatch(Inst, inst_arg, arg)) {
-              if (substs[inst_arg]) {
-                inst->set_arg(it, substs[inst_arg]);
+            if (arg->is_inst()) {
+              if (substs[(Inst*) arg]) {
+                inst->set_arg(it, substs[(Inst*) arg]);
               }
             }
           }
@@ -2281,8 +2287,8 @@ namespace metajit {
         return ALWAYS;
       } else if (dynmatch(Input, input, value)) {
         return _inputs[input->index()];
-      } else if (dynmatch(Inst, inst, value)) {
-        return _groups.at(inst);
+      } else if (value->is_inst()) {
+        return _groups.at((Inst*) value);
       } else {
         assert(false); // Unreachable
         return 0;
@@ -2346,8 +2352,8 @@ namespace metajit {
           }
 
           for (Value* arg : inst->args()) {
-            if (dynmatch(Inst, arg_inst, arg)) {
-              used_by(arg_inst, inst);
+            if (arg->is_inst()) {
+              used_by((Inst*) arg, inst);
             }
           }
         }
