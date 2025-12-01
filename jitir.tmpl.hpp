@@ -1365,12 +1365,17 @@ namespace metajit {
   public:
     ExpandingVector() {}
 
+    size_t real_size() const { return _data.size(); }
+
     T& operator[](size_t index) {
       if (index >= _data.size()) {
         _data.resize(index + 1);
       }
       return _data[index];
     }
+
+    auto begin() { return _data.begin(); }
+    auto end() { return _data.end(); }
   };
 
   class TraceBuilder: public Builder {
@@ -1705,30 +1710,50 @@ namespace metajit {
     }
   public:
     DeadStoreElim(Section* section): Pass(section) {
+      InstMap<bool> unused(section);
+      ExpandingVector<StoreInst*> last_exact_store;
+
       for (Block* block : *section) {
-        std::set<Inst*> unused;
         std::map<Pointer, StoreInst*> last_store;
 
         for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst)) {
             Pointer pointer(store->ptr(), store->offset());
-            last_store[pointer] = store;
-            unused.insert(inst);
+            if (store->aliasing() < 0) {
+              last_exact_store[-store->aliasing()] = store;
+            } else {
+              last_store[pointer] = store;
+            }
+            unused[inst] = true;
           } else if (dynmatch(LoadInst, load, inst)) {
-            for (const auto& [pointer, store] : last_store) {
-              if (could_alias(load, store)) {
-                unused.erase(store);
+            if (load->aliasing() < 0) {
+              StoreInst* store = last_exact_store[-load->aliasing()];
+              if (store) {
+                unused[store] = false;
+              }
+            } else {
+              for (const auto& [pointer, store] : last_store) {
+                if (could_alias(load, store)) {
+                  unused[store] = false;
+                }
               }
             }
           }
         }
 
         for (const auto& [pointer, store] : last_store) {
-          unused.erase(store);
+          unused[store] = false;
+        }
+
+        for (StoreInst*& store : last_exact_store) {
+          if (store) {
+            unused[store] = false;
+            store = nullptr; // Clear for next block
+          }
         }
 
         block->filter_inplace([&](Inst* inst) {
-          return unused.find(inst) == unused.end();
+          return !unused[inst];
         });
       }
     }
