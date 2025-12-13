@@ -171,6 +171,14 @@ jitir = IR(
                 "is_int_or_bool(type)"
             ]
         ),
+        Inst("ResizeS",
+            args = [Arg("a"), Arg("type", Type("Type"))],
+            type = "type",
+            type_checks = [
+                "is_int_or_bool(a->type())",
+                "is_int_or_bool(type)"
+            ]
+        ),
         Inst("Load",
             args = [
                 Arg("ptr", getter=Getter.Always),
@@ -206,6 +214,8 @@ jitir = IR(
         binop("Add"),
         binop("Sub"),
         binop("Mul"),
+        binop("DivS"),
+        binop("DivU"),
         binop("ModS"),
         binop("ModU"),
         binop("And", type_checks = ["is_int_or_bool(a->type())"]),

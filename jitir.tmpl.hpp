@@ -724,9 +724,17 @@ namespace metajit {
         } else {
           stream << ", ";
         }
-        _blocks[it]->write_arg(stream);
+        if (_blocks[it]) {
+          _blocks[it]->write_arg(stream);
+        } else {
+          stream << "<NULL>";
+        }
         stream << " -> ";
-        arg(it)->write_arg(stream);
+        if (arg(it)) {
+          arg(it)->write_arg(stream);
+        } else {
+          stream << "<NULL>";
+        }
       }
     }
 
@@ -1087,6 +1095,14 @@ namespace metajit {
       return build_mul(a, b);
     }
 
+    Value* fold_div_s(Value* a, Value* b) {
+      return build_div_s(a, b);
+    }
+
+    Value* fold_div_u(Value* a, Value* b) {
+      return build_div_u(a, b);
+    }
+
     Value* fold_mod_s(Value* a, Value* b) {
       return build_mod_s(a, b);
     }
@@ -1312,6 +1328,13 @@ namespace metajit {
       return build_resize_u(a, type);
     }
 
+    Value* fold_resize_s(Value* a, Type type) {
+      if (a->type() == type) {
+        return a;
+      }
+      return build_resize_s(a, type);
+    }
+
     Value* fold_shl(Value* a, Value* b) {
       if (dynmatch(Const, const_b, b)) {
         if (dynmatch(Const, const_a, a)) {
@@ -1346,6 +1369,36 @@ namespace metajit {
         }
       }
       return build_shr_s(a, b);
+    }
+
+    Value* fold_jump(Block* block) {
+      return build_jump(block);
+    }
+
+    Value* fold_branch(Value* cond, Block* true_block, Block* false_block) {
+      return build_branch(cond, true_block, false_block);
+    }
+
+    Value* fold_load(Value* ptr, Type type, LoadFlags flags, AliasingGroup aliasing, uint64_t offset) {
+      if (dynmatch(AddPtrInst, add_ptr, ptr)) {
+        if (dynmatch(Const, const_offset, add_ptr->offset())) {
+          ptr = add_ptr->ptr();
+          offset += const_offset->value();
+        }
+      }
+
+      return build_load(ptr, type, flags, aliasing, offset);
+    }
+
+    Value* fold_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
+      if (dynmatch(AddPtrInst, add_ptr, ptr)) {
+        if (dynmatch(Const, const_offset, add_ptr->offset())) {
+          ptr = add_ptr->ptr();
+          offset += const_offset->value();
+        }
+      }
+
+      return build_store(ptr, value, aliasing, offset);
     }
   };
 

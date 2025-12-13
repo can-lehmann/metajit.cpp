@@ -22,6 +22,7 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/GetElementPtrTypeIterator.h"
 
 #include "jitir.hpp"
 
@@ -29,6 +30,7 @@ namespace metajit {
   class LowerLLVM {
   private:
     llvm::Function* _function = nullptr;
+    const llvm::DataLayout& _data_layout;
     Section* _section = nullptr;
     Builder _builder;
 
@@ -56,7 +58,7 @@ namespace metajit {
       }
     }
 
-    Value* lower_arg(llvm::Value* value) {
+    Value* lower_operand(llvm::Value* value) {
       if (llvm::ConstantInt* constant_int = llvm::dyn_cast<llvm::ConstantInt>(value)) {
         Type type = lower_type(constant_int->getType());
         return _builder.build_const(type, constant_int->getZExtValue());
@@ -66,15 +68,22 @@ namespace metajit {
         value->print(llvm::errs());
         llvm::errs() << "\n";
         
-        assert(false && "Unable to lower argument");
+        assert(false && "Unable to lower operand");
         return nullptr;
       }
     }
 
     Value* lower_inst(llvm::Instruction* inst) {
+      #define fail_lowering(message) {\
+        inst->print(llvm::errs()); \
+        llvm::errs() << "\n"; \
+        assert(false && message); \
+        return nullptr; \
+      }
+      
       if (llvm::ICmpInst* icmp = llvm::dyn_cast<llvm::ICmpInst>(inst)) {
-        Value* a = lower_arg(icmp->getOperand(0));
-        Value* b = lower_arg(icmp->getOperand(1));
+        Value* a = lower_operand(icmp->getOperand(0));
+        Value* b = lower_operand(icmp->getOperand(1));
 
         switch (icmp->getPredicate()) {
           case llvm::ICmpInst::ICMP_EQ: return _builder.fold_eq(a, b);
@@ -87,36 +96,105 @@ namespace metajit {
           case llvm::ICmpInst::ICMP_SGE: return _builder.fold_ge_s(a, b);
           case llvm::ICmpInst::ICMP_SLT: return _builder.fold_lt_s(a, b);
           case llvm::ICmpInst::ICMP_SLE: return _builder.fold_le_s(a, b);
-          default:
-            assert(false && "Unknown icmp predicate");
-            return nullptr;
+          default: fail_lowering("Unknown ICmp predicate");
         }
-      } else if (llvm::LoadInst* load = llvm::dyn_cast<llvm::LoadInst>(inst)) {
-        Value* ptr = lower_arg(load->getPointerOperand());
-        Type type = lower_type(load->getType());
-        return _builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), 0);
-      } else if (llvm::StoreInst* store = llvm::dyn_cast<llvm::StoreInst>(inst)) {
-        Value* ptr = lower_arg(store->getPointerOperand());
-        Value* value = lower_arg(store->getValueOperand());
-        return _builder.build_store(ptr, value, AliasingGroup(0), 0);
-      } else {
-        inst->print(llvm::errs());
-        llvm::errs() << "\n";
+      } else if (llvm::BinaryOperator* binop = llvm::dyn_cast<llvm::BinaryOperator>(inst)) {
+        Value* a = lower_operand(binop->getOperand(0));
+        Value* b = lower_operand(binop->getOperand(1));
 
-        assert(false && "Unable to lower instruction");
+        switch (binop->getOpcode()) {
+          case llvm::Instruction::Add: return _builder.fold_add(a, b);
+          case llvm::Instruction::Sub: return _builder.fold_sub(a, b);
+          case llvm::Instruction::Mul: return _builder.fold_mul(a, b);
+          case llvm::Instruction::UDiv: return _builder.fold_div_u(a, b);
+          case llvm::Instruction::SDiv: return _builder.fold_div_s(a, b);
+          case llvm::Instruction::URem: return _builder.fold_mod_u(a, b);
+          case llvm::Instruction::SRem: return _builder.fold_mod_s(a, b);
+          case llvm::Instruction::Shl: return _builder.fold_shl(a, b);
+          case llvm::Instruction::AShr: return _builder.fold_shr_s(a, b);
+          case llvm::Instruction::LShr: return _builder.fold_shr_u(a, b);
+          case llvm::Instruction::And: return _builder.fold_and(a, b);
+          case llvm::Instruction::Or: return _builder.fold_or(a, b);
+          case llvm::Instruction::Xor: return _builder.fold_xor(a, b);
+          default: fail_lowering("Unknown binary operator");
+        }
+      } else if (llvm::CastInst* cast = llvm::dyn_cast<llvm::CastInst>(inst)) {
+        Value* a = lower_operand(cast->getOperand(0));
+        Type type = lower_type(cast->getType());
+        
+        switch (cast->getOpcode()) {
+          case llvm::Instruction::ZExt: return _builder.fold_resize_u(a, type);
+          case llvm::Instruction::Trunc: return _builder.fold_resize_u(a, type);
+          case llvm::Instruction::SExt: return _builder.fold_resize_s(a, type);
+          default: fail_lowering("Unknown cast instruction");
+        }
+      } else if (llvm::SelectInst* select = llvm::dyn_cast<llvm::SelectInst>(inst)) {
+        Value* cond = lower_operand(select->getCondition());
+        Value* true_value = lower_operand(select->getTrueValue());
+        Value* false_value = lower_operand(select->getFalseValue());
+        return _builder.fold_select(cond, true_value, false_value);
+      } else if (llvm::LoadInst* load = llvm::dyn_cast<llvm::LoadInst>(inst)) {
+        Value* ptr = lower_operand(load->getPointerOperand());
+        Type type = lower_type(load->getType());
+        return _builder.fold_load(ptr, type, LoadFlags::None, AliasingGroup(0), 0);
+      } else if (llvm::StoreInst* store = llvm::dyn_cast<llvm::StoreInst>(inst)) {
+        Value* ptr = lower_operand(store->getPointerOperand());
+        Value* value = lower_operand(store->getValueOperand());
+        return _builder.fold_store(ptr, value, AliasingGroup(0), 0);
+      } else if (llvm::GetElementPtrInst* gep = llvm::dyn_cast<llvm::GetElementPtrInst>(inst)) {
+        Value* ptr = lower_operand(gep->getPointerOperand());
+        assert(ptr->type() == Type::Ptr);
+        for (auto it = llvm::gep_type_begin(gep), end = llvm::gep_type_end(gep); it != end; ++it) {
+          Value* index = _builder.fold_resize_u(lower_operand(it.getOperand()), Type::Int64);
+          uint64_t stride = it.getSequentialElementStride(_data_layout).getFixedValue();
+          if (stride != 1) {
+            index = _builder.fold_mul(index, _builder.build_const(Type::Int64, stride));
+          }
+          ptr = _builder.fold_add_ptr(ptr, index);
+        }
+        return ptr;
+      } else if (llvm::PHINode* phi = llvm::dyn_cast<llvm::PHINode>(inst)) {
+        PhiInst* phi_inst = _builder.build_phi(
+          lower_type(phi->getType()),
+          phi->getNumIncomingValues()
+        );
+        for (unsigned int it = 0; it < phi->getNumIncomingValues(); it++) {
+          Value* value = lower_operand(phi->getIncomingValue(it));
+          Block* from = _blocks.at(phi->getIncomingBlock(it));
+          phi_inst->set_incoming(it, value, from);
+        }
+        return phi_inst;
+      } else if (llvm::BranchInst* branch = llvm::dyn_cast<llvm::BranchInst>(inst)) {
+        if (branch->isUnconditional()) {
+          _builder.fold_jump(_blocks.at(branch->getSuccessor(0)));
+        } else {
+          Value* cond = lower_operand(branch->getCondition());
+          _builder.fold_branch(
+            cond,
+            _blocks.at(branch->getSuccessor(0)),
+            _blocks.at(branch->getSuccessor(1))
+          );
+        }
         return nullptr;
+      } else if (llvm::ReturnInst* ret = llvm::dyn_cast<llvm::ReturnInst>(inst)) {
+        return _builder.build_exit();
+      } else {
+        fail_lowering("Unable to lower instruction");
       }
     }
   public:
     LowerLLVM(llvm::Function* function, Section* section):
-        _function(function), _section(section), _builder(section) {
+        _function(function),
+        _data_layout(function->getParent()->getDataLayout()),
+        _section(section),
+        _builder(section) {
       
-      for (llvm::BasicBlock& block : *function) {
-        _blocks[&block] = _builder.build_block();
-      }
-
       for (llvm::Argument& arg : function->args()) {
         _values[&arg] = _builder.build_input(lower_type(arg.getType()));
+      }
+
+      for (llvm::BasicBlock& block : *function) {
+        _blocks[&block] = _builder.build_block();
       }
 
       for (llvm::BasicBlock& block : *function) {
