@@ -1172,6 +1172,10 @@ namespace metajit {
       return build_xor(a, b);
     }
 
+    Value* fold_not(Value* a) {
+      return fold_xor(a, build_const(a->type(), type_mask(a->type())));
+    }
+
     Value* fold_eq(Value* a, Value* b) {
       if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
@@ -1196,12 +1200,40 @@ namespace metajit {
       return build_eq(a, b);
     }
 
+    Value* fold_ne(Value* a, Value* b) {
+      return fold_not(fold_eq(a, b));
+    }
+
     Value* fold_lt_s(Value* a, Value* b) {
       return build_lt_s(a, b);
     }
 
     Value* fold_lt_u(Value* a, Value* b) {
       return build_lt_u(a, b);
+    }
+
+    Value* fold_gt_s(Value* a, Value* b) {
+      return fold_lt_s(b, a);
+    }
+
+    Value* fold_gt_u(Value* a, Value* b) {
+      return fold_lt_u(b, a);
+    }
+
+    Value* fold_le_s(Value* a, Value* b) {
+      return fold_not(fold_gt_s(a, b));
+    }
+
+    Value* fold_le_u(Value* a, Value* b) {
+      return fold_not(fold_gt_u(a, b));
+    }
+
+    Value* fold_ge_s(Value* a, Value* b) {
+      return fold_le_s(b, a);
+    }
+
+    Value* fold_ge_u(Value* a, Value* b) {
+      return fold_le_u(b, a);
     }
 
     Value* fold_select(Value* cond, Value* true_value, Value* false_value) {
@@ -1636,25 +1668,17 @@ namespace metajit {
   template <class Self>
   class Pass {
   private:
-    std::set<Inst*> _removed;
   public:
     Pass(Section* section) {
       section->autoname();
     }
 
     ~Pass() {
-      for (Inst* inst : _removed) {
-        delete inst;
-      }
     }
 
     template <class... Args>
     static void run(Section* section, Args... args) {
       Self self(section, args...);
-    }
-
-    void remove(Inst* inst) {
-      //_removed.insert(inst);
     }
   };
 
@@ -2122,7 +2146,6 @@ namespace metajit {
           if (subst) {
             substs[inst] = subst;
             inst_it = inst_it.erase();
-            remove(inst);
             changed = true;
           } else {
             inst_it++;
@@ -2233,7 +2256,6 @@ namespace metajit {
           } else {
             substs[inst] = canon.at(lookup);
             inst_it = inst_it.erase();
-            remove(inst);
           }
         }
       }
