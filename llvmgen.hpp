@@ -134,6 +134,11 @@ namespace metajit {
           emit_arg(resize_u->arg(0)),
           emit_type(resize_u->type())
         );
+      } else if (dynmatch(ResizeSInst, resize_s, inst)) {
+        return _builder.CreateSExtOrTrunc(
+          emit_arg(resize_s->arg(0)),
+          emit_type(resize_s->type())
+        );
       } else if (dynmatch(LoadInst, load, inst)) {
         return _builder.CreateLoad(
           emit_type(load->type()),
@@ -163,6 +168,8 @@ namespace metajit {
       binop(Add, Add)
       binop(Sub, Sub)
       binop(Mul, Mul)
+      binop(DivS, SDiv)
+      binop(DivU, UDiv)
       binop(ModS, SRem)
       binop(ModU, URem)
       binop(And, And)
