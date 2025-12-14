@@ -123,6 +123,8 @@ namespace metajit {
     llvm::Value* emit_inst(Inst* inst) {
       if (dynmatch(FreezeInst, freeze, inst)) {
         return emit_arg(freeze->arg(0));
+      } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
+        return emit_arg(assume_const->arg(0));
       } else if (dynmatch(SelectInst, select, inst)) {
         return _builder.CreateSelect(
           emit_arg(select->arg(0)),
@@ -220,11 +222,7 @@ namespace metajit {
       if (dynmatch(Const, constant, value)) {
         return llvm::ConstantInt::getTrue(_context);
       } else if (dynmatch(Input, input, value)) {
-        if (input->flags().has(InputFlags::AssumeConst)) {
-          return llvm::ConstantInt::getTrue(_context);
-        } else {
-          return llvm::ConstantInt::getFalse(_context);
-        }
+        return llvm::ConstantInt::getFalse(_context);
       } else if (dynmatch(Inst, inst, value)) {
         return _builder.CreateLoad(
           llvm::Type::getInt1Ty(_context),
@@ -238,6 +236,8 @@ namespace metajit {
 
     llvm::Value* emit_const_prop(Inst* inst) {
       if (dynamic_cast<FreezeInst*>(inst)) {
+        return llvm::ConstantInt::getTrue(_context);
+      } else if (dynamic_cast<AssumeConstInst*>(inst)) {
         return llvm::ConstantInt::getTrue(_context);
       } else if (dynmatch(LoadInst, load, inst)) {
         if (load->flags().has(LoadFlags::Pure)) {
@@ -651,10 +651,6 @@ namespace metajit {
 
         #undef push_action
 
-        if (_groups.size() > 0) {
-          save_dot("action_queue.dot");
-        }
-
         for (ActionGroup* group : _groups) {
           assert(group->executed.has_value());
         }
@@ -849,10 +845,13 @@ namespace metajit {
         });
 
         std::vector<ActionGroup*> const_deps;
-        const_deps.push_back(emit_group);
-        for (Value* arg : inst->args()) {
-          if (const_groups.find(arg) != const_groups.end()) {
-            const_deps.push_back(const_groups.at(arg));
+        if (!dynamic_cast<FreezeInst*>(inst) &&
+            !dynamic_cast<AssumeConstInst*>(inst)) {
+          const_deps.push_back(emit_group);
+          for (Value* arg : inst->args()) {
+            if (const_groups.find(arg) != const_groups.end()) {
+              const_deps.push_back(const_groups.at(arg));
+            }
           }
         }
 
@@ -894,9 +893,7 @@ namespace metajit {
         } else {
           for (Uses::Use use : _uses.at(inst)) {
             if (always_used.find(use.inst) == always_used.end()) {
-              always_used[use.inst] = true; // Used outside of current block
-            } else if (always_used.at(use.inst) && !dynamic_cast<SelectInst*>(use.inst)) {
-              always_used[inst] = true;
+              always_used[inst] = true; // Used outside of current block or in terminator
             }
           }
         }
@@ -951,6 +948,10 @@ namespace metajit {
 
       _builder.SetInsertPoint(_blocks.at(block));
       queue.run();
+
+      if (block->name() == 0) {
+        queue.save_dot("action_queue.dot");
+      }
 
       Inst* inst = block->terminator();
       assert(inst);

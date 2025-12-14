@@ -155,6 +155,11 @@ jitir = IR(
             type = "a->type()",
             type_checks = []
         ),
+        Inst("AssumeConst",
+            args = [Arg("a")],
+            type = "a->type()",
+            type_checks = []
+        ),
         Inst("Select",
             args = [Arg("cond", getter=Getter.Always), Arg("a"), Arg("b")],
             type = "a->type()",

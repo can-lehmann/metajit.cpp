@@ -73,6 +73,28 @@ namespace metajit {
       }
     }
 
+    Value* lower_intrinsic(llvm::StringRef name, std::vector<Value*> args, Type return_type) {
+      if (name.starts_with("__metajit_freeze")) {
+        assert(args.size() == 1);
+        return _builder.build_freeze(args[0]);
+      } else if (name.starts_with("__metajit_assume_const")) {
+        assert(args.size() == 1);
+        return _builder.build_assume_const(args[0]);
+      } else if (name.starts_with("__metajit_load_pure")) {
+        assert(args.size() == 1);
+        return _builder.build_load(
+          args[0],
+          return_type,
+          LoadFlags::Pure,
+          AliasingGroup(0),
+          0
+        );
+      } else {
+        assert(false && "Unknown intrinsic");
+        return nullptr;
+      }
+    }
+
     Value* lower_inst(llvm::Instruction* inst) {
       #define fail_lowering(message) {\
         inst->print(llvm::errs()); \
@@ -178,9 +200,23 @@ namespace metajit {
         return nullptr;
       } else if (llvm::ReturnInst* ret = llvm::dyn_cast<llvm::ReturnInst>(inst)) {
         return _builder.build_exit();
+      } else if (llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(inst)) {
+        if (call->getCalledFunction() && call->getCalledFunction()->getName().starts_with("__metajit")) {
+          llvm::StringRef name = call->getCalledFunction()->getName();
+          std::vector<Value*> args;
+          for (llvm::Value* arg : call->args()) {
+            args.push_back(lower_operand(arg));
+          }
+          Type return_type = lower_type(call->getType());
+          return lower_intrinsic(name, args, return_type);
+        } else {
+          fail_lowering("Unable to lower call instruction");
+        }
       } else {
         fail_lowering("Unable to lower instruction");
       }
+
+      #undef fail_lowering
     }
   public:
     LowerLLVM(llvm::Function* function, Section* section):

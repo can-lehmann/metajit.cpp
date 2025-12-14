@@ -140,46 +140,6 @@ namespace metajit {
     }
   };
 
-  class InputFlags final: public BaseFlags<InputFlags> {
-  public:
-    enum : uint32_t {
-      None = 0,
-      AssumeConst = 1 << 0
-    };
-
-    using BaseFlags<InputFlags>::BaseFlags;
-
-    void write(std::ostream& stream) const {
-      stream << "{";
-      bool is_first = true;
-      #define write_flag(name) \
-        if (_flags & name) { \
-          if (!is_first) { stream << ", "; } \
-          is_first = false; \
-          stream << #name; \
-        }
-      
-      write_flag(AssumeConst)
-
-      #undef write_flag
-      stream << "}";
-    }
-  };
-}
-
-template <>
-struct std::hash<metajit::InputFlags> {
-  size_t operator()(const metajit::InputFlags& flags) const {
-    return std::hash<uint32_t>()((uint32_t) flags);
-  }
-};
-
-std::ostream& operator<<(std::ostream& stream, metajit::InputFlags flags) {
-  flags.write(stream);
-  return stream;
-}
-
-namespace metajit {
   enum class Type {
     Void, Bool, Int8, Int16, Int32, Int64, Ptr
   };
@@ -285,13 +245,11 @@ namespace metajit {
   class Input final: public Value {
   private:
     size_t _index = 0;
-    InputFlags _flags;
   public:
-    Input(Type type, size_t index, InputFlags flags):
-      Value(type), _index(index), _flags(flags) {}
+    Input(Type type, size_t index):
+      Value(type), _index(index) {}
 
     size_t index() const { return _index; }
-    InputFlags flags() const { return _flags; }
 
     void write_arg(std::ostream& stream) const override {
       stream << "%input" << _index;
@@ -850,9 +808,9 @@ namespace metajit {
 
     size_t name_count() const { return _name_count; }
 
-    Input* add_input(Type type, InputFlags flags = InputFlags()) {
+    Input* add_input(Type type) {
       Input* input = (Input*) _allocator.alloc(sizeof(Input), alignof(Input));
-      new (input) Input(type, _inputs.size(), flags);
+      new (input) Input(type, _inputs.size());
       _inputs.push_back(input);
       return input;
     }
@@ -885,7 +843,6 @@ namespace metajit {
         }
         stream << input->type() << " ";
         input->write_arg(stream);
-        stream << " " << input->flags();
       }
       stream << ") {\n";
       for (Block* block : _blocks) {
@@ -985,8 +942,8 @@ namespace metajit {
 
     ${builder}
 
-    Input* build_input(Type type, InputFlags flags = InputFlags()) {
-      return _section->add_input(type, flags);
+    Input* build_input(Type type) {
+      return _section->add_input(type);
     }
 
     ShlInst* build_shl(Value* a, size_t shift) {
@@ -1570,6 +1527,17 @@ namespace metajit {
     }
 
     Value* build_eq(Value* a, Value* b) {
+      if (!a || !b) {
+        std::cerr << "Warning: building eq with null operand\n";
+        if (!a) {
+          std::cerr << "  a: null\n";
+        }
+        if (!b) {
+          std::cerr << "  b: null\n";
+        }
+        section()->write(std::cerr);
+        std::cerr << std::endl << std::flush;
+      }
       return Builder::fold_eq(a, b);
     }
 
@@ -2330,14 +2298,14 @@ namespace metajit {
         _inputs(section->inputs().size(), ALWAYS) {
       
       for (Input* input : section->inputs()) {
-        if (!input->flags().has(InputFlags::AssumeConst)) {
-          _inputs[input->index()] = _next_group++;
-        }
+        _inputs[input->index()] = _next_group++;
       }
 
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(FreezeInst, freeze, inst)) {
+            _groups[inst] = ALWAYS;
+          } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
             _groups[inst] = ALWAYS;
           } else if (dynmatch(LoadInst, load, inst)) {
             if (load->flags().has(LoadFlags::Pure)) {
