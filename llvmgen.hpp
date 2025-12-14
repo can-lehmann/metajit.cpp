@@ -329,7 +329,9 @@ namespace metajit {
         for (Uses::Use use : _uses.at(inst)) {
           llvm::Value* use_used = is_used(use.inst);
           
-          if (is_int_or_bool(use.inst->type())) {
+          if (is_int_or_bool(use.inst->type()) &&
+              // Freeze is always constant, but needs this instruction to perform the check
+              !dynamic_cast<FreezeInst*>(use.inst)) {
             use_used = _builder.CreateAnd(
               use_used,
               _builder.CreateNot(is_const(use.inst))
@@ -669,6 +671,8 @@ namespace metajit {
       _builder.CreateStore(is_const_load, _is_const.at(load));
     }
 
+    
+
     void emit_build_inst(Inst* inst) {
       if (_comments &&
           !dynamic_cast<CommentInst*>(inst) &&
@@ -725,6 +729,28 @@ namespace metajit {
               },
               "freeze_"
             );
+            return;
+          } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
+            if (is_int_or_bool(assume_const->type())) {
+              llvm::Value* built_const = _builder.CreateCall(
+                _llvm_api.build_const_fast,
+                {
+                  _jitir_builder,
+                  llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
+                  _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
+                }
+              );
+
+              _builder.CreateStore(
+                built_const,
+                _built.at(inst)
+              );
+            } else {
+              _builder.CreateStore(
+                emit_built_arg(assume_const->arg(0)),
+                _built.at(inst)
+              );
+            }
             return;
           }
 

@@ -2401,6 +2401,12 @@ namespace metajit {
           _can_trace_const[inst] = true;
         }
       }
+
+      if (dynamic_cast<FreezeInst*>(by) ||
+          (dynamic_cast<AssumeConstInst*>(by) && !is_int_or_bool(inst->type()))) {
+        _can_trace_inst[inst] = true;
+        _can_trace_const[inst] = true;
+      }
     }
   public:
     TraceCapabilities(Section* section, ConstnessAnalysis& constness):
@@ -2414,7 +2420,8 @@ namespace metajit {
         for (Inst* inst : block->rev_range()) {
           if (inst->has_side_effect() ||
               inst->is_terminator() ||
-              dynamic_cast<FreezeInst*>(inst)) {
+              dynamic_cast<FreezeInst*>(inst) ||
+              dynamic_cast<AssumeConstInst*>(inst)) {
             _can_trace_inst[inst] = true;
             _can_trace_const[inst] = true;
           }
