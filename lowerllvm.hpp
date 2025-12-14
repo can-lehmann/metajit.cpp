@@ -73,22 +73,27 @@ namespace metajit {
       }
     }
 
-    Value* lower_intrinsic(llvm::StringRef name, std::vector<Value*> args, Type return_type) {
+    Value* lower_intrinsic(llvm::StringRef name, std::vector<llvm::Value*> args, Type return_type) {
       if (name.starts_with("__metajit_freeze")) {
         assert(args.size() == 1);
-        return _builder.build_freeze(args[0]);
+        return _builder.build_freeze(lower_operand(args[0]));
       } else if (name.starts_with("__metajit_assume_const")) {
         assert(args.size() == 1);
-        return _builder.build_assume_const(args[0]);
+        return _builder.build_assume_const(lower_operand(args[0]));
       } else if (name.starts_with("__metajit_load_pure")) {
         assert(args.size() == 1);
         return _builder.build_load(
-          args[0],
+          lower_operand(args[0]),
           return_type,
           LoadFlags::Pure,
           AliasingGroup(0),
           0
         );
+      } else if (name.starts_with("__metajit_comment")) {
+        llvm::GlobalVariable* global_var = llvm::cast<llvm::GlobalVariable>(args[0]);
+        llvm::ConstantDataArray* constant_data_array = llvm::dyn_cast<llvm::ConstantDataArray>(global_var->getInitializer());
+        std::string text = constant_data_array->getAsCString().str();
+        return _builder.build_comment(text);
       } else {
         assert(false && "Unknown intrinsic");
         return nullptr;
@@ -203,10 +208,8 @@ namespace metajit {
       } else if (llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(inst)) {
         if (call->getCalledFunction() && call->getCalledFunction()->getName().starts_with("__metajit")) {
           llvm::StringRef name = call->getCalledFunction()->getName();
-          std::vector<Value*> args;
-          for (llvm::Value* arg : call->args()) {
-            args.push_back(lower_operand(arg));
-          }
+          std::vector<llvm::Value*> args;
+          args.insert(args.end(), call->arg_begin(), call->arg_end());
           Type return_type = lower_type(call->getType());
           return lower_intrinsic(name, args, return_type);
         } else {

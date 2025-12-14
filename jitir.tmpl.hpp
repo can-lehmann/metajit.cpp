@@ -281,6 +281,13 @@ namespace metajit {
       new (constant) Const(type, value & type_mask(type));
       return constant;
     }
+
+    const char* alloc_string(const std::string& string) {
+      char* data = (char*) _const_allocator.alloc(string.size() + 1, alignof(char));
+      std::copy(string.data(), string.data() + string.size(), data);
+      data[string.size()] = '\0';
+      return data;
+    }
   };
 
   class Block;
@@ -961,6 +968,10 @@ namespace metajit {
       new (phi) PhiInst(type, incoming_count);
       insert(phi);
       return phi;
+    }
+
+    CommentInst* build_comment(const std::string& text) {
+      return build_comment(_section->context().alloc_string(text));
     }
 
     // Folding
