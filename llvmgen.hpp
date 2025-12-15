@@ -306,6 +306,12 @@ namespace metajit {
         assert(false);
         return nullptr;
       } else {
+        if (inst->has_side_effect() ||
+            inst->is_terminator() ||
+            dynamic_cast<CommentInst*>(inst)) {
+          return llvm::ConstantInt::getFalse(_context);
+        }
+
         llvm::Value* all_const = llvm::ConstantInt::getTrue(_context);
         for (Value* arg : inst->args()) {
           all_const = _builder.CreateAnd(all_const, is_const(arg));
@@ -914,7 +920,7 @@ namespace metajit {
         }
 
         always_used[inst] = false;
-        if (inst->has_side_effect()) {
+        if (inst->has_side_effect() || dynamic_cast<CommentInst*>(inst)) {
           always_used[inst] = true;
         } else {
           for (Uses::Use use : _uses.at(inst)) {

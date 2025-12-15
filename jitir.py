@@ -61,7 +61,11 @@ class BuildBuildInstPlugin:
             code += f"    args.insert(args.begin(), jitir_builder);\n"
             for arg in inst.args:
                 if not arg.type.is_value():
-                    code += f"    args.push_back(llvm::ConstantInt::get({self.type_substitutions[arg.type]}, (uint64_t)i->{arg.name}(), false));\n"
+                    llvm_type = self.type_substitutions[arg.type]
+                    if "PointerType" in llvm_type:
+                        code += f"    args.push_back(builder.CreateIntToPtr(llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), (uint64_t)i->{arg.name}(), false), {llvm_type}));\n"
+                    else:
+                        code += f"    args.push_back(llvm::ConstantInt::get({llvm_type}, (uint64_t)i->{arg.name}(), false));\n"
             code += f"    assert(args.size() == {len(inst.args) + 1});\n"
             code += f"    return builder.CreateCall(api.{inst.format_builder_name(ir)}, args);\n"
             code += f"  }}\n"
@@ -188,9 +192,9 @@ jitir = IR(
             args = [
                 Arg("ptr", getter=Getter.Always),
                 Arg("type", Type("Type")),
-                Arg("flags", Type("LoadFlags")),
-                Arg("aliasing", Type("AliasingGroup")),
-                Arg("offset", Type("uint64_t"))
+                Arg("flags", Type("LoadFlags"), setter=True),
+                Arg("aliasing", Type("AliasingGroup"), setter=True),
+                Arg("offset", Type("uint64_t"), setter=True)
             ],
             type = "type",
             type_checks = ["ptr->type() == Type::Ptr"]
@@ -199,8 +203,8 @@ jitir = IR(
             args = [
                 Arg("ptr", getter=Getter.Always),
                 Arg("value", getter=Getter.Always),
-                Arg("aliasing", Type("AliasingGroup")),
-                Arg("offset", Type("uint64_t"))
+                Arg("aliasing", Type("AliasingGroup"), setter=True),
+                Arg("offset", Type("uint64_t"), setter=True)
             ],
             type = "Type::Void",
             type_checks = ["ptr->type() == Type::Ptr"]
@@ -235,14 +239,14 @@ jitir = IR(
         Inst("Branch",
             args = [
                 Arg("cond", getter=Getter.Always),
-                Arg("true_block", type=Type("Block*")),
-                Arg("false_block", type=Type("Block*"))
+                Arg("true_block", type=Type("Block*"), setter=True),
+                Arg("false_block", type=Type("Block*"), setter=True)
             ],
             type = "Type::Void",
             type_checks = ["cond->type() == Type::Bool"]
         ),
         Inst("Jump",
-            args = [Arg("block", type=Type("Block*"))],
+            args = [Arg("block", type=Type("Block*"), setter=True)],
             type = "Type::Void",
             type_checks = []
         ),
@@ -252,7 +256,7 @@ jitir = IR(
             type_checks = []
         ),
         Inst("Comment",
-            args = [Arg("text", Type("const char*"))],
+            args = [Arg("text", Type("const char*"), setter=True)],
             type = "Type::Void",
             type_checks = []
         ),
@@ -267,12 +271,13 @@ lwir(
         InstPlugin([
             InstTrailingConstructorPlugin(),
             InstGetterPlugin(),
+            InstSetterPlugin(),
             InstWritePlugin(
                 custom={
                     Type("Block*"): lambda value, stream: f"{value}->write_arg({stream});",
                 },
                 overrides={
-                    "Comment": lambda stream: "stream << \"; \"; stream << _text;"
+                    "Comment": lambda stream: "stream << \"; \" << _text;"
                 }
             ),
             InstEqualsPlugin(),

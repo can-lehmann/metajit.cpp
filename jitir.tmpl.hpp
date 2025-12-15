@@ -2276,7 +2276,10 @@ namespace metajit {
             }
           }
 
-          if (inst->has_side_effect() || inst->is_terminator()) {
+          if (inst->has_side_effect() ||
+              inst->is_terminator() ||
+              dynamic_cast<LoadInst*>(inst) ||
+              dynamic_cast<CommentInst*>(inst)) {
             inst_it++;
             continue;
           }
@@ -2432,7 +2435,8 @@ namespace metajit {
           if (inst->has_side_effect() ||
               inst->is_terminator() ||
               dynamic_cast<FreezeInst*>(inst) ||
-              dynamic_cast<AssumeConstInst*>(inst)) {
+              dynamic_cast<AssumeConstInst*>(inst) ||
+              dynamic_cast<CommentInst*>(inst)) {
             _can_trace_inst[inst] = true;
             _can_trace_const[inst] = true;
           }
