@@ -91,12 +91,28 @@ imm_binop_x86_inst(And64Imm, and64_imm, imm_usedef, true, { reg = Reg::phys(4); 
 imm_binop_x86_inst(Or64Imm, or64_imm, imm_usedef, true, { reg = Reg::phys(1); rex_w(); byte(0x81); modrm(); imm_n(4); })
 imm_binop_x86_inst(Xor64Imm, xor64_imm, imm_usedef, true, { reg = Reg::phys(6); rex_w(); byte(0x81); modrm(); imm_n(4); })
 
-binop_x86_inst(Shl64, shl64, binop_usedef, true, { reg = Reg::phys(4); rex_w(); byte(0xd3); modrm(); })
-binop_x86_inst(Shr64, shr64, binop_usedef, true, { reg = Reg::phys(5); rex_w(); byte(0xd3); modrm(); })
-binop_x86_inst(Sar64, sar64, binop_usedef, true, { reg = Reg::phys(7); rex_w(); byte(0xd3); modrm(); })
+rev_binop_x86_inst(Shl64, shl64, binop_usedef, true, { reg = Reg::phys(4); rex_w(); byte(0xd3); modrm(); })
+
+rev_binop_x86_inst(Shr8, shr8, binop_usedef, true, { reg = Reg::phys(5); rex(); byte(0xd2); modrm(); })
+rev_binop_x86_inst(Shr16, shr16, binop_usedef, true, { reg = Reg::phys(5); byte(0x66); rex_opt(); byte(0xd3); modrm(); })
+rev_binop_x86_inst(Shr32, shr32, binop_usedef, true, { reg = Reg::phys(5); rex_opt(); byte(0xd3); modrm(); })
+rev_binop_x86_inst(Shr64, shr64, binop_usedef, true, { reg = Reg::phys(5); rex_w(); byte(0xd3); modrm(); })
+
+rev_binop_x86_inst(Sar8, sar8, binop_usedef, true, { reg = Reg::phys(7); rex(); byte(0xd2); modrm(); })
+rev_binop_x86_inst(Sar16, sar16, binop_usedef, true, { reg = Reg::phys(7); byte(0x66); rex_opt(); byte(0xd3); modrm(); })
+rev_binop_x86_inst(Sar32, sar32, binop_usedef, true, { reg = Reg::phys(7); rex_opt(); byte(0xd3); modrm(); })
+rev_binop_x86_inst(Sar64, sar64, binop_usedef, true, { reg = Reg::phys(7); rex_w(); byte(0xd3); modrm(); })
 
 imm_binop_x86_inst(Shl64Imm, shl64_imm, imm_usedef, true, { reg = Reg::phys(4); rex_w(); byte(0xc1); modrm(); imm_n(1); })
+
+imm_binop_x86_inst(Shr8Imm, shr8_imm, imm_usedef, true, { reg = Reg::phys(5); rex(); byte(0xc0); modrm(); imm_n(1); })
+imm_binop_x86_inst(Shr16Imm, shr16_imm, imm_usedef, true, { reg = Reg::phys(5); byte(0x66); rex_opt(); byte(0xc1); modrm(); imm_n(1); })
+imm_binop_x86_inst(Shr32Imm, shr32_imm, imm_usedef, true, { reg = Reg::phys(5); rex_opt(); byte(0xc1); modrm(); imm_n(1); })
 imm_binop_x86_inst(Shr64Imm, shr64_imm, imm_usedef, true, { reg = Reg::phys(5); rex_w(); byte(0xc1); modrm(); imm_n(1); })
+
+imm_binop_x86_inst(Sar8Imm, sar8_imm, imm_usedef, true, { reg = Reg::phys(7); rex(); byte(0xc0); modrm(); imm_n(1); })
+imm_binop_x86_inst(Sar16Imm, sar16_imm, imm_usedef, true, { reg = Reg::phys(7); byte(0x66); rex_opt(); byte(0xc1); modrm(); imm_n(1); })
+imm_binop_x86_inst(Sar32Imm, sar32_imm, imm_usedef, true, { reg = Reg::phys(7); rex_opt(); byte(0xc1); modrm(); imm_n(1); })
 imm_binop_x86_inst(Sar64Imm, sar64_imm, imm_usedef, true, { reg = Reg::phys(7); rex_w(); byte(0xc1); modrm(); imm_n(1); })
 
 rev_binop_x86_inst(Cmp8, cmp8, cmp_usedef, false, { rex(); byte(0x38); modrm(); })

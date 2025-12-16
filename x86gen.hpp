@@ -721,20 +721,44 @@ namespace metajit {
         _builder.mov64(vreg(inst), vreg(shr_u->arg(0)));
 
         if (dynmatch(Const, constant_b, shr_u->arg(1))) {
-          _builder.shr64_imm(vreg(inst), constant_b->value());
+          switch (type_size(shr_u->arg(0)->type())) {
+            case 1: _builder.shr8_imm(vreg(inst), constant_b->value()); break;
+            case 2: _builder.shr16_imm(vreg(inst), constant_b->value()); break;
+            case 4: _builder.shr32_imm(vreg(inst), constant_b->value()); break;
+            case 8: _builder.shr64_imm(vreg(inst), constant_b->value()); break;
+            default: assert(false && "Unsupported type");
+          }
           return;
         }
 
-        _builder.shr64(vreg(inst), vreg(shr_u->arg(1)));
+        switch (type_size(shr_u->arg(0)->type())) {
+          case 1: _builder.shr8(vreg(inst), vreg(shr_u->arg(1))); break;
+          case 2: _builder.shr16(vreg(inst), vreg(shr_u->arg(1))); break;
+          case 4: _builder.shr32(vreg(inst), vreg(shr_u->arg(1))); break;
+          case 8: _builder.shr64(vreg(inst), vreg(shr_u->arg(1))); break;
+          default: assert(false && "Unsupported type");
+        }
       } else if (dynmatch(ShrSInst, shr_s, inst)) {
         _builder.mov64(vreg(inst), vreg(shr_s->arg(0)));
 
         if (dynmatch(Const, constant_b, shr_s->arg(1))) {
-          _builder.sar64_imm(vreg(inst), constant_b->value());
+          switch (type_size(shr_s->arg(0)->type())) {
+            case 1: _builder.sar8_imm(vreg(inst), constant_b->value()); break;
+            case 2: _builder.sar16_imm(vreg(inst), constant_b->value()); break;
+            case 4: _builder.sar32_imm(vreg(inst), constant_b->value()); break;
+            case 8: _builder.sar64_imm(vreg(inst), constant_b->value()); break;
+            default: assert(false && "Unsupported type");
+          }
           return;
         }
 
-        _builder.sar64(vreg(inst), vreg(shr_s->arg(1)));
+        switch (type_size(shr_s->arg(0)->type())) {
+          case 1: _builder.sar8(vreg(inst), vreg(shr_s->arg(1))); break;
+          case 2: _builder.sar16(vreg(inst), vreg(shr_s->arg(1))); break;
+          case 4: _builder.sar32(vreg(inst), vreg(shr_s->arg(1))); break;
+          case 8: _builder.sar64(vreg(inst), vreg(shr_s->arg(1))); break;
+          default: assert(false && "Unsupported type");
+        }
       } else if (dynamic_cast<EqInst*>(inst) ||
                  dynamic_cast<LtSInst*>(inst) ||
                  dynamic_cast<LtUInst*>(inst)) {
@@ -1064,6 +1088,24 @@ namespace metajit {
               inst->set_rm(perm.to(std::get<Reg>(inst->rm())));
               _builder.move_before(inst->next());
               perm.reset();
+              continue;
+            } else if (inst->kind() == X86Inst::Kind::Shl64 ||
+                       inst->kind() == X86Inst::Kind::Shr8 ||
+                       inst->kind() == X86Inst::Kind::Shr16 ||
+                       inst->kind() == X86Inst::Kind::Shr32 ||
+                       inst->kind() == X86Inst::Kind::Shr64 ||
+                       inst->kind() == X86Inst::Kind::Sar8 ||
+                       inst->kind() == X86Inst::Kind::Sar16 ||
+                       inst->kind() == X86Inst::Kind::Sar32 ||
+                       inst->kind() == X86Inst::Kind::Sar64) {
+              
+              ++it;
+              RegPermutation perm(_builder);
+              _builder.move_before(inst);
+              perm.xchg(Reg::phys(1), inst->reg()); // RCX
+              inst->set_rm(perm.to(std::get<Reg>(inst->rm())));
+              _builder.move_before(inst->next());
+              perm.xchg(Reg::phys(1), inst->reg()); // RCX
               continue;
             }
 

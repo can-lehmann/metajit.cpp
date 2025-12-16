@@ -63,6 +63,10 @@ namespace metajit {
         return value;
       }
 
+      Value* gen_const(Builder& builder) const {
+        return builder.build_const(_type, gen());
+      }
+
       void write(std::ostream& stream) const {
         stream << _type << " in [" << _min << "; " << _max << "]";
       }

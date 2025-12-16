@@ -27,6 +27,9 @@ int main() {
   #define binop_type(name, type) \
     DiffTest(#name "_" #type, output_path).run([](Builder& builder, TestData& data) { \
       data.output(builder.build_##name(data.input(Type::type), data.input(Type::type))); \
+    }); \
+    DiffTest(#name "_" #type "_imm", output_path).run([](Builder& builder, TestData& data) { \
+      data.output(builder.build_##name(data.input(Type::type), RandomRange(Type::type).gen_const(builder))); \
     });
 
   #define binop(name, supports_bool) \
@@ -38,9 +41,14 @@ int main() {
   
   #define shift_type(name, type) \
     DiffTest(#name "_" #type, output_path).run([](Builder& builder, TestData& data) { \
-      Value* by = data.input(RandomRange(Type::type, 0, type_size(Type::type) * 8)); \
+      Value* by = data.input(RandomRange(Type::type, 0, type_size(Type::type) * 8 - 1)); \
+      data.output(builder.build_##name(data.input(Type::type), by)); \
+    }); \
+    DiffTest(#name "_" #type "_imm", output_path).run([](Builder& builder, TestData& data) { \
+      Value* by = RandomRange(Type::type, 0, type_size(Type::type) * 8 - 1).gen_const(builder); \
       data.output(builder.build_##name(data.input(Type::type), by)); \
     });
+
 
   #define shift(name) \
     shift_type(name, Int8); \
