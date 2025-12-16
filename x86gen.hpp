@@ -374,7 +374,7 @@ namespace metajit {
     #include "x86insts.inc.hpp"
 
     X86Inst* mov64_imm64(Reg dst, X86Inst::Imm imm) {
-      return &build(X86Inst::Kind::Mov64Imm64).set_reg(dst).set_imm(imm);
+      return &build(X86Inst::Kind::Mov64Imm64).set_rm(dst).set_imm(imm);
     }
     
     X86Inst* lea64(Reg dst, X86Inst::Mem src) {

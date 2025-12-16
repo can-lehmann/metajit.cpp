@@ -36,5 +36,30 @@ int main() {
     );
   });
 
+  
+  // TODO: This test depends on the behavior of the register allocator
+  // it would be nice to test the instruction encoding of
+  //   mov64_imm64 r8, 14624083866164270481
+  // directly. Not a priority right now though.
+  DiffTest("mov64_imm64_rexw", output_path).run([](Builder& builder, TestData& data) {
+    Value* a = data.input(Type::Int32);
+    Value* b = data.input(Type::Int32);
+    Value* c = data.input(Type::Int32);
+    Value* d = data.input(Type::Int32);
+    Value* f = data.input(Type::Int64);
+
+    data.output(
+      builder.build_select(
+        builder.build_lt_u(a, b),
+        f,
+        builder.build_select(
+          builder.build_lt_u(c, d),
+          builder.build_const(Type::Int64, 14624083866164270481UL),
+          builder.build_const(Type::Int64, 14624083866164270480UL)
+        )
+      )
+    );
+  });
+
   return 0;
 }

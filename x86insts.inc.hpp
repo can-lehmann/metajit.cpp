@@ -57,7 +57,7 @@ imm_binop_x86_inst(Mov8Imm, mov8_imm, { def(rm); }, true, { reg = Reg::phys(0); 
 imm_binop_x86_inst(Mov16Imm, mov16_imm, { def(rm); }, true, { reg = Reg::phys(0); byte(0x66); rex_opt(); byte(0xc7); modrm(); imm_n(2); })
 imm_binop_x86_inst(Mov32Imm, mov32_imm, { def(rm); }, true, { reg = Reg::phys(0); rex_opt(); byte(0xc7); modrm(); imm_n(4); })
 imm_binop_x86_inst(Mov64Imm, mov64_imm, { def(rm); }, true, { reg = Reg::phys(0); rex_w(); byte(0xc7); modrm(); imm_n(4); })
-x86_inst(Mov64Imm64, mov64_imm64, { def(rm); }, true, { rex_w(); byte(0xb8 + (reg.id() & 0b111)); imm_n(8); })
+x86_inst(Mov64Imm64, mov64_imm64, { def(rm); }, true, { rex_w(); byte(0xb8 + (std::get<Reg>(rm).id() & 0b111)); imm_n(8); })
 
 binop_x86_inst(Xchg64, xchg64, binop_usedef, true, { rex_w(); byte(0x87); modrm(); })
 
