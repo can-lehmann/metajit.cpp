@@ -1796,26 +1796,26 @@ namespace metajit {
     }
   };
 
-  class DeadStoreElim: public Pass<DeadStoreElim> {
-  private:
-    bool could_alias(LoadInst* load, StoreInst* store) {
-      if (load->aliasing() != store->aliasing()) {
-        return false;
-      }
-
-      if (load->aliasing() < 0) {
-        return true; // Exact aliasing
-      }
-
-      if (load->ptr() != store->ptr()) {
-        return true;
-      }
-
-      Interval load_interval(load->offset(), load->type());
-      Interval store_interval(store->offset(), store->value()->type());
-
-      return load_interval.intersects(store_interval);
+  inline bool could_alias(LoadInst* load, StoreInst* store) {
+    if (load->aliasing() != store->aliasing()) {
+      return false;
     }
+
+    if (load->aliasing() < 0) {
+      return true; // Exact aliasing
+    }
+
+    if (load->ptr() != store->ptr()) {
+      return true;
+    }
+
+    Interval load_interval(load->offset(), load->type());
+    Interval store_interval(store->offset(), store->value()->type());
+
+    return load_interval.intersects(store_interval);
+  }
+
+  class DeadStoreElim: public Pass<DeadStoreElim> {
   public:
     DeadStoreElim(Section* section): Pass(section) {
       InstMap<bool> unused(section);
@@ -2301,6 +2301,7 @@ namespace metajit {
       std::unordered_map<Lookup, Const*, LookupHash> consts;
       for (Block* block : *section) {
         std::unordered_map<Lookup, Value*, LookupHash> canon;
+        std::unordered_map<AliasingGroup, std::vector<LoadInst*>> valid_loads;
 
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
@@ -2320,9 +2321,20 @@ namespace metajit {
             }
           }
 
+          if (dynmatch(StoreInst, store, inst)) {
+            std::vector<LoadInst*> remaining_loads;
+            for (LoadInst* load : valid_loads[store->aliasing()]) {
+              if (could_alias(load, store)) {
+                canon.erase(Lookup(load));
+              } else {
+                remaining_loads.push_back(load);
+              }
+            }
+            valid_loads[store->aliasing()] = remaining_loads;
+          }
+
           if (inst->has_side_effect() ||
               inst->is_terminator() ||
-              dynamic_cast<LoadInst*>(inst) ||
               dynamic_cast<CommentInst*>(inst)) {
             inst_it++;
             continue;
@@ -2331,6 +2343,9 @@ namespace metajit {
           Lookup lookup(inst);
           if (canon.find(lookup) == canon.end()) {
             canon[lookup] = inst;
+            if (dynmatch(LoadInst, load, inst)) {
+              valid_loads[load->aliasing()].push_back(load);
+            }
             inst_it++;
           } else {
             substs[inst] = canon.at(lookup);
