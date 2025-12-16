@@ -22,16 +22,19 @@ int main() {
 
   LLVMCodeGen::initilize_llvm_jit();
 
-  #define binop(name, supports_bool) \
-    DiffTest(#name).run([](Builder& builder, TestData& data) { \
-      if (supports_bool) { \
-        data.output(builder.build_##name(data.input(Type::Bool), data.input(Type::Bool))); \
-      } \
-      data.output(builder.build_##name(data.input(Type::Int8), data.input(Type::Int8))); \
-      data.output(builder.build_##name(data.input(Type::Int16), data.input(Type::Int16))); \
-      data.output(builder.build_##name(data.input(Type::Int32), data.input(Type::Int32))); \
-      data.output(builder.build_##name(data.input(Type::Int64), data.input(Type::Int64))); \
+  const std::string output_path = "tests/output/test_insts";
+
+  #define binop_type(name, type) \
+    DiffTest(#name "_" #type, output_path).run([](Builder& builder, TestData& data) { \
+      data.output(builder.build_##name(data.input(Type::type), data.input(Type::type))); \
     });
+
+  #define binop(name, supports_bool) \
+    if (supports_bool) { binop_type(name, Bool); } \
+    binop_type(name, Int8); \
+    binop_type(name, Int16); \
+    binop_type(name, Int32); \
+    binop_type(name, Int64);
   
   binop(add, false)
   binop(sub, false)
