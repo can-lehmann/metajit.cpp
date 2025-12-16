@@ -20,6 +20,33 @@ b0:
 }
 ```
 
+metajit.cpp's LLVM backend generates the following LLVM IR from this JITIR program:
+
+```llvm
+define void @add(ptr %0, ptr %1, ptr %2) {
+entry:
+  br label %block
+
+block:                                            ; preds = %entry
+  %3 = load i32, ptr %0, align 4
+  %4 = load i32, ptr %1, align 4
+  %5 = add i32 %3, %4
+  store i32 %5, ptr %2, align 4
+  ret void
+}
+```
+
+The x86 backend generates the following x86-64 assembly code:
+
+```asm
+b0:
+  mov32 reg=p0 rm=[p12]
+  mov32 reg=p1 rm=[p13]
+  lea64 reg=p0 rm=[p0 + p1 * 1]
+  mov32_mem reg=p0 rm=[p14]
+  ret
+```
+
 ### Aliasing
 
 Aliasing information is encoded using aliasing groups.
