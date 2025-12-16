@@ -24,6 +24,8 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/IRBuilder.h"
 
+#include "llvm/Support/TargetSelect.h"
+
 #include "jitir.hpp"
 #include "jitir_llvmapi.hpp"
 
@@ -1107,6 +1109,11 @@ namespace metajit {
         
         _end_blocks[block] = _builder.GetInsertBlock();
       }
+    }
+
+    static void initilize_llvm_jit() {
+      llvm::InitializeNativeTarget();
+      llvm::InitializeNativeTargetAsmPrinter();
     }
   };
 }
