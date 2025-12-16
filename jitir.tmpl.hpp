@@ -494,6 +494,9 @@ namespace metajit {
     Range<reverse_iterator> rev_range() { return Range<reverse_iterator>(rbegin(), rend()); }
   };
 
+  template<class T>
+  class InstMap;
+
   class Inst: public Value, public LinkedListItem<Inst> {
   private:
     Span<Value*> _args;
@@ -510,6 +513,8 @@ namespace metajit {
       assert(!value || !_args.at(index) || value->type() == _args.at(index)->type());
       _args[index] = value;
     }
+
+    void substitute_args(InstMap<Value*>& substs);
 
     size_t name() const { return _name; }
     void set_name(size_t name) { _name = name; }
@@ -571,6 +576,10 @@ namespace metajit {
 
     size_t name() const { return _name; }
     void set_name(size_t name) { _name = name; }
+
+    void insert_before(Inst* before, Inst* inst) {
+      _insts.insert_before(before, inst);
+    }
 
     void add(Inst* inst) {
       _insts.add(inst);
@@ -919,14 +928,46 @@ namespace metajit {
   private:
     Section* _section = nullptr;
     Block* _block = nullptr;
+    Inst* _before = nullptr;
   public:
     Builder(Section* section): _section(section) {}
 
     Section* section() const { return _section; }
     Block* block() const { return _block; }
+    Inst* before() const { return _before; }
 
-    void move_to_end(Block* block) { _block = block; }
-    void insert(Inst* inst) { _block->add(inst); }
+    void move_to_end(Block* block) {
+      _block = block;
+      _before = nullptr;
+    }
+
+    void move_to_begin(Block* block) {
+      _block = block;
+      _before = block->empty() ? nullptr : *block->begin();
+    }
+
+    void move_prev() {
+      if (_before) {
+        _before = _before->prev();
+      } else {
+        _before = *_block->rbegin();
+      }
+    }
+
+    void move_next() {
+      if (_before) {
+        _before = _before->next();
+      }
+    }
+
+    void move_before(Block* block, Inst* inst) {
+      _block = block;
+      _before = inst;
+    }
+
+    void insert(Inst* inst) {
+      _block->insert_before(_before, inst);
+    }
 
     Block* build_block() {
       Block* block = (Block*) _section->allocator().alloc(
@@ -1697,6 +1738,17 @@ namespace metajit {
     const T& operator[](Inst* inst) const { return at(inst); }
   };
 
+  void Inst::substitute_args(InstMap<Value*>& substs) {
+    for (size_t it = 0; it < _args.size(); it++) {
+      Value* arg = _args.at(it);
+      if (arg->is_inst()) {
+        if (substs[(Inst*) arg]) {
+          set_arg(it, substs[(Inst*) arg]);
+        }
+      }
+    }
+  }
+
   template <class Self>
   class Pass {
   private:
@@ -2164,15 +2216,7 @@ namespace metajit {
       for (Block* block : *_section) {
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
-
-          for (size_t it = 0; it < inst->arg_count(); it++) {
-            Value* arg = inst->arg(it);
-            if (arg->is_inst()) {
-              if (substs[(Inst*) arg]) {
-                inst->set_arg(it, substs[(Inst*) arg]);
-              }
-            }
-          }
+          inst->substitute_args(substs);
 
           Value* subst = fn(inst);
           if (subst) {
