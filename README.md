@@ -1,8 +1,38 @@
 # metajit.cpp
 
-A meta-tracing framework.
+A low-level meta-tracing framework.
+
+## JITIR
+
+```
+section(Ptr %input0, Ptr %input1, Ptr %input2) {
+b0:
+  %0 = Load %input0, type=Int32, flags={}, aliasing=0, offset=0
+  %1 = Load %input1, type=Int32, flags={}, aliasing=0, offset=0
+  %2 = Add %0, %1
+  Store %input2, %2, aliasing=0, offset=0
+  Exit
+}
+```
+
+### Aliasing
+
+Aliasing information is encoded using aliasing groups.
+Memory operations can only alias if they are in the same aliasing group.
+Aliasing groups are represented as integers.
+Negative integers are used to represent exact aliasing (i.e., two operations with the same negative aliasing group always alias).
+Non-negative integers are used to represent potential aliasing (i.e., two operations with the same non-negative aliasing group may alias, but do not have to).
+
+## LLVM Frontend
+
+A subset of LLVM IR can be automatically translated to metajit.cpp's JITIR.
+This allows us to use clang as a frontend for metajit.cpp.
+See https://github.com/can-lehmann/uxnjit for an example of using the LLVM frontend to automatically generate a JIT from a interpreter written in C.
 
 ## Differential Testing
+
+Since we have two backends (LLVM and x86), we can use differential testing to find bugs.
+In differential testing, a JITIR program is compiled with both backends and the behaviour of the generated code is compared by running both programs with random inputs.
 
 ![](doc/fuzzer.svg)
 
