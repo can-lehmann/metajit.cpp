@@ -34,13 +34,56 @@
 
 namespace metajit {
   namespace test {
+    class RandomRange {
+    private:
+      Type _type = Type::Void;
+      uint64_t _min = 0;
+      uint64_t _max = 0;
+    public:
+      RandomRange() {}
+      RandomRange(Type type):
+        _type(type), _min(0), _max(type_mask(type)) {}
+      RandomRange(Type type, uint64_t min, uint64_t max):
+        _type(type), _min(min), _max(max) {}
+      
+      Type type() const { return _type; }
+      uint64_t min() const { return _min; }
+      uint64_t max() const { return _max; }
+
+      uint64_t gen() const {
+        assert(_min <= _max);
+        uint64_t value = 0;
+        for (size_t it = 0; it < sizeof(value); it++) {
+          value |= ((uint64_t)(rand() & 0xff)) << (it * 8);
+        }
+        if (_max != ~(uint64_t) 0 || _min != 0) {
+          assert(_max - _min + 1 != 0);
+          value = _min + (value % (_max - _min + 1));
+        }
+        return value;
+      }
+
+      void write(std::ostream& stream) const {
+        stream << _type << " in [" << _min << "; " << _max << "]";
+      }
+    };
+
     class TestData {
+    public:
+      struct RandomInput {
+        Value* value = nullptr;
+        RandomRange range;
+
+        RandomInput() {}
+        RandomInput(Value* _value, const RandomRange& _range):
+          value(_value), range(_range) {}
+      };
     private:
       Builder& _builder;
       Input* _data;
       size_t _data_size = 0;
       std::vector<size_t> _input_bytes;
-      std::map<size_t, Value*> _inputs;
+      std::map<size_t, RandomInput> _inputs;
       std::map<size_t, Value*> _outputs;
 
       size_t alloc(Type type) {
@@ -58,22 +101,21 @@ namespace metajit {
 
       size_t data_size() const { return _data_size; }
       const std::vector<size_t>& input_bytes() const { return _input_bytes; }
-      const std::map<size_t, Value*>& inputs() const { return _inputs; }
       const std::map<size_t, Value*>& outputs() const { return _outputs; }
 
-      Value* input(Type type) {
-        size_t offset = alloc(type);
-        for (size_t it = 0; it < type_size(type); it++) {
+      Value* input(RandomRange random_range) {
+        size_t offset = alloc(random_range.type());
+        for (size_t it = 0; it < type_size(random_range.type()); it++) {
           _input_bytes.push_back(offset + it);
         }
         Value* value = _builder.build_load(
           _data,
-          type,
+          random_range.type(),
           LoadFlags::None,
           AliasingGroup(0),
           offset
         );
-        _inputs[offset] = value;
+        _inputs[offset] = RandomInput(value, random_range);
         return value;
       }
 
@@ -103,10 +145,19 @@ namespace metajit {
         }
       }
 
-      void write_values(std::ostream& stream,
-                        const std::map<size_t, Value*>& values,
-                        uint8_t* data) {
-        for (auto [offset, value] : values) {
+    public:
+      void write_inputs(std::ostream& stream, uint8_t* data) {
+        for (auto [offset, input] : _inputs) {
+          stream << "  ";
+          input.value->write_arg(stream);
+          stream << " = ";
+          write_value_of_type(stream, input.value->type(), data + offset);
+          stream << "\n";
+        }
+      }
+
+      void write_outputs(std::ostream& stream, uint8_t* data) {
+        for (auto [offset, value] : _outputs) {
           stream << "  ";
           value->write_arg(stream);
           stream << " = ";
@@ -114,13 +165,15 @@ namespace metajit {
           stream << "\n";
         }
       }
-    public:
-      void write_inputs(std::ostream& stream, uint8_t* data) {
-        write_values(stream, _inputs, data);
-      }
 
-      void write_outputs(std::ostream& stream, uint8_t* data) {
-        write_values(stream, _outputs, data);
+      void gen(uint8_t* data) {
+        for (auto [offset, input] : _inputs) {
+          uint64_t value = input.range.gen();
+          // Assume little-endian, which is fine since we are on x86_64
+          for (size_t it = 0; it < type_size(input.value->type()); it++) {
+            data[offset + it] = (uint8_t)((value >> (it * 8)) & 0xFF);
+          }
+        }
       }
     };
 
@@ -168,10 +221,8 @@ namespace metajit {
       uint8_t* x86_data = new uint8_t[data.data_size()]();
 
       for (size_t sample = 0; sample < sample_count; sample++) {
-        for (size_t offset : data.input_bytes()) {
-          llvm_data[offset] = (uint8_t) (rand() % 256);
-          x86_data[offset] = llvm_data[offset];
-        }
+        data.gen(llvm_data);
+        std::copy(llvm_data, llvm_data + data.data_size(), x86_data);
 
         llvm_func(llvm_data);
         x86_func(x86_data);

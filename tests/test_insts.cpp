@@ -36,19 +36,43 @@ int main() {
     binop_type(name, Int32); \
     binop_type(name, Int64);
   
+  #define shift_type(name, type) \
+    DiffTest(#name "_" #type, output_path).run([](Builder& builder, TestData& data) { \
+      Value* by = data.input(RandomRange(Type::type, 0, type_size(Type::type) * 8)); \
+      data.output(builder.build_##name(data.input(Type::type), by)); \
+    });
+
+  #define shift(name) \
+    shift_type(name, Int8); \
+    shift_type(name, Int16); \
+    shift_type(name, Int32); \
+    shift_type(name, Int64);
+
+  #define div_mod_type(name, type) \
+    DiffTest(#name "_" #type, output_path).run([](Builder& builder, TestData& data) { \
+      Value* divisor = data.input(RandomRange(Type::type, 1, type_mask(Type::type))); \
+      data.output(builder.build_##name(data.input(Type::type), divisor)); \
+    });
+
+  #define div_mod(name) \
+    div_mod_type(name, Int8); \
+    div_mod_type(name, Int16); \
+    div_mod_type(name, Int32); \
+    div_mod_type(name, Int64);
+
   binop(add, false)
   binop(sub, false)
   binop(mul, false)
-  //binop(div_u, false)
-  //binop(div_s, false)
-  binop(mod_u, false)
-  //binop(mod_s, false)
+  //div_mod(div_u)
+  //div_mod(div_s)
+  div_mod(mod_u)
+  //div_mod(mod_s)
   binop(and, false)
   binop(or, false)
   binop(xor, false)
-  binop(shr_u, false)
-  binop(shr_s, false)
-  binop(shl, false)
+  shift(shr_u)
+  shift(shr_s)
+  shift(shl)
   binop(eq, false)
   binop(lt_u, false)
   binop(lt_s, false)
