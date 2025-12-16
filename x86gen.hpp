@@ -374,7 +374,7 @@ namespace metajit {
     #include "x86insts.inc.hpp"
 
     X86Inst* mov64_imm64(Reg dst, X86Inst::Imm imm) {
-      return &build(X86Inst::Kind::Mov64Imm).set_reg(dst).set_imm(imm);
+      return &build(X86Inst::Kind::Mov64Imm64).set_reg(dst).set_imm(imm);
     }
     
     X86Inst* lea64(Reg dst, X86Inst::Mem src) {
@@ -537,36 +537,54 @@ namespace metajit {
       }
     }
 
+    void build_cmov(Reg res, Value* cond, Reg then) {
+      if (cond->is_inst()) {
+        Inst* pred_inst = (Inst*) cond;
+        if (dynamic_cast<EqInst*>(pred_inst) ||
+            dynamic_cast<LtSInst*>(pred_inst) ||
+            dynamic_cast<LtUInst*>(pred_inst)) {
+          build_cmp(pred_inst->arg(0), pred_inst->arg(1));
+          if (dynamic_cast<EqInst*>(pred_inst)) {
+            _builder.cmove64(res, then);
+          } else if (dynamic_cast<LtSInst*>(pred_inst)) {
+            _builder.cmovl64(res, then);
+          } else if (dynamic_cast<LtUInst*>(pred_inst)) {
+            _builder.cmovb64(res, then);
+          } else {
+            assert(false);
+          }
+          return;
+        }
+      }
+      
+      _builder.test8_imm(vreg(cond), (uint64_t) 1);
+      _builder.cmovnz64(res, then);
+    }
+
     void isel(Inst* inst) {
       if (dynmatch(FreezeInst, freeze, inst)) {
         _builder.mov64(vreg(inst), vreg(freeze->arg(0)));
       } else if (dynmatch(SelectInst, select, inst)) {
         _builder.mov64(vreg(inst), vreg(select->arg(2)));
-
-        Reg a = vreg(select->arg(1)); // Ensure that cmp/test appear directly before cmov
-        if (select->arg(0)->is_inst()) {
-          Inst* pred_inst = (Inst*) select->arg(0);
-          if (dynamic_cast<EqInst*>(pred_inst) ||
-              dynamic_cast<LtSInst*>(pred_inst) ||
-              dynamic_cast<LtUInst*>(pred_inst)) {
-            build_cmp(pred_inst->arg(0), pred_inst->arg(1));
-            if (dynamic_cast<EqInst*>(pred_inst)) {
-              _builder.cmove64(vreg(inst), a);
-            } else if (dynamic_cast<LtSInst*>(pred_inst)) {
-              _builder.cmovl64(vreg(inst), a);
-            } else if (dynamic_cast<LtUInst*>(pred_inst)) {
-              _builder.cmovb64(vreg(inst), a);
-            } else {
-              assert(false);
-            }
-            return;
-          }
-        }
-        
-        _builder.test8_imm(vreg(select->arg(0)), (uint64_t) 1);
-        _builder.cmovnz64(vreg(inst), a);
+        build_cmov(vreg(inst), select->cond(), vreg(select->arg(1)));
       } else if (dynmatch(ResizeUInst, resize_u, inst)) {
         _builder.mov64(vreg(inst), vreg(resize_u->arg(0)));
+      } else if (dynmatch(ResizeSInst, resize_s, inst)) {
+        if (resize_s->type() == Type::Bool) {
+          _builder.mov64_imm(vreg(inst), (uint64_t) 0);
+          Reg ones = vreg();
+          _builder.mov64_imm(ones, ~(uint64_t) 0);
+          build_cmov(vreg(inst), resize_s->arg(0), ones);
+        } else {
+          switch (type_size(resize_s->arg(0)->type())) {
+            case 1: _builder.movsx8to64(vreg(inst), vreg(resize_s->arg(0))); break;
+            case 2: _builder.movsx16to64(vreg(inst), vreg(resize_s->arg(0))); break;
+            case 4: _builder.movsx32to64(vreg(inst), vreg(resize_s->arg(0))); break;
+            case 8: _builder.mov64(vreg(inst), vreg(resize_s->arg(0))); break;
+            default:
+              assert(false && "Unsupported resize type");
+          }
+        }
       } else if (dynmatch(LoadInst, load, inst)) {
         X86Inst::Mem mem(vreg(load->arg(0)), load->offset());
         switch (type_size(load->type())) {
@@ -1230,6 +1248,11 @@ namespace metajit {
               byte((mem.disp >> 24) & 0xff);
             }
           }
+        } else {
+          inst->write(std::cerr);
+          std::cerr << std::endl;
+
+          assert(false && "Incomplete ModRM");
         }
       };
 

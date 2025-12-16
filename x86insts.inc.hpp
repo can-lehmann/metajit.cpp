@@ -61,6 +61,10 @@ x86_inst(Mov64Imm64, mov64_imm64, { def(rm); }, true, { rex_w(); byte(0xb8 + (re
 
 binop_x86_inst(Xchg64, xchg64, binop_usedef, true, { rex_w(); byte(0x87); modrm(); })
 
+binop_x86_inst(MovSX8To64, movsx8to64, mov_usedef, false, { rex_w(); byte(0x0f); byte(0xbe); modrm(); })
+binop_x86_inst(MovSX16To64, movsx16to64, mov_usedef, false, { rex_w(); byte(0x0f); byte(0xbf); modrm(); })
+binop_x86_inst(MovSX32To64, movsx32to64, mov_usedef, false, { rex_w(); byte(0x63); modrm(); })
+
 x86_inst(Lea64, lea64, { use(rm); def(reg); }, true, { rex_w(); byte(0x8d); modrm(); })
 
 binop_x86_inst(Add64, add64, binop_usedef, true, { rex_w(); byte(0x03); modrm(); })
