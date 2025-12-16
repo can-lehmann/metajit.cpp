@@ -24,6 +24,7 @@
 #include <set>
 #include <map>
 #include <optional>
+#include <cstring>
 
 #define dynmatch(Type, name, value) Type* name = dynamic_cast<Type*>(value)
 

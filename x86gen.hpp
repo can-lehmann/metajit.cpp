@@ -1200,7 +1200,7 @@ namespace metajit {
         } else if (std::holds_alternative<X86Inst::Mem>(rm)) {
           X86Inst::Mem mem = std::get<X86Inst::Mem>(rm);
 
-          if (mem.disp == 0) {
+          if (mem.disp == 0 && (mem.base.id() & 0b111) != 0b101) {
             modrm |= 0b00 << 6;
           } else if (mem.disp >= -128 && mem.disp <= 127) {
             modrm |= 0b01 << 6;
@@ -1236,7 +1236,7 @@ namespace metajit {
             byte(sib);
           }
 
-          if (mem.disp != 0) {
+          if (mem.disp != 0 || (mem.base.id() & 0b111) == 0b101) {
             if (mem.disp >= -128 && mem.disp <= 127) {
               byte(mem.disp & 0xff);
             } else {

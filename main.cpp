@@ -21,18 +21,25 @@
 int main() {
   using namespace metajit;
 
-  Section* section = new Section();
+  Context context;
+  Allocator allocator;
+  Section* section = new Section(context, allocator);
+
   Builder builder(section);
   builder.move_to_end(builder.build_block());
 
-  builder.build_output(
+  Input* a = section->add_input(Type::Ptr);
+  Input* b = section->add_input(Type::Ptr);
+  Input* c = section->add_input(Type::Ptr);
+
+  builder.build_store(
+    c,
     builder.build_add(
-      builder.build_load(
-        builder.build_input(Type::Ptr),
-        Type::Int32
-      ),
-      builder.build_input(Type::Int32)
-    )
+      builder.build_load(a, Type::Int32, LoadFlags::None, AliasingGroup(0), 0),
+      builder.build_load(b, Type::Int32, LoadFlags::None, AliasingGroup(0), 0)
+    ),
+    AliasingGroup(0),
+    0
   );
 
   builder.build_exit();
@@ -43,15 +50,28 @@ int main() {
     llvm::LLVMContext context;
     std::unique_ptr<llvm::Module> module = std::make_unique<llvm::Module>("my_module", context);
 
-    LLVMCodeGen cg(section, module.get(), true);
+    LLVMCodeGen::run(section, module.get(), "add");
 
     module->print(llvm::outs(), nullptr);
   }
 
   {
-    X86CodeGen cg(section);
+    // We use the clang::preserve_none calling convention, so the arguments are
+    // stored in r12, r13, r14
+    X86CodeGen cg(section, { Reg::phys(12), Reg::phys(13), Reg::phys(14) });
+
+    cg.write(std::cout);
+
     cg.save("asm.bin");
 
+    using Fn = void(* [[clang::preserve_none]])(uint32_t*, uint32_t*, uint32_t*);
+    Fn fn = (Fn) cg.deploy();
+
+    uint32_t a = 2;
+    uint32_t b = 3;
+    uint32_t c = 0;
+    fn(&a, &b, &c);
+    std::cout << a << " + " << b << " = " << c << std::endl;
   }
   
   
