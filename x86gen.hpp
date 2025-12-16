@@ -826,7 +826,6 @@ namespace metajit {
 
     bool is_reg_mov(X86Inst* inst) {
       if (inst->kind() == X86Inst::Kind::Mov8 ||
-          inst->kind() == X86Inst::Kind::Mov16 ||
           inst->kind() == X86Inst::Kind::Mov32 ||
           inst->kind() == X86Inst::Kind::Mov64) {
         return std::holds_alternative<Reg>(inst->rm());
@@ -1029,7 +1028,6 @@ namespace metajit {
             it = it.erase();
           } else {
             if (((inst->kind() == X86Inst::Kind::Mov8Imm ||
-                  inst->kind() == X86Inst::Kind::Mov16Imm ||
                   inst->kind() == X86Inst::Kind::Mov32Imm ||
                   inst->kind() == X86Inst::Kind::Mov64Imm) &&
                 std::holds_alternative<Reg>(inst->rm())) ||
