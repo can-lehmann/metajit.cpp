@@ -4,4 +4,5 @@ jitir_llvmapi.hpp
 main
 asm.bin
 tests/test_insts
-tests/output/*
+tests/output
+tests/fuzzer

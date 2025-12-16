@@ -1580,17 +1580,6 @@ namespace metajit {
     }
 
     Value* build_eq(Value* a, Value* b) {
-      if (!a || !b) {
-        std::cerr << "Warning: building eq with null operand\n";
-        if (!a) {
-          std::cerr << "  a: null\n";
-        }
-        if (!b) {
-          std::cerr << "  b: null\n";
-        }
-        section()->write(std::cerr);
-        std::cerr << std::endl << std::flush;
-      }
       return Builder::fold_eq(a, b);
     }
 

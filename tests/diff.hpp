@@ -50,6 +50,10 @@ namespace metajit {
       uint64_t min() const { return _min; }
       uint64_t max() const { return _max; }
 
+      bool is_full() const {
+        return _min == 0 && _max == type_mask(_type);
+      }
+
       uint64_t gen() const {
         assert(_min <= _max);
         uint64_t value = 0;
