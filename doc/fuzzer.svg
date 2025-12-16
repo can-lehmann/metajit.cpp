@@ -1,0 +1,439 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="148.22124mm"
+   height="43.601597mm"
+   viewBox="0 0 148.22124 43.601597"
+   version="1.1"
+   id="svg1"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs1">
+    <marker
+       style="overflow:visible"
+       id="Triangle"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       markerWidth="0.5"
+       markerHeight="0.5"
+       viewBox="0 0 1 1"
+       preserveAspectRatio="xMidYMid"
+       markerUnits="strokeWidth">
+      <path
+         transform="scale(0.5)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 5.77,0 -2.88,5 V -5 Z"
+         id="path135" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="Triangle-2"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       markerWidth="0.5"
+       markerHeight="0.5"
+       viewBox="0 0 1 1"
+       preserveAspectRatio="xMidYMid"
+       markerUnits="strokeWidth">
+      <path
+         transform="scale(0.5)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 5.77,0 -2.88,5 V -5 Z"
+         id="path135-0" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="Triangle-4"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       markerWidth="0.5"
+       markerHeight="0.5"
+       viewBox="0 0 1 1"
+       preserveAspectRatio="xMidYMid"
+       markerUnits="strokeWidth">
+      <path
+         transform="scale(0.5)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 5.77,0 -2.88,5 V -5 Z"
+         id="path135-9" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="Triangle-4-8"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       markerWidth="0.5"
+       markerHeight="0.5"
+       viewBox="0 0 1 1"
+       preserveAspectRatio="xMidYMid"
+       markerUnits="strokeWidth">
+      <path
+         transform="scale(0.5)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 5.77,0 -2.88,5 V -5 Z"
+         id="path135-9-8" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="Triangle-43"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       markerWidth="0.5"
+       markerHeight="0.5"
+       viewBox="0 0 1 1"
+       preserveAspectRatio="xMidYMid"
+       markerUnits="strokeWidth">
+      <path
+         transform="scale(0.5)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 5.77,0 -2.88,5 V -5 Z"
+         id="path135-1" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="Triangle-2-2"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       markerWidth="0.5"
+       markerHeight="0.5"
+       viewBox="0 0 1 1"
+       preserveAspectRatio="xMidYMid"
+       markerUnits="strokeWidth">
+      <path
+         transform="scale(0.5)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 5.77,0 -2.88,5 V -5 Z"
+         id="path135-0-6" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="Triangle-43-9"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       markerWidth="0.5"
+       markerHeight="0.5"
+       viewBox="0 0 1 1"
+       preserveAspectRatio="xMidYMid"
+       markerUnits="strokeWidth">
+      <path
+         transform="scale(0.5)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 5.77,0 -2.88,5 V -5 Z"
+         id="path135-1-4" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="Triangle-43-9-9"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       markerWidth="0.5"
+       markerHeight="0.5"
+       viewBox="0 0 1 1"
+       preserveAspectRatio="xMidYMid"
+       markerUnits="strokeWidth">
+      <path
+         transform="scale(0.5)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 5.77,0 -2.88,5 V -5 Z"
+         id="path135-1-4-0" />
+    </marker>
+  </defs>
+  <g
+     id="layer1"
+     transform="translate(-36.600723,-89.798665)">
+    <rect
+       style="fill:#e9e9e9;fill-opacity:1;stroke:#a8a8a8;stroke-width:0.845526;stroke-linecap:butt;stroke-linejoin:round;stroke-dasharray:3.3821, 0.845526;stroke-dashoffset:0;stroke-opacity:1"
+       id="rect3"
+       width="115.6479"
+       height="52.562084"
+       x="81.286713"
+       y="16.734964"
+       ry="2.426497" />
+    <rect
+       style="fill:#de9800;fill-opacity:1;stroke-width:152.217;stroke-linecap:round;stroke-linejoin:round"
+       id="rect1"
+       width="21.913441"
+       height="9.0636749"
+       x="5.9090624"
+       y="38.484169"
+       ry="2.0651414" />
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#ffffff;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="16.79887"
+       y="45.008324"
+       id="text2"><tspan
+         id="tspan2"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:18.5235"
+         x="16.79887"
+         y="45.008324">uxn.c</tspan></text>
+    <rect
+       style="fill:#de9800;fill-opacity:1;stroke-width:152.217;stroke-linecap:round;stroke-linejoin:round"
+       id="rect1-44"
+       width="21.913441"
+       height="9.0636749"
+       x="36.600727"
+       y="106.18299"
+       ry="2.0651414" />
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#ffffff;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="47.490536"
+       y="112.70715"
+       id="text2-30"><tspan
+         id="tspan2-7"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:18.5235"
+         x="47.490536"
+         y="112.70715">JIT IR</tspan></text>
+    <rect
+       style="fill:#de9800;fill-opacity:1;stroke-width:152.217;stroke-linecap:round;stroke-linejoin:round"
+       id="rect1-44-4"
+       width="21.913441"
+       height="9.0636749"
+       x="84.228493"
+       y="96.485191"
+       ry="2.0651414" />
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#ffffff;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="95.118301"
+       y="103.00936"
+       id="text2-30-9"><tspan
+         id="tspan2-7-5"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:18.5235"
+         x="95.118301"
+         y="103.00936">LLVM</tspan></text>
+    <rect
+       style="fill:#de9800;fill-opacity:1;stroke-width:152.217;stroke-linecap:round;stroke-linejoin:round"
+       id="rect1-44-4-1"
+       width="21.913441"
+       height="9.0636749"
+       x="84.228493"
+       y="115.98553"
+       ry="2.0651414" />
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#ffffff;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="95.118301"
+       y="122.5097"
+       id="text2-30-9-7"><tspan
+         id="tspan2-7-5-2"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:18.5235"
+         x="95.118301"
+         y="122.5097">x86</tspan></text>
+    <rect
+       style="fill:#de9800;fill-opacity:1;stroke-width:152.217;stroke-linecap:round;stroke-linejoin:round"
+       id="rect1-44-4-1-3"
+       width="21.913441"
+       height="9.0636749"
+       x="162.90854"
+       y="106.18299"
+       ry="2.0651414" />
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#ffffff;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="173.79834"
+       y="112.70716"
+       id="text2-30-9-7-6"><tspan
+         id="tspan2-7-5-2-5"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:18.5235"
+         x="173.79834"
+         y="112.70716">Same?</tspan></text>
+    <rect
+       style="fill:#de9800;fill-opacity:1;stroke-width:152.217;stroke-linecap:round;stroke-linejoin:round"
+       id="rect1-44-4-1-1"
+       width="21.913441"
+       height="9.0636749"
+       x="123.08006"
+       y="96.485191"
+       ry="2.0651414" />
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#ffffff;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="133.96988"
+       y="103.00936"
+       id="text2-30-9-7-5"><tspan
+         id="tspan2-7-5-2-9"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:18.5235"
+         x="133.96988"
+         y="103.00936">x86</tspan></text>
+    <rect
+       style="fill:#de9800;fill-opacity:1;stroke-width:178.567;stroke-linecap:round;stroke-linejoin:round"
+       id="rect1-4"
+       width="30.156708"
+       height="9.0636749"
+       x="44.696789"
+       y="38.484169"
+       ry="2.0651414" />
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#ffffff;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="59.687653"
+       y="45.35252"
+       id="text2-3"><tspan
+         id="tspan2-0"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:18.5235"
+         x="59.687653"
+         y="45.35252">LLVM IR</tspan></text>
+    <rect
+       style="fill:#de9800;fill-opacity:1;stroke-width:178.567;stroke-linecap:round;stroke-linejoin:round"
+       id="rect1-4-8"
+       width="30.156708"
+       height="9.0636749"
+       x="91.639503"
+       y="38.484169"
+       ry="2.0651414" />
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#ffffff;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="106.63037"
+       y="45.35252"
+       id="text2-3-4"><tspan
+         id="tspan2-0-3"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:18.5235"
+         x="106.63037"
+         y="45.35252">JIT IR</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#000000;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="141.28093"
+       y="11.098466"
+       id="text2-3-4-8-8"><tspan
+         id="tspan2-0-3-6-7"
+         style="fill:#000000;fill-opacity:1;stroke-width:18.5235"
+         x="141.28093"
+         y="11.098466">metajit.cpp</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#000000;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="35.098106"
+       y="56.527599"
+       id="text2-3-4-8-7"><tspan
+         id="tspan2-0-3-6-0"
+         style="fill:#000000;fill-opacity:1;stroke-width:18.5235"
+         x="35.098106"
+         y="56.527599">Clang</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#000000;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="114.7074"
+       y="94.880424"
+       id="text2-3-4-8-7-6"><tspan
+         id="tspan2-0-3-6-0-1"
+         style="fill:#000000;fill-opacity:1;stroke-width:18.5235"
+         x="114.7074"
+         y="94.880424">ORC</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#000000;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="71.259064"
+       y="94.880424"
+       id="text2-3-4-8-7-6-4"><tspan
+         id="tspan2-0-3-6-0-1-8"
+         style="fill:#000000;fill-opacity:1;stroke-width:18.5235"
+         x="71.259064"
+         y="94.880424">llvmgen</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#000000;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="71.259064"
+       y="131.79549"
+       id="text2-3-4-8-7-6-4-4"><tspan
+         id="tspan2-0-3-6-0-1-8-4"
+         style="fill:#000000;fill-opacity:1;stroke-width:18.5235"
+         x="71.259064"
+         y="131.79549">x86gen</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#000000;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="125.41724"
+       y="131.79549"
+       id="text2-3-4-8-7-6-4-4-3"><tspan
+         id="tspan2-0-3-6-0-1-8-4-1"
+         style="fill:#000000;fill-opacity:1;stroke-width:18.5235"
+         x="125.41724"
+         y="131.79549">Execute</tspan></text>
+    <rect
+       style="fill:#de9800;fill-opacity:1;stroke-width:236.312;stroke-linecap:round;stroke-linejoin:round"
+       id="rect1-4-8-3"
+       width="39.908764"
+       height="11.994679"
+       x="147.51329"
+       y="27.954992"
+       ry="2.7329652" />
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#ffffff;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="167.78172"
+       y="36.288834"
+       id="text2-3-4-4"><tspan
+         id="tspan2-0-3-2"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:18.5235"
+         x="167.78172"
+         y="36.288834">Interpreter</tspan></text>
+    <rect
+       style="fill:#de9800;fill-opacity:1;stroke-width:236.312;stroke-linecap:round;stroke-linejoin:round"
+       id="rect1-4-8-3-6"
+       width="39.908764"
+       height="11.994679"
+       x="147.51054"
+       y="46.036064"
+       ry="2.7329652" />
+    <text
+       xml:space="preserve"
+       style="font-size:6.68654px;line-height:1;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#ffffff;fill-opacity:1;stroke-width:18.5235;stroke-linecap:round;stroke-linejoin:round"
+       x="167.77899"
+       y="54.369904"
+       id="text2-3-4-4-3"><tspan
+         id="tspan2-0-3-2-9"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:18.5235"
+         x="167.77899"
+         y="54.369904">JIT Traces</tspan></text>
+    <path
+       style="fill:#ffffff;fill-opacity:1;stroke:#000000;stroke-width:0.912278;stroke-linecap:butt;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Triangle)"
+       d="M 27.822501,43.016006 H 43.194012"
+       id="path2" />
+    <path
+       style="fill:#ffffff;fill-opacity:1;stroke:#000000;stroke-width:0.912278;stroke-linecap:butt;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Triangle-2)"
+       d="M 74.853506,43.016007 H 90.225009"
+       id="path2-3" />
+    <path
+       style="fill:#ffffff;fill-opacity:1;stroke:#000000;stroke-width:0.912278;stroke-linecap:butt;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Triangle-2-2)"
+       d="m 106.14194,101.01703 h 15.3715"
+       id="path2-3-6" />
+    <path
+       style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:0.912277;stroke-linecap:butt;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Triangle)"
+       d="m 121.79621,43.016006 c 13.56265,0 10.69415,-9.063677 24.09454,-9.063677"
+       id="path3" />
+    <path
+       style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:0.912277;stroke-linecap:butt;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Triangle-4)"
+       d="m 121.79621,43.016007 c 13.56265,0 10.69415,9.270894 24.09454,9.270894"
+       id="path3-2" />
+    <path
+       style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:0.912277;stroke-linecap:butt;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Triangle-43)"
+       d="m 58.514168,110.71483 c 13.56265,0 10.69415,-9.06368 24.09454,-9.06368"
+       id="path3-20" />
+    <path
+       style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:0.912277;stroke-linecap:butt;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Triangle-43-9)"
+       d="m 144.9935,101.01703 c 10.01371,0 3.38189,9.67106 16.3306,9.67106"
+       id="path3-20-2" />
+    <path
+       style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:0.912277;stroke-linecap:butt;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Triangle-43-9-9)"
+       d="m 106.14194,120.51736 h 38.13498 c 10.61398,0 3.72794,-9.82927 17.04718,-9.82927"
+       id="path3-20-2-5" />
+    <path
+       style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:0.912277;stroke-linecap:butt;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Triangle-4-8)"
+       d="m 58.514168,110.71483 c 13.56265,0 10.69415,9.2709 24.09454,9.2709"
+       id="path3-2-6" />
+  </g>
+</svg>

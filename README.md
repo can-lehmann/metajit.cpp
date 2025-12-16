@@ -2,6 +2,10 @@
 
 A meta-tracing framework.
 
+## Differential Testing
+
+![](doc/fuzzer.svg)
+
 ## License
 
 Copyright 2025 Can Joshua Lehmann
