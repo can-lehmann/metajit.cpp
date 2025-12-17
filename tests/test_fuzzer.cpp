@@ -61,5 +61,29 @@ int main() {
     );
   });
 
+  DiffTest("shr_multiple_blocks", output_path).run([](Builder& builder, TestData& data) {
+    Value* a = data.input(Type::Bool);
+    Value* b = data.input(Type::Int8);
+    Value* c = data.input(Type::Int8);
+    Value* d = data.input(Type::Int8);
+    Value* e = data.input(Type::Int8);
+
+    Value* select = builder.build_select(a, b, c);
+    Value* xor_value = builder.build_xor(d, e);
+    Value* cmp = builder.build_lt_u(builder.build_const(Type::Int8, 7), xor_value);
+
+    Block* true_block = builder.build_block();
+    Block* false_block = builder.build_block();
+    builder.fold_branch(cmp, true_block, false_block);
+
+    builder.move_to_end(true_block);
+    builder.build_exit();
+
+    builder.move_to_end(false_block);
+    data.output(builder.build_shr_u(select, xor_value));
+    builder.build_exit();
+  });
+
+
   return 0;
 }

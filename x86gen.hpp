@@ -336,7 +336,8 @@ namespace metajit {
     X86Block* block() const { return _block; }
     void set_block(X86Block* block) { _block = block; }
 
-    void move_before(X86Inst* inst) {
+    void move_before(X86Block* block, X86Inst* inst) {
+      _block = block;
       _insert_pos = inst;
     }
 
@@ -829,7 +830,7 @@ namespace metajit {
         Block* block = (*_section)[block_id];
         _builder.set_block(_blocks[block->name()]);
         for (Inst* inst : block->rev_range()) {
-          _builder.move_before(_builder.block()->first());
+          _builder.move_before(_builder.block(), _builder.block()->first());
           if (inst->has_side_effect() ||
               inst->is_terminator() ||
               !_vregs.at(inst).is_invalid()) {
@@ -1099,11 +1100,11 @@ namespace metajit {
               ++it;
 
               RegPermutation perm(_builder);
-              _builder.move_before(inst);
+              _builder.move_before(block, inst);
               perm.xchg(Reg::phys(0), perm.to(inst->misc()[1])); // RDX
               perm.xchg(Reg::phys(2), perm.to(inst->misc()[0])); // RAX
               inst->set_rm(perm.to(std::get<Reg>(inst->rm())));
-              _builder.move_before(inst->next());
+              _builder.move_before(block, inst->next());
               perm.reset();
               continue;
             } else if (inst->kind() == X86Inst::Kind::Shl64 ||
@@ -1118,11 +1119,11 @@ namespace metajit {
               
               ++it;
               RegPermutation perm(_builder);
-              _builder.move_before(inst);
+              _builder.move_before(block, inst);
               perm.xchg(Reg::phys(1), inst->reg()); // RCX
               inst->set_rm(perm.to(std::get<Reg>(inst->rm())));
-              _builder.move_before(inst->next());
-              perm.xchg(Reg::phys(1), inst->reg()); // RCX
+              _builder.move_before(block, inst->next());
+              perm.reset();
               continue;
             }
 
