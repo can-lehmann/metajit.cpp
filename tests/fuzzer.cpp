@@ -23,7 +23,7 @@ namespace metajit {
       TestData* _data = nullptr;
       size_t _depth = 0;
 
-      size_t _max_depth = 3;
+      size_t _max_depth = 4;
 
       Type gen_type() {
         return (Type) (rand() % 6 + 1);
@@ -33,8 +33,12 @@ namespace metajit {
         return (Type) (rand() % 4 + (size_t) Type::Int8);
       }
 
+      Type gen_int_or_bool_type() {
+        return (Type) (rand() % 5 + (size_t) Type::Bool);
+      }
+
       Value* gen_int(RandomRange random_range) {
-        switch (rand() % 10) {
+        switch (rand() % 12) {
           #define binop(name) \
             return _builder->build_##name( \
               gen(RandomRange(random_range.type())), \
@@ -62,6 +66,16 @@ namespace metajit {
           case 7: shift(shl)
           case 8: shift(shr_u)
           case 9: shift(shr_s)
+          case 10: 
+            return _builder->build_resize_u(
+              gen(RandomRange(gen_int_or_bool_type())),
+              random_range.type()
+            );
+          case 11: 
+            return _builder->build_resize_s(
+              gen(RandomRange(gen_int_or_bool_type())),
+              random_range.type()
+            );
           default:
             assert(false && "Unreachable");
           

@@ -867,9 +867,7 @@ namespace metajit {
     };
 
     bool is_reg_mov(X86Inst* inst) {
-      if (inst->kind() == X86Inst::Kind::Mov8 ||
-          inst->kind() == X86Inst::Kind::Mov32 ||
-          inst->kind() == X86Inst::Kind::Mov64) {
+      if (inst->kind() == X86Inst::Kind::Mov64) {
         return std::holds_alternative<Reg>(inst->rm());
       }
       return false;

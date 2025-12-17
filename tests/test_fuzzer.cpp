@@ -84,6 +84,18 @@ int main() {
     builder.build_exit();
   });
 
+  DiffTest("resize_u_shl", output_path).run([](Builder& builder, TestData& data) {
+    Value* a = data.input(Type::Int32);
+    Value* b = data.input(RandomRange(Type::Int32, 0, 31));
+
+    data.output(
+      builder.build_resize_u(
+        builder.build_shl(a, b),
+        Type::Int64
+      )
+    );
+  });
+
 
   return 0;
 }
