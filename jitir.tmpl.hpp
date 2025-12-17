@@ -1235,6 +1235,13 @@ namespace metajit {
     }
 
     Value* fold_lt_u(Value* a, Value* b) {
+      if (dynmatch(Const, const_b, b)) {
+        if (const_b->value() == 0) {
+          // a < 0 => 0
+          return build_const(Type::Bool, 0);
+        }
+      }
+
       return build_lt_u(a, b);
     }
 
@@ -1386,6 +1393,12 @@ namespace metajit {
     }
 
     Value* fold_branch(Value* cond, Block* true_block, Block* false_block) {
+      if (XorInst* xor_inst = is_not(cond)) {
+        // Branch !cond, a, b => Branch cond, b, a
+        cond = xor_inst->arg(0);
+        std::swap(true_block, false_block);
+      }
+
       return build_branch(cond, true_block, false_block);
     }
 

@@ -185,7 +185,10 @@ namespace metajit {
       }
     };
 
-    inline void check_codegen_differential(std::string output_path, Section* section, TestData& data, size_t sample_count = 100) {
+    inline void check_codegen_differential(std::string output_path,
+                                           Section* section,
+                                           TestData& data,
+                                           size_t sample_count = 1024) {
       if (!output_path.empty()) {
         std::ofstream stream(output_path + ".jitir");
         section->write(stream);

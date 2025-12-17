@@ -53,19 +53,20 @@ namespace metajit {
           case 3: binop(and)
           case 4: binop(or)
           case 5: binop(xor)
-          case 6: shift(shl)
-          case 7: shift(shr_u)
-          case 8: shift(shr_s)
-          case 9:
+          case 6:
             return _builder->build_select(
               gen(RandomRange(Type::Bool)),
               gen(random_range),
               gen(random_range)
             );
+          case 7: shift(shl)
+          case 8: shift(shr_u)
+          case 9: shift(shr_s)
           default:
             assert(false && "Unreachable");
           
           #undef binop
+          #undef shift
         }
       }
 
@@ -125,15 +126,15 @@ namespace metajit {
       }
 
       Value* build_is_inside(Value* value, const RandomRange& range) {
-        Value* ge_min = _builder->fold_ge_s(
+        Value* ge_min = _builder->fold_ge_u(
           value,
-          range.gen_const(*_builder)
+          _builder->build_const(range.type(), range.min())
         );
-        Value* le_max = _builder->fold_le_s(
+        Value* le_max = _builder->fold_le_u(
           value,
-          range.gen_const(*_builder)
+          _builder->build_const(range.type(), range.max())
         );
-        return _builder->build_and(ge_min, le_max);
+        return _builder->fold_and(ge_min, le_max);
       }
 
       Value* gen(RandomRange random_range) {
@@ -175,7 +176,7 @@ namespace metajit {
           Block* else_block = _builder->build_block();
           Block* then_block = _builder->build_block();
 
-          _builder->build_branch(
+          _builder->fold_branch(
             build_is_inside(result, random_range),
             then_block,
             else_block
