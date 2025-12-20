@@ -110,7 +110,7 @@ namespace metajit {
       if (!expected) {
         std::swap(a, b);
       }
-      builder.build_branch(value, a, b);
+      builder.fold_branch(value, a, b);
       
       builder.move_to_end(failure);
       builder.build_exit();
