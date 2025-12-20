@@ -826,8 +826,7 @@ namespace metajit {
     }
 
     void isel() {
-      for (size_t block_id = _section->size(); block_id-- > 0; ) {
-        Block* block = (*_section)[block_id];
+      for (Block* block : _section->rev_range()) {
         _builder.set_block(_blocks[block->name()]);
         for (Inst* inst : block->rev_range()) {
           _builder.move_before(_builder.block(), _builder.block()->first());
@@ -1147,7 +1146,7 @@ namespace metajit {
       _isel.init(section);
       _vregs.init(section);
 
-      _blocks.resize(section->size(), nullptr);
+      _blocks.resize(section->block_count(), nullptr);
       for (Block* block : *section) {
         X86Block* x86_block = _builder.build_block();
         x86_block->set_name(block->name());

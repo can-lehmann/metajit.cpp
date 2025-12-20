@@ -557,7 +557,7 @@ namespace metajit {
     InfoWriter(const InstFn& _inst): inst(_inst) {}
   };
 
-  class Block {
+  class Block: public LinkedListItem<Block> {
   private:
     LinkedList<Inst> _insts;
     size_t _name = 0;
@@ -803,8 +803,9 @@ namespace metajit {
   private:
     Context& _context;
     Allocator& _allocator;
-    std::vector<Block*> _blocks;
+    LinkedList<Block> _blocks;
     std::vector<Input*> _inputs;
+    size_t _block_count = 0;
     size_t _name_count = 0;
   public:
     Section(Context& context, Allocator& allocator):
@@ -813,16 +814,17 @@ namespace metajit {
     Context& context() const { return _context; }
     Allocator& allocator() const { return _allocator; }
 
-    auto begin() const { return _blocks.begin(); }
-    auto end() const { return _blocks.end(); }
+    auto begin() { return _blocks.begin(); }
+    auto end() { return _blocks.end(); }
 
-    size_t size() const { return _blocks.size(); }
-    Block* operator[](size_t index) const { return _blocks.at(index); }
+    Block* entry() const { return _blocks.first(); }
 
-    Block* entry() const { return _blocks.at(0); }
+    auto range() { return _blocks.range(); }
+    auto rev_range() { return _blocks.rev_range(); }
 
     const std::vector<Input*>& inputs() const { return _inputs; }
 
+    size_t block_count() const { return _block_count; }
     size_t name_count() const { return _name_count; }
 
     Input* add_input(Type type) {
@@ -836,13 +838,13 @@ namespace metajit {
       return _inputs.at(index);
     }
 
-    void add(Block* block) { _blocks.push_back(block); }
+    void add(Block* block) { _blocks.add(block); }
 
     void autoname() {
       _name_count = 0;
-      size_t block_id = 0;
+      _block_count = 0;
       for (Block* block : _blocks) {
-        block->set_name(block_id++);
+        block->set_name(_block_count++);
         block->autoname(_name_count);
       }
     }
@@ -1774,8 +1776,7 @@ namespace metajit {
     DeadCodeElim(Section* section): Pass(section) {
       InstMap<bool> used(section);
 
-      for (size_t block_id = section->size(); block_id-- > 0; ) {
-        Block* block = (*section)[block_id];
+      for (Block* block : section->rev_range()) {
         for (Inst* inst : block->rev_range()) {
           if (used[inst] ||
               inst->has_side_effect() ||
@@ -2095,8 +2096,7 @@ namespace metajit {
     }
   public:
     UsedBits(Section* section): _section(section), _values(section) {
-      for (size_t block_id = section->size(); block_id-- > 0; ) {
-        Block* block = (*section)[block_id];
+      for (Block* block : section->rev_range()) {
         for (Inst* inst : block->rev_range()) {
           if (_values[inst].type != inst->type()) {
             assert(_values[inst].type == Type::Void);
@@ -2491,8 +2491,7 @@ namespace metajit {
         _can_trace_inst(section),
         _can_trace_const(section) {
     
-      for (size_t block_id = section->size(); block_id-- > 0; ) {
-        Block* block = (*section)[block_id];
+      for (Block* block : section->rev_range()) {
         for (Inst* inst : block->rev_range()) {
           if (inst->has_side_effect() ||
               inst->is_terminator() ||
