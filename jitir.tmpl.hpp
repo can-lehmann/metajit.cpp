@@ -1819,45 +1819,121 @@ namespace metajit {
     return load_interval.intersects(store_interval);
   }
 
+  class RefineAliasing: public Pass<RefineAliasing> {
+  private:
+    struct GroupInfo {
+      bool is_invalid = false;
+      Value* base = nullptr;
+      Type type = Type::Void;
+    };
+
+    struct Key {
+      AliasingGroup group;
+      uint64_t offset;
+
+      Key(AliasingGroup _group, uint64_t _offset):
+        group(_group), offset(_offset) {}
+
+      bool operator==(const Key& other) const {
+        return group == other.group && offset == other.offset;
+      }
+    };
+
+    struct KeyHash {
+      size_t operator()(const Key& key) const {
+        return std::hash<AliasingGroup>()(key.group) ^ std::hash<uint64_t>()(key.offset);
+      }
+    };
+
+    ExpandingVector<GroupInfo> _groups;
+    AliasingGroup _min_exact_group = 0;
+    std::vector<LoadInst*> _loads;
+    std::vector<StoreInst*> _stores;
+    std::unordered_map<Key, AliasingGroup, KeyHash> _exact_groups;
+
+    void access(AliasingGroup aliasing, Value* ptr, uint64_t offset, Type type) {
+      assert(aliasing >= 0);
+      GroupInfo& group = _groups[aliasing];
+      if (!group.is_invalid) {
+        if (group.base == nullptr) {
+          group.base = ptr;
+          group.type = type;
+        } else if (group.base != ptr || group.type != type || offset % type_size(type) != 0) {
+          group.is_invalid = true;
+        }
+      }
+    }
+
+    AliasingGroup apply(AliasingGroup aliasing, uint64_t offset) {
+      assert(aliasing >= 0);
+      GroupInfo& group = _groups[aliasing];
+      if (group.is_invalid) {
+        return aliasing;
+      }
+
+      Key key(aliasing, offset);
+      if (_exact_groups.find(key) == _exact_groups.end()) {
+        _exact_groups[key] = --_min_exact_group;
+      }
+      return _exact_groups[key];
+    }
+  public:
+    RefineAliasing(Section* section): Pass(section) {
+      for (Block* block : *section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(LoadInst, load, inst)) {
+            if (load->aliasing() >= 0) {
+              _loads.push_back(load);
+              access(load->aliasing(), load->ptr(), load->offset(), inst->type());
+            } else {
+              _min_exact_group = std::min(_min_exact_group, load->aliasing());
+            }
+          } else if (dynmatch(StoreInst, store, inst)) {
+            if (store->aliasing() >= 0) {
+              _stores.push_back(store);
+              access(store->aliasing(), store->ptr(), store->offset(), store->value()->type());
+            } else {
+              _min_exact_group = std::min(_min_exact_group, store->aliasing());
+            }
+          }
+        }
+      }
+
+      for (LoadInst* load : _loads) {
+        load->set_aliasing(apply(load->aliasing(), load->offset()));
+      }
+
+      for (StoreInst* store : _stores) {
+        store->set_aliasing(apply(store->aliasing(), store->offset()));
+      }
+    }
+  };
+
   class DeadStoreElim: public Pass<DeadStoreElim> {
   public:
     DeadStoreElim(Section* section): Pass(section) {
       InstMap<bool> unused(section);
-      ExpandingVector<StoreInst*> last_exact_store;
+      ExpandingVector<StoreInst*> last_store;
 
       for (Block* block : *section) {
-        std::map<Pointer, StoreInst*> last_store;
-
         for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst)) {
             Pointer pointer(store->ptr(), store->offset());
             if (store->aliasing() < 0) {
-              last_exact_store[-store->aliasing()] = store;
-            } else {
-              last_store[pointer] = store;
+              last_store[-store->aliasing()] = store;
             }
             unused[inst] = true;
           } else if (dynmatch(LoadInst, load, inst)) {
             if (load->aliasing() < 0) {
-              StoreInst* store = last_exact_store[-load->aliasing()];
+              StoreInst* store = last_store[-load->aliasing()];
               if (store) {
                 unused[store] = false;
-              }
-            } else {
-              for (const auto& [pointer, store] : last_store) {
-                if (could_alias(load, store)) {
-                  unused[store] = false;
-                }
               }
             }
           }
         }
 
-        for (const auto& [pointer, store] : last_store) {
-          unused[store] = false;
-        }
-
-        for (StoreInst*& store : last_exact_store) {
+        for (StoreInst*& store : last_store) {
           if (store) {
             unused[store] = false;
             store = nullptr; // Clear for next block
