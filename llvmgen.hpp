@@ -1047,7 +1047,8 @@ namespace metajit {
 
       llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(_context, "entry", _function);
       for (Block* block : *_section) {
-        _blocks[block] = llvm::BasicBlock::Create(_context, "block", _function);
+        std::string name = "b" + std::to_string(block->name());
+        _blocks[block] = llvm::BasicBlock::Create(_context, name, _function);
       }
 
       _builder.SetInsertPoint(entry_block);
