@@ -2404,6 +2404,7 @@ namespace metajit {
             std::vector<LoadInst*> remaining_loads;
             for (LoadInst* load : valid_loads[store->aliasing()]) {
               if (could_alias(load, store)) {
+                assert(canon.find(Lookup(load)) != canon.end());
                 canon.erase(Lookup(load));
               } else {
                 remaining_loads.push_back(load);
