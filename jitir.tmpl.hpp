@@ -1741,6 +1741,11 @@ namespace metajit {
     }
 
     const T& operator[](Inst* inst) const { return at(inst); }
+
+    T& at_name(size_t name) {
+      assert(name < _size);
+      return _data[name];
+    }
   };
 
   void Inst::substitute_args(InstMap<Value*>& substs) {

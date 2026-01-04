@@ -230,9 +230,11 @@ namespace metajit {
     X86Block* loop() const { return _loop; }
     void set_loop(X86Block* loop) { _loop = loop; }
 
-    void add_backedge(X86Block* from) {
-      if (!_loop || from->name() > _loop->name()) {
-        _loop = from;
+    void add_incoming(X86Block* from) {
+      if (from->name() >= _name) {
+        if (!_loop || from->name() > _loop->name()) {
+          _loop = from;
+        }
       }
     }
 
@@ -304,6 +306,11 @@ namespace metajit {
     void move_before(X86Block* block, X86Inst* inst) {
       _block = block;
       _insert_pos = inst;
+    }
+
+    void move_to_begin(X86Block* block) {
+      _block = block;
+      _insert_pos = block->first();
     }
 
     X86Block* build_block() {
@@ -853,6 +860,16 @@ namespace metajit {
     void isel() {
       for (Block* block : _section->rev_range()) {
         X86Block* x86block = _blocks[block->name()];
+        
+        // Keep track of backedges, to identify loops
+        if (dynmatch(JumpInst, jump, block->terminator())) {
+          _blocks[jump->block()->name()]->add_incoming(x86block);
+        } else if (dynmatch(BranchInst, branch, block->terminator())) {
+          _blocks[branch->true_block()->name()]->add_incoming(x86block);
+          _blocks[branch->false_block()->name()]->add_incoming(x86block);
+        }
+
+        // isel
         _builder.set_block(x86block);
         for (Inst* inst : block->rev_range()) {
           _builder.move_before(_builder.block(), _builder.block()->first());
@@ -862,33 +879,35 @@ namespace metajit {
             isel(inst);
           }
         }
+
+        // Add pseudo uses after loops
+        if (x86block->loop()) {
+          // We added an extra block at the end, so this should always be the case
+          assert(x86block->loop()->name() + 1 < _blocks.size());
+          X86Block* after_end = _blocks[x86block->loop()->name() + 1];
+
+          // The only instructions that can be live across loops are those
+          // which are defined before the loop (name < (*loop->begin())->name())
+          // and used inside the loop (vreg exists)
+
+          size_t max_name = (*block->begin())->name();
+          assert(max_name < _section->name_count());
+          _builder.move_to_begin(after_end);
+          for (size_t it = 0; it < max_name; it++) {
+            Reg vreg = _vregs.at_name(it);
+            if (vreg.is_virtual()) {
+              _builder.pseudo_use(vreg);
+            }
+          }
+        }
       }
     }
 
-    bool is_reg_mov(X86Inst* inst) {
-      if (inst->kind() == X86Inst::Kind::Mov64) {
-        return std::holds_alternative<Reg>(inst->rm());
-      }
-      return false;
-    }
-
-    void autoname() {
-      size_t block_name = 0;
-      for (X86Block* block : _blocks) {
-        block->set_name(block_name++);
-        block->set_loop(nullptr);
-      }
-
+    void autoname_insts() {
       size_t inst_name = 0;
       for (X86Block* block : _blocks) {
         for (X86Inst* inst : *block) {
           inst->set_name(inst_name++);
-          if (std::holds_alternative<X86Block*>(inst->imm())) {
-            X86Block* target = std::get<X86Block*>(inst->imm());
-            if (target->name() <= block->name()) {
-              target->add_backedge(target);
-            }
-          }
         }
       }
     }
@@ -1088,7 +1107,7 @@ namespace metajit {
           _builder.move_before(block, inst);
           
           if (inst->kind() == X86Inst::Kind::PseudoUse) {
-            // Pass
+            it = it.erase(); // Not needed after regalloc
           } else if (is_foldable_mov(inst)) {
             Reg src = std::get<Reg>(inst->rm());
             Reg dst = inst->reg();
@@ -1127,6 +1146,8 @@ namespace metajit {
               reg_file.touch(info.current_reg);
               reg = info.current_reg;
             });
+
+            it++;
           }
 
           inst->visit_regs([&](Reg& reg) {
@@ -1150,62 +1171,45 @@ namespace metajit {
               }
             }
           });
-
-          it++;
         }
       }
-
-
-    }
-
-    bool is_noop(X86Inst* inst) {
-      if (is_reg_mov(inst)) {
-        if (std::holds_alternative<Reg>(inst->rm())) {
-          Reg src_reg = std::get<Reg>(inst->rm());
-          return src_reg == inst->reg();
-        }
-      }
-      return false;
     }
 
     void peephole() {
       for (X86Block* block : _blocks) {
         for (auto it = block->begin(); it != block->end(); ) {
           X86Inst* inst = *it;
-          if (is_noop(inst)) {
-            it = it.erase();
-          } else {
-            if (((inst->kind() == X86Inst::Kind::Mov8Imm ||
-                  inst->kind() == X86Inst::Kind::Mov32Imm ||
-                  inst->kind() == X86Inst::Kind::Mov64Imm) &&
-                std::holds_alternative<Reg>(inst->rm())) ||
-                inst->kind() == X86Inst::Kind::Mov64Imm64) {
-              if (std::holds_alternative<uint64_t>(inst->imm())) {
-                uint64_t value = std::get<uint64_t>(inst->imm());
-                if (value == 0) {
-                  // Replace with xor reg, reg
-                  inst->set_kind(X86Inst::Kind::Xor64);
-                  inst->set_imm(std::monostate());
-                  if (inst->kind() == X86Inst::Kind::Mov64Imm64) {
-                    inst->set_rm(inst->reg());
-                  } else {
-                    inst->set_reg(std::get<Reg>(inst->rm()));
-                  }
+
+          if (((inst->kind() == X86Inst::Kind::Mov8Imm ||
+                inst->kind() == X86Inst::Kind::Mov32Imm ||
+                inst->kind() == X86Inst::Kind::Mov64Imm) &&
+              std::holds_alternative<Reg>(inst->rm())) ||
+              inst->kind() == X86Inst::Kind::Mov64Imm64) {
+            if (std::holds_alternative<uint64_t>(inst->imm())) {
+              uint64_t value = std::get<uint64_t>(inst->imm());
+              if (value == 0) {
+                // Replace with xor reg, reg
+                inst->set_kind(X86Inst::Kind::Xor64);
+                inst->set_imm(std::monostate());
+                if (inst->kind() == X86Inst::Kind::Mov64Imm64) {
+                  inst->set_rm(inst->reg());
+                } else {
+                  inst->set_reg(std::get<Reg>(inst->rm()));
                 }
               }
-            } else if (inst->kind() == X86Inst::Kind::Jmp &&
-                       inst->next() == nullptr &&
-                       std::holds_alternative<X86Block*>(inst->imm()) &&
-                       block->name() + 1 < _blocks.size()) {
-              X86Block* target_block = std::get<X86Block*>(inst->imm());
-              if (target_block == _blocks[block->name() + 1]) {
-                it = it.erase();
-                continue;
-              }
             }
-
-            ++it;
+          } else if (inst->kind() == X86Inst::Kind::Jmp &&
+                      inst->next() == nullptr &&
+                      std::holds_alternative<X86Block*>(inst->imm()) &&
+                      block->name() + 1 < _blocks.size()) {
+            X86Block* target_block = std::get<X86Block*>(inst->imm());
+            if (target_block == _blocks[block->name() + 1]) {
+              it = it.erase();
+              continue;
+            }
           }
+
+          ++it;
         }
       }
     }
@@ -1224,16 +1228,17 @@ namespace metajit {
       _memory_deps.init(section);
       _vregs.init(section);
 
-      _blocks.resize(section->block_count(), nullptr);
-      for (Block* block : *section) {
+      // We create one extra block for pseudo_use instructions after loops
+      _blocks.resize(section->block_count() + 1, nullptr);
+      for (size_t it = 0; it < section->block_count() + 1; it++) {
         X86Block* x86_block = _builder.build_block();
-        x86_block->set_name(block->name());
-        _blocks[block->name()] = x86_block;
+        x86_block->set_name(it);
+        _blocks[it] = x86_block;
       }
 
       memory_deps();
       isel();
-      autoname();
+      autoname_insts();
       regalloc();
       peephole();
     }

@@ -23,7 +23,7 @@ namespace metajit {
       TestData* _data = nullptr;
       size_t _depth = 0;
 
-      size_t _max_depth = 4;
+      size_t _max_depth = 16;
 
       Type gen_type() {
         return (Type) (rand() % 6 + 1);
