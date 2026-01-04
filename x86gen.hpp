@@ -684,12 +684,15 @@ namespace metajit {
       } else if (dynmatch(MulInst, mul, inst)) {
         _builder.mov64(vreg(inst), vreg(mul->arg(0)));
         _builder.imul64(vreg(inst), vreg(mul->arg(1)));
-      } else if (dynmatch(ModUInst, mod_u, inst)) {
+      } else if (dynamic_cast<DivUInst*>(inst) ||
+                 dynamic_cast<ModUInst*>(inst)) {
         if (inst->type() == Type::Int8) {
           Reg rax = fix_to_preg(vreg(), REG_RAX);
           _builder.movzx8to64(rax, vreg(inst->arg(0)));
           _builder.div8(vreg(inst->arg(1)));
-          _builder.shr16_imm(rax, (uint64_t) 8);
+          if (dynamic_cast<ModUInst*>(inst)) {
+            _builder.shr16_imm(rax, (uint64_t) 8);
+          }
           _builder.mov64(vreg(inst), rax);
         } else {
           Reg rdx = fix_to_preg(vreg(), REG_RDX);
@@ -704,8 +707,13 @@ namespace metajit {
             default: assert(false && "Unsupported type");
           }
 
-          _builder.mov64(vreg(inst), rdx);
-          _builder.pseudo_use(rax);
+          if (dynamic_cast<ModUInst*>(inst)) {
+            _builder.mov64(vreg(inst), rdx);
+            _builder.pseudo_use(rax);
+          } else {
+            _builder.mov64(vreg(inst), rax);
+            _builder.pseudo_use(rdx);
+          }
         }
       } else if (dynmatch(AndInst, and_inst, inst)) {
         _builder.mov64(vreg(inst), vreg(and_inst->arg(0)));
