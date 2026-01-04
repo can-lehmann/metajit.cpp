@@ -43,6 +43,8 @@
 #define cmp_usedef { use(reg); use(rm); }
 #define cmp_imm_usedef { use(rm); }
 
+unop_x86_inst(PseudoUse, pseudo_use, { use(rm); }, false, { })
+
 binop_x86_inst(Mov8, mov8, mov_usedef, false, { rex(); byte(0x8a); modrm(); })
 binop_x86_inst(Mov16, mov16, mov_usedef, false, { byte(0x66); rex_opt(); byte(0x8b); modrm(); })
 binop_x86_inst(Mov32, mov32, mov_usedef, false, { rex_opt(); byte(0x8b); modrm(); })

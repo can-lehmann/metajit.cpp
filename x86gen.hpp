@@ -33,14 +33,14 @@ namespace metajit {
     Kind _kind = Kind::Invalid;
     size_t _id = 0;
   public:
-    Reg() {}
-    Reg(Kind kind, size_t id): _kind(kind), _id(id) {}
+    constexpr Reg() {}
+    constexpr Reg(Kind kind, size_t id): _kind(kind), _id(id) {}
 
-    static Reg phys(size_t id) {
+    static constexpr Reg phys(size_t id) {
       return Reg(Kind::Physical, id);
     }
 
-    static Reg virt(size_t id) {
+    static constexpr Reg virt(size_t id) {
       return Reg(Kind::Virtual, id);
     }
 
@@ -184,7 +184,7 @@ namespace metajit {
     }
 
     template <class UseFn, class DefFn>
-    void visit_usedef(const UseFn& use_fn, const DefFn& def_fn) const {
+    void visit_use_then_def(const UseFn& use_fn, const DefFn& def_fn) const {
       RM reg = std::monostate();
       if (!_reg.is_invalid()) {
         reg = _reg;
@@ -224,8 +224,7 @@ namespace metajit {
   class X86Block {
   private:
     LinkedList<X86Inst> _insts;
-    X86Block* _backedges = nullptr; // If this block is a loop header, linked list of backedges
-    X86Block* _next_backedge = nullptr; // Next backedge in linked list
+    X86Block* _loop = nullptr;
     size_t _name = 0;
   public:
     X86Block() {}
@@ -243,12 +242,13 @@ namespace metajit {
 
     auto rev_range() { return _insts.rev_range(); }
 
-    X86Block* backedges() const { return _backedges; }
-    X86Block* next_backedge() const { return _next_backedge; }
+    X86Block* loop() const { return _loop; }
+    void set_loop(X86Block* loop) { _loop = loop; }
 
-    void add_backedge(X86Block* backedge) {
-      backedge->_next_backedge = _backedges;
-      _backedges = backedge;
+    void add_backedge(X86Block* from) {
+      if (!_loop || from->name() > _loop->name()) {
+        _loop = from;
+      }
     }
 
     void insert_before(X86Inst* before, X86Inst* inst) {
@@ -257,17 +257,8 @@ namespace metajit {
 
     void write(std::ostream& stream) {
       stream << "b" << _name;
-      if (_backedges) {
-        stream << " loop(";
-        bool is_first = true;
-        for (X86Block* backedge = _backedges; backedge; backedge = backedge->_next_backedge) {
-          if (!is_first) {
-            stream << ", ";
-          }
-          stream << "b" << backedge->name();
-          is_first = false;
-        }
-        stream << ")";
+      if (_loop) {
+        stream << " loop until b" << _loop->name();
       }
       stream << ":\n";
       for (X86Inst* inst : _insts) {
@@ -402,13 +393,45 @@ namespace metajit {
 
     InstMap<void*> _memory_deps;
 
-    InstMap<std::vector<X86Inst>> _isel;
+    struct Interval {
+      size_t min = 0;
+      size_t max = 0;
+
+      Interval(): min(~size_t(0)), max(0) {}
+
+      bool empty() const {
+        return max < min;
+      }
+
+      void incl(size_t value) {
+        if (value < min) {
+          min = value;
+        }
+        if (value > max) {
+          max = value;
+        }
+      }
+
+      void write(std::ostream& stream) const {
+        if (empty()) {
+          stream << "{}";
+        } else {
+          stream << "[" << min << "; " << max << "]";          
+        }
+      }
+    };
+
+    struct VRegInfo {
+      Reg fixed;
+      Interval interval;
+      Reg current_reg;
+      size_t stack_offset = 0;
+    };
 
     InstMap<Reg> _vregs;
     std::vector<Reg> _input_vregs;
-    std::vector<Reg> _input_pregs;
-    size_t _next_vreg = 0;
-
+    std::vector<VRegInfo> _vreg_info;
+    
     void memory_deps() {
       for (Block* block : *_section) {
         std::unordered_map<AliasingGroup, void*> last_store;
@@ -435,7 +458,16 @@ namespace metajit {
     }
 
     Reg vreg() {
-      return Reg::virt(_next_vreg++);
+      size_t id = _vreg_info.size();
+      _vreg_info.emplace_back();
+      return Reg::virt(id);
+    }
+
+    Reg fix_to_preg(Reg vreg, Reg preg) {
+      assert(vreg.is_virtual());
+      VRegInfo& info = _vreg_info[vreg.id()];
+      info.fixed = preg;
+      return vreg;
     }
 
     bool is_sext_imm32(Const* constant) {
@@ -827,7 +859,8 @@ namespace metajit {
 
     void isel() {
       for (Block* block : _section->rev_range()) {
-        _builder.set_block(_blocks[block->name()]);
+        X86Block* x86block = _blocks[block->name()];
+        _builder.set_block(x86block);
         for (Inst* inst : block->rev_range()) {
           _builder.move_before(_builder.block(), _builder.block()->first());
           if (inst->has_side_effect() ||
@@ -839,32 +872,6 @@ namespace metajit {
       }
     }
 
-    class PhysicalRegSet {
-    private:
-      uint16_t _regs = 0;
-    public:
-      PhysicalRegSet() {
-        _regs = ~0;
-        erase(4); // ESP
-        erase(5); // EBP
-      }
-
-      void insert(size_t reg_id) {
-        _regs |= (1 << reg_id);
-      }
-
-      void erase(size_t reg_id) {
-        _regs &= ~(1 << reg_id);
-      }
-
-      Reg get_any() {
-        if (_regs == 0) {
-          return Reg();
-        }
-        return Reg::phys(__builtin_ctz(_regs));
-      }
-    };
-
     bool is_reg_mov(X86Inst* inst) {
       if (inst->kind() == X86Inst::Kind::Mov64) {
         return std::holds_alternative<Reg>(inst->rm());
@@ -872,30 +879,11 @@ namespace metajit {
       return false;
     }
 
-    struct Interval {
-      size_t min = 0;
-      size_t max = 0;
-
-      Interval(): min(~size_t(0)), max(0) {}
-
-      void incl(size_t value) {
-        if (value < min) {
-          min = value;
-        }
-        if (value > max) {
-          max = value;
-        }
-      }
-
-      void write(std::ostream& stream) const {
-        stream << "[" << min << "; " << max << "]";
-      }
-    };
-
     void autoname() {
       size_t block_name = 0;
       for (X86Block* block : _blocks) {
         block->set_name(block_name++);
+        block->set_loop(nullptr);
       }
 
       size_t inst_name = 0;
@@ -905,106 +893,267 @@ namespace metajit {
           if (std::holds_alternative<X86Block*>(inst->imm())) {
             X86Block* target = std::get<X86Block*>(inst->imm());
             if (target->name() <= block->name()) {
-              target->add_backedge(block);
+              target->add_backedge(target);
             }
           }
         }
       }
     }
 
-    void regalloc() {
-      std::vector<Interval> intervals(_next_vreg, Interval());
-      
-      std::set<size_t> live;
-      for (size_t block_it = _blocks.size(); block_it-- > 0; ) {
-        X86Block* block = _blocks[block_it];
-        for (X86Inst* inst : block->rev_range()) {
-          inst->visit_usedef(
-            [&](Reg reg) {},
-            [&](Reg reg) {
-              assert(reg.is_virtual());
-              live.erase(reg.id());
-              intervals[reg.id()].incl(inst->name());
-            }
-          );
+    class StackOffsetAlloc {
+    private:
+      size_t _max_offset = 0;
+      std::vector<size_t> _returned_offsets;
+    public:
+      StackOffsetAlloc() {}
 
-          inst->visit_usedef(
-            [&](Reg reg) {
-              assert(reg.is_virtual());
-              live.insert(reg.id());
-              intervals[reg.id()].incl(inst->name());
-            },
-            [&](Reg reg) {}
-          );
+      size_t alloc() {
+        if (_returned_offsets.empty()) {
+          _max_offset += 8;
+          return _max_offset;
+        } else {
+          size_t offset = _returned_offsets.back();
+          _returned_offsets.pop_back();
+          return offset;
         }
+      }
 
-        for (X86Block* backedge = block->backedges(); backedge; backedge = backedge->next_backedge()) {
-          for (size_t id : live) {
-            intervals[id].incl(backedge->last()->name() + 1);
+      void free(size_t offset) {
+        _returned_offsets.push_back(offset);
+      }
+    };
+
+    constexpr static Reg REG_RAX = Reg::phys(0);
+    constexpr static Reg REG_RCX = Reg::phys(1);
+    constexpr static Reg REG_RDX = Reg::phys(2);
+    constexpr static Reg REG_RBX = Reg::phys(3);
+    constexpr static Reg REG_RSP = Reg::phys(4);
+    constexpr static Reg REG_RBP = Reg::phys(5);
+
+    class RegFileState {
+    private:
+      std::vector<Reg> _regs;
+      uint16_t _free = 0xffff;
+      
+      std::vector<size_t> _lru;
+      size_t _lru_count = 0;
+    public:
+      RegFileState() {
+        _regs.resize(16, Reg());
+        _lru.resize(16, 0);
+
+        disable(REG_RSP);
+        disable(REG_RBP);
+      }
+
+      void disable(Reg preg) {
+        assert(preg.is_physical());
+        _free &= ~(1 << preg.id());
+        _lru[preg.id()] = ~size_t(0);
+      }
+
+      Reg operator[](Reg reg) const {
+        assert(reg.is_physical());
+        return _regs[reg.id()];
+      }
+
+      void set(Reg preg, Reg vreg) {
+        assert(preg.is_physical() && vreg.is_virtual());
+        _regs[preg.id()] = vreg;
+        _free &= ~(1 << preg.id());
+      }
+
+      void touch(Reg preg) {
+        assert(preg.is_physical());
+        _lru[preg.id()] = _lru_count++;
+      }
+
+      void free(Reg preg) {
+        assert(preg.is_physical());
+        _regs[preg.id()] = Reg();
+        _free |= (1 << preg.id());
+      }
+
+      Reg get_free_reg() {
+        if (_free == 0) {
+          return Reg();
+        } else {
+          return Reg::phys(__builtin_ctz(_free));
+        }
+      }
+
+      Reg get_lru() {
+        size_t min_index = 0;
+        size_t min_value = ~size_t(0);
+        for (size_t it = 0; it < _lru.size(); it++) {
+          if (_lru[it] < min_value) {
+            min_value = _lru[it];
+            min_index = it;
           }
         }
+        return Reg::phys(min_index);
       }
+    };
 
-      std::vector<size_t> kill_order;
-      kill_order.reserve(intervals.size());
-      for (size_t id = 0; id < intervals.size(); id++) {
-        kill_order.push_back(id);
-      }
+    StackOffsetAlloc _stack_offset_alloc;
 
-      std::sort(
-        kill_order.begin(),
-        kill_order.end(),
-        [&](size_t a, size_t b) {
-          return intervals[a].max < intervals[b].max;
+    void spill(RegFileState& reg_file, Reg preg) {
+      Reg vreg = reg_file[preg];
+      if (vreg.is_virtual()) {
+        VRegInfo& info = _vreg_info[vreg.id()];
+        if (info.stack_offset == 0) {
+          info.stack_offset = _stack_offset_alloc.alloc();
+          assert(info.stack_offset != 0);
         }
-      );
-
-      std::vector<Reg> mapping(_next_vreg, Reg());
-      PhysicalRegSet available_regs;
-      size_t kill_index = 0;
-
-      for (Input* input : _section->inputs()) {
-        Reg phys_reg = _input_pregs[input->index()];
-        mapping[_input_vregs[input->index()].id()] = phys_reg;
-        available_regs.erase(phys_reg.id());
+        _builder.mov64_mem(
+          X86Inst::Mem(
+            REG_RSP,
+            -(int64_t) info.stack_offset
+          ),
+          preg
+        );
+        reg_file.free(preg);
+        info.current_reg = Reg();
       }
+    }
 
+    void unspill(RegFileState& reg_file, Reg vreg, Reg preg) {
+      VRegInfo& info = _vreg_info[vreg.id()];
+      if (info.current_reg.is_physical()) {
+        assert(false);
+      } else {
+        assert(info.stack_offset != 0);
+        _builder.mov64(
+          preg,
+          X86Inst::Mem(
+            REG_RSP,
+            -(int64_t) info.stack_offset
+          )
+        );
+      }
+      info.current_reg = preg;
+      reg_file.set(preg, vreg);
+    }
+
+    void spill_and_unspill(RegFileState& reg_file, Reg preg, Reg vreg, bool is_def) {
+      VRegInfo& info = _vreg_info[vreg.id()];
+      spill(reg_file, preg);
+      if (is_def) {
+        info.current_reg = preg;
+        reg_file.set(preg, vreg);
+      } else {
+        unspill(reg_file, vreg, preg);
+      }
+      reg_file.touch(preg);
+    }
+
+    bool is_foldable_mov(X86Inst* inst) {
+      if (inst->kind() == X86Inst::Kind::Mov64 &&
+          std::holds_alternative<Reg>(inst->rm())) {
+        Reg src = std::get<Reg>(inst->rm());
+        Reg dst = inst->reg();
+        assert(src.is_virtual() && dst.is_virtual());
+        if (_vreg_info[src.id()].current_reg.is_physical() &&
+            _vreg_info[src.id()].interval.max == inst->name() &&
+            _vreg_info[dst.id()].interval.min == inst->name() &&
+            _vreg_info[dst.id()].fixed.is_invalid()) {
+          return true;
+        }
+      } 
+      return false;
+    }
+
+    void regalloc() {
       for (X86Block* block : _blocks) {
         for (X86Inst* inst : *block) {
-          while (kill_index < kill_order.size() &&
-                 intervals[kill_order[kill_index]].max <= inst->name()) {
-            size_t reg_id = kill_order[kill_index];
-            if (!mapping[reg_id].is_invalid()) {
-              available_regs.insert(mapping[reg_id].id());
-            }
-            kill_index++;
-          }
-
-          if (is_reg_mov(inst)) {
-            Reg src_reg = std::get<Reg>(inst->rm());
-            Reg dst_reg = inst->reg();
-            assert(src_reg.is_virtual() && dst_reg.is_virtual());
-            if (intervals[src_reg.id()].max == intervals[dst_reg.id()].min) {
-              Reg phys_reg = mapping[src_reg.id()];
-              mapping[dst_reg.id()] = phys_reg;
-              available_regs.erase(phys_reg.id());
-            }
-          }
-
-          inst->visit_regs([&](Reg& reg) {
+          inst->visit_regs([&](Reg reg) {
             assert(reg.is_virtual());
-
-            if (mapping[reg.id()].is_invalid()) {
-              Reg phys_reg = available_regs.get_any();
-              assert(!phys_reg.is_invalid() && "Ran out of physical registers");
-              mapping[reg.id()] = phys_reg;
-              available_regs.erase(phys_reg.id());
-            }
-
-            reg = mapping[reg.id()];
+            _vreg_info[reg.id()].interval.incl(inst->name());
           });
         }
       }
+
+      RegFileState reg_file;
+      for (Reg vreg : _input_vregs) {
+        VRegInfo& info = _vreg_info[vreg.id()];
+        info.current_reg = info.fixed;
+        reg_file[info.fixed] = vreg;
+      }
+
+      for (X86Block* block : _blocks) {
+        for (auto it = block->begin(); it != block->end(); ) {
+          X86Inst* inst = *it;
+          _builder.move_before(block, inst);
+          
+          if (inst->kind() == X86Inst::Kind::PseudoUse) {
+            // Pass
+          } else if (is_foldable_mov(inst)) {
+            Reg src = std::get<Reg>(inst->rm());
+            Reg dst = inst->reg();
+            VRegInfo& src_info = _vreg_info[src.id()];
+            VRegInfo& dst_info = _vreg_info[dst.id()];
+
+            dst_info.current_reg = src_info.current_reg;
+            reg_file.set(src_info.current_reg, dst);
+            reg_file.touch(src_info.current_reg);
+            src_info.current_reg = Reg();
+
+            it = it.erase();
+            continue;
+          } else {
+            inst->visit_regs([&](Reg reg) {
+              VRegInfo& info = _vreg_info[reg.id()];
+              if (info.current_reg.is_invalid() && info.fixed.is_physical()) {
+                spill_and_unspill(reg_file, info.fixed, reg, inst->name() == info.interval.min);
+              }
+            });
+
+            inst->visit_regs([&](Reg reg) {
+              VRegInfo& info = _vreg_info[reg.id()];
+              if (info.current_reg.is_invalid() && !info.fixed.is_physical()) {
+                Reg preg = reg_file.get_free_reg();
+                if (!preg.is_physical()) {
+                  preg = reg_file.get_lru();
+                }
+                spill_and_unspill(reg_file, preg, reg, inst->name() == info.interval.min);
+              }
+            });
+
+            inst->visit_regs([&](Reg& reg) {
+              VRegInfo& info = _vreg_info[reg.id()];
+              assert(info.current_reg.is_physical());
+              reg_file.touch(info.current_reg);
+              reg = info.current_reg;
+            });
+          }
+
+          inst->visit_regs([&](Reg& reg) {
+            VRegInfo* info;
+            if (reg.is_virtual()) {
+              info = &_vreg_info[reg.id()];
+              if (info->current_reg.is_invalid()) {
+                return; // Already deallocated
+              }
+            } else {
+              if (reg_file[reg].is_invalid()) {
+                return; // Already deallocated
+              }
+              info = &_vreg_info[reg_file[reg].id()];
+            }
+            if (inst->name() == info->interval.max) {
+              reg_file.free(info->current_reg);
+              info->current_reg = Reg();
+              if (info->stack_offset != 0) {
+                _stack_offset_alloc.free(info->stack_offset);
+              }
+            }
+          });
+
+          it++;
+        }
+      }
+
+
     }
 
     bool is_noop(X86Inst* inst) {
@@ -1016,48 +1165,6 @@ namespace metajit {
       }
       return false;
     }
-
-    class RegPermutation {
-    private:
-      X86InstBuilder& _builder;
-      uint8_t _from[16];
-      uint8_t _to[16];
-      std::vector<std::pair<uint8_t, uint8_t>> _swaps;
-    public:
-      RegPermutation(X86InstBuilder& builder): _builder(builder) {
-        for (size_t it = 0; it < 16; it++) {
-          _from[it] = it;
-          _to[it] = it;
-        }
-      }
-
-      void xchg(uint8_t a, uint8_t b) {
-        if (a == b) {
-          return;
-        }
-
-        _builder.xchg64(Reg::phys(a), Reg::phys(b));
-        _to[_from[a]] = b;
-        _to[_from[b]] = a;
-        std::swap(_from[a], _from[b]);
-        _swaps.push_back({a, b});
-      }
-
-      void xchg(Reg a, Reg b) {
-        xchg(a.id(), b.id());
-      }
-
-      Reg to(Reg reg) const {
-        return Reg::phys(_to[reg.id()]);
-      }
-
-      void reset() {
-        for (size_t it = _swaps.size(); it-- > 0; ) {
-          _builder.xchg64(Reg::phys(_swaps[it].first), Reg::phys(_swaps[it].second));
-        }
-        _swaps.clear();
-      }
-    };
 
     void peephole() {
       for (X86Block* block : _blocks) {
@@ -1093,35 +1200,6 @@ namespace metajit {
                 it = it.erase();
                 continue;
               }
-            } else if (inst->kind() == X86Inst::Kind::Div64) {
-              ++it;
-
-              RegPermutation perm(_builder);
-              _builder.move_before(block, inst);
-              perm.xchg(Reg::phys(0), perm.to(inst->misc()[1])); // RDX
-              perm.xchg(Reg::phys(2), perm.to(inst->misc()[0])); // RAX
-              inst->set_rm(perm.to(std::get<Reg>(inst->rm())));
-              _builder.move_before(block, inst->next());
-              perm.reset();
-              continue;
-            } else if (inst->kind() == X86Inst::Kind::Shl64 ||
-                       inst->kind() == X86Inst::Kind::Shr8 ||
-                       inst->kind() == X86Inst::Kind::Shr16 ||
-                       inst->kind() == X86Inst::Kind::Shr32 ||
-                       inst->kind() == X86Inst::Kind::Shr64 ||
-                       inst->kind() == X86Inst::Kind::Sar8 ||
-                       inst->kind() == X86Inst::Kind::Sar16 ||
-                       inst->kind() == X86Inst::Kind::Sar32 ||
-                       inst->kind() == X86Inst::Kind::Sar64) {
-              
-              ++it;
-              RegPermutation perm(_builder);
-              _builder.move_before(block, inst);
-              perm.xchg(Reg::phys(1), inst->reg()); // RCX
-              inst->set_rm(perm.to(std::get<Reg>(inst->rm())));
-              _builder.move_before(block, inst->next());
-              perm.reset();
-              continue;
             }
 
             ++it;
@@ -1134,16 +1212,14 @@ namespace metajit {
     X86CodeGen(Section* section, const std::vector<Reg>& input_pregs):
         Pass(section),
         _section(section),
-        _builder(section->allocator(), nullptr),
-        _input_pregs(input_pregs) {
+        _builder(section->allocator(), nullptr) {
       
       for (Reg reg : input_pregs) {
-        _input_vregs.push_back(vreg());
+        _input_vregs.push_back(fix_to_preg(vreg(), reg));
       }
 
       section->autoname();
       _memory_deps.init(section);
-      _isel.init(section);
       _vregs.init(section);
 
       _blocks.resize(section->block_count(), nullptr);
