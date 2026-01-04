@@ -1926,8 +1926,8 @@ namespace metajit {
             Pointer pointer(store->ptr(), store->offset());
             if (store->aliasing() < 0) {
               last_store[-store->aliasing()] = store;
+              unused[store] = true;
             }
-            unused[inst] = true;
           } else if (dynmatch(LoadInst, load, inst)) {
             if (load->aliasing() < 0) {
               StoreInst* store = last_store[-load->aliasing()];
