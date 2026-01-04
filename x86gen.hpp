@@ -690,7 +690,7 @@ namespace metajit {
           _builder.movzx8to64(rax, vreg(inst->arg(0)));
           _builder.div8(vreg(inst->arg(1)));
           _builder.shr16_imm(rax, (uint64_t) 8);
-          _builder.mov8(vreg(inst), rax);
+          _builder.mov64(vreg(inst), rax);
         } else {
           Reg rdx = fix_to_preg(vreg(), REG_RDX);
           Reg rax = fix_to_preg(vreg(), REG_RAX);
@@ -986,19 +986,28 @@ namespace metajit {
       Reg vreg = reg_file[preg];
       if (vreg.is_virtual()) {
         VRegInfo& info = _vreg_info[vreg.id()];
-        if (info.stack_offset == 0) {
-          info.stack_offset = _stack_offset_alloc.alloc();
-          assert(info.stack_offset != 0);
+        Reg free_reg = reg_file.get_free_reg();
+        if (free_reg.is_physical()) {
+          // No need to spill, just move to free reg
+          _builder.mov64(free_reg, preg);
+          reg_file.free(preg);
+          info.current_reg = free_reg;
+          reg_file.set(free_reg, vreg);
+        } else {
+          if (info.stack_offset == 0) {
+            info.stack_offset = _stack_offset_alloc.alloc();
+            assert(info.stack_offset != 0);
+          }
+          _builder.mov64_mem(
+            X86Inst::Mem(
+              REG_RSP,
+              -(int64_t) info.stack_offset
+            ),
+            preg
+          );
+          reg_file.free(preg);
+          info.current_reg = Reg();
         }
-        _builder.mov64_mem(
-          X86Inst::Mem(
-            REG_RSP,
-            -(int64_t) info.stack_offset
-          ),
-          preg
-        );
-        reg_file.free(preg);
-        info.current_reg = Reg();
       }
     }
 
