@@ -88,7 +88,7 @@ namespace metajit {
       };
     private:
       Builder& _builder;
-      Input* _data;
+      Arg* _data;
       size_t _data_size = 0;
       std::vector<size_t> _input_bytes;
       std::map<size_t, RandomInput> _inputs;
@@ -104,7 +104,7 @@ namespace metajit {
       }
     public:
       TestData(Builder& builder): _builder(builder) {
-        _data = _builder.build_input(Type::Ptr);
+        _data = _builder.entry_arg(0);
       }
 
       size_t data_size() const { return _data_size; }
@@ -280,7 +280,7 @@ namespace metajit {
           Section* section = new Section(context, allocator);
 
           Builder builder(section);
-          builder.move_to_end(builder.build_block());
+          builder.move_to_end(builder.build_block({Type::Ptr}));
 
           TestData data(builder);
           body(builder, data);

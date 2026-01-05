@@ -29,3 +29,14 @@ jitir.hpp: jitir.py jitir.tmpl.hpp
 
 jitir_llvmapi.hpp: jitir.py jitir_llvmapi.tmpl.hpp
 	PYTHONPATH="../lwir.cpp" python3 $<
+
+clean:
+	-rm main
+	-rm tests/test_insts
+	-rm tests/test_fuzzer
+	-rm tests/fuzzer
+	-rm jitir.hpp
+	-rm jitir_llvmapi.hpp
+	-rm -r tests/output
+	mkdir -p tests/output/test_insts
+	mkdir -p tests/output/test_fuzzer

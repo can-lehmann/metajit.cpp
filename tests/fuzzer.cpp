@@ -218,7 +218,9 @@ namespace metajit {
         Section* section = new Section(context, allocator);
 
         _builder = new Builder(section);
-        _builder->move_to_end(_builder->build_block());
+        _builder->move_to_end(_builder->build_block({
+          Type::Ptr
+        }));
 
         _data = new TestData(*_builder);
 
