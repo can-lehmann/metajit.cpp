@@ -224,6 +224,7 @@ namespace metajit {
     virtual size_t hash() const = 0;
 
     virtual bool is_inst() const { return false; }
+    virtual bool is_named() const { return false; }
   };
 
   class Const final: public Value {
@@ -252,34 +253,6 @@ namespace metajit {
     }
   };
 
-  class Input final: public Value {
-  private:
-    size_t _index = 0;
-  public:
-    Input(Type type, size_t index):
-      Value(type), _index(index) {}
-
-    size_t index() const { return _index; }
-
-    void write_arg(std::ostream& stream) const override {
-      stream << "%input" << _index;
-    }
-
-    bool equals(const Value* other) const override {
-      if (typeid(*this) != typeid(*other)) {
-        return false;
-      }
-
-      const Input* input_other = (const Input*) other;
-      return type() == input_other->type() &&
-             index() == input_other->index();
-    }
-
-    size_t hash() const override {
-      return std::hash<size_t>()(_index);
-    }
-  };
-
   class Context {
   private:
     Allocator _const_allocator;
@@ -305,9 +278,10 @@ namespace metajit {
   template <class T>
   class Span {
   private:
-    T* _data;
+    T* _data = nullptr;
     size_t _size = 0;
   public:
+    Span() {}
     Span(T* data, size_t size): _data(data), _size(size) {}
     
     template <class Ptr>
@@ -509,15 +483,32 @@ namespace metajit {
   };
 
   template<class T>
-  class InstMap;
+  class NameMap;
 
-  class Inst: public Value, public LinkedListItem<Inst> {
+  class NamedValue : public Value {
   private:
-    Span<Value*> _args;
     size_t _name = 0;
   public:
+    NamedValue(Type type): Value(type) {}
+
+    size_t name() const { return _name; }
+    void set_name(size_t name) { _name = name; }
+
+    void write_arg(std::ostream& stream) const override {
+      stream << '%' << _name;
+    }
+
+    bool is_named() const override {
+      return true;
+    }
+  };
+
+  class Inst: public NamedValue, public LinkedListItem<Inst> {
+  private:
+    Span<Value*> _args;
+  public:
     Inst(Type type, const Span<Value*>& args):
-      Value(type), _args(args) {}
+      NamedValue(type), _args(args) {}
 
     const Span<Value*>& args() const { return _args; }
     size_t arg_count() const { return _args.size(); }
@@ -528,10 +519,7 @@ namespace metajit {
       _args[index] = value;
     }
 
-    void substitute_args(InstMap<Value*>& substs);
-
-    size_t name() const { return _name; }
-    void set_name(size_t name) { _name = name; }
+    void substitute_args(NameMap<Value*>& substs);
 
     virtual void write(std::ostream& stream) const = 0;
     void write_args(std::ostream& stream, bool& is_first) const {
@@ -549,15 +537,35 @@ namespace metajit {
       }
     }
 
-    void write_arg(std::ostream& stream) const override {
-      stream << '%' << _name;
-    }
-
     bool has_side_effect() const;
     bool is_terminator() const;
     std::vector<Block*> successor_blocks() const;
 
     bool is_inst() const override { return true; }
+  };
+
+  class Arg: public NamedValue {
+  private:
+    size_t _index = 0;
+  public:
+    Arg(Type type, size_t index):
+      NamedValue(type), _index(index) {}
+
+    size_t index() const { return _index; }
+
+    bool equals(const Value* other) const override {
+      if (typeid(*this) != typeid(*other)) {
+        return false;
+      }
+
+      const Arg* arg_other = (const Arg*) other;
+      return type() == arg_other->type() &&
+             index() == arg_other->index();
+    }
+
+    size_t hash() const override {
+      return std::hash<size_t>()(_index);
+    }
   };
 
   struct InfoWriter {
@@ -572,10 +580,12 @@ namespace metajit {
 
   class Block: public LinkedListItem<Block> {
   private:
+    Span<Arg*> _args;
     LinkedList<Inst> _insts;
     size_t _name = 0;
   public:
     Block() {}
+    Block(const Span<Arg*>& args): _args(args) {}
 
     auto begin() { return _insts.begin(); }
     auto end() { return _insts.end(); }
@@ -587,6 +597,11 @@ namespace metajit {
     auto rev_range() { return _insts.rev_range(); }
 
     bool empty() const { return _insts.empty(); }
+
+    const Span<Arg*>& args() const { return _args; }
+    void set_args(const Span<Arg*>& args) { _args = args; }
+
+    Arg* arg(size_t index) const { return _args.at(index); }
 
     size_t name() const { return _name; }
     void set_name(size_t name) { _name = name; }
@@ -603,13 +618,31 @@ namespace metajit {
     std::vector<Block*> successors() const;
 
     void autoname(size_t& next_name) {
+      for (Arg* arg : _args) {
+        arg->set_name(next_name++);
+      }
+      
       for (Inst* inst : _insts) {
         inst->set_name(next_name++);
       }
     }
 
     void write(std::ostream& stream, InfoWriter* info_writer = nullptr) {
-      stream << "b" << _name << ":\n";
+      stream << "b" << _name;
+      if (_args.size() > 0) {
+        stream << "(";
+        bool is_first = true;
+        for (Arg* arg : _args) {
+          if (is_first) {
+            is_first = false;
+          } else {
+            stream << ", ";
+          }
+          arg->write_arg(stream);
+        }
+        stream << ")";
+      }
+      stream << ":\n";
       for (Inst* inst : _insts) {
         stream << "  ";
         if (inst->type() != Type::Void) {
@@ -688,96 +721,6 @@ namespace metajit {
 
   ${insts}
 
-  class PhiInst: public Inst {
-  private:
-    Span<Block*> _blocks;
-  public:
-    PhiInst(Type type, size_t incoming_count):
-      Inst(type, Span<Value*>::trailing(this, incoming_count).zeroed()),
-      _blocks(Span<Block*>::offset(this, sizeof(PhiInst) + sizeof(Value*) * incoming_count, incoming_count).zeroed()) {}
-
-    Block* block(size_t index) const {
-      return _blocks.at(index);
-    }
-
-    void set_incoming(size_t index, Value* value, Block* from) {
-      set_arg(index, value);
-      _blocks[index] = from;
-    }
-
-    void write(std::ostream& stream) const override {
-      stream << "phi ";
-      bool is_first = true;
-      for (size_t it = 0; it < arg_count(); it++) {
-        if (is_first) {
-          is_first = false;
-        } else {
-          stream << ", ";
-        }
-        if (_blocks[it]) {
-          _blocks[it]->write_arg(stream);
-        } else {
-          stream << "<NULL>";
-        }
-        stream << " -> ";
-        if (arg(it)) {
-          arg(it)->write_arg(stream);
-        } else {
-          stream << "<NULL>";
-        }
-      }
-    }
-
-    bool equals(const Value* other) const override {
-      if (typeid(*this) != typeid(*other)) {
-        return false;
-      }
-
-      const PhiInst* phi_other = (const PhiInst*) other;
-      if (type() != phi_other->type() ||
-          arg_count() != phi_other->arg_count()) {
-        return false;
-      }
-
-      for (size_t it = 0; it < arg_count(); it++) {
-        if (arg(it) != phi_other->arg(it) || 
-            block(it) != phi_other->block(it)) {
-          return false;
-        }
-      }
-
-      return true;
-    }
-
-    size_t hash() const override {
-      size_t hash = 2345678; // Some random seed
-      hash ^= std::hash<Type>()(type());
-      hash ^= std::hash<size_t>()(arg_count());
-
-      for (size_t it = 0; it < arg_count(); it++) {
-        hash ^= std::hash<Value*>()(arg(it));
-        hash ^= std::hash<Block*>()(block(it));
-      }
-
-      return hash;
-    }
-
-    bool verify(const std::set<Block*>& incoming,
-                std::ostream& errors) const {
-      
-      std::set<Block*> blocks;
-      blocks.insert(_blocks.begin(), _blocks.end());
-
-      if (blocks != incoming) {
-        errors << "Phi node ";
-        write_arg(errors);
-        errors << " has incorrect incoming blocks\n";
-        return true;
-      }
-      return false;
-    }
-  };
-
   bool Inst::has_side_effect() const {
     return dynamic_cast<const StoreInst*>(this);
   }
@@ -819,7 +762,6 @@ namespace metajit {
     Context& _context;
     Allocator& _allocator;
     LinkedList<Block> _blocks;
-    std::vector<Input*> _inputs;
     size_t _block_count = 0;
     size_t _name_count = 0;
   public:
@@ -837,21 +779,8 @@ namespace metajit {
     auto range() { return _blocks.range(); }
     auto rev_range() { return _blocks.rev_range(); }
 
-    const std::vector<Input*>& inputs() const { return _inputs; }
-
     size_t block_count() const { return _block_count; }
     size_t name_count() const { return _name_count; }
-
-    Input* add_input(Type type) {
-      Input* input = (Input*) _allocator.alloc(sizeof(Input), alignof(Input));
-      new (input) Input(type, _inputs.size());
-      _inputs.push_back(input);
-      return input;
-    }
-
-    Input* input(size_t index) const {
-      return _inputs.at(index);
-    }
 
     void add(Block* block) { _blocks.add(block); }
 
@@ -871,18 +800,7 @@ namespace metajit {
     void write(std::ostream& stream, InfoWriter* info_writer = nullptr) {
       autoname();
       
-      stream << "section(";
-      bool is_first = true;
-      for (Input* input : _inputs) {
-        if (is_first) {
-          is_first = false;
-        } else {
-          stream << ", ";
-        }
-        stream << input->type() << " ";
-        input->write_arg(stream);
-      }
-      stream << ") {\n";
+      stream << "section {\n";
       for (Block* block : _blocks) {
         block->write(stream, info_writer);
       }
@@ -908,11 +826,11 @@ namespace metajit {
 
       std::set<Value*> defined;
 
-      for (Input* input : _inputs) {
-        defined.insert(input);
-      }
-
       for (Block* block : *this) {
+        for (Arg* arg : block->args()) {
+          defined.insert(arg);
+        }
+
         for (Inst* inst : *block) {
           for (Value* arg : inst->args()) {
             if (arg == nullptr) {
@@ -933,13 +851,31 @@ namespace metajit {
             }
           }
 
-          if (dynmatch(PhiInst, phi, inst)) {
-            if (phi->verify(incoming[block], errors)) {
+          defined.insert(inst);
+        }
+
+        if (!block->terminator()) {
+          errors << "Block ";
+          block->write_arg(errors);
+          errors << " has no terminator\n";
+          return true;
+        }
+
+        if (dynmatch(JumpInst, jump, block->terminator())) {
+
+        } else {
+          for (Block* succ : block->successors()) {
+            if (succ->args().size() != 0) {
+              errors << "Block ";
+              block->write_arg(errors);
+              errors << " jumps to block ";
+              succ->write_arg(errors);
+              errors << " which requires ";
+              errors << succ->args().size();
+              errors << " arguments, but none were provided\n";
               return true;
             }
           }
-
-          defined.insert(inst);
         }
       }
       return false;
@@ -991,23 +927,56 @@ namespace metajit {
       _block->insert_before(_before, inst);
     }
 
-    Block* build_block() {
-      Block* block = (Block*) _section->allocator().alloc(
-        sizeof(Block), alignof(Block)
-      );
-      new (block) Block();
-      _section->add(block);
-      return block;
+    Arg* alloc_arg(Type type, size_t index) {
+      return new (_section->allocator().alloc<Arg>()) Arg(type, index);
     }
 
-    Block* build_block_before(Block* before) {
-      Block* block = (Block*) _section->allocator().alloc(
-        sizeof(Block), alignof(Block)
-      );
-      new (block) Block();
-      _section->insert_before(before, block);
-      return block;
+    Block* alloc_block() {
+      return new (_section->allocator().alloc<Block>()) Block();
     }
+
+    Block* alloc_block(size_t arg_count) {
+      Block* block = (Block*) _section->allocator().alloc(
+        sizeof(Block) + sizeof(Arg*) * arg_count, alignof(Block)
+      );
+      return new (block) Block(Span<Arg*>::trailing<Block>(block, arg_count).zeroed());
+    }
+
+    Block* alloc_block(const Span<Type>& arg_types) {
+      Block* block = (Block*) _section->allocator().alloc(
+        sizeof(Block) + sizeof(Arg*) * arg_types.size(), alignof(Block)
+      );
+      Span<Arg*> args = Span<Arg*>::trailing<Block>(block, arg_types.size());
+      for (size_t it = 0; it < arg_types.size(); it++) {
+        args[it] = alloc_arg(arg_types[it], it);
+      }
+      return new (block) Block(args);
+    }
+
+    Block* alloc_block(const std::vector<Type>& arg_types) {
+      return alloc_block(Span<Type>((Type*) arg_types.data(), arg_types.size())); 
+    }
+
+    #define define_build_block(arg_type, arg_name) \
+      Block* build_block(arg_type arg_name) { \
+        Block* block = alloc_block(arg_name); \
+        _section->add(block); \
+        return block; \
+      } \
+      Block* build_block_before(Block* before, arg_type arg_name) { \
+        Block* block = alloc_block(arg_name); \
+        _section->insert_before(before, block); \
+        return block; \
+      }
+    
+    define_build_block(size_t, arg_count)
+    define_build_block(const Span<Type>&, arg_types)
+    define_build_block(const std::vector<Type>&, arg_types)
+
+    #undef define_build_block
+
+    Block* build_block() { return build_block(0); }
+    Block* build_block_before(Block* before) { return build_block_before(before, 0); }
 
     Const* build_const(Type type, uint64_t value) {
       return _section->context().build_const(type, value);
@@ -1021,25 +990,9 @@ namespace metajit {
 
     ${builder}
 
-    Input* build_input(Type type) {
-      return _section->add_input(type);
-    }
-
     ShlInst* build_shl(Value* a, size_t shift) {
       assert(shift <= type_size(a->type()) * 8);
       return build_shl(a, build_const(a->type(), shift));
-    }
-
-    PhiInst* build_phi(Type type, size_t incoming_count) {
-      PhiInst* phi = (PhiInst*) _section->allocator().alloc(
-        sizeof(PhiInst) +
-        sizeof(Value*) * incoming_count +
-        sizeof(Block*) * incoming_count,
-        alignof(PhiInst)
-      );
-      new (phi) PhiInst(type, incoming_count);
-      insert(phi);
-      return phi;
     }
 
     CommentInst* build_comment(const std::string& text) {
@@ -1747,18 +1700,18 @@ namespace metajit {
   ${capi}
 
   template<class T>
-  class InstMap {
+  class NameMap {
   private:
     T* _data = nullptr;
     size_t _size = 0;
   public:
-    InstMap() {}
-    InstMap(Section* section) { init(section); }
+    NameMap() {}
+    NameMap(Section* section) { init(section); }
 
-    InstMap(const InstMap<T>&) = delete;
-    InstMap<T>& operator=(const InstMap<T>&) = delete;
+    NameMap(const NameMap<T>&) = delete;
+    NameMap<T>& operator=(const NameMap<T>&) = delete;
 
-    ~InstMap() { if (_data) { delete[] _data; } }
+    ~NameMap() { if (_data) { delete[] _data; } }
 
     void init(Section* section) {
       assert(_data == nullptr);
@@ -1766,19 +1719,19 @@ namespace metajit {
       _data = new T[_size]();
     }
 
-    T& at(Inst* inst) {
-      assert(inst->name() < _size);
-      return _data[inst->name()];
+    T& at(NamedValue* value) {
+      assert(value->name() < _size);
+      return _data[value->name()];
     }
 
-    T& operator[](Inst* inst) { return at(inst); }
+    T& operator[](NamedValue* value) { return at(value); }
 
-    const T& at(Inst* inst) const {
-      assert(inst->name() < _size);
-      return _data[inst->name()];
+    const T& at(NamedValue* value) const {
+      assert(value->name() < _size);
+      return _data[value->name()];
     }
 
-    const T& operator[](Inst* inst) const { return at(inst); }
+    const T& operator[](NamedValue* value) const { return at(value); }
 
     T& at_name(size_t name) {
       assert(name < _size);
@@ -1786,7 +1739,7 @@ namespace metajit {
     }
   };
 
-  void Inst::substitute_args(InstMap<Value*>& substs) {
+  void Inst::substitute_args(NameMap<Value*>& substs) {
     for (size_t it = 0; it < _args.size(); it++) {
       Value* arg = _args.at(it);
       if (arg->is_inst()) {
@@ -1817,7 +1770,7 @@ namespace metajit {
   class DeadCodeElim: public Pass<DeadCodeElim> {
   public:
     DeadCodeElim(Section* section): Pass(section) {
-      InstMap<bool> used(section);
+      NameMap<bool> used(section);
 
       for (Block* block : section->rev_range()) {
         for (Inst* inst : block->rev_range()) {
@@ -1955,7 +1908,7 @@ namespace metajit {
   class DeadStoreElim: public Pass<DeadStoreElim> {
   public:
     DeadStoreElim(Section* section): Pass(section) {
-      InstMap<bool> unused(section);
+      NameMap<bool> unused(section);
       ExpandingVector<StoreInst*> last_store;
 
       for (Block* block : *section) {
@@ -2106,10 +2059,14 @@ namespace metajit {
 
   private:
     Section* _section;
-    InstMap<Bits> _values;
+    NameMap<Bits> _values;
   public:
     KnownBits(Section* section): _section(section), _values(section) {
       for (Block* block : *section) {
+        for (Arg* arg : block->args()) {
+          _values[arg] = Bits(arg->type(), 0, 0);
+        }
+
         for (Inst* inst : *block) {
           if (dynmatch(ResizeUInst, resize_u, inst)) {
             Bits a = at(resize_u->arg(0));
@@ -2153,10 +2110,8 @@ namespace metajit {
           type_mask(constant->type()),
           constant->value()
         );
-      } else if (dynmatch(Input, input, value)) {
-        return Bits(input->type(), 0, 0);
-      } else if (value->is_inst()) {
-        return _values.at((Inst*) value);
+      } else if (value->is_named()) {
+        return _values.at((NamedValue*) value);
       } else {
         assert(false); // Unreachable
         return Bits();
@@ -2198,7 +2153,7 @@ namespace metajit {
     };
   private:
     Section* _section;
-    InstMap<Bits> _values;
+    NameMap<Bits> _values;
 
     void use(Value* value, uint64_t used) {
       if (value->is_inst()) {
@@ -2320,7 +2275,7 @@ namespace metajit {
     };
   private:
     Section* _section;
-    InstMap<std::vector<Use>> _uses;
+    NameMap<std::vector<Use>> _uses;
   public:
     Uses(Section* section): _section(section), _uses(section) {
       for (Block* block : *section) {
@@ -2347,7 +2302,7 @@ namespace metajit {
 
     template <class Fn>
     bool substitute(const Fn& fn) {
-      InstMap<Value*> substs(_section);
+      NameMap<Value*> substs(_section);
       bool changed = false;
       for (Block* block : *_section) {
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
@@ -2538,7 +2493,7 @@ namespace metajit {
   class LoopInvCodeMotion: public Pass<LoopInvCodeMotion> {
   private:
     Loop* _loop;
-    InstMap<bool> _invariant;
+    NameMap<bool> _invariant;
   public:
     LoopInvCodeMotion(Loop* loop):
         Pass(loop->section()),
@@ -2626,20 +2581,18 @@ namespace metajit {
     static constexpr size_t ALWAYS = 0;
   private:
     Section* _section;
-    InstMap<size_t> _groups;
-    std::vector<size_t> _inputs;
+    NameMap<size_t> _groups;
     size_t _next_group = 1;
   public:
     ConstnessAnalysis(Section* section):
         _section(section),
-        _groups(section),
-        _inputs(section->inputs().size(), ALWAYS) {
+        _groups(section) {
       
-      for (Input* input : section->inputs()) {
-        _inputs[input->index()] = _next_group++;
-      }
-
       for (Block* block : *section) {
+        for (Arg* arg : block->args()) {
+          _groups[arg] = _next_group++;
+        }
+
         for (Inst* inst : *block) {
           if (dynmatch(FreezeInst, freeze, inst)) {
             _groups[inst] = ALWAYS;
@@ -2691,10 +2644,8 @@ namespace metajit {
     size_t at(Value* value) const {
       if (dynmatch(Const, constant, value)) {
         return ALWAYS;
-      } else if (dynmatch(Input, input, value)) {
-        return _inputs[input->index()];
-      } else if (value->is_inst()) {
-        return _groups.at((Inst*) value);
+      } else if (value->is_named()) {
+        return _groups.at((NamedValue*) value);
       } else {
         assert(false); // Unreachable
         return 0;
@@ -2718,32 +2669,32 @@ namespace metajit {
   private:
     Section* _section;
     ConstnessAnalysis& _constness;
-    InstMap<bool> _can_trace_inst;
-    InstMap<bool> _can_trace_const;
+    NameMap<bool> _can_trace_inst;
+    NameMap<bool> _can_trace_const;
 
-    void used_by(Inst* inst, Inst* by) {
+    void used_by(NamedValue* value, NamedValue* by) {
       if (_can_trace_inst.at(by)) {
-        if (_constness.at(by) != _constness.at(inst) ||
-            (is_int_or_bool(inst->type()) && !is_int_or_bool(by->type()))) {
-          _can_trace_const[inst] = true;
+        if (_constness.at(by) != _constness.at(value) ||
+            (is_int_or_bool(value->type()) && !is_int_or_bool(by->type()))) {
+          _can_trace_const[value] = true;
         }
-        if (_constness.at(inst) != ConstnessAnalysis::ALWAYS ||
-            !is_int_or_bool(inst->type())) {
-          _can_trace_inst[inst] = true;
+        if (_constness.at(value) != ConstnessAnalysis::ALWAYS ||
+            !is_int_or_bool(value->type())) {
+          _can_trace_inst[value] = true;
         }
       }
 
-      // Phis cannot generate new constants, so all arguments need to be const traceable
-      if (dynmatch(PhiInst, phi, by)) {
+      // Args cannot generate new constants, so all arguments need to be const traceable
+      if (dynmatch(Arg, arg, by)) {
         if (_can_trace_const.at(by)) {
-          _can_trace_const[inst] = true;
+          _can_trace_const[value] = true;
         }
       }
 
       if (dynamic_cast<FreezeInst*>(by) ||
-          (dynamic_cast<AssumeConstInst*>(by) && !is_int_or_bool(inst->type()))) {
-        _can_trace_inst[inst] = true;
-        _can_trace_const[inst] = true;
+          (dynamic_cast<AssumeConstInst*>(by) && !is_int_or_bool(value->type()))) {
+        _can_trace_inst[value] = true;
+        _can_trace_const[value] = true;
       }
     }
   public:
@@ -2764,25 +2715,35 @@ namespace metajit {
             _can_trace_const[inst] = true;
           }
 
-          for (Value* arg : inst->args()) {
-            if (arg->is_inst()) {
-              used_by((Inst*) arg, inst);
+          if (dynmatch(JumpInst, jump, inst)) {
+            // Jump arguments are passed to block arguments
+            for (Arg* block_arg : jump->block()->args()) {
+              Value* arg = jump->arg(block_arg->index());
+              if (arg->is_named()) {
+                used_by((NamedValue*) arg, block_arg);
+              }
+            }
+          } else {
+            for (Value* arg : inst->args()) {
+              if (arg->is_named()) {
+                used_by((NamedValue*) arg, inst);
+              }
             }
           }
         }
       }
     }
 
-    bool can_trace_const(Inst* inst) const {
-      return _can_trace_const[inst];
+    bool can_trace_const(NamedValue* value) const {
+      return _can_trace_const[value];
     }
 
-    bool can_trace_inst(Inst* inst) const {
-      return _can_trace_inst[inst];
+    bool can_trace_inst(NamedValue* value) const {
+      return _can_trace_inst[value];
     }
 
-    bool any(Inst* inst) const {
-      return can_trace_const(inst) || can_trace_inst(inst);
+    bool any(NamedValue* value) const {
+      return can_trace_const(value) || can_trace_inst(value);
     }
 
     void write(std::ostream& stream) {

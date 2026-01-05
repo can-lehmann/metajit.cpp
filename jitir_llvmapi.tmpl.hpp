@@ -121,8 +121,8 @@ namespace metajit {
     void* jitir_get_input(void* builder_ptr, uint64_t index) {
       Builder& builder = *(Builder*)builder_ptr;
       Section* section = builder.section();
-      Input* input = section->inputs().at(index);
-      return (void*)input;
+      Arg* arg = section->entry()->args().at(index);
+      return (void*) arg;
     }
 
     uint32_t jitir_is_const_inst(void* value_ptr) {

@@ -50,11 +50,11 @@ namespace metajit {
     ConstnessAnalysis _constness;
     TraceCapabilities _trace_capabilities;
 
-    InstMap<llvm::Value*> _values;
+    NameMap<llvm::Value*> _values;
     // Used for generating extension
-    InstMap<llvm::Value*> _built;
-    InstMap<llvm::Value*> _is_const;
-    InstMap<llvm::Value*> _is_used;
+    NameMap<llvm::Value*> _built;
+    NameMap<llvm::Value*> _is_const;
+    NameMap<llvm::Value*> _is_used;
     llvm::Value* _jitir_builder = nullptr;
 
     void emit_branch(llvm::Value* cond,
@@ -100,10 +100,8 @@ namespace metajit {
           constant->value(),
           false
         );
-      } else if (dynmatch(Input, input, value)) {
-        return _function->getArg(input->index());
-      } else if (dynmatch(Inst, inst, value)) {
-        return _values.at(inst);
+      } else if (value->is_named()) {
+        return _values.at((NamedValue*) value);
       } else {
         assert(false && "Unknown value");
         return nullptr;
@@ -203,18 +201,6 @@ namespace metajit {
         return _builder.CreateBr(_blocks.at(jump->block()));
       } else if (dynmatch(ExitInst, exit, inst)) {
         return _builder.CreateRetVoid();
-      } else if (dynmatch(PhiInst, phi, inst)) {
-        llvm::PHINode* phi_node = _builder.CreatePHI(
-          emit_type(phi->type()),
-          phi->arg_count()
-        );
-        for (size_t it = 0; it < phi->arg_count(); it++) {
-          phi_node->addIncoming(
-            emit_arg(phi->arg(it)),
-            _end_blocks.at(phi->block(it))
-          );
-        }
-        return phi_node;
       } else if (dynmatch(CommentInst, comment, inst)) {
         return nullptr;
       }
@@ -228,12 +214,10 @@ namespace metajit {
     llvm::Value* is_const(Value* value) {
       if (dynmatch(Const, constant, value)) {
         return llvm::ConstantInt::getTrue(_context);
-      } else if (dynmatch(Input, input, value)) {
-        return llvm::ConstantInt::getFalse(_context);
-      } else if (dynmatch(Inst, inst, value)) {
+      } else if (value->is_named()) {
         return _builder.CreateLoad(
           llvm::Type::getInt1Ty(_context),
-          _is_const.at(inst)
+          _is_const.at((NamedValue*) value)
         );
       } else {
         assert(false && "Unknown value");
@@ -309,9 +293,6 @@ namespace metajit {
         ));
 
         return res;
-      } else if (dynmatch(PhiInst, phi, inst)) {
-        assert(false);
-        return nullptr;
       } else {
         if (inst->has_side_effect() ||
             inst->is_terminator() ||
@@ -388,21 +369,10 @@ namespace metajit {
           addr,
           llvm::PointerType::get(_context, 0)
         );
-      } else if (dynmatch(Input, input, value)) {
-        return _builder.CreateCall(
-          _llvm_api.get_input,
-          {
-            _jitir_builder,
-            llvm::ConstantInt::get(
-              llvm::Type::getInt64Ty(_context),
-              input->index()
-            )
-          }
-        );
-      } else if (dynmatch(Inst, inst, value)) {
+      } else if (value->is_named()) {
         return _builder.CreateLoad(
           llvm::PointerType::get(_context, 0),
-          _built.at(inst)
+          _built.at((NamedValue*) value)
         );
       } else {
         assert(false && "Unknown value");
@@ -688,8 +658,7 @@ namespace metajit {
 
     void emit_build_inst(Inst* inst) {
       if (_comments &&
-          !dynamic_cast<CommentInst*>(inst) &&
-          !dynamic_cast<PhiInst*>(inst)) {
+          !dynamic_cast<CommentInst*>(inst)) {
         std::ostringstream comment_stream;
         inst->write_arg(comment_stream);
         comment_stream << " = ";
@@ -823,25 +792,24 @@ namespace metajit {
     }
 
     void emit_generating_extension(Block* block) {
-      for (Inst* inst : *block) {
-        if (dynmatch(PhiInst, phi, inst)) {
-          for (size_t it = 0; it < phi->arg_count(); it++) {
-            llvm::BasicBlock* from_block = _end_blocks.at(phi->block(it));
-            llvm::Instruction* terminator = from_block->getTerminator();
-            assert(terminator);
-            terminator->removeFromParent();
-            _builder.SetInsertPoint(from_block);
-            _builder.CreateStore(is_const(phi->arg(it)), _is_const.at(inst));
-            _builder.CreateStore(emit_built_arg(phi->arg(it)), _built.at(inst));
-            _builder.Insert(terminator);
-            _end_blocks.at(phi->block(it)) = _builder.GetInsertBlock();
+      for (Arg* arg : block->args()) {
+        /*
+        TODO
+        for (size_t it = 0; it < phi->arg_count(); it++) {
+          llvm::BasicBlock* from_block = _end_blocks.at(phi->block(it));
+          llvm::Instruction* terminator = from_block->getTerminator();
+          assert(terminator);
+          terminator->removeFromParent();
+          _builder.SetInsertPoint(from_block);
+          _builder.CreateStore(is_const(phi->arg(it)), _is_const.at(inst));
+          _builder.CreateStore(emit_built_arg(phi->arg(it)), _built.at(inst));
+          _builder.Insert(terminator);
+          _end_blocks.at(phi->block(it)) = _builder.GetInsertBlock();
 
-            _builder.SetInsertPoint(_blocks.at(block));
-            _values[inst] = emit_inst(inst);
-          }
-        } else {
-          break;
+          _builder.SetInsertPoint(_blocks.at(block));
+          _values[inst] = emit_inst(inst);
         }
+        */
       }
       
       ActionQueue queue;
@@ -856,7 +824,7 @@ namespace metajit {
       constexpr const size_t PRIO_OVERAPPROX_USED = 50;
 
       for (Inst* inst : *block) {
-        if (dynamic_cast<PhiInst*>(inst) || inst->is_terminator()) {
+        if (inst->is_terminator()) {
           continue;
         }
 
@@ -922,7 +890,7 @@ namespace metajit {
 
       std::unordered_map<Inst*, bool> always_used;
       for (Inst* inst : block->rev_range()) {
-        if (dynamic_cast<PhiInst*>(inst) || inst->is_terminator()) {
+        if (inst->is_terminator()) {
           continue;
         }
 
@@ -939,7 +907,7 @@ namespace metajit {
       }
             
       for (Inst* inst : *block) {
-        if (dynamic_cast<PhiInst*>(inst) || inst->is_terminator()) {
+        if (inst->is_terminator()) {
           continue;
         }
 
@@ -1029,8 +997,8 @@ namespace metajit {
         _trace_capabilities(section, _constness) {
       
       std::vector<llvm::Type*> args;
-      for (Input* input : _section->inputs()) {
-        args.push_back(emit_type(input->type()));
+      for (Arg* arg : _section->entry()->args()) {
+        args.push_back(emit_type(arg->type()));
       }
 
       if (_generating_extension) {
@@ -1059,7 +1027,7 @@ namespace metajit {
       _builder.SetInsertPoint(entry_block);
 
       if (_generating_extension) {
-        _jitir_builder = _function->getArg(_section->inputs().size());
+        _jitir_builder = _function->getArg(_section->entry()->args().size());
 
         for (Block* block : *section) {
           for (Inst* inst : *block) {

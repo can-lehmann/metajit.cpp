@@ -26,11 +26,12 @@ int main() {
   Section* section = new Section(context, allocator);
 
   Builder builder(section);
-  builder.move_to_end(builder.build_block());
+  Block* block = builder.build_block({Type::Ptr, Type::Ptr, Type::Ptr});
+  builder.move_to_end(block);
 
-  Input* a = section->add_input(Type::Ptr);
-  Input* b = section->add_input(Type::Ptr);
-  Input* c = section->add_input(Type::Ptr);
+  Arg* a = block->arg(0);
+  Arg* b = block->arg(1);
+  Arg* c = block->arg(2);
 
   builder.build_store(
     c,

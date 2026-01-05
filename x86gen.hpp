@@ -365,7 +365,7 @@ namespace metajit {
     std::vector<X86Block*> _blocks;
     X86InstBuilder _builder;
 
-    InstMap<void*> _memory_deps;
+    NameMap<void*> _memory_deps;
 
     struct Interval {
       size_t min = 0;
@@ -402,8 +402,7 @@ namespace metajit {
       size_t stack_offset = 0;
     };
 
-    InstMap<Reg> _vregs;
-    std::vector<Reg> _input_vregs;
+    NameMap<Reg> _vregs;
     std::vector<VRegInfo> _vreg_info;
     
     void memory_deps() {
@@ -471,14 +470,12 @@ namespace metajit {
             assert(false && "Unsupported constant type");
         }
         return reg;
-      } else if (dynmatch(Input, input, value)) {
-        return _input_vregs[input->index()];
-      } else if (value->is_inst()) {
-        Inst* inst = (Inst*) value;
-        if (_vregs.at(inst).is_invalid()) {
-          _vregs[inst] = vreg();
+      } else if (value->is_named()) {
+        NamedValue* named = (NamedValue*) value;
+        if (_vregs.at(named).is_invalid()) {
+          _vregs[named] = vreg();
         }
-        return _vregs.at(inst);
+        return _vregs.at(named);
       } else {
         assert(false && "Unknown value");
         return Reg();
@@ -1097,10 +1094,10 @@ namespace metajit {
       }
 
       RegFileState reg_file;
-      for (Reg vreg : _input_vregs) {
-        VRegInfo& info = _vreg_info[vreg.id()];
+      for (Arg* arg : _section->entry()->args()) {
+        VRegInfo& info = _vreg_info[vreg(arg).id()];
         info.current_reg = info.fixed;
-        reg_file.set(info.fixed, vreg);
+        reg_file.set(info.fixed, vreg(arg));
       }
 
       for (X86Block* block : _blocks) {
@@ -1221,14 +1218,14 @@ namespace metajit {
         Pass(section),
         _section(section),
         _builder(section->allocator(), nullptr) {
-      
-      for (Reg reg : input_pregs) {
-        _input_vregs.push_back(fix_to_preg(vreg(), reg));
-      }
 
       section->autoname();
       _memory_deps.init(section);
       _vregs.init(section);
+
+      for (Arg* arg : section->entry()->args()) {
+        fix_to_preg(vreg(arg), input_pregs[arg->index()]);
+      }
 
       // We create one extra block for pseudo_use instructions after loops
       _blocks.resize(section->block_count() + 1, nullptr);
