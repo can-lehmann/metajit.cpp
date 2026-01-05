@@ -511,6 +511,8 @@ namespace metajit {
       NamedValue(type), _args(args) {}
 
     const Span<Value*>& args() const { return _args; }
+    void set_args(const Span<Value*>& args) { _args = args; }
+
     size_t arg_count() const { return _args.size(); }
     Value* arg(size_t index) const { return _args.at(index); }
 
@@ -621,7 +623,7 @@ namespace metajit {
       for (Arg* arg : _args) {
         arg->set_name(next_name++);
       }
-      
+
       for (Inst* inst : _insts) {
         inst->set_name(next_name++);
       }
@@ -639,6 +641,7 @@ namespace metajit {
             stream << ", ";
           }
           arg->write_arg(stream);
+          stream << ": " << arg->type();
         }
         stream << ")";
       }
@@ -810,22 +813,7 @@ namespace metajit {
     bool verify(std::ostream& errors) {
       autoname();
 
-      std::map<Block*, std::set<Block*>> incoming;
-      for (Block* block : *this) {
-        if (!block->terminator()) {
-          errors << "Block ";
-          block->write_arg(errors);
-          errors << " has no terminator\n";
-          return true;
-        }
-
-        for (Block* succ : block->successors()) {
-          incoming[succ].insert(block);
-        }
-      }
-
       std::set<Value*> defined;
-
       for (Block* block : *this) {
         for (Arg* arg : block->args()) {
           defined.insert(arg);
@@ -862,7 +850,37 @@ namespace metajit {
         }
 
         if (dynmatch(JumpInst, jump, block->terminator())) {
+          if (jump->args().size() != jump->block()->args().size()) {
+            errors << "Block ";
+            block->write_arg(errors);
+            errors << " jumps to block ";
+            jump->block()->write_arg(errors);
+            errors << " which requires ";
+            errors << jump->block()->args().size();
+            errors << " arguments, but ";
+            errors << jump->args().size();
+            errors << " were provided\n";
+            return true;
+          }
 
+          for (Arg* arg : jump->block()->args()) {
+            if (arg->type() != jump->arg(arg->index())->type()) {
+              errors << "Block ";
+              block->write_arg(errors);
+              errors << " jumps to block ";
+              jump->block()->write_arg(errors);
+              errors << " with formal argument ";
+              arg->write_arg(errors);
+              errors << " of type ";
+              errors << arg->type();
+              errors << ", but provided argument ";
+              jump->arg(arg->index())->write_arg(errors);
+              errors << " has type ";
+              errors << jump->arg(arg->index())->type();
+              errors << "\n";
+              return true;
+            }
+          }
         } else {
           for (Block* succ : block->successors()) {
             if (succ->args().size() != 0) {
@@ -923,6 +941,10 @@ namespace metajit {
       _before = inst;
     }
 
+    Arg* entry_arg(size_t index) const {
+      return _section->entry()->arg(index);
+    }
+
     void insert(Inst* inst) {
       _block->insert_before(_before, inst);
     }
@@ -953,8 +975,23 @@ namespace metajit {
       return new (block) Block(args);
     }
 
+    Block* alloc_block(const Span<Arg*>& args) {
+      Block* block = (Block*) _section->allocator().alloc(
+        sizeof(Block) + sizeof(Arg*) * args.size(), alignof(Block)
+      );
+      Span<Arg*> trailing_args = Span<Arg*>::trailing<Block>(block, args.size());
+      for (size_t it = 0; it < args.size(); it++) {
+        trailing_args[it] = args[it];
+      }
+      return new (block) Block(trailing_args);
+    }
+
     Block* alloc_block(const std::vector<Type>& arg_types) {
       return alloc_block(Span<Type>((Type*) arg_types.data(), arg_types.size())); 
+    }
+
+    Block* alloc_block(const std::vector<Arg*>& args) {
+      return alloc_block(Span<Arg*>((Arg**) args.data(), args.size())); 
     }
 
     #define define_build_block(arg_type, arg_name) \
@@ -972,6 +1009,8 @@ namespace metajit {
     define_build_block(size_t, arg_count)
     define_build_block(const Span<Type>&, arg_types)
     define_build_block(const std::vector<Type>&, arg_types)
+    define_build_block(const Span<Arg*>&, arg_types)
+    define_build_block(const std::vector<Arg*>&, arg_types)
 
     #undef define_build_block
 
@@ -997,6 +1036,25 @@ namespace metajit {
 
     CommentInst* build_comment(const std::string& text) {
       return build_comment(_section->context().alloc_string(text));
+    }
+
+    JumpInst* build_jump(Block* block, const Span<Value*>& args) {
+      JumpInst* jump = (JumpInst*) _section->allocator().alloc(
+        sizeof(JumpInst) + sizeof(Value*) * args.size(),
+        alignof(JumpInst)
+      );
+      new (jump) JumpInst(block);
+      Span<Value*> trailing_span = Span<Value*>::trailing<JumpInst>(jump, args.size());
+      for (size_t it = 0; it < args.size(); it++) {
+        trailing_span[it] = args[it];
+      }
+      jump->set_args(trailing_span);
+      insert(jump);
+      return jump;
+    }
+
+    JumpInst* build_jump(Block* block, const std::vector<Value*>& args) {
+      return build_jump(block, Span<Value*>((Value**) args.data(), args.size()));
     }
 
     // Folding

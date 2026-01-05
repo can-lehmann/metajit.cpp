@@ -120,6 +120,10 @@ namespace metajit {
       }
     }
 
+    llvm::Value* emit_phi(Arg* arg) {
+      return _builder.CreatePHI(emit_type(arg->type()), 0);
+    }
+
     llvm::Value* emit_inst(Inst* inst) {
       if (dynmatch(FreezeInst, freeze, inst)) {
         return emit_arg(freeze->arg(0));
@@ -191,17 +195,7 @@ namespace metajit {
 
       #undef binop
 
-      else if (dynmatch(BranchInst, branch, inst)) {
-        return _builder.CreateCondBr(
-          emit_arg(branch->cond()),
-          _blocks.at(branch->true_block()),
-          _blocks.at(branch->false_block())
-        );
-      } else if (dynmatch(JumpInst, jump, inst)) {
-        return _builder.CreateBr(_blocks.at(jump->block()));
-      } else if (dynmatch(ExitInst, exit, inst)) {
-        return _builder.CreateRetVoid();
-      } else if (dynmatch(CommentInst, comment, inst)) {
+      else if (dynmatch(CommentInst, comment, inst)) {
         return nullptr;
       }
 
@@ -209,6 +203,28 @@ namespace metajit {
       std::cerr << std::endl;
       assert(false && "Unknown instruction");
       return nullptr;
+    }
+
+    llvm::Value* emit_terminator(Inst* inst, Block* block) {
+      if (dynmatch(BranchInst, branch, inst)) {
+        return _builder.CreateCondBr(
+          emit_arg(branch->cond()),
+          _blocks.at(branch->true_block()),
+          _blocks.at(branch->false_block())
+        );
+      } else if (dynmatch(JumpInst, jump, inst)) {
+        for (Arg* arg : jump->block()->args()) {
+          llvm::PHINode* phi = (llvm::PHINode*) _values.at(arg);
+          phi->addIncoming(emit_arg(jump->arg(arg->index())), _blocks.at(block));
+        }
+
+        return _builder.CreateBr(_blocks.at(jump->block()));
+      } else if (dynmatch(ExitInst, exit, inst)) {
+        return _builder.CreateRetVoid();
+      } else {
+        assert(false && "Unknown terminator");
+        return nullptr;
+      }
     }
 
     llvm::Value* is_const(Value* value) {
@@ -971,10 +987,10 @@ namespace metajit {
             llvm::Type::getInt32Ty(_context)
           )
         });
-        _values[inst] = emit_inst(inst);
+        _values[inst] = emit_terminator(inst, block);
       } else if (dynamic_cast<JumpInst*>(inst) ||
                   dynamic_cast<ExitInst*>(inst)) {
-        _values[inst] = emit_inst(inst);
+        _values[inst] = emit_terminator(inst, block);
       } else {
         assert(false && "Unknown terminator");
       }
@@ -1072,12 +1088,31 @@ namespace metajit {
       _builder.CreateBr(_blocks.at(section->entry()));
 
       for (Block* block : *_section) {
+        _builder.SetInsertPoint(_blocks.at(block));
+        for (Arg* arg : block->args()) {
+          _values[arg] = emit_phi(arg);
+          
+          if (section->entry()) {
+            llvm::PHINode* phi = (llvm::PHINode*) _values.at(arg);
+            phi->addIncoming(
+              _function->getArg(arg->index()),
+              entry_block
+            );
+          }
+        }
+      }
+
+      for (Block* block : *_section) {
         if (_generating_extension) {
           emit_generating_extension(block);
         } else {
           _builder.SetInsertPoint(_blocks.at(block));
           for (Inst* inst : *block) {
-            _values[inst] = emit_inst(inst);
+            if (inst->is_terminator()) {
+              _values[inst] = emit_terminator(inst, block);
+            } else {
+              _values[inst] = emit_inst(inst);
+            }
           }
         }
         
