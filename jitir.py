@@ -188,6 +188,14 @@ jitir = IR(
                 "is_int_or_bool(type)"
             ]
         ),
+        Inst("ResizeX",
+            args = [Arg("a"), Arg("type", Type("Type"))],
+            type = "type",
+            type_checks = [
+                "is_int_or_bool(a->type())",
+                "is_int_or_bool(type)"
+            ]
+        ),
         Inst("Load",
             args = [
                 Arg("ptr", getter=Getter.Always),

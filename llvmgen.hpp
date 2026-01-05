@@ -143,6 +143,11 @@ namespace metajit {
           emit_arg(resize_s->arg(0)),
           emit_type(resize_s->type())
         );
+      } else if (dynmatch(ResizeXInst, resize_x, inst)) {
+        return _builder.CreateZExtOrTrunc(
+          emit_arg(resize_x->arg(0)),
+          emit_type(resize_x->type())
+        );
       } else if (dynmatch(LoadInst, load, inst)) {
         return _builder.CreateLoad(
           emit_type(load->type()),

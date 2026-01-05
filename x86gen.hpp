@@ -604,6 +604,8 @@ namespace metajit {
               assert(false && "Unsupported resize type");
           }
         }
+      } else if (dynmatch(ResizeXInst, resize_x, inst)) {
+        _builder.mov64(vreg(inst), vreg(resize_x->arg(0)));
       } else if (dynmatch(LoadInst, load, inst)) {
         X86Inst::Mem mem(vreg(load->arg(0)), load->offset());
         switch (type_size(load->type())) {

@@ -2029,6 +2029,14 @@ namespace metajit {
         );
       }
 
+      Bits resize_x(Type to) const {
+        return Bits(
+          to,
+          mask & type_mask(type) & type_mask(to),
+          value
+        );
+      }
+
       Bits select(const Bits& a, const Bits& b) const {
         if (is_const()) {
           if (value != 0) {
@@ -2068,6 +2076,9 @@ namespace metajit {
           if (dynmatch(ResizeUInst, resize_u, inst)) {
             Bits a = at(resize_u->arg(0));
             _values[inst] = a.resize_u(resize_u->type());
+          } else if (dynmatch(ResizeXInst, resize_x, inst)) {
+            Bits a = at(resize_x->arg(0));
+            _values[inst] = a.resize_x(resize_x->type());
           } else if (dynmatch(SelectInst, select, inst)) {
             Bits cond = at(select->cond());
             Bits a = at(select->arg(1));
@@ -2186,6 +2197,8 @@ namespace metajit {
           
           if (dynmatch(ResizeUInst, resize_u, inst)) {
             use(resize_u->arg(0), _values[inst].used);
+          } else if (dynmatch(ResizeXInst, resize_x, inst)) {
+            use(resize_x->arg(0), _values[inst].used);
           } else if (dynmatch(AndInst, and_inst, inst)) {
             if (dynmatch(Const, const_b, and_inst->arg(1))) {
               use(and_inst->arg(0), _values[inst].used & const_b->value());
@@ -2292,6 +2305,7 @@ namespace metajit {
   class Simplify: public Pass<Simplify> {
   private:
     Section* _section = nullptr;
+    Builder _builder;
 
     template <class Fn>
     bool substitute(const Fn& fn) {
@@ -2302,6 +2316,7 @@ namespace metajit {
           Inst* inst = *inst_it;
           inst->substitute_args(substs);
 
+          _builder.move_before(block, inst);
           Value* subst = fn(inst);
           if (subst) {
             substs[inst] = subst;
@@ -2315,7 +2330,9 @@ namespace metajit {
       return changed;
     }
   public:
-    Simplify(Section* section, size_t max_iters): Pass(section), _section(section) {
+    Simplify(Section* section, size_t max_iters):
+        Pass(section), _section(section), _builder(section) {
+      
       bool changed = true;
       for (size_t iter = 0; changed && iter < max_iters; iter++) {
         changed = false;
@@ -2354,6 +2371,13 @@ namespace metajit {
               if ((used.used & b->value()) == 0) {
                 return or_inst->arg(0);
               }
+            }
+          } else if (dynamic_cast<ResizeUInst*>(inst) ||
+                     dynamic_cast<ResizeSInst*>(inst)) {
+            UsedBits::Bits used = used_bits.at(inst);
+            uint64_t mask = type_mask(inst->type()) & type_mask(inst->arg(0)->type());
+            if ((used.used & ~mask) == 0) {
+              return _builder.build_resize_x(inst->arg(0), inst->type());
             }
           }
           return nullptr;
