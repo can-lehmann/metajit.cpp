@@ -23,7 +23,7 @@ namespace metajit {
     llvm::FunctionCallee build_const;
     llvm::FunctionCallee build_const_fast;
     llvm::FunctionCallee build_guard;
-    llvm::FunctionCallee get_input;
+    llvm::FunctionCallee entry_arg;
     llvm::FunctionCallee is_const_inst;
 
     LLVM_API(llvm::Module* module) {
@@ -56,8 +56,8 @@ namespace metajit {
         )
       );
 
-      get_input = module->getOrInsertFunction(
-        "jitir_get_input",
+      entry_arg = module->getOrInsertFunction(
+        "jitir_entry_arg",
         llvm::FunctionType::get(
           llvm::PointerType::get(context, 0),
           std::vector<llvm::Type*>({
@@ -118,11 +118,9 @@ namespace metajit {
       builder.move_to_end(success);
     }
 
-    void* jitir_get_input(void* builder_ptr, uint64_t index) {
+    void* jitir_entry_arg(void* builder_ptr, uint64_t index) {
       Builder& builder = *(Builder*)builder_ptr;
-      Section* section = builder.section();
-      Arg* arg = section->entry()->args().at(index);
-      return (void*) arg;
+      return (void*) builder.entry_arg(index);
     }
 
     uint32_t jitir_is_const_inst(void* value_ptr) {
@@ -150,7 +148,7 @@ namespace metajit {
     map_symbol(jitir_build_const)
     map_symbol(jitir_build_const_fast)
     map_symbol(jitir_build_guard)
-    map_symbol(jitir_get_input)
+    map_symbol(jitir_entry_arg)
     map_symbol(jitir_is_const_inst)
 
     #undef map_symbol

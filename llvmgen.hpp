@@ -976,7 +976,7 @@ namespace metajit {
       _values[inst] = emit_terminator(inst, block);
     }
 
-    void emit_genearting_extension_allocs(NamedValue* value) {
+    void emit_generating_extension_allocs(NamedValue* value) {
       _is_const[value] = _builder.CreateAlloca(
         llvm::Type::getInt1Ty(_context),
         nullptr,
@@ -1064,12 +1064,28 @@ namespace metajit {
 
         for (Block* block : *section) {
           for (Arg* arg : block->args()) {
-            emit_genearting_extension_allocs(arg);
+            emit_generating_extension_allocs(arg);
           }
 
           for (Inst* inst : *block) {
-            emit_genearting_extension_allocs(inst);
+            emit_generating_extension_allocs(inst);
           }
+        }
+
+        for (Arg* arg : _section->entry()->args()) {
+          _builder.CreateStore(
+            _builder.CreateCall(
+              _llvm_api.entry_arg,
+              {
+                _jitir_builder,
+                llvm::ConstantInt::get(
+                  llvm::Type::getInt64Ty(_context),
+                  arg->index()
+                )
+              }
+            ),
+            _built.at(arg)
+          );
         }
       }
 
@@ -1079,15 +1095,15 @@ namespace metajit {
         _builder.SetInsertPoint(_blocks.at(block));
         for (Arg* arg : block->args()) {
           _values[arg] = emit_phi(arg);
-
-          if (block == section->entry()) {
-            llvm::PHINode* phi = (llvm::PHINode*) _values.at(arg);
-            phi->addIncoming(
-              _function->getArg(arg->index()),
-              entry_block
-            );
-          }
         }
+      }
+
+      for (Arg* arg : _section->entry()->args()) {
+        llvm::PHINode* phi = (llvm::PHINode*) _values.at(arg);
+        phi->addIncoming(
+          _function->getArg(arg->index()),
+          entry_block
+        );
       }
 
       for (Block* block : *_section) {
