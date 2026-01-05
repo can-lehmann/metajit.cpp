@@ -964,7 +964,7 @@ namespace metajit {
         _lru[preg.id()] = ~size_t(0);
       }
 
-      Reg operator[](Reg reg) const {
+      const Reg operator[](Reg reg) const {
         assert(reg.is_physical());
         return _regs[reg.id()];
       }
@@ -1098,7 +1098,7 @@ namespace metajit {
       for (Reg vreg : _input_vregs) {
         VRegInfo& info = _vreg_info[vreg.id()];
         info.current_reg = info.fixed;
-        reg_file[info.fixed] = vreg;
+        reg_file.set(info.fixed, vreg);
       }
 
       for (X86Block* block : _blocks) {
