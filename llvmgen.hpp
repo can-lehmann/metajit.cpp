@@ -215,7 +215,7 @@ namespace metajit {
       } else if (dynmatch(JumpInst, jump, inst)) {
         for (Arg* arg : jump->block()->args()) {
           llvm::PHINode* phi = (llvm::PHINode*) _values.at(arg);
-          phi->addIncoming(emit_arg(jump->arg(arg->index())), _blocks.at(block));
+          phi->addIncoming(emit_arg(jump->arg(arg->index())), _builder.GetInsertBlock());
         }
 
         return _builder.CreateBr(_blocks.at(jump->block()));
@@ -808,26 +808,6 @@ namespace metajit {
     }
 
     void emit_generating_extension(Block* block) {
-      for (Arg* arg : block->args()) {
-        /*
-        TODO
-        for (size_t it = 0; it < phi->arg_count(); it++) {
-          llvm::BasicBlock* from_block = _end_blocks.at(phi->block(it));
-          llvm::Instruction* terminator = from_block->getTerminator();
-          assert(terminator);
-          terminator->removeFromParent();
-          _builder.SetInsertPoint(from_block);
-          _builder.CreateStore(is_const(phi->arg(it)), _is_const.at(inst));
-          _builder.CreateStore(emit_built_arg(phi->arg(it)), _built.at(inst));
-          _builder.Insert(terminator);
-          _end_blocks.at(phi->block(it)) = _builder.GetInsertBlock();
-
-          _builder.SetInsertPoint(_blocks.at(block));
-          _values[inst] = emit_inst(inst);
-        }
-        */
-      }
-      
       ActionQueue queue;
 
       std::unordered_map<Value*, ActionGroup*> emit_groups;
@@ -987,13 +967,50 @@ namespace metajit {
             llvm::Type::getInt32Ty(_context)
           )
         });
-        _values[inst] = emit_terminator(inst, block);
-      } else if (dynamic_cast<JumpInst*>(inst) ||
-                  dynamic_cast<ExitInst*>(inst)) {
-        _values[inst] = emit_terminator(inst, block);
-      } else {
-        assert(false && "Unknown terminator");
+      } else if (dynmatch(JumpInst, jump, inst)) {
+        for (Arg* arg : jump->block()->args()) {
+          _builder.CreateStore(is_const(jump->arg(arg->index())), _is_const.at(arg));
+          _builder.CreateStore(emit_built_arg(jump->arg(arg->index())), _built.at(arg));
+        }
       }
+      _values[inst] = emit_terminator(inst, block);
+    }
+
+    void emit_genearting_extension_allocs(NamedValue* value) {
+      _is_const[value] = _builder.CreateAlloca(
+        llvm::Type::getInt1Ty(_context),
+        nullptr,
+        "is_const"
+      );
+
+      // False is always a valid overapproximation
+      _builder.CreateStore(
+        llvm::ConstantInt::getFalse(_context),
+        _is_const.at(value)
+      );
+
+      _is_used[value] = _builder.CreateAlloca(
+        llvm::Type::getInt1Ty(_context),
+        nullptr,
+        "is_used"
+      );
+
+      // True is always a valid overapproximation 
+      _builder.CreateStore(
+        llvm::ConstantInt::getTrue(_context),
+        _is_used.at(value)
+      );
+
+      _built[value] = _builder.CreateAlloca(
+        llvm::PointerType::get(_context, 0),
+        nullptr,
+        "built"
+      );
+
+      _builder.CreateStore(
+        llvm::ConstantPointerNull::get(llvm::PointerType::get(_context, 0)),
+        _built.at(value)
+      );
     }
 
   public:
@@ -1046,41 +1063,12 @@ namespace metajit {
         _jitir_builder = _function->getArg(_section->entry()->args().size());
 
         for (Block* block : *section) {
+          for (Arg* arg : block->args()) {
+            emit_genearting_extension_allocs(arg);
+          }
+
           for (Inst* inst : *block) {
-            _is_const[inst] = _builder.CreateAlloca(
-              llvm::Type::getInt1Ty(_context),
-              nullptr,
-              "is_const"
-            );
-
-            // False is always a valid overapproximation
-            _builder.CreateStore(
-              llvm::ConstantInt::getFalse(_context),
-              _is_const.at(inst)
-            );
-
-            _is_used[inst] = _builder.CreateAlloca(
-              llvm::Type::getInt1Ty(_context),
-              nullptr,
-              "is_used"
-            );
-
-            // True is always a valid overapproximation 
-            _builder.CreateStore(
-              llvm::ConstantInt::getTrue(_context),
-              _is_used.at(inst)
-            );
-
-            _built[inst] = _builder.CreateAlloca(
-              llvm::PointerType::get(_context, 0),
-              nullptr,
-              "built"
-            );
-
-            _builder.CreateStore(
-              llvm::ConstantPointerNull::get(llvm::PointerType::get(_context, 0)),
-              _built.at(inst)
-            );
+            emit_genearting_extension_allocs(inst);
           }
         }
       }
@@ -1091,8 +1079,8 @@ namespace metajit {
         _builder.SetInsertPoint(_blocks.at(block));
         for (Arg* arg : block->args()) {
           _values[arg] = emit_phi(arg);
-          
-          if (section->entry()) {
+
+          if (block == section->entry()) {
             llvm::PHINode* phi = (llvm::PHINode*) _values.at(arg);
             phi->addIncoming(
               _function->getArg(arg->index()),
