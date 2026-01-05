@@ -93,6 +93,11 @@ namespace metajit {
       return ptr;
     }
 
+    template <class T>
+    T* alloc() {
+      return (T*) alloc(sizeof(T), alignof(T));
+    }
+
     void dealloc_all() {
       _current = _first;
       _ptr = _first->data;
@@ -138,6 +143,10 @@ namespace metajit {
 
     bool operator!=(const Self& other) const {
       return !(*this == other);
+    }
+
+    Self operator|(const Self& other) const {
+      return Self(_flags | other._flags);
     }
   };
 
@@ -453,6 +462,10 @@ namespace metajit {
         _list->remove(_item);
         return iterator(_list, next);
       }
+
+      iterator at(T* new_item) {
+        return iterator(_list, new_item);
+      }
     };
 
     iterator begin() { return iterator(this, _first); }
@@ -633,7 +646,8 @@ namespace metajit {
   public:
     enum : uint32_t {
       None = 0,
-      Pure = 1 << 0
+      Pure = 1 << 0,
+      InBounds = 1 << 1
     };
 
     using BaseFlags<LoadFlags>::BaseFlags;
@@ -649,6 +663,7 @@ namespace metajit {
         }
       
       write_flag(Pure)
+      write_flag(InBounds)
 
       #undef write_flag
       stream << "}";
@@ -840,6 +855,10 @@ namespace metajit {
 
     void add(Block* block) { _blocks.add(block); }
 
+    void insert_before(Block* before, Block* block) {
+      _blocks.insert_before(before, block);
+    }
+
     void autoname() {
       _name_count = 0;
       _block_count = 0;
@@ -978,6 +997,15 @@ namespace metajit {
       );
       new (block) Block();
       _section->add(block);
+      return block;
+    }
+
+    Block* build_block_before(Block* before) {
+      Block* block = (Block*) _section->allocator().alloc(
+        sizeof(Block), alignof(Block)
+      );
+      new (block) Block();
+      _section->insert_before(before, block);
       return block;
     }
 
@@ -1771,8 +1799,8 @@ namespace metajit {
     }
 
     template <class... Args>
-    static void run(Section* section, Args... args) {
-      Self self(section, args...);
+    static void run(Args... args) {
+      Self self(args...);
     }
   };
 
@@ -2462,6 +2490,124 @@ namespace metajit {
           }
         }
       }
+    }
+  };
+
+  class Loop {
+  private:
+    Section* _section = nullptr;
+    Block* _header = nullptr;
+    Block* _extent = nullptr;
+    Block* _preheader = nullptr;
+  public:
+    Loop(Section* section, Block* header, Block* extent):
+        _section(section), _header(header), _extent(extent) {}
+
+    Section* section() const { return _section; }
+
+    Block* header() const { return _header; }
+    Block* extent() const { return _extent; }
+
+    Block* preheader() const { return _preheader; }
+    void set_preheader(Block* preheader) { _preheader = preheader; }
+
+    using iterator = decltype(_section->begin());
+
+    Range<iterator> range() {
+      iterator begin = _section->begin().at(_header);
+      iterator end = _section->begin().at(_extent);
+      end++;
+      return Range(begin, end);
+    }
+
+    size_t first_name() const {
+      return (*_header->begin())->name();
+    }
+  };
+
+  class LoopInvCodeMotion: public Pass<LoopInvCodeMotion> {
+  private:
+    Loop* _loop;
+    InstMap<bool> _invariant;
+  public:
+    LoopInvCodeMotion(Loop* loop):
+        Pass(loop->section()),
+        _loop(loop),
+        _invariant(loop->section()) {
+      
+      assert(loop->preheader());
+      assert(loop->preheader()->terminator());
+
+      // ExpandingVector<bool> does not work due to std::vector<bool>
+      ExpandingVector<uint8_t> stores;
+      for (Block* block : loop->range()) {
+        for (Inst* inst : *block) {
+          if (dynmatch(StoreInst, store, inst)) {
+            if (store->aliasing() < 0) {
+              stores[-store->aliasing()] = 1;
+            }
+          }
+        }
+      }
+
+      Builder builder(loop->section());
+      builder.move_before(loop->preheader(), loop->preheader()->terminator());
+
+      for (Block* block : loop->range()) {
+        for (auto inst_it = block->begin(); inst_it != block->end(); ) {
+          Inst* inst = *inst_it;
+
+          if (inst->has_side_effect() ||
+              inst->is_terminator() ||
+              dynamic_cast<StoreInst*>(inst) ||
+              dynamic_cast<CommentInst*>(inst)) {
+            inst_it++;
+            continue;
+          }
+
+          bool invariant = true;
+
+          for (Value* arg : inst->args()) {
+            if (!is_invariant(arg)) {
+              invariant = false;
+              break;
+            }
+          }
+
+          if (invariant) {
+            if (dynmatch(LoadInst, load, inst)) {
+              if (load->flags().has(LoadFlags::InBounds) &&
+                  load->aliasing() < 0) {
+                if (stores[-load->aliasing()]) {
+                  invariant = false;
+                }
+              } else {
+                invariant = false;
+              }
+            }
+          }
+
+          if (invariant) {
+            _invariant[inst] = true;
+            inst_it = inst_it.erase();
+            builder.insert(inst);
+          } else {
+            inst_it++;
+          }
+        }
+      }
+    }
+
+    bool is_invariant(Value* value) const {
+      if (value->is_inst()) {
+        Inst* inst = (Inst*) value;
+        if (inst->name() < _loop->first_name()) {
+          return true;
+        } else {
+          return _invariant.at(inst);
+        }
+      }
+      return true;
     }
   };
 
