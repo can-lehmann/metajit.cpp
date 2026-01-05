@@ -1251,6 +1251,16 @@ namespace metajit {
         if (res) {
           return res;
         }
+
+        if (a->type() == Type::Bool) {
+          if (const_b->value()) {
+            // a == 1 => a
+            return a;
+          } else {
+            // a == 0 => !a
+            return fold_not(a);
+          }
+        }
       }
 
       return build_eq(a, b);
