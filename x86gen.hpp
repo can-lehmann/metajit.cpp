@@ -210,12 +210,16 @@ namespace metajit {
   private:
     LinkedList<X86Inst> _insts;
     X86Block* _loop = nullptr;
+    Reg* _regalloc = nullptr;
     size_t _name = 0;
   public:
     X86Block() {}
 
     size_t name() const { return _name; }
     void set_name(size_t name) { _name = name; }
+
+    Reg* regalloc() const { return _regalloc; }
+    void set_regalloc(Reg* regalloc) { _regalloc = regalloc; }
 
     LinkedList<X86Inst>& insts() { return _insts; }
 
@@ -362,6 +366,7 @@ namespace metajit {
   class X86CodeGen: public Pass<X86CodeGen> {
   private:
     Section* _section;
+    Allocator& _allocator;
     std::vector<X86Block*> _blocks;
     X86InstBuilder _builder;
 
@@ -945,6 +950,7 @@ namespace metajit {
     private:
       std::vector<Reg> _regs;
       uint16_t _free = 0xffff;
+      uint16_t _max_free = 0xffff;
       
       std::vector<size_t> _lru;
       size_t _lru_count = 0;
@@ -955,11 +961,17 @@ namespace metajit {
 
         disable(REG_RSP);
         disable(REG_RBP);
+
+        _free = _max_free;
+      }
+
+      size_t size() const {
+        return _regs.size();
       }
 
       void disable(Reg preg) {
         assert(preg.is_physical());
-        _free &= ~(1 << preg.id());
+        _max_free &= ~(1 << preg.id());
         _lru[preg.id()] = ~size_t(0);
       }
 
@@ -985,6 +997,16 @@ namespace metajit {
         _free |= (1 << preg.id());
       }
 
+      bool is_free(Reg preg) const {
+        assert(preg.is_physical());
+        return (_free & (1 << preg.id())) != 0;
+      }
+
+      bool is_disabled(Reg preg) const {
+        assert(preg.is_physical());
+        return (_max_free & (1 << preg.id())) == 0;
+      }
+
       Reg get_free_reg() {
         if (_free == 0) {
           return Reg();
@@ -1004,16 +1026,80 @@ namespace metajit {
         }
         return Reg::phys(min_index);
       }
+
+      #ifndef NDEBUG
+      void assert_invariant() const {
+        for (size_t it = 0; it < _regs.size(); it++) {
+          if (!is_disabled(Reg::phys(it))) {
+            assert(_regs[it].is_invalid() == is_free(Reg::phys(it)));
+          }
+        }
+      }
+      #else
+      __attribute__((always_inline))
+      void assert_invariant() const {}
+      #endif
+
+      Reg* save_state(Allocator& allocator) {
+        assert_invariant();
+        Reg* state = (Reg*) allocator.alloc(sizeof(Reg) * _regs.size(), alignof(Reg));
+        for (size_t it = 0; it < _regs.size(); it++) {
+          state[it] = _regs[it];
+        }
+        return state;
+      }
+
+      void load_state(Reg* state) {
+        _free = _max_free;
+        for (size_t it = 0; it < _regs.size(); it++) {
+          _regs[it] = state[it];
+          if (!_regs[it].is_invalid()) {
+            _free &= ~(1 << it);
+          }
+        }
+        assert_invariant();
+      }
+
+      void merge_state(Reg* state) {
+        assert_invariant();
+        for (size_t it = 0; it < _regs.size(); it++) {
+          if (state[it] != _regs[it]) {
+            state[it] = Reg();
+          }
+        }
+      }
+
+      void write_state(std::ostream& stream, const Reg* regs) const {
+        stream << "[";
+        for (size_t it = 0; it < _regs.size(); it++) {
+          if (it != 0) {
+            stream << ", ";
+          }
+          if (regs[it].is_invalid()) {
+            stream << "<free>";
+          } else if (is_disabled(Reg::phys(it))) {
+            stream << "<disabled>";
+          } else {
+            stream << regs[it];
+          }
+        }
+        stream << "]";
+      }
+
+      void write(std::ostream& stream) const {
+        assert_invariant();
+        write_state(stream, _regs.data());
+      }
     };
 
     StackOffsetAlloc _stack_offset_alloc;
 
-    void spill(RegFileState& reg_file, Reg preg) {
+    void spill(RegFileState& reg_file, Reg preg, bool allow_spill_to_reg = true) {
       Reg vreg = reg_file[preg];
       if (vreg.is_virtual()) {
         VRegInfo& info = _vreg_info[vreg.id()];
         Reg free_reg = reg_file.get_free_reg();
-        if (free_reg.is_physical()) {
+        if (allow_spill_to_reg && free_reg.is_physical()) {
           // No need to spill, just move to free reg
           _builder.mov64(free_reg, preg);
           reg_file.free(preg);
@@ -1038,9 +1124,12 @@ namespace metajit {
     }
 
     void unspill(RegFileState& reg_file, Reg vreg, Reg preg) {
+      assert(vreg.is_virtual());
       VRegInfo& info = _vreg_info[vreg.id()];
       if (info.current_reg.is_physical()) {
-        assert(false);
+        // Ne need to unspill, just move from current reg
+        _builder.mov64(preg, info.current_reg);
+        reg_file.free(info.current_reg);
       } else {
         assert(info.stack_offset != 0);
         _builder.mov64(
@@ -1055,16 +1144,23 @@ namespace metajit {
       reg_file.set(preg, vreg);
     }
 
-    void spill_and_unspill(RegFileState& reg_file, Reg preg, Reg vreg, bool is_def) {
-      VRegInfo& info = _vreg_info[vreg.id()];
-      spill(reg_file, preg);
-      if (is_def) {
-        info.current_reg = preg;
-        reg_file.set(preg, vreg);
-      } else {
-        unspill(reg_file, vreg, preg);
+    void spill_and_unspill(RegFileState& reg_file,
+                           Reg preg,
+                           Reg vreg,
+                           bool is_def,
+                           bool allow_spill_to_reg = true) {
+      assert(preg.is_physical());
+      spill(reg_file, preg, allow_spill_to_reg);
+      if (vreg.is_virtual()) {
+        VRegInfo& info = _vreg_info[vreg.id()];
+        if (is_def) {
+          info.current_reg = preg;
+          reg_file.set(preg, vreg);
+        } else {
+          unspill(reg_file, vreg, preg);
+        }
+        reg_file.touch(preg); 
       }
-      reg_file.touch(preg);
     }
 
     bool is_foldable_mov(X86Inst* inst) {
@@ -1083,6 +1179,30 @@ namespace metajit {
       return false;
     }
 
+    void load_state(RegFileState& reg_file, Reg* state) {
+      for (size_t it = 0; it < reg_file.size(); it++) {
+        Reg preg = Reg::phys(it);
+        if (reg_file[preg].is_virtual()) {
+          _vreg_info[reg_file[preg].id()].current_reg = Reg();
+        }
+      }
+      reg_file.load_state(state);
+      for (size_t it = 0; it < reg_file.size(); it++) {
+        Reg preg = Reg::phys(it);
+        if (reg_file[preg].is_virtual()) {
+          _vreg_info[reg_file[preg].id()].current_reg = preg;
+        }
+      }
+    }
+
+    void spill_all(RegFileState& reg_file) {
+      for (size_t it = 0; it < reg_file.size(); it++) {
+        if (!reg_file.is_free(Reg::phys(it))) {
+          spill(reg_file, Reg::phys(it), false);
+        }
+      }
+    }
+
     void regalloc() {
       for (X86Block* block : _blocks) {
         for (X86Inst* inst : *block) {
@@ -1094,13 +1214,20 @@ namespace metajit {
       }
 
       RegFileState reg_file;
+
+      Reg* initial_state = reg_file.save_state(_allocator);
       for (Arg* arg : _section->entry()->args()) {
         VRegInfo& info = _vreg_info[vreg(arg).id()];
-        info.current_reg = info.fixed;
-        reg_file.set(info.fixed, vreg(arg));
+        assert(info.fixed.is_physical() && "Entry arguments must be in fixed registers");
+        initial_state[info.fixed.id()] = vreg(arg);
       }
+      _blocks[0]->set_regalloc(initial_state);
 
       for (X86Block* block : _blocks) {
+        if (block->regalloc()) {
+          load_state(reg_file, block->regalloc());
+        }
+
         for (auto it = block->begin(); it != block->end(); ) {
           X86Inst* inst = *it;
           _builder.move_before(block, inst);
@@ -1170,6 +1297,33 @@ namespace metajit {
               }
             }
           });
+
+          if (std::holds_alternative<X86Block*>(inst->imm())) {
+            X86Block* target = std::get<X86Block*>(inst->imm());
+            if (target->name() < block->name()) {
+              // Backedge, restore regalloc state
+              assert(target->loop());
+              assert(target->regalloc());
+              assert(inst->kind() == X86Inst::Kind::Jmp); // Backedges may only be unconditional jumps
+              for (size_t it = 0; it < reg_file.size(); it++) {
+                Reg preg = Reg::phys(it);
+                Reg current_vreg = reg_file[preg];
+                Reg target_vreg = target->regalloc()[it];
+                if (current_vreg != target_vreg) {
+                  spill_and_unspill(reg_file, preg, target_vreg, /*is_def=*/ false, /*allow_spill_to_reg=*/ false);
+                }
+              }
+              #ifndef NDEBUG
+              for (size_t it = 0; it < reg_file.size(); it++) {
+                assert(reg_file[Reg::phys(it)] == target->regalloc()[it]);
+              }
+              #endif
+            } else if (target->regalloc()) {
+              reg_file.merge_state(target->regalloc());
+            } else {
+              target->set_regalloc(reg_file.save_state(_allocator));
+            }
+          }
         }
       }
     }
@@ -1213,23 +1367,17 @@ namespace metajit {
       }
     }
 
-  public:
-    X86CodeGen(Section* section, const std::vector<Reg>& input_pregs):
-        Pass(section),
-        _section(section),
-        _builder(section->allocator(), nullptr) {
+    void run(const std::vector<Reg>& input_pregs) {
+      _memory_deps.init(_section);
+      _vregs.init(_section);
 
-      section->autoname();
-      _memory_deps.init(section);
-      _vregs.init(section);
-
-      for (Arg* arg : section->entry()->args()) {
+      for (Arg* arg : _section->entry()->args()) {
         fix_to_preg(vreg(arg), input_pregs[arg->index()]);
       }
 
       // We create one extra block for pseudo_use instructions after loops
-      _blocks.resize(section->block_count() + 1, nullptr);
-      for (size_t it = 0; it < section->block_count() + 1; it++) {
+      _blocks.resize(_section->block_count() + 1, nullptr);
+      for (size_t it = 0; it < _section->block_count() + 1; it++) {
         X86Block* x86_block = _builder.build_block();
         x86_block->set_name(it);
         _blocks[it] = x86_block;
@@ -1240,6 +1388,26 @@ namespace metajit {
       autoname_insts();
       regalloc();
       peephole();
+    }
+  public:
+    X86CodeGen(Section* section, const std::vector<Reg>& input_pregs):
+        Pass(section),
+        _section(section),
+        _allocator(section->allocator()),
+        _builder(section->allocator(), nullptr) {
+
+      run(input_pregs);
+    }
+
+    X86CodeGen(Section* section,
+               Allocator& allocator,
+               const std::vector<Reg>& input_pregs):
+        Pass(section),
+        _section(section),
+        _allocator(allocator),
+        _builder(allocator, nullptr) {
+      
+      run(input_pregs);
     }
 
     struct Label {
