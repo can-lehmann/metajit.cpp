@@ -2188,7 +2188,77 @@ namespace metajit {
             stream << '_';
           }
         }
-      }   
+      }
+
+      static Bits at(const NameMap<Bits>& values, Value* value) {
+        if (dynmatch(Const, constant, value)) {
+          return Bits(
+            constant->type(),
+            type_mask(constant->type()),
+            constant->value()
+          );
+        } else if (value->is_named()) {
+          return values.at((NamedValue*) value);
+        } else {
+          assert(false); // Unreachable
+          return Bits();
+        }
+      }
+
+      static Bits eval(Inst* inst, NameMap<Bits>& values) {
+        if (dynamic_cast<FreezeInst*>(inst) ||
+            dynamic_cast<AssumeConstInst*>(inst)) {
+          return at(values, inst->arg(0));
+        } else if (dynmatch(SelectInst, select, inst)) {
+          Bits cond = at(values, select->cond());
+          Bits a = at(values, select->arg(1));
+          Bits b = at(values, select->arg(2));
+          return cond.select(a, b);
+        } else if (dynmatch(ResizeUInst, resize_u, inst)) {
+          Bits a = at(values, resize_u->arg(0));
+          return a.resize_u(resize_u->type());
+        } else if (dynmatch(ResizeSInst, resize_u, inst)) {
+          Bits a = at(values, resize_u->arg(0));
+          return a.resize_s(resize_u->type());
+        } else if (dynmatch(ResizeXInst, resize_x, inst)) {
+          Bits a = at(values, resize_x->arg(0));
+          return a.resize_x(resize_x->type());
+        }
+
+        #define binop(name, expr) \
+          else if (dynmatch(name, binop, inst)) { \
+            Bits a = at(values, binop->arg(0)); \
+            Bits b = at(values, binop->arg(1)); \
+            return expr; \
+          }
+        
+        binop(AddPtrInst, a + b)
+        binop(AddInst, a + b)
+        binop(SubInst, a - b)
+        binop(MulInst, a * b)
+        binop(DivSInst, a.div_s(b))
+        binop(DivUInst, a.div_u(b))
+        binop(ModSInst, a.mod_s(b))
+        binop(ModUInst, a.mod_u(b))
+
+        binop(AndInst, a & b)
+        binop(OrInst, a | b)
+        binop(XorInst, a ^ b)
+        
+        binop(ShlInst, a.shl(b))
+        binop(ShrUInst, a.shr_u(b))
+        binop(ShrSInst, a.shr_s(b))
+
+        binop(EqInst, a.eq(b))
+        binop(LtSInst, a.lt_s(b))
+        binop(LtUInst, a.lt_u(b))
+
+        #undef binop
+
+        else {
+          return Bits(inst->type(), 0, 0);
+        }
+      }
     };
 
   private:
@@ -2202,75 +2272,13 @@ namespace metajit {
         }
 
         for (Inst* inst : *block) {
-          if (dynamic_cast<FreezeInst*>(inst) ||
-              dynamic_cast<AssumeConstInst*>(inst)) {
-            _values[inst] = at(inst->arg(0));
-          } else if (dynmatch(SelectInst, select, inst)) {
-            Bits cond = at(select->cond());
-            Bits a = at(select->arg(1));
-            Bits b = at(select->arg(2));
-            _values[inst] = cond.select(a, b);
-          } else if (dynmatch(ResizeUInst, resize_u, inst)) {
-            Bits a = at(resize_u->arg(0));
-            _values[inst] = a.resize_u(resize_u->type());
-          } else if (dynmatch(ResizeSInst, resize_u, inst)) {
-            Bits a = at(resize_u->arg(0));
-            _values[inst] = a.resize_s(resize_u->type());
-          } else if (dynmatch(ResizeXInst, resize_x, inst)) {
-            Bits a = at(resize_x->arg(0));
-            _values[inst] = a.resize_x(resize_x->type());
-          }
-
-          #define binop(name, expr) \
-            else if (dynmatch(name, binop, inst)) { \
-              Bits a = at(binop->arg(0)); \
-              Bits b = at(binop->arg(1)); \
-              _values[inst] = expr; \
-            }
-          
-          binop(AddPtrInst, a + b)
-          binop(AddInst, a + b)
-          binop(SubInst, a - b)
-          binop(MulInst, a * b)
-          binop(DivSInst, a.div_s(b))
-          binop(DivUInst, a.div_u(b))
-          binop(ModSInst, a.mod_s(b))
-          binop(ModUInst, a.mod_u(b))
-
-          binop(AndInst, a & b)
-          binop(OrInst, a | b)
-          binop(XorInst, a ^ b)
-          
-          binop(ShlInst, a.shl(b))
-          binop(ShrUInst, a.shr_u(b))
-          binop(ShrSInst, a.shr_s(b))
-
-          binop(EqInst, a.eq(b))
-          binop(LtSInst, a.lt_s(b))
-          binop(LtUInst, a.lt_u(b))
-
-          #undef binop
-
-          else {
-            _values[inst] = Bits(inst->type(), 0, 0);
-          }
+          _values[inst] = Bits::eval(inst, _values);
         }
       }
     }
 
     Bits at(Value* value) const {
-      if (dynmatch(Const, constant, value)) {
-        return Bits(
-          constant->type(),
-          type_mask(constant->type()),
-          constant->value()
-        );
-      } else if (value->is_named()) {
-        return _values.at((NamedValue*) value);
-      } else {
-        assert(false); // Unreachable
-        return Bits();
-      }
+      return Bits::at(_values, value);
     }
 
     void write(std::ostream& stream) {
