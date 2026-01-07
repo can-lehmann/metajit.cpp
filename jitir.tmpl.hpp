@@ -2014,6 +2014,14 @@ namespace metajit {
         mask(_mask & type_mask(_type)),
         value(_value & type_mask(_type)) {}
 
+      static Bits constant(Type type, uint64_t value) {
+        return Bits(type, type_mask(type), value);
+      }
+
+      static Bits constant(bool value) {
+        return Bits::constant(Type::Bool, value ? 1 : 0);
+      }
+
       std::optional<bool> at(size_t bit) const {
         if (mask & (uint64_t(1) << bit)) {
           return (value & (uint64_t(1) << bit)) != 0;
@@ -2024,6 +2032,53 @@ namespace metajit {
       bool is_const() const {
         return mask == type_mask(type);
       }
+
+      static Bits div_u(Type type, uint64_t a, uint64_t b) {
+        return Bits::constant(type, a / b);
+      }
+
+      static Bits div_s(Type type, uint64_t a, uint64_t b) {
+        return Bits(type, 0, 0);  // TODO
+      }
+
+      static Bits mod_u(Type type, uint64_t a, uint64_t b) {
+        return Bits::constant(type, a % b);
+      }
+
+      static Bits mod_s(Type type, uint64_t a, uint64_t b) {
+        return Bits(type, 0, 0);  // TODO
+      }
+
+      static Bits lt_u(Type type, uint64_t a, uint64_t b) {
+        return Bits::constant(a < b);
+      }
+
+      static Bits lt_s(Type type, uint64_t a, uint64_t b) {
+        return Bits(type, 0, 0);  // TODO
+      }
+
+      #define const_binop(name, expr) \
+        Bits name(const Bits& other) const { \
+          if (is_const() && other.is_const()) { \
+            return expr; \
+          } \
+          return Bits(type, 0, 0); \
+        }
+      
+      const_binop(operator+, Bits::constant(type, value + other.value))
+      const_binop(operator-, Bits::constant(type, value - other.value))
+      const_binop(operator*, Bits::constant(type, value * other.value))
+
+      const_binop(div_u, div_u(type, value, other.value))
+      const_binop(div_s, div_s(type, value, other.value))
+      const_binop(mod_u, mod_u(type, value, other.value))
+      const_binop(mod_s, mod_s(type, value, other.value))
+
+      const_binop(eq, Bits::constant(Type::Bool, value == other.value))
+      const_binop(lt_u, lt_u(type, value, other.value))
+      const_binop(lt_s, lt_s(type, value, other.value))
+
+      #undef const_binop
 
       Bits operator&(const Bits& other) const {
         return Bits(
@@ -2038,6 +2093,14 @@ namespace metajit {
           type,
           (mask & other.mask) | (mask & value) | (other.mask & other.value),
           value | other.value
+        );
+      }
+
+      Bits operator^(const Bits& other) const {
+        return Bits(
+          type,
+          mask & other.mask,
+          value ^ other.value
         );
       }
 
@@ -2057,6 +2120,14 @@ namespace metajit {
         );
       }
 
+      Bits shr_s(size_t shift) const {
+        return Bits(
+          type,
+          (mask >> shift), // TODO: | (type_mask(type) & ~(type_mask(type) >> shift)),
+          value >> shift
+        );
+      }
+
       #define shift_by_const(name) \
         Bits name(const Bits& other) const { \
           if (other.is_const()) { \
@@ -2067,6 +2138,7 @@ namespace metajit {
       
       shift_by_const(shl)
       shift_by_const(shr_u)
+      shift_by_const(shr_s)
 
       #undef shift_by_const
 
@@ -2076,6 +2148,10 @@ namespace metajit {
           (mask & type_mask(type) & type_mask(to)) | (type_mask(to) & ~type_mask(type)),
           value & type_mask(type) & type_mask(to)
         );
+      }
+
+      Bits resize_s(Type to) const {
+        return Bits(to, 0, 0); // TODO
       }
 
       Bits resize_x(Type to) const {
@@ -2126,17 +2202,23 @@ namespace metajit {
         }
 
         for (Inst* inst : *block) {
-          if (dynmatch(ResizeUInst, resize_u, inst)) {
-            Bits a = at(resize_u->arg(0));
-            _values[inst] = a.resize_u(resize_u->type());
-          } else if (dynmatch(ResizeXInst, resize_x, inst)) {
-            Bits a = at(resize_x->arg(0));
-            _values[inst] = a.resize_x(resize_x->type());
+          if (dynamic_cast<FreezeInst*>(inst) ||
+              dynamic_cast<AssumeConstInst*>(inst)) {
+            _values[inst] = at(inst->arg(0));
           } else if (dynmatch(SelectInst, select, inst)) {
             Bits cond = at(select->cond());
             Bits a = at(select->arg(1));
             Bits b = at(select->arg(2));
             _values[inst] = cond.select(a, b);
+          } else if (dynmatch(ResizeUInst, resize_u, inst)) {
+            Bits a = at(resize_u->arg(0));
+            _values[inst] = a.resize_u(resize_u->type());
+          } else if (dynmatch(ResizeSInst, resize_u, inst)) {
+            Bits a = at(resize_u->arg(0));
+            _values[inst] = a.resize_s(resize_u->type());
+          } else if (dynmatch(ResizeXInst, resize_x, inst)) {
+            Bits a = at(resize_x->arg(0));
+            _values[inst] = a.resize_x(resize_x->type());
           }
 
           #define binop(name, expr) \
@@ -2146,11 +2228,26 @@ namespace metajit {
               _values[inst] = expr; \
             }
           
+          binop(AddPtrInst, a + b)
+          binop(AddInst, a + b)
+          binop(SubInst, a - b)
+          binop(MulInst, a * b)
+          binop(DivSInst, a.div_s(b))
+          binop(DivUInst, a.div_u(b))
+          binop(ModSInst, a.mod_s(b))
+          binop(ModUInst, a.mod_u(b))
+
           binop(AndInst, a & b)
           binop(OrInst, a | b)
+          binop(XorInst, a ^ b)
           
           binop(ShlInst, a.shl(b))
           binop(ShrUInst, a.shr_u(b))
+          binop(ShrSInst, a.shr_s(b))
+
+          binop(EqInst, a.eq(b))
+          binop(LtSInst, a.lt_s(b))
+          binop(LtUInst, a.lt_u(b))
 
           #undef binop
 
