@@ -2,6 +2,8 @@
 
 A low-level meta-tracing framework.
 
+![Architecture](doc/architecture.svg)
+
 ## JITIR
 
 JITIR is metajit.cpp's intermediate representation.
