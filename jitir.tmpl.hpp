@@ -539,6 +539,14 @@ namespace metajit {
       }
     }
 
+    void write_stmt(std::ostream& stream) const {
+      if (type() != Type::Void) {
+        write_arg(stream);
+        stream << " = ";
+      }
+      write(stream);
+    }
+
     bool has_side_effect() const;
     bool is_terminator() const;
     std::vector<Block*> successor_blocks() const;
@@ -629,7 +637,7 @@ namespace metajit {
       }
     }
 
-    void write(std::ostream& stream, InfoWriter* info_writer = nullptr) {
+    void write_header(std::ostream& stream) {
       stream << "b" << _name;
       if (_args.size() > 0) {
         stream << "(";
@@ -645,14 +653,15 @@ namespace metajit {
         }
         stream << ")";
       }
-      stream << ":\n";
+      stream << ":";
+    }
+
+    void write(std::ostream& stream, InfoWriter* info_writer = nullptr) {
+      write_header(stream);
+      stream << '\n';
       for (Inst* inst : _insts) {
         stream << "  ";
-        if (inst->type() != Type::Void) {
-          inst->write_arg(stream);
-          stream << " = ";
-        }
-        inst->write(stream);
+        inst->write_stmt(stream);
         if (info_writer && info_writer->inst) {
           stream << " ; ";
           info_writer->inst(stream, inst);
@@ -2022,6 +2031,10 @@ namespace metajit {
         return Bits::constant(Type::Bool, value ? 1 : 0);
       }
 
+      static Bits constant(void* ptr) {
+        return Bits::constant(Type::Ptr, (uint64_t)(uintptr_t) ptr);
+      }
+
       std::optional<bool> at(size_t bit) const {
         if (mask & (uint64_t(1) << bit)) {
           return (value & (uint64_t(1) << bit)) != 0;
@@ -2286,6 +2299,181 @@ namespace metajit {
         _values[inst].write(stream);
       });
       _section->write(stream, &info_writer);
+    }
+  };
+
+  class Interpreter {
+  public:
+    using Bits = KnownBits::Bits;
+  private:
+    Section* _section;
+    NameMap<Bits> _values;
+
+    bool _refine_store_values = true;
+
+    // Program Counter
+    Block* _block = nullptr;
+    Inst* _inst = nullptr;
+  public:
+    Interpreter(Section* section, const std::vector<Bits>& entry_args):
+        _section(section) {
+      
+      _section->autoname();
+      _values.init(_section);
+      enter(section->entry(), entry_args);
+    }
+
+    Section* section() const { return _section; }
+    Block* block() const { return _block; }
+    Inst* inst() const { return _inst; }
+
+    bool is_valid() const {
+      return _block != nullptr && _inst != nullptr;
+    }
+
+    enum class Event {
+      None,
+      // Info
+      Exit, EnterBlock, RefineStoreValue,
+      // Errors
+      BranchUnknown, MemoryUnknown,
+      Invalid
+    };
+
+    static bool is_error(Event event) {
+      return (size_t) event >= (size_t) Event::BranchUnknown;
+    }
+
+    static const char* event_name(Event event) {
+      static const char* names[] = {
+        "None",
+        "Exit",
+        "EnterBlock",
+        "RefineStoreValue",
+        "BranchUnknown",
+        "MemoryUnknown",
+        "Invalid"
+      };
+      return names[(size_t) event];
+    }
+
+    void invalidate() {
+      _block = nullptr;
+      _inst = nullptr;
+    }
+
+    Event run_until(Event event) {
+      while (true) {
+        Event step_event = step();
+        if (step_event == event ||
+            step_event == Event::Exit ||
+            is_error(step_event)) {
+          return step_event;
+        }
+      }
+    }
+
+    Event run_for(size_t steps) {
+      for (size_t it = 0; it < steps; it++) {
+        Event step_event = step();
+        if (step_event == Event::Exit ||
+            is_error(step_event)) {
+          return step_event;
+        }
+      }
+      return Event::None;
+    }
+
+    Event step() {
+      if (!is_valid()) {
+        return Event::Invalid;
+      }
+
+      if (dynmatch(LoadInst, load, _inst)) {
+        Bits ptr_bits = at(load->ptr());
+        if (!ptr_bits.is_const()) {
+          invalidate();
+          return Event::MemoryUnknown;
+        }
+        uint8_t* ptr = (uint8_t*) ptr_bits.value + load->offset();
+        uint64_t value = 0;
+        switch (type_size(load->type())) {
+          case 1: value = *ptr; break;
+          case 2: value = *(uint16_t*) ptr; break;
+          case 4: value = *(uint32_t*) ptr; break;
+          case 8: value = *(uint64_t*) ptr; break;
+          default:
+            assert(false); // Unreachable
+        }
+        _values[load] = Bits::constant(load->type(), value);
+        _inst = _inst->next();
+      } else if (dynmatch(StoreInst, store, _inst)) {
+        Bits ptr_bits = at(store->ptr());
+        Bits value_bits = at(store->value());
+        bool refined = false;
+        if (_refine_store_values && !value_bits.is_const()) {
+          refined = true;
+          value_bits.mask = type_mask(store->value()->type());
+        }
+        if (!ptr_bits.is_const() || !value_bits.is_const()) {
+          invalidate();
+          return Event::MemoryUnknown;
+        }
+        uint8_t* ptr = (uint8_t*) ptr_bits.value + store->offset();
+        uint64_t value = value_bits.value;
+        switch (type_size(store->value()->type())) {
+          case 1: *ptr = (uint8_t) value; break;
+          case 2: *(uint16_t*) ptr = (uint16_t) value; break;
+          case 4: *(uint32_t*) ptr = (uint32_t) value; break;
+          case 8: *(uint64_t*) ptr = (uint64_t) value; break;
+          default:
+            assert(false); // Unreachable
+        }
+        _values[store] = Bits();
+        _inst = _inst->next();
+        if (refined) {
+          return Event::RefineStoreValue;
+        }
+      } else if (dynmatch(JumpInst, jump, _inst)) {
+        std::vector<Bits> args;
+        for (Value* arg : jump->args()) {
+          args.push_back(at(arg));
+        }
+        enter(jump->block(), args);
+        return Event::EnterBlock;
+      } else if (dynmatch(BranchInst, branch, _inst)) {
+        Bits cond = at(branch->cond());
+        if (!cond.is_const()) {
+          invalidate();
+          return Event::BranchUnknown;
+        }
+        if (cond.value != 0) {
+          enter(branch->true_block(), {});
+        } else {
+          enter(branch->false_block(), {});
+        }
+        return Event::EnterBlock;
+      } else if (dynmatch(ExitInst, exit, _inst)) {
+        invalidate();
+        return Event::Exit;
+      } else {
+        _values[_inst] = KnownBits::Bits::eval(_inst, _values);
+        _inst = _inst->next();
+      }
+      return Event::None;
+    }
+
+    void enter(Block* block, const std::vector<Bits>& args) {
+      assert(args.size() == block->args().size());
+      _block = block;
+      _inst = *block->begin();
+      for (Arg* arg : block->args()) {
+        _values[arg] = args[arg->index()];
+      }
+    }
+
+    Bits at(Value* value) const {
+      return KnownBits::Bits::at(_values, value);
     }
   };
 
