@@ -121,13 +121,9 @@ namespace metajit {
       }
 
       void step(std::function<Interpreter::Event()> fn) {
-        if (_interpreter->is_valid()) {
-          Interpreter::Event event = fn();
-          _status = Interpreter::event_name(event);
-          if (_interpreter->is_valid()) {
-            scroll_into_view(_lines[_interpreter->inst()]);
-          }
-        }
+        Interpreter::Event event = fn();
+        _status = Interpreter::event_name(event);
+        scroll_into_view(_lines[_interpreter->inst()]);
       }
 
       void scroll_into_view(int line) {

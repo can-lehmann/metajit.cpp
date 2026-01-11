@@ -2355,8 +2355,6 @@ namespace metajit {
     Section* _section;
     NameMap<Bits> _values;
 
-    bool _refine_store_values = true;
-
     // Program Counter
     Block* _block = nullptr;
     Inst* _inst = nullptr;
@@ -2373,47 +2371,23 @@ namespace metajit {
     Block* block() const { return _block; }
     Inst* inst() const { return _inst; }
 
-    bool is_valid() const {
-      return _block != nullptr && _inst != nullptr;
-    }
-
     enum class Event {
-      None,
-      // Info
-      Exit, EnterBlock, RefineStoreValue,
-      // Errors
-      BranchUnknown, MemoryUnknown,
-      Invalid
+      None, Exit, EnterBlock
     };
-
-    static bool is_error(Event event) {
-      return (size_t) event >= (size_t) Event::BranchUnknown;
-    }
 
     static const char* event_name(Event event) {
       static const char* names[] = {
         "None",
         "Exit",
-        "EnterBlock",
-        "RefineStoreValue",
-        "BranchUnknown",
-        "MemoryUnknown",
-        "Invalid"
+        "EnterBlock"
       };
       return names[(size_t) event];
-    }
-
-    void invalidate() {
-      _block = nullptr;
-      _inst = nullptr;
     }
 
     Event run_until(Event event) {
       while (true) {
         Event step_event = step();
-        if (step_event == event ||
-            step_event == Event::Exit ||
-            is_error(step_event)) {
+        if (step_event == event || step_event == Event::Exit) {
           return step_event;
         }
       }
@@ -2422,8 +2396,7 @@ namespace metajit {
     Event run_for(size_t steps) {
       for (size_t it = 0; it < steps; it++) {
         Event step_event = step();
-        if (step_event == Event::Exit ||
-            is_error(step_event)) {
+        if (step_event == Event::Exit) {
           return step_event;
         }
       }
@@ -2435,16 +2408,9 @@ namespace metajit {
     }
 
     Event step() {
-      if (!is_valid()) {
-        return Event::Invalid;
-      }
-
       if (dynmatch(LoadInst, load, _inst)) {
         Bits ptr_bits = at(load->ptr());
-        if (!ptr_bits.is_const()) {
-          invalidate();
-          return Event::MemoryUnknown;
-        }
+        assert(ptr_bits.is_const());
         uint8_t* ptr = (uint8_t*) ptr_bits.value + load->offset();
         uint64_t value = 0;
         switch (type_size(load->type())) {
@@ -2456,19 +2422,11 @@ namespace metajit {
             assert(false); // Unreachable
         }
         _values[load] = Bits::constant(load->type(), value);
-        _inst = _inst->next();
       } else if (dynmatch(StoreInst, store, _inst)) {
         Bits ptr_bits = at(store->ptr());
         Bits value_bits = at(store->value());
-        bool refined = false;
-        if (_refine_store_values && !value_bits.is_const()) {
-          refined = true;
-          value_bits.mask = type_mask(store->value()->type());
-        }
-        if (!ptr_bits.is_const() || !value_bits.is_const()) {
-          invalidate();
-          return Event::MemoryUnknown;
-        }
+        assert(ptr_bits.is_const());
+        assert(value_bits.is_const());
         uint8_t* ptr = (uint8_t*) ptr_bits.value + store->offset();
         uint64_t value = value_bits.value;
         switch (type_size(store->value()->type())) {
@@ -2480,10 +2438,10 @@ namespace metajit {
             assert(false); // Unreachable
         }
         _values[store] = Bits();
-        _inst = _inst->next();
-        if (refined) {
-          return Event::RefineStoreValue;
-        }
+      } else if (dynmatch(ResizeXInst, resize_x, _inst)) {
+        // We don't want to introduce any unknown bits, so we just zero-extend
+        Bits arg = at(resize_x->arg(0));
+        _values[resize_x] = arg.resize_u(resize_x->type());
       } else if (dynmatch(JumpInst, jump, _inst)) {
         std::vector<Bits> args;
         for (Value* arg : jump->args()) {
@@ -2493,10 +2451,7 @@ namespace metajit {
         return Event::EnterBlock;
       } else if (dynmatch(BranchInst, branch, _inst)) {
         Bits cond = at(branch->cond());
-        if (!cond.is_const()) {
-          invalidate();
-          return Event::BranchUnknown;
-        }
+        assert(cond.is_const());
         if (cond.value != 0) {
           enter(branch->true_block(), {});
         } else {
@@ -2504,12 +2459,12 @@ namespace metajit {
         }
         return Event::EnterBlock;
       } else if (dynmatch(ExitInst, exit, _inst)) {
-        invalidate();
         return Event::Exit;
       } else {
         _values[_inst] = KnownBits::Bits::eval(_inst, _values);
-        _inst = _inst->next();
       }
+      assert(_values[_inst].is_const() || _inst->type() != Type::Void);
+      _inst = _inst->next();
       return Event::None;
     }
 
@@ -2518,6 +2473,8 @@ namespace metajit {
       _block = block;
       _inst = *block->begin();
       for (Arg* arg : block->args()) {
+        assert(args[arg->index()].type == arg->type());
+        assert(args[arg->index()].is_const());
         _values[arg] = args[arg->index()];
       }
     }
