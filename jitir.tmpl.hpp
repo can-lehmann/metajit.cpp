@@ -239,7 +239,10 @@ namespace metajit {
   private:
     uint64_t _value = 0;
   public:
-    Const(Type type, uint64_t value): Value(type), _value(value) {}
+    Const(Type type, uint64_t value): Value(type), _value(value) {
+      assert(type != Type::Void);
+      assert((value & ~type_mask(type)) == 0);
+    }
     uint64_t value() const { return _value; }
 
     void write_arg(std::ostream& stream) const override {
@@ -1039,7 +1042,7 @@ namespace metajit {
     }
 
     Const* build_const_fast(Type type, uint64_t value) {
-      Const* constant = (Const*) _section->allocator().alloc(sizeof(Const), alignof(Const));
+      Const* constant = _section->allocator().alloc<Const>();
       new (constant) Const(type, value);
       return constant;
     }
