@@ -2235,7 +2235,7 @@ namespace metajit {
 
         return Bits(
           a.type,
-          a.mask & b.mask,
+          a.mask & b.mask & ~(a.value ^ b.value),
           a.value
         );
       }
@@ -2699,6 +2699,7 @@ namespace metajit {
             KnownBits::Bits a = known_bits.at(and_inst->arg(0));
             KnownBits::Bits b = known_bits.at(and_inst->arg(1));
 
+            // If there is no case where b_i is 0 and a_i is 1 or _, then a & b == a
             if (b.is_const() && ((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
               return and_inst->arg(0);
             }
