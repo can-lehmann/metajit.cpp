@@ -230,18 +230,34 @@ namespace metajit {
 
       uint8_t* llvm_data = new uint8_t[data.data_size()]();
       uint8_t* x86_data = new uint8_t[data.data_size()]();
+      uint8_t* interp_data = new uint8_t[data.data_size()]();
 
       for (size_t sample = 0; sample < sample_count; sample++) {
         data.gen(llvm_data);
         std::copy(llvm_data, llvm_data + data.data_size(), x86_data);
+        std::copy(llvm_data, llvm_data + data.data_size(), interp_data);
 
         llvm_func(llvm_data);
         x86_func(x86_data);
 
+        Interpreter interpreter(section, {
+          Interpreter::Bits::constant(interp_data)
+        });
+
+        Interpreter::Event event = interpreter.run();
+        if (event != Interpreter::Event::Exit) {
+          throw unittest::AssertionError(
+            "Interpreter did not exit cleanly",
+            __LINE__,
+            __FILE__
+          );
+        }
+        
         for (auto [offset, value] : data.outputs()) {
           bool is_equal = true;
           for (size_t it = 0; it < type_size(value->type()); it++) {
-            if (llvm_data[offset + it] != x86_data[offset + it]) {
+            if (llvm_data[offset + it] != x86_data[offset + it] ||
+                llvm_data[offset + it] != interp_data[offset + it]) {
               is_equal = false;
               break;
             }
@@ -254,9 +270,11 @@ namespace metajit {
             data.write_outputs(stream, llvm_data);
             stream << "x86 Output:\n";
             data.write_outputs(stream, x86_data);
+            stream << "Interpreter Output:\n";
+            data.write_outputs(stream, interp_data);
             stream << "\n";
             throw unittest::AssertionError(
-              "llvm_data[offset] != x86_data[offset]",
+              "Output mismatch",
               __LINE__,
               __FILE__,
               stream.str()

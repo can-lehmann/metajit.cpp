@@ -179,6 +179,14 @@ namespace metajit {
     return 0;
   }
 
+  inline size_t type_width(Type type) {
+    if (type == Type::Bool) {
+      return 1;
+    } else {
+      return type_size(type) * 8;
+    }
+  }
+
   inline uint64_t type_mask(Type type) {
     switch (type) {
       case Type::Void: return 0;
@@ -2035,6 +2043,10 @@ namespace metajit {
         return Bits::constant(Type::Ptr, (uint64_t)(uintptr_t) ptr);
       }
 
+      bool is_known(size_t bit) const {
+        return (mask & (uint64_t(1) << bit)) != 0;
+      }
+
       std::optional<bool> at(size_t bit) const {
         if (mask & (uint64_t(1) << bit)) {
           return (value & (uint64_t(1) << bit)) != 0;
@@ -2067,7 +2079,15 @@ namespace metajit {
       }
 
       static Bits lt_s(Type type, uint64_t a, uint64_t b) {
-        return Bits(type, 0, 0);  // TODO
+        bool res = false;
+        switch (type) {
+          case Type::Int8: res = (int8_t(a) < int8_t(b)); break;
+          case Type::Int16: res = (int16_t(a) < int16_t(b)); break;
+          case Type::Int32: res = (int32_t(a) < int32_t(b)); break;
+          case Type::Int64: res = (int64_t(a) < int64_t(b)); break;
+          default: assert(false); // Unsupported type
+        }
+        return Bits::constant(res);
       }
 
       #define const_binop(name, expr) \
@@ -2134,11 +2154,22 @@ namespace metajit {
       }
 
       Bits shr_s(size_t shift) const {
-        return Bits(
+        Bits result(
           type,
-          (mask >> shift), // TODO: | (type_mask(type) & ~(type_mask(type) >> shift)),
+          (mask >> shift),
           value >> shift
         );
+        std::optional<bool> sign_bit = at(type_width(type) - 1);
+        if (sign_bit.has_value()) {
+          uint64_t upper_bits = type_mask(type) & ~(type_mask(type) >> shift);
+          result.mask |= upper_bits;
+          if (sign_bit.value()) {
+            result.value |= upper_bits;
+          } else {
+            result.value &= ~upper_bits;
+          }
+        }
+        return result;
       }
 
       #define shift_by_const(name) \
@@ -2164,7 +2195,22 @@ namespace metajit {
       }
 
       Bits resize_s(Type to) const {
-        return Bits(to, 0, 0); // TODO
+        Bits result(
+          to,
+          mask & type_mask(type) & type_mask(to),
+          value & type_mask(type) & type_mask(to)
+        );
+        std::optional<bool> sign_bit = at(type_width(type) - 1);
+        if (sign_bit.has_value()) {
+          uint64_t upper_bits = type_mask(to) & ~type_mask(type);
+          result.mask |= upper_bits;
+          if (sign_bit.value()) {
+            result.value |= upper_bits;
+          } else {
+            result.value &= ~upper_bits;
+          }
+        }
+        return result;
       }
 
       Bits resize_x(Type to) const {
@@ -2382,6 +2428,10 @@ namespace metajit {
         }
       }
       return Event::None;
+    }
+
+    Event run() {
+      return run_until(Event::Exit);
     }
 
     Event step() {
