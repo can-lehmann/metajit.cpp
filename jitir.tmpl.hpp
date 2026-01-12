@@ -118,6 +118,39 @@ namespace metajit {
 
   using Allocator = ArenaAllocator;
 
+  enum class Highlight {
+    None,
+    Keyword,
+    Comment,
+    Constant,
+    Type,
+    Value,
+    ArgName
+  };
+
+  class PrettyStream {
+  private:
+  public:
+    virtual ~PrettyStream() {}
+
+    operator std::ostream&() { return ostream(); }
+
+    virtual std::ostream& ostream() = 0;
+    virtual PrettyStream& operator<<(Highlight highlight) = 0;
+  };
+
+  class PlainPrettyStream: public PrettyStream {
+  private:
+    std::ostream& _stream;
+  public:
+    PlainPrettyStream(std::ostream& stream): _stream(stream) {}
+
+    std::ostream& ostream() override { return _stream; }
+    PrettyStream& operator<<(Highlight highlight) override {
+      return *this;
+    }
+  };
+
   template <class Self>
   class BaseFlags {
   protected:
@@ -216,6 +249,13 @@ struct std::hash<metajit::Type> {
   }
 };
 
+
+template <class T>
+metajit::PrettyStream& operator<<(metajit::PrettyStream& stream, const T& value) {
+  stream.ostream() << value;
+  return stream;
+}
+
 namespace metajit {
   class Value {
   private:
@@ -226,7 +266,12 @@ namespace metajit {
 
     Type type() const { return _type; }
 
-    virtual void write_arg(std::ostream& stream) const = 0;
+    virtual void write_arg(PrettyStream& stream) const = 0;
+
+    void write_arg(std::ostream& stream) const {
+      PlainPrettyStream plain_stream(stream);
+      write_arg(plain_stream);
+    }
 
     virtual bool equals(const Value* other) const = 0;
     virtual size_t hash() const = 0;
@@ -245,8 +290,8 @@ namespace metajit {
     }
     uint64_t value() const { return _value; }
 
-    void write_arg(std::ostream& stream) const override {
-      stream << _value;
+    void write_arg(PrettyStream& stream) const override {
+      stream << Highlight::Constant << _value << Highlight::None;
     }
 
     bool equals(const Value* other) const override {
@@ -505,9 +550,11 @@ namespace metajit {
     size_t name() const { return _name; }
     void set_name(size_t name) { _name = name; }
 
-    void write_arg(std::ostream& stream) const override {
-      stream << '%' << _name;
+    void write_arg(PrettyStream& stream) const override {
+      stream << Highlight::Value << '%' << _name << Highlight::None;
     }
+
+    using Value::write_arg;
 
     bool is_named() const override {
       return true;
@@ -534,8 +581,14 @@ namespace metajit {
 
     void substitute_args(NameMap<Value*>& substs);
 
-    virtual void write(std::ostream& stream) const = 0;
-    void write_args(std::ostream& stream, bool& is_first) const {
+    virtual void write(PrettyStream& stream) const = 0;
+
+    void write(std::ostream& stream) const {
+      PlainPrettyStream plain_stream(stream);
+      write(plain_stream);
+    }
+
+    void write_args(PrettyStream& stream, bool& is_first) const {
       for (Value* arg : _args) {
         if (is_first) {
           is_first = false;
@@ -550,7 +603,7 @@ namespace metajit {
       }
     }
 
-    void write_stmt(std::ostream& stream) const {
+    void write_stmt(PrettyStream& stream) const {
       if (type() != Type::Void) {
         write_arg(stream);
         stream << " = ";
@@ -648,7 +701,7 @@ namespace metajit {
       }
     }
 
-    void write_header(std::ostream& stream) {
+    void write_header(PrettyStream& stream) {
       stream << "b" << _name;
       if (_args.size() > 0) {
         stream << "(";
@@ -660,14 +713,14 @@ namespace metajit {
             stream << ", ";
           }
           arg->write_arg(stream);
-          stream << ": " << arg->type();
+          stream << ": " << Highlight::Type << arg->type() << Highlight::None;
         }
         stream << ")";
       }
       stream << ":";
     }
 
-    void write(std::ostream& stream, InfoWriter* info_writer = nullptr) {
+    void write(PrettyStream& stream, InfoWriter* info_writer = nullptr) {
       write_header(stream);
       stream << '\n';
       for (Inst* inst : _insts) {
@@ -681,8 +734,13 @@ namespace metajit {
       }
     }
 
-    void write_arg(std::ostream& stream) {
+    void write_arg(PrettyStream& stream) {
       stream << 'b' << _name;
+    }
+
+    void write_arg(std::ostream& stream) {
+      PlainPrettyStream plain_stream(stream);
+      write_arg(plain_stream);
     }
 
     template <class Fn>
@@ -708,14 +766,14 @@ namespace metajit {
 
     using BaseFlags<LoadFlags>::BaseFlags;
 
-    void write(std::ostream& stream) const {
+    void write(PrettyStream& stream) const {
       stream << "{";
       bool is_first = true;
       #define write_flag(name) \
         if (_flags & name) { \
           if (!is_first) { stream << ", "; } \
           is_first = false; \
-          stream << #name; \
+          stream << Highlight::Constant << #name << Highlight::None; \
         }
       
       write_flag(Pure)
@@ -735,6 +793,12 @@ struct std::hash<metajit::LoadFlags> {
 };
 
 std::ostream& operator<<(std::ostream& stream, metajit::LoadFlags flags) {
+  metajit::PlainPrettyStream plain_stream(stream);
+  flags.write(plain_stream);
+  return stream;
+}
+
+metajit::PrettyStream& operator<<(metajit::PrettyStream& stream, const metajit::LoadFlags& flags) {
   flags.write(stream);
   return stream;
 }
@@ -820,7 +884,7 @@ namespace metajit {
       }
     }
 
-    void write(std::ostream& stream, InfoWriter* info_writer = nullptr) {
+    void write(PrettyStream& stream, InfoWriter* info_writer = nullptr) {
       autoname();
       
       stream << "section {\n";
@@ -828,6 +892,11 @@ namespace metajit {
         block->write(stream, info_writer);
       }
       stream << "}\n";
+    }
+
+    void write(std::ostream& stream, InfoWriter* info_writer = nullptr) {
+      PlainPrettyStream plain_stream(stream);
+      write(plain_stream, info_writer);
     }
 
     bool verify(std::ostream& errors) {

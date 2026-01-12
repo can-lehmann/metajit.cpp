@@ -130,6 +130,32 @@ class InstTrailingConstructorPlugin:
 
         return code
 
+class PrettyInstWritePlugin(InstWritePlugin):
+    def __init__(self):
+        super().__init__(
+            overrides={
+                "Comment": lambda stream: "stream << Highlight::Comment << \"; \" << _text << Highlight::None;"
+            },
+            stream_type="metajit::PrettyStream&"
+        )
+    
+    def write_name(self, inst, stream):
+        return f"{stream} << Highlight::Keyword << \"{inst.name}\" << Highlight::None;"
+
+    def write_arg(self, arg, value, stream):
+        code = f"{stream} << Highlight::ArgName << \"{arg.name}=\" << Highlight::None; "
+        if arg.type == Type("Block*"):
+            code += f"{value}->write_arg({stream});"
+        elif arg.type == Type("Type"):
+            code += f"{stream} << Highlight::Type << {value} << Highlight::None;"
+        elif arg.type == Type("LoadFlags"):
+            code += f"{stream} << {value};"
+        elif arg.type == Type("AliasingGroup") or arg.type == Type("uint64_t"):
+            code += f"{stream} << Highlight::Constant << {value} << Highlight::None;"
+        else:
+            assert False
+        return code
+
 def binop(name, type_checks = None):
     if type_checks is None:
         type_checks = ["is_int(a->type())"]
@@ -280,14 +306,7 @@ lwir(
             InstTrailingConstructorPlugin(),
             InstGetterPlugin(),
             InstSetterPlugin(),
-            InstWritePlugin(
-                custom={
-                    Type("Block*"): lambda value, stream: f"{value}->write_arg({stream});",
-                },
-                overrides={
-                    "Comment": lambda stream: "stream << \"; \" << _text;"
-                }
-            ),
+            PrettyInstWritePlugin(),
             InstEqualsPlugin(),
             InstHashPlugin()
         ]),

@@ -60,6 +60,52 @@ namespace metajit {
       }
     };
 
+    class ViewPrettyStream: public PrettyStream {
+    private:
+      View* _view;
+      int _y = 0;
+      int _x = 0;
+      std::ostringstream _buffer;
+      Highlight _current_highlight = Highlight::None;
+    public:
+      ViewPrettyStream(View* view, int y, int x):
+        _view(view), _y(y), _x(x) {}
+      
+      std::ostream& ostream() override { return _buffer; }
+
+      PrettyStream& operator<<(Highlight highlight) override {
+        flush();
+        if (_current_highlight != Highlight::None) {
+          attroff(COLOR_PAIR((size_t) _current_highlight));
+        }
+        if (highlight != Highlight::None) {
+          attron(COLOR_PAIR((size_t) highlight));
+        }
+        _current_highlight = highlight;
+        return *this;
+      }
+
+      PrettyStream& flush() {
+        for (char chr : _buffer.str()) {
+          _view->write(_y, _x, chr);
+          if (chr == '\n') {
+            _y++;
+            _x = 0;
+          } else {
+            _x++;
+          }
+        }
+        _buffer = std::ostringstream();
+        return *this;
+      }
+
+      void move(int y, int x) {
+        flush();
+        _y = y;
+        _x = x;
+      }
+    };
+
     class Debugger {
     private:
       Interpreter* _interpreter = nullptr;
@@ -76,6 +122,15 @@ namespace metajit {
         cbreak();
         noecho();
         keypad(stdscr, TRUE);
+        start_color();
+        use_default_colors();
+
+        init_pair((size_t) Highlight::Keyword, COLOR_GREEN, -1);
+        init_pair((size_t) Highlight::Comment, COLOR_CYAN, -1);
+        init_pair((size_t) Highlight::Constant, COLOR_YELLOW, -1);
+        init_pair((size_t) Highlight::Type, COLOR_YELLOW, -1);
+        init_pair((size_t) Highlight::Value, -1, -1);
+        init_pair((size_t) Highlight::ArgName, COLOR_WHITE, -1);
 
         redraw();
         refresh();
@@ -142,27 +197,30 @@ namespace metajit {
         int y = _scroll;
         View main_view(0, 0, LINES - 1, COLS);
         for (Block* block : *_interpreter->section()) {
-          std::ostringstream line;
-          block->write_header(line);
-          main_view.write(y, 0, line.str());
+          ViewPrettyStream stream(&main_view, y, 0);
+          block->write_header(stream);
+          stream.flush();
           y++;
           for (Inst* inst : *block) {
-            line = std::ostringstream();
+            stream.move(y, 0);
             if (inst == _interpreter->inst()) {
-              line << "> ";
+              stream << "> ";
             } else {
-              line << "  ";
+              stream << "  ";
             }
-            inst->write_stmt(line);
+            inst->write_stmt(stream);
             if (inst->type() != Type::Void &&
                 _interpreter->at(inst).type != Type::Void) {
-              line << " ; ";
-              _interpreter->at(inst).write(line);
+              stream << Highlight::Comment;
+              stream << " ; ";
+              _interpreter->at(inst).write(stream);
+              stream << Highlight::None;
             }
-            main_view.write(y, 0, line.str());
+            stream.flush();
             _lines[inst] = y - _scroll;
             y++;
           }
+
           View status_bar(LINES - 1, 0, 1, COLS);
           attron(A_REVERSE);
           status_bar.fill(' ');
