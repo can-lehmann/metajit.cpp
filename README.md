@@ -9,17 +9,18 @@ A low-level meta-tracing framework.
 JITIR is metajit.cpp's intermediate representation.
 It is a low-level SSA-based IR similar to LLVM IR.
 While many LLVM IR operations map directly to JITIR, JITIR also includes operations that are specifically designed for meta-tracing.
+JITIR uses block parameters instead of phi nodes.
 All instructions are documented in [doc/jitir.md](doc/jitir.md).
 
 Here is an example JITIR program that adds two 32-bit integers:
 
 ```
-section(Ptr %input0, Ptr %input1, Ptr %input2) {
-b0:
-  %0 = Load %input0, type=Int32, flags={}, aliasing=0, offset=0
-  %1 = Load %input1, type=Int32, flags={}, aliasing=0, offset=0
-  %2 = Add %0, %1
-  Store %input2, %2, aliasing=0, offset=0
+section {
+b0(%0: Ptr, %1: Ptr, %2: Ptr):
+  %3 = Load %0, type=Int32, flags={}, aliasing=0, offset=0
+  %4 = Load %1, type=Int32, flags={}, aliasing=0, offset=0
+  %5 = Add %3, %4
+  Store %2, %5, aliasing=0, offset=0
   Exit
 }
 ```
@@ -29,13 +30,16 @@ metajit.cpp's LLVM backend generates the following LLVM IR from this JITIR progr
 ```llvm
 define void @add(ptr %0, ptr %1, ptr %2) {
 entry:
-  br label %block
+  br label %b0
 
-block:                                            ; preds = %entry
-  %3 = load i32, ptr %0, align 4
-  %4 = load i32, ptr %1, align 4
-  %5 = add i32 %3, %4
-  store i32 %5, ptr %2, align 4
+b0:                                               ; preds = %entry
+  %3 = phi ptr [ %0, %entry ]
+  %4 = phi ptr [ %1, %entry ]
+  %5 = phi ptr [ %2, %entry ]
+  %6 = load i32, ptr %3, align 4
+  %7 = load i32, ptr %4, align 4
+  %8 = add i32 %6, %7
+  store i32 %8, ptr %5, align 4
   ret void
 }
 ```
@@ -46,9 +50,10 @@ The x86 backend generates the following x86-64 assembly code:
 b0:
   mov32 reg=p0 rm=[p12]
   mov32 reg=p1 rm=[p13]
-  lea64 reg=p0 rm=[p0 + p1 * 1]
-  mov32_mem reg=p0 rm=[p14]
+  lea64 reg=p2 rm=[p0 + p1 * 1]
+  mov32_mem reg=p2 rm=[p14]
   ret
+b1:
 ```
 
 ### Aliasing
