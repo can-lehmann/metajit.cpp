@@ -409,6 +409,7 @@ class MarkdownPlugin:
                 code += f"Type Checks:\n\n"
                 for check in inst.type_checks:
                     code += f"- `{check}`\n"
+            code += f"\n"
         return {"markdown": code}
         
 lwir(

@@ -21,6 +21,7 @@ Arguments
 
 Return Type: `a->type()`
 
+
 ### AssumeConst
 
 Bind a value at tracing time without inserting a guard.
@@ -30,6 +31,7 @@ Arguments
 - **a**: `Value*`
 
 Return Type: `a->type()`
+
 
 ### Select
 
@@ -45,6 +47,7 @@ Type Checks:
 
 - `cond->type() == Type::Bool`
 - `a->type() == b->type()`
+
 ### ResizeU
 
 Zero-extend or truncate value.
@@ -60,6 +63,7 @@ Type Checks:
 
 - `is_int_or_bool(a->type())`
 - `is_int_or_bool(type)`
+
 ### ResizeS
 
 Sign-extend or truncate value.
@@ -75,6 +79,7 @@ Type Checks:
 
 - `is_int_or_bool(a->type())`
 - `is_int_or_bool(type)`
+
 ### ResizeX
 
 Extend or truncate value. If extending, the new bits are undefined.
@@ -90,6 +95,7 @@ Type Checks:
 
 - `is_int_or_bool(a->type())`
 - `is_int_or_bool(type)`
+
 ### Load
 
 Arguments
@@ -105,6 +111,7 @@ Return Type: `type`
 Type Checks:
 
 - `ptr->type() == Type::Ptr`
+
 ### Store
 
 Arguments
@@ -119,6 +126,7 @@ Return Type: `Type::Void`
 Type Checks:
 
 - `ptr->type() == Type::Ptr`
+
 ### AddPtr
 
 Arguments
@@ -132,6 +140,7 @@ Type Checks:
 
 - `ptr->type() == Type::Ptr`
 - `offset->type() == Type::Int64`
+
 ### Add
 
 Arguments
@@ -145,6 +154,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
+
 ### Sub
 
 Arguments
@@ -158,6 +168,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
+
 ### Mul
 
 Arguments
@@ -171,6 +182,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
+
 ### DivS
 
 Arguments
@@ -184,6 +196,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
+
 ### DivU
 
 Arguments
@@ -197,6 +210,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
+
 ### ModS
 
 Arguments
@@ -210,6 +224,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
+
 ### ModU
 
 Arguments
@@ -223,6 +238,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
+
 ### And
 
 Arguments
@@ -236,6 +252,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int_or_bool(a->type())`
+
 ### Or
 
 Arguments
@@ -249,6 +266,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int_or_bool(a->type())`
+
 ### Xor
 
 Arguments
@@ -262,6 +280,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int_or_bool(a->type())`
+
 ### ShrU
 
 Arguments
@@ -275,6 +294,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
+
 ### ShrS
 
 Arguments
@@ -288,6 +308,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
+
 ### Shl
 
 Arguments
@@ -301,6 +322,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
+
 ### Eq
 
 Arguments
@@ -313,6 +335,7 @@ Return Type: `Type::Bool`
 Type Checks:
 
 - `a->type() == b->type()`
+
 ### LtU
 
 Arguments
@@ -326,6 +349,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
+
 ### LtS
 
 Arguments
@@ -339,6 +363,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
+
 ### Branch
 
 Conditional jump.
@@ -354,6 +379,7 @@ Return Type: `Type::Void`
 Type Checks:
 
 - `cond->type() == Type::Bool`
+
 ### Jump
 
 Unconditional jump.
@@ -364,6 +390,7 @@ Arguments
 
 Return Type: `Type::Void`
 
+
 ### Exit
 
 Return from section.
@@ -372,6 +399,7 @@ Arguments
 
 
 Return Type: `Type::Void`
+
 
 ### Comment
 
@@ -382,5 +410,6 @@ Arguments
 - **text**: `const char*`
 
 Return Type: `Type::Void`
+
 
 
