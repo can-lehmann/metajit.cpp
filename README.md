@@ -9,6 +9,8 @@ A low-level meta-tracing framework.
 JITIR is metajit.cpp's intermediate representation.
 It is a low-level SSA-based IR similar to LLVM IR.
 While many LLVM IR operations map directly to JITIR, JITIR also includes operations that are specifically designed for meta-tracing.
+All instructions are documented in [doc/jitir.md](doc/jitir.md).
+
 Here is an example JITIR program that adds two 32-bit integers:
 
 ```
