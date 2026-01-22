@@ -1626,5 +1626,15 @@ namespace metajit {
 
       return buffer;
     }
+
+    size_t inst_count() const {
+      size_t count = 0;
+      for (X86Block* block : _blocks) {
+        for (X86Inst* inst : *block) {
+          count++;
+        }
+      }
+      return count;
+    }
   };
 }
