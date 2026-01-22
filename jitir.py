@@ -207,12 +207,14 @@ jitir = IR(
         Inst("Freeze",
             args = [Arg("a")],
             type = "a->type()",
-            type_checks = []
+            type_checks = [],
+            doc = "Bind a value at tracing time. Insert a guard to check that the value is the same at runtime."
         ),
         Inst("AssumeConst",
             args = [Arg("a")],
             type = "a->type()",
-            type_checks = []
+            type_checks = [],
+            doc = "Bind a value at tracing time without inserting a guard."
         ),
         Inst("Select",
             args = [Arg("cond", getter=Getter.Always), Arg("a"), Arg("b")],
@@ -228,7 +230,8 @@ jitir = IR(
             type_checks = [
                 "is_int_or_bool(a->type())",
                 "is_int_or_bool(type)"
-            ]
+            ],
+            doc = "Zero-extend or truncate value."
         ),
         Inst("ResizeS",
             args = [Arg("a"), Arg("type", Type("Type"))],
@@ -236,7 +239,8 @@ jitir = IR(
             type_checks = [
                 "is_int_or_bool(a->type())",
                 "is_int_or_bool(type)"
-            ]
+            ],
+            doc = "Sign-extend or truncate value."
         ),
         Inst("ResizeX",
             args = [Arg("a"), Arg("type", Type("Type"))],
@@ -244,7 +248,8 @@ jitir = IR(
             type_checks = [
                 "is_int_or_bool(a->type())",
                 "is_int_or_bool(type)"
-            ]
+            ],
+            doc = "Extend or truncate value. If extending, the new bits are undefined."
         ),
         Inst("Load",
             args = [
@@ -301,22 +306,26 @@ jitir = IR(
                 Arg("false_block", type=Type("Block*"), setter=True)
             ],
             type = "Type::Void",
-            type_checks = ["cond->type() == Type::Bool"]
+            type_checks = ["cond->type() == Type::Bool"],
+            doc = "Conditional jump."
         ),
         Inst("Jump",
             args = [Arg("block", type=Type("Block*"), setter=True)],
             type = "Type::Void",
-            type_checks = []
+            type_checks = [],
+            doc = "Unconditional jump."
         ),
         Inst("Exit",
             args = [],
             type = "Type::Void",
-            type_checks = []
+            type_checks = [],
+            doc = "Return from section."
         ),
         Inst("Comment",
             args = [Arg("text", Type("const char*"), setter=True)],
             type = "Type::Void",
-            type_checks = []
+            type_checks = [],
+            doc = "No-op. Used for adding comments to the IR."
         ),
     ]
 )
@@ -388,7 +397,9 @@ class MarkdownPlugin:
     def run(self, ir):
         code = ""
         for inst in ir.insts:
-            code += f"## {inst.name}\n\n"
+            code += f"### {inst.name}\n\n"
+            if inst.doc:
+                code += f"{inst.doc}\n\n"
             code += f"Arguments\n\n"
             for arg in inst.args:
                 code += f"- **{arg.name}**: `{arg.type.format(ir)}`\n"

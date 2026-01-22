@@ -1,6 +1,19 @@
 # JITIR Instruction Reference
 
-## Freeze
+## Types
+
+- `Type::Void`
+- `Type::Int8`
+- `Type::Int16`
+- `Type::Int32`
+- `Type::Int64`
+- `Type::Ptr`
+
+## Instructions
+
+### Freeze
+
+Bind a value at tracing time. Insert a guard to check that the value is the same at runtime.
 
 Arguments
 
@@ -8,7 +21,9 @@ Arguments
 
 Return Type: `a->type()`
 
-## AssumeConst
+### AssumeConst
+
+Bind a value at tracing time without inserting a guard.
 
 Arguments
 
@@ -16,7 +31,7 @@ Arguments
 
 Return Type: `a->type()`
 
-## Select
+### Select
 
 Arguments
 
@@ -30,7 +45,9 @@ Type Checks:
 
 - `cond->type() == Type::Bool`
 - `a->type() == b->type()`
-## ResizeU
+### ResizeU
+
+Zero-extend or truncate value.
 
 Arguments
 
@@ -43,7 +60,9 @@ Type Checks:
 
 - `is_int_or_bool(a->type())`
 - `is_int_or_bool(type)`
-## ResizeS
+### ResizeS
+
+Sign-extend or truncate value.
 
 Arguments
 
@@ -56,7 +75,9 @@ Type Checks:
 
 - `is_int_or_bool(a->type())`
 - `is_int_or_bool(type)`
-## ResizeX
+### ResizeX
+
+Extend or truncate value. If extending, the new bits are undefined.
 
 Arguments
 
@@ -69,7 +90,7 @@ Type Checks:
 
 - `is_int_or_bool(a->type())`
 - `is_int_or_bool(type)`
-## Load
+### Load
 
 Arguments
 
@@ -84,7 +105,7 @@ Return Type: `type`
 Type Checks:
 
 - `ptr->type() == Type::Ptr`
-## Store
+### Store
 
 Arguments
 
@@ -98,7 +119,7 @@ Return Type: `Type::Void`
 Type Checks:
 
 - `ptr->type() == Type::Ptr`
-## AddPtr
+### AddPtr
 
 Arguments
 
@@ -111,7 +132,7 @@ Type Checks:
 
 - `ptr->type() == Type::Ptr`
 - `offset->type() == Type::Int64`
-## Add
+### Add
 
 Arguments
 
@@ -124,7 +145,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
-## Sub
+### Sub
 
 Arguments
 
@@ -137,7 +158,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
-## Mul
+### Mul
 
 Arguments
 
@@ -150,7 +171,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
-## DivS
+### DivS
 
 Arguments
 
@@ -163,7 +184,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
-## DivU
+### DivU
 
 Arguments
 
@@ -176,7 +197,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
-## ModS
+### ModS
 
 Arguments
 
@@ -189,7 +210,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
-## ModU
+### ModU
 
 Arguments
 
@@ -202,7 +223,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
-## And
+### And
 
 Arguments
 
@@ -215,7 +236,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int_or_bool(a->type())`
-## Or
+### Or
 
 Arguments
 
@@ -228,7 +249,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int_or_bool(a->type())`
-## Xor
+### Xor
 
 Arguments
 
@@ -241,7 +262,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int_or_bool(a->type())`
-## ShrU
+### ShrU
 
 Arguments
 
@@ -254,7 +275,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
-## ShrS
+### ShrS
 
 Arguments
 
@@ -267,7 +288,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
-## Shl
+### Shl
 
 Arguments
 
@@ -280,7 +301,7 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
-## Eq
+### Eq
 
 Arguments
 
@@ -292,20 +313,7 @@ Return Type: `Type::Bool`
 Type Checks:
 
 - `a->type() == b->type()`
-## LtU
-
-Arguments
-
-- **a**: `Value*`
-- **b**: `Value*`
-
-Return Type: `Type::Bool`
-
-Type Checks:
-
-- `a->type() == b->type()`
-- `is_int(a->type())`
-## LtS
+### LtU
 
 Arguments
 
@@ -318,7 +326,22 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
-## Branch
+### LtS
+
+Arguments
+
+- **a**: `Value*`
+- **b**: `Value*`
+
+Return Type: `Type::Bool`
+
+Type Checks:
+
+- `a->type() == b->type()`
+- `is_int(a->type())`
+### Branch
+
+Conditional jump.
 
 Arguments
 
@@ -331,7 +354,9 @@ Return Type: `Type::Void`
 Type Checks:
 
 - `cond->type() == Type::Bool`
-## Jump
+### Jump
+
+Unconditional jump.
 
 Arguments
 
@@ -339,14 +364,18 @@ Arguments
 
 Return Type: `Type::Void`
 
-## Exit
+### Exit
+
+Return from section.
 
 Arguments
 
 
 Return Type: `Type::Void`
 
-## Comment
+### Comment
+
+No-op. Used for adding comments to the IR.
 
 Arguments
 
