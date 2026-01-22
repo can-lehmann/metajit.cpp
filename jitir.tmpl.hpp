@@ -26,10 +26,11 @@
 #include <optional>
 #include <cstring>
 
+#include "../lwir.cpp/lwir_utils.hpp"
+
 #define dynmatch(Type, name, value) Type* name = dynamic_cast<Type*>(value)
 
 namespace metajit {
-
   class ArenaAllocator {
   private:
     struct Chunk {
@@ -326,213 +327,6 @@ namespace metajit {
 
   class Block;
   
-  template <class T>
-  class Span {
-  private:
-    T* _data = nullptr;
-    size_t _size = 0;
-  public:
-    Span() {}
-    Span(T* data, size_t size): _data(data), _size(size) {}
-    
-    template <class Ptr>
-    static Span<T> offset(Ptr* base, size_t offset, size_t size) {
-      return Span<T>((T*) ((uint8_t*) base + offset), size);
-    }
-
-    template <class Ptr>
-    static Span<T> trailing(Ptr* base, size_t size) {
-      return Span<T>((T*) ((uint8_t*) base + sizeof(Ptr)), size);
-    }
-
-    T* data() const { return _data; }
-
-    size_t size() const { return _size; }
-    
-    inline T at(size_t index) const {
-      assert(index < _size);
-      return _data[index];
-    }
-
-    inline T& at(size_t index) {
-      assert(index < _size);
-      return _data[index];
-    }
-
-    inline T operator[](size_t index) const { return at(index); }
-    inline T& operator[](size_t index) { return at(index); }
-
-    T* begin() const { return _data; }
-    T* end() const { return _data + _size; }
-
-    Span zeroed() const {
-      memset(_data, 0, sizeof(T) * _size);
-      return *this;
-    }
-
-    Span with(size_t index, const T& value) const {
-      assert(index < _size);
-      _data[index] = value;
-      return *this;
-    }
-  };
-
-  template <class T>
-  class LinkedListItem {
-  private:
-    T* _prev = nullptr;
-    T* _next = nullptr;
-  public:
-    LinkedListItem() {}
-
-    inline T* prev() const { return _prev; }
-    inline void set_prev(T* prev) { _prev = prev; }
-
-    inline T* next() const { return _next; }
-    inline void set_next(T* next) { _next = next; }
-  };
-
-  template <class T>
-  class Range {
-  private:
-    T _begin;
-    T _end;
-  public:
-    Range(const T& begin, const T& end): _begin(begin), _end(end) {}
-
-    T begin() const { return _begin; }
-    T end() const { return _end; }
-  };
-
-  template <class T>
-  class LinkedList {
-  private:
-    T* _first = nullptr;
-    T* _last = nullptr;
-  public:
-    LinkedList() {}
-
-    T* first() const { return _first; }
-    T* last() const { return _last; }
-
-    bool empty() const { return _first == nullptr; }
-
-    void add(T* item) {
-      assert(!item->prev() && !item->next());
-      item->set_prev(_last);
-      if (_last) {
-        _last->set_next(item);
-      } else {
-        _first = item;
-      }
-      _last = item;
-    }
-
-    void insert_before(T* before, T* item) {
-      assert(!item->prev() && !item->next());
-      if (before == nullptr) {
-        add(item);
-      } else {
-        item->set_next(before);
-        item->set_prev(before->prev());
-        if (before->prev()) {
-          before->prev()->set_next(item);
-        } else {
-          _first = item;
-        }
-        before->set_prev(item);
-      }
-    }
-
-    void remove(T* item) {
-      if (item->prev()) {
-        item->prev()->set_next(item->next());
-      } else {
-        _first = item->next();
-      }
-      if (item->next()) {
-        item->next()->set_prev(item->prev());
-      } else {
-        _last = item->prev();
-      }
-      item->set_prev(nullptr);
-      item->set_next(nullptr);
-    }
-
-    class iterator {
-    private:
-      LinkedList* _list;
-      T* _item;
-    public:
-      iterator(LinkedList* list, T* item): _list(list), _item(item) {}
-      
-      T* operator*() const { return _item; }
-      
-      iterator& operator++() { 
-        _item = _item->next(); 
-        return *this;
-      }
-
-      iterator operator++(int) { 
-        iterator iter = *this;
-        ++(*this);
-        return iter;
-      }
-
-      bool operator==(const iterator& other) const { return _item == other._item; }
-      bool operator!=(const iterator& other) const { return !(*this == other); }
-
-      iterator erase() {
-        T* next = _item->next();
-        _list->remove(_item);
-        return iterator(_list, next);
-      }
-
-      iterator at(T* new_item) {
-        return iterator(_list, new_item);
-      }
-    };
-
-    iterator begin() { return iterator(this, _first); }
-    iterator end() { return iterator(this, nullptr); }
-    
-    class reverse_iterator {
-    private:
-      LinkedList* _list;
-      T* _item;
-    public:
-      reverse_iterator(LinkedList* list, T* item): _list(list), _item(item) {}
-
-      T* operator*() const { return _item; }
-
-      reverse_iterator& operator++() { 
-        _item = _item->prev(); 
-        return *this;
-      }
-
-      reverse_iterator operator++(int) { 
-        reverse_iterator iter = *this;
-        ++(*this);
-        return iter;
-      }
-
-      bool operator==(const reverse_iterator& other) const { return _item == other._item; }
-      bool operator!=(const reverse_iterator& other) const { return !(*this == other); }
-      
-      reverse_iterator erase() {
-        T* prev = _item->prev();
-        _list->remove(_item);
-        return reverse_iterator(_list, prev);
-      }
-    };
-
-    reverse_iterator rbegin() { return reverse_iterator(this, _last); }
-    reverse_iterator rend() { return reverse_iterator(this, nullptr); }
-
-    Range<iterator> range() { return Range<iterator>(begin(), end()); }
-    Range<reverse_iterator> rev_range() { return Range<reverse_iterator>(rbegin(), rend()); }
-  };
-
   template<class T>
   class NameMap;
 
@@ -560,15 +354,15 @@ namespace metajit {
     }
   };
 
-  class Inst: public NamedValue, public LinkedListItem<Inst> {
+  class Inst: public NamedValue, public lwir::LinkedListItem<Inst> {
   private:
-    Span<Value*> _args;
+    lwir::Span<Value*> _args;
   public:
-    Inst(Type type, const Span<Value*>& args):
+    Inst(Type type, const lwir::Span<Value*>& args):
       NamedValue(type), _args(args) {}
 
-    const Span<Value*>& args() const { return _args; }
-    void set_args(const Span<Value*>& args) { _args = args; }
+    const lwir::Span<Value*>& args() const { return _args; }
+    void set_args(const lwir::Span<Value*>& args) { _args = args; }
 
     size_t arg_count() const { return _args.size(); }
     Value* arg(size_t index) const { return _args.at(index); }
@@ -680,14 +474,14 @@ namespace metajit {
     InfoWriter(const InstFn& _inst): inst(_inst) {}
   };
 
-  class Block: public LinkedListItem<Block> {
+  class Block: public lwir::LinkedListItem<Block> {
   private:
-    Span<Arg*> _args;
-    LinkedList<Inst> _insts;
+    lwir::Span<Arg*> _args;
+    lwir::LinkedList<Inst> _insts;
     size_t _name = 0;
   public:
     Block() {}
-    Block(const Span<Arg*>& args): _args(args) {}
+    Block(const lwir::Span<Arg*>& args): _args(args) {}
 
     auto begin() { return _insts.begin(); }
     auto end() { return _insts.end(); }
@@ -700,8 +494,8 @@ namespace metajit {
 
     bool empty() const { return _insts.empty(); }
 
-    const Span<Arg*>& args() const { return _args; }
-    void set_args(const Span<Arg*>& args) { _args = args; }
+    const lwir::Span<Arg*>& args() const { return _args; }
+    void set_args(const lwir::Span<Arg*>& args) { _args = args; }
 
     Arg* arg(size_t index) const { return _args.at(index); }
 
@@ -955,7 +749,7 @@ namespace metajit {
   private:
     Context& _context;
     Allocator& _allocator;
-    LinkedList<Block> _blocks;
+    lwir::LinkedList<Block> _blocks;
     size_t _block_count = 0;
     size_t _name_count = 0;
   public:
@@ -1175,25 +969,25 @@ namespace metajit {
       Block* block = (Block*) _section->allocator().alloc(
         sizeof(Block) + sizeof(Arg*) * arg_count, alignof(Block)
       );
-      return new (block) Block(Span<Arg*>::trailing<Block>(block, arg_count).zeroed());
+      return new (block) Block(lwir::Span<Arg*>::trailing<Block>(block, arg_count).zeroed());
     }
 
-    Block* alloc_block(const Span<Type>& arg_types) {
+    Block* alloc_block(const lwir::Span<Type>& arg_types) {
       Block* block = (Block*) _section->allocator().alloc(
         sizeof(Block) + sizeof(Arg*) * arg_types.size(), alignof(Block)
       );
-      Span<Arg*> args = Span<Arg*>::trailing<Block>(block, arg_types.size());
+      lwir::Span<Arg*> args = lwir::Span<Arg*>::trailing<Block>(block, arg_types.size());
       for (size_t it = 0; it < arg_types.size(); it++) {
         args[it] = alloc_arg(arg_types[it], it);
       }
       return new (block) Block(args);
     }
 
-    Block* alloc_block(const Span<Arg*>& args) {
+    Block* alloc_block(const lwir::Span<Arg*>& args) {
       Block* block = (Block*) _section->allocator().alloc(
         sizeof(Block) + sizeof(Arg*) * args.size(), alignof(Block)
       );
-      Span<Arg*> trailing_args = Span<Arg*>::trailing<Block>(block, args.size());
+      lwir::Span<Arg*> trailing_args = lwir::Span<Arg*>::trailing<Block>(block, args.size());
       for (size_t it = 0; it < args.size(); it++) {
         trailing_args[it] = args[it];
       }
@@ -1201,11 +995,11 @@ namespace metajit {
     }
 
     Block* alloc_block(const std::vector<Type>& arg_types) {
-      return alloc_block(Span<Type>((Type*) arg_types.data(), arg_types.size())); 
+      return alloc_block(lwir::Span<Type>((Type*) arg_types.data(), arg_types.size())); 
     }
 
     Block* alloc_block(const std::vector<Arg*>& args) {
-      return alloc_block(Span<Arg*>((Arg**) args.data(), args.size())); 
+      return alloc_block(lwir::Span<Arg*>((Arg**) args.data(), args.size())); 
     }
 
     #define define_build_block(arg_type, arg_name) \
@@ -1221,9 +1015,9 @@ namespace metajit {
       }
     
     define_build_block(size_t, arg_count)
-    define_build_block(const Span<Type>&, arg_types)
+    define_build_block(const lwir::Span<Type>&, arg_types)
     define_build_block(const std::vector<Type>&, arg_types)
-    define_build_block(const Span<Arg*>&, arg_types)
+    define_build_block(const lwir::Span<Arg*>&, arg_types)
     define_build_block(const std::vector<Arg*>&, arg_types)
 
     #undef define_build_block
@@ -1252,13 +1046,13 @@ namespace metajit {
       return build_comment(_section->context().alloc_string(text));
     }
 
-    JumpInst* build_jump(Block* block, const Span<Value*>& args) {
+    JumpInst* build_jump(Block* block, const lwir::Span<Value*>& args) {
       JumpInst* jump = (JumpInst*) _section->allocator().alloc(
         sizeof(JumpInst) + sizeof(Value*) * args.size(),
         alignof(JumpInst)
       );
       new (jump) JumpInst(block);
-      Span<Value*> trailing_span = Span<Value*>::trailing<JumpInst>(jump, args.size());
+      lwir::Span<Value*> trailing_span = lwir::Span<Value*>::trailing<JumpInst>(jump, args.size());
       for (size_t it = 0; it < args.size(); it++) {
         trailing_span[it] = args[it];
       }
@@ -1268,7 +1062,7 @@ namespace metajit {
     }
 
     JumpInst* build_jump(Block* block, const std::vector<Value*>& args) {
-      return build_jump(block, Span<Value*>((Value**) args.data(), args.size()));
+      return build_jump(block, lwir::Span<Value*>((Value**) args.data(), args.size()));
     }
 
     // Folding
@@ -3034,11 +2828,11 @@ namespace metajit {
 
     using iterator = decltype(_section->begin());
 
-    Range<iterator> range() {
+    lwir::Range<iterator> range() {
       iterator begin = _section->begin().at(_header);
       iterator end = _section->begin().at(_extent);
       end++;
-      return Range(begin, end);
+      return lwir::Range(begin, end);
     }
 
     size_t first_name() const {

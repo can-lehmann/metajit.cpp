@@ -116,7 +116,7 @@ class InstTrailingConstructorPlugin:
                 case _:
                     assert False, f"Unknown type: {arg.type}"
         
-        arg_init = f"Span<Value*>::trailing(this, {arg_count})" + arg_init
+        arg_init = f"lwir::Span<Value*>::trailing(this, {arg_count})" + arg_init
 
         init_list = [f"{base}({inst.type}, {arg_init})"] + init_list
         init_list = ", ".join(init_list)

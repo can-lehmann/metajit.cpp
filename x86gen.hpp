@@ -83,7 +83,7 @@ std::ostream& operator<<(std::ostream& stream, const metajit::Reg& reg) {
 namespace metajit {
   class X86Block;
 
-  class X86Inst: public LinkedListItem<X86Inst> {
+  class X86Inst: public lwir::LinkedListItem<X86Inst> {
   public:
     enum class Kind {
       #define x86_inst(name, ...) name,
@@ -208,7 +208,7 @@ namespace metajit {
 
   class X86Block {
   private:
-    LinkedList<X86Inst> _insts;
+    lwir::LinkedList<X86Inst> _insts;
     X86Block* _loop = nullptr;
     Reg* _regalloc = nullptr;
     size_t _name = 0;
@@ -221,7 +221,7 @@ namespace metajit {
     Reg* regalloc() const { return _regalloc; }
     void set_regalloc(Reg* regalloc) { _regalloc = regalloc; }
 
-    LinkedList<X86Inst>& insts() { return _insts; }
+    lwir::LinkedList<X86Inst>& insts() { return _insts; }
 
     auto begin() { return _insts.begin(); }
     auto end() { return _insts.end(); }
