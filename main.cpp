@@ -51,6 +51,12 @@ int main() {
   section->write(std::cout);
 
   {
+    // Save to JSON
+    std::ofstream stream("section.json");
+    section->write_json(stream);
+  }
+
+  {
     llvm::LLVMContext context;
     std::unique_ptr<llvm::Module> module = std::make_unique<llvm::Module>("my_module", context);
 

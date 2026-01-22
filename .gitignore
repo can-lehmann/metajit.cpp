@@ -3,6 +3,7 @@ jitir.hpp
 jitir_llvmapi.hpp
 main
 asm.bin
+section.json
 tests/test_insts
 tests/test_fuzzer
 tests/output

@@ -118,6 +118,24 @@ namespace metajit {
 
   using Allocator = ArenaAllocator;
 
+  inline std::string escape_json(const std::string& string) {
+    // TODO: Check that this actually covers all cases
+    // Right now it is not that important, since we do not handle untrusted input
+    std::ostringstream stream;
+    for (char chr : string) {
+      switch (chr) {
+        case '\"': stream << "\\\""; break;
+        case '\\': stream << "\\\\"; break;
+        case '/': stream << "\\/"; break;
+        case '\n': stream << "\\n"; break;
+        case '\t': stream << "\\t"; break;
+        case '\r': stream << "\\r"; break;
+        default: stream << chr; break;
+      }
+    }
+    return stream.str();
+  }
+
   enum class Highlight {
     None,
     Keyword,
@@ -148,38 +166,6 @@ namespace metajit {
     std::ostream& ostream() override { return _stream; }
     PrettyStream& operator<<(Highlight highlight) override {
       return *this;
-    }
-  };
-
-  template <class Self>
-  class BaseFlags {
-  protected:
-    uint32_t _flags = 0;
-  public:
-    BaseFlags(uint32_t flags = 0): _flags(flags) {}
-
-    explicit operator uint32_t() const {
-      return _flags;
-    }
-
-    explicit operator uint64_t() const {
-      return _flags;
-    }
-
-    bool has(Self flag) const {
-      return (_flags & flag._flags) != 0;
-    }
-
-    bool operator==(const Self& other) const {
-      return _flags == other._flags;
-    }
-
-    bool operator!=(const Self& other) const {
-      return !(*this == other);
-    }
-
-    Self operator|(const Self& other) const {
-      return Self(_flags | other._flags);
     }
   };
 
@@ -267,6 +253,7 @@ namespace metajit {
     Type type() const { return _type; }
 
     virtual void write_arg(PrettyStream& stream) const = 0;
+    virtual void write_arg_json(std::ostream& stream) const = 0;
 
     void write_arg(std::ostream& stream) const {
       PlainPrettyStream plain_stream(stream);
@@ -292,6 +279,14 @@ namespace metajit {
 
     void write_arg(PrettyStream& stream) const override {
       stream << Highlight::Constant << _value << Highlight::None;
+    }
+
+    void write_arg_json(std::ostream& stream) const override {
+      stream << "{";
+      stream << "\"kind\": \"Const\", ";
+      stream << "\"type\": \"" << type() << "\", ";
+      stream << "\"value\": " << _value;
+      stream << "}";
     }
 
     bool equals(const Value* other) const override {
@@ -554,6 +549,10 @@ namespace metajit {
       stream << Highlight::Value << '%' << _name << Highlight::None;
     }
 
+    void write_arg_json(std::ostream& stream) const override {
+      stream << _name;
+    }
+
     using Value::write_arg;
 
     bool is_named() const override {
@@ -582,6 +581,7 @@ namespace metajit {
     void substitute_args(NameMap<Value*>& substs);
 
     virtual void write(PrettyStream& stream) const = 0;
+    virtual void write_json(std::ostream& stream) const = 0;
 
     void write(std::ostream& stream) const {
       PlainPrettyStream plain_stream(stream);
@@ -601,6 +601,25 @@ namespace metajit {
           arg->write_arg(stream);
         }
       }
+    }
+
+    void write_args_json(std::ostream& stream) const {
+      stream << "[";
+      bool is_first = true;
+      for (Value* arg : _args) {
+        if (is_first) {
+          is_first = false;
+        } else {
+          stream << ", ";
+        }
+
+        if (arg == nullptr) {
+          stream << "null";
+        } else {
+          arg->write_arg_json(stream);
+        }
+      }
+      stream << "]";
     }
 
     void write_stmt(PrettyStream& stream) const {
@@ -626,6 +645,15 @@ namespace metajit {
       NamedValue(type), _index(index) {}
 
     size_t index() const { return _index; }
+
+    void write_json(std::ostream& stream) const {
+      stream << "{";
+      stream << "\"kind\": \"Arg\", ";
+      stream << "\"name\": " << name() << ", ";
+      stream << "\"type\": \"" << type() << "\", ";
+      stream << "\"index\": " << _index;
+      stream << "}";
+    }
 
     bool equals(const Value* other) const override {
       if (typeid(*this) != typeid(*other)) {
@@ -743,6 +771,34 @@ namespace metajit {
       write_arg(plain_stream);
     }
 
+    void write_json(std::ostream& stream) {
+      stream << "{";
+      stream << "\"name\": " << _name << ", ";
+      stream << "\"args\": [";
+      bool is_first = true;
+      for (Arg* arg : _args) {
+        if (is_first) {
+          is_first = false;
+        } else {
+          stream << ", ";
+        }
+        arg->write_json(stream);
+      }
+      stream << "], ";
+      stream << "\"insts\": [";
+      is_first = true;
+      for (Inst* inst : _insts) {
+        if (is_first) {
+          is_first = false;
+        } else {
+          stream << ", ";
+        }
+        inst->write_json(stream);
+      }
+      stream << "]";
+      stream << "}";
+    }
+
     template <class Fn>
     void filter_inplace(Fn fn) {
       for (auto it = begin(); it != end(); ) {
@@ -756,6 +812,67 @@ namespace metajit {
     }
   };
 
+
+  template <class Self>
+  class BaseFlags {
+  protected:
+    uint32_t _flags = 0;
+  public:
+    BaseFlags(uint32_t flags = 0): _flags(flags) {}
+
+    explicit operator uint32_t() const {
+      return _flags;
+    }
+
+    explicit operator uint64_t() const {
+      return _flags;
+    }
+
+    bool has(Self flag) const {
+      return (_flags & flag._flags) != 0;
+    }
+
+    bool operator==(const Self& other) const {
+      return _flags == other._flags;
+    }
+
+    bool operator!=(const Self& other) const {
+      return !(*this == other);
+    }
+
+    Self operator|(const Self& other) const {
+      return Self(_flags | other._flags);
+    }
+
+    void write(PrettyStream& stream) const {
+      stream << "{";
+      bool is_first = true;
+      for (size_t it = 0; it < Self::COUNT; it++) {
+        uint32_t bit = 1 << it;
+        if (_flags & bit) {
+          if (!is_first) { stream << ", "; }
+          is_first = false;
+          stream << Highlight::Constant << Self::NAMES[it] << Highlight::None;
+        }
+      }
+      stream << "}";
+    }
+
+    void write_json(std::ostream& stream) const {
+      stream << "[";
+      bool is_first = true;
+      for (size_t it = 0; it < Self::COUNT; it++) {
+        uint32_t bit = 1 << it;
+        if (_flags & bit) {
+          if (!is_first) { stream << ", "; }
+          is_first = false;
+          stream << "\"" << Self::NAMES[it] << "\"";
+        }
+      }
+      stream << "]";
+    }
+  };
+
   class LoadFlags final: public BaseFlags<LoadFlags> {
   public:
     enum : uint32_t {
@@ -766,22 +883,12 @@ namespace metajit {
 
     using BaseFlags<LoadFlags>::BaseFlags;
 
-    void write(PrettyStream& stream) const {
-      stream << "{";
-      bool is_first = true;
-      #define write_flag(name) \
-        if (_flags & name) { \
-          if (!is_first) { stream << ", "; } \
-          is_first = false; \
-          stream << Highlight::Constant << #name << Highlight::None; \
-        }
-      
-      write_flag(Pure)
-      write_flag(InBounds)
+    constexpr static const char* NAMES[] = {
+      "Pure",
+      "InBounds"
+    };
 
-      #undef write_flag
-      stream << "}";
-    }
+    constexpr static size_t COUNT = 2;
   };
 }
 
@@ -897,6 +1004,24 @@ namespace metajit {
     void write(std::ostream& stream, InfoWriter* info_writer = nullptr) {
       PlainPrettyStream plain_stream(stream);
       write(plain_stream, info_writer);
+    }
+
+    void write_json(std::ostream& stream) {
+      autoname();
+
+      stream << "{";
+      stream << "\"blocks\": [";
+      bool is_first = true;
+      for (Block* block : _blocks) {
+        if (is_first) {
+          is_first = false;
+        } else {
+          stream << ", ";
+        }
+        block->write_json(stream);
+      }
+      stream << "]";
+      stream << "}";
     }
 
     bool verify(std::ostream& errors) {

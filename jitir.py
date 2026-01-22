@@ -156,6 +156,30 @@ class PrettyInstWritePlugin(InstWritePlugin):
             assert False
         return code
 
+class JitirInstWriteJsonPlugin(InstWriteJsonPlugin):
+    def __init__(self):
+        super().__init__()
+    
+    def write_misc(self, stream):
+        return {
+            "name": f"{stream} << name()",
+            "type": f"{stream} << \"\\\"\" << type() << \"\\\"\""
+        }
+
+    def write_arg(self, arg, value, stream):
+        if arg.type == Type("Block*"):
+            return f"{stream} << {value}->name()"
+        elif arg.type == Type("Type"):
+            return f"{stream} << \"\\\"\" << {value} << \"\\\"\""
+        elif arg.type == Type("LoadFlags"):
+            return f"{value}.write_json({stream})"
+        elif arg.type == Type("AliasingGroup") or arg.type == Type("uint64_t"):
+            return f"{stream} << {value}"
+        elif arg.type == Type("const char*"):
+            return f"{stream} << \"\\\"\" << escape_json({value}) << \"\\\"\""
+        else:
+            assert False
+
 def binop(name, type_checks = None):
     if type_checks is None:
         type_checks = ["is_int(a->type())"]
@@ -307,6 +331,7 @@ lwir(
             InstGetterPlugin(),
             InstSetterPlugin(),
             PrettyInstWritePlugin(),
+            JitirInstWriteJsonPlugin(),
             InstEqualsPlugin(),
             InstHashPlugin()
         ]),
