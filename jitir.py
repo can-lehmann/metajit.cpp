@@ -383,3 +383,28 @@ lwir(
         )
     ]
 )
+
+class MarkdownPlugin:
+    def run(self, ir):
+        code = ""
+        for inst in ir.insts:
+            code += f"## {inst.name}\n\n"
+            code += f"Arguments\n\n"
+            for arg in inst.args:
+                code += f"- **{arg.name}**: `{arg.type.format(ir)}`\n"
+            code += f"\n"
+            code += f"Return Type: `{inst.type}`\n\n"
+            if len(inst.type_checks) > 0:
+                code += f"Type Checks:\n\n"
+                for check in inst.type_checks:
+                    code += f"- `{check}`\n"
+        return {"markdown": code}
+        
+lwir(
+    template_path = "doc/jitir.md.tmpl",
+    output_path = "doc/jitir.md",
+    ir = jitir,
+    plugins = [
+        MarkdownPlugin()
+    ]
+)
