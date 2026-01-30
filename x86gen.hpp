@@ -851,8 +851,13 @@ namespace metajit {
         _builder.jne(_blocks[branch->true_block()->name()]);
         _builder.jmp(_blocks[branch->false_block()->name()]);
       } else if (dynmatch(JumpInst, jump, inst)) {
+        Reg copies[jump->block()->args().size()];
         for (Arg* arg : jump->block()->args()) {
-          _builder.mov64(vreg(arg), vreg(jump->arg(arg->index())));
+          copies[arg->index()] = vreg();
+          _builder.mov64(copies[arg->index()], vreg(jump->arg(arg->index())));
+        }
+        for (Arg* arg : jump->block()->args()) {
+          _builder.mov64(vreg(arg), copies[arg->index()]);
         }
         _builder.jmp(_blocks[jump->block()->name()]);
       } else if (dynmatch(ExitInst, exit, inst)) {

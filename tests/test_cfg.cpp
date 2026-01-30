@@ -124,5 +124,35 @@ int main() {
     data.output(loop_header->arg(1));
   });
 
+  DiffTest("swap_loop", output_path).run([](Builder& builder, TestData& data) {
+    Block* loop_header = builder.build_block({Type::Bool, Type::Int64, Type::Int64}); // (cond, a, b)
+    Block* loop_body = builder.build_block();
+    Block* loop_end = builder.build_block();
+
+    Value* a = data.input(RandomRange(Type::Int64));
+    Value* b = data.input(RandomRange(Type::Int64));
+    Value* cond = data.input(Type::Bool);
+
+    builder.build_jump(loop_header, {cond, a, b});
+
+    builder.move_to_end(loop_header);
+    builder.build_branch(
+      loop_header->arg(0),
+      loop_body,
+      loop_end
+    );
+
+    builder.move_to_end(loop_body);
+    builder.build_jump(loop_header, {
+      builder.build_const(Type::Bool, false),
+      loop_header->arg(2),
+      loop_header->arg(1)
+    });
+
+    builder.move_to_end(loop_end);
+    data.output(loop_header->arg(1));
+    data.output(loop_header->arg(2));
+  });
+
   return 0;
 }
