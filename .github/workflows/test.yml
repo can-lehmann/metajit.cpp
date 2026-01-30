@@ -30,7 +30,7 @@ jobs:
           chmod +x llvm.sh
           sudo ./llvm.sh 20
           sudo apt-get update
-          sudo apt-get install -y llvm-20 libllvm-20 llvm-20-dev
+          sudo apt-get install -y llvm-20-dev llvm-20-tools
       - name: Build and run tests
         working-directory: metajit.cpp
         run: |
