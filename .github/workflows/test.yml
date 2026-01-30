@@ -34,9 +34,6 @@ jobs:
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 200
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 200
           sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-20 200
-          update-alternatives --display clang++
-          clang++ --version
-          llvm-config --version
       - name: Build and run tests
         working-directory: metajit.cpp
         run: |
