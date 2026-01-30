@@ -5,8 +5,9 @@ TEST_HEADER_FILES := $(wildcard tests/*.hpp)
 run: main
 	./main
 
-test: tests/test_insts tests/test_fuzzer
+test: tests/test_insts tests/test_cfg tests/test_fuzzer
 	./tests/test_insts
+	./tests/test_cfg
 	./tests/test_fuzzer
 
 fuzz: tests/fuzzer
@@ -19,6 +20,9 @@ tests/test_insts: tests/test_insts.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
 tests/test_fuzzer: tests/test_fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${CFLAGS} -o $@ $<
+
+tests/test_cfg: tests/test_cfg.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
 tests/fuzzer: tests/fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
@@ -34,9 +38,11 @@ clean:
 	-rm main
 	-rm tests/test_insts
 	-rm tests/test_fuzzer
+	-rm tests/test_cfg
 	-rm tests/fuzzer
 	-rm jitir.hpp
 	-rm jitir_llvmapi.hpp
 	-rm -r tests/output
 	mkdir -p tests/output/test_insts
 	mkdir -p tests/output/test_fuzzer
+	mkdir -p tests/output/test_cfg

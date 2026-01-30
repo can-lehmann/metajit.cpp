@@ -851,6 +851,9 @@ namespace metajit {
         _builder.jne(_blocks[branch->true_block()->name()]);
         _builder.jmp(_blocks[branch->false_block()->name()]);
       } else if (dynmatch(JumpInst, jump, inst)) {
+        for (Arg* arg : jump->block()->args()) {
+          _builder.mov64(vreg(arg), vreg(jump->arg(arg->index())));
+        }
         _builder.jmp(_blocks[jump->block()->name()]);
       } else if (dynmatch(ExitInst, exit, inst)) {
         _builder.ret();
@@ -1040,15 +1043,6 @@ namespace metajit {
       void assert_invariant() const {}
       #endif
 
-      Reg* save_state(Allocator& allocator) {
-        assert_invariant();
-        Reg* state = (Reg*) allocator.alloc(sizeof(Reg) * _regs.size(), alignof(Reg));
-        for (size_t it = 0; it < _regs.size(); it++) {
-          state[it] = _regs[it];
-        }
-        return state;
-      }
-
       void load_state(Reg* state) {
         _free = _max_free;
         for (size_t it = 0; it < _regs.size(); it++) {
@@ -1203,6 +1197,25 @@ namespace metajit {
       }
     }
 
+    bool is_def_only(Reg reg, X86Inst* inst) {
+      VRegInfo& info = _vreg_info[reg.id()];
+
+      // Special case for mov instructions.
+      // Since they are used for block arguments, the register may
+      // be def-only even if the instruction is not the first in
+      // the register's live interval.
+      if (inst->kind() == X86Inst::Kind::Mov64 &&
+          std::holds_alternative<Reg>(inst->rm())) {
+        Reg src = std::get<Reg>(inst->rm());
+        Reg dst = inst->reg();
+        if (reg != src && reg == dst) {
+          return true;
+        }
+      }
+
+      return inst->name() == info.interval.min; 
+    }
+
     void regalloc() {
       for (X86Block* block : _blocks) {
         for (X86Inst* inst : *block) {
@@ -1215,7 +1228,9 @@ namespace metajit {
 
       RegFileState reg_file;
 
-      Reg* initial_state = reg_file.save_state(_allocator);
+      Reg* initial_state = (Reg*) _allocator.alloc(sizeof(Reg) * reg_file.size(), alignof(Reg));
+      std::fill(initial_state, initial_state + reg_file.size(), Reg());
+
       for (Arg* arg : _section->entry()->args()) {
         VRegInfo& info = _vreg_info[vreg(arg).id()];
         assert(info.fixed.is_physical() && "Entry arguments must be in fixed registers");
@@ -1231,7 +1246,7 @@ namespace metajit {
         for (auto it = block->begin(); it != block->end(); ) {
           X86Inst* inst = *it;
           _builder.move_before(block, inst);
-          
+
           if (inst->kind() == X86Inst::Kind::PseudoUse) {
             it = it.erase(); // Not needed after regalloc
           } else if (is_foldable_mov(inst)) {
@@ -1251,7 +1266,7 @@ namespace metajit {
             inst->visit_regs([&](Reg reg) {
               VRegInfo& info = _vreg_info[reg.id()];
               if (info.current_reg.is_invalid() && info.fixed.is_physical()) {
-                spill_and_unspill(reg_file, info.fixed, reg, inst->name() == info.interval.min);
+                spill_and_unspill(reg_file, info.fixed, reg, is_def_only(reg, inst));
               }
             });
 
@@ -1262,7 +1277,7 @@ namespace metajit {
                 if (!preg.is_physical()) {
                   preg = reg_file.get_lru();
                 }
-                spill_and_unspill(reg_file, preg, reg, inst->name() == info.interval.min);
+                spill_and_unspill(reg_file, preg, reg, is_def_only(reg, inst));
               }
             });
 
@@ -1300,11 +1315,13 @@ namespace metajit {
 
           if (std::holds_alternative<X86Block*>(inst->imm())) {
             X86Block* target = std::get<X86Block*>(inst->imm());
-            if (target->name() < block->name()) {
-              // Backedge, restore regalloc state
-              assert(target->loop());
-              assert(target->regalloc());
-              assert(inst->kind() == X86Inst::Kind::Jmp); // Backedges may only be unconditional jumps
+            if (target->regalloc()) {
+              // Restore regalloc state
+              assert(inst->kind() == X86Inst::Kind::Jmp); // Merges may only be unconditional jumps
+              if (target->name() < block->name()) {
+                // Backedge
+                assert(target->loop());
+              }
               for (size_t it = 0; it < reg_file.size(); it++) {
                 Reg preg = Reg::phys(it);
                 Reg current_vreg = reg_file[preg];
@@ -1318,10 +1335,17 @@ namespace metajit {
                 assert(reg_file[Reg::phys(it)] == target->regalloc()[it]);
               }
               #endif
-            } else if (target->regalloc()) {
-              reg_file.merge_state(target->regalloc());
             } else {
-              target->set_regalloc(reg_file.save_state(_allocator));
+              Reg* state = (Reg*) _allocator.alloc(sizeof(Reg) * reg_file.size(), alignof(Reg));
+              for (size_t it = 0; it < reg_file.size(); it++) {
+                Reg reg = reg_file[Reg::phys(it)];
+                if (reg.is_virtual() && _vreg_info[reg.id()].interval.max >= target->first()->name()) {
+                  state[it] = reg;
+                } else {
+                  state[it] = Reg();
+                }
+              }
+              target->set_regalloc(state);
             }
           }
         }
