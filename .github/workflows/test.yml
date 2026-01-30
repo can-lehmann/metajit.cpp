@@ -1,0 +1,38 @@
+name: test
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout metajit.cpp
+        uses: actions/checkout@v6
+        with:
+          path: metajit.cpp
+      - name: Checkout unittest.cpp
+        uses: actions/checkout@v6
+        with:
+          path: unittest.cpp
+          repository: can-lehmann/unittest.cpp
+      - name: Checkout lwir.cpp
+        uses: actions/checkout@v6
+        with:
+          path: lwir.cpp
+          repository: can-lehmann/lwir.cpp
+      - name: Set up LLVM
+        run: |
+          # See https://apt.llvm.org/
+          deb http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main
+          deb-src http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main
+          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          sudo apt-get update
+          sudo apt-get install -y clang-20 llvm-20 libllvm-20 llvm-20-dev
+      - name: Build and run tests
+        working-directory: metajit.cpp
+        run: |
+          make clean
+          make test
