@@ -96,6 +96,34 @@ Type Checks:
 - `is_int_or_bool(a->type())`
 - `is_int_or_bool(type)`
 
+### IntToFloatS
+
+Arguments
+
+- **a**: `Value*`
+- **type**: `Type`
+
+Return Type: `type`
+
+Type Checks:
+
+- `is_int(a->type())`
+- `is_float(type)`
+
+### FloatToIntS
+
+Arguments
+
+- **a**: `Value*`
+- **type**: `Type`
+
+Return Type: `type`
+
+Type Checks:
+
+- `is_float(a->type())`
+- `is_int(type)`
+
 ### Load
 
 Arguments
@@ -323,6 +351,62 @@ Type Checks:
 - `a->type() == b->type()`
 - `is_int(a->type())`
 
+### AddF
+
+Arguments
+
+- **a**: `Value*`
+- **b**: `Value*`
+
+Return Type: `a->type()`
+
+Type Checks:
+
+- `a->type() == b->type()`
+- `is_float(a->type())`
+
+### SubF
+
+Arguments
+
+- **a**: `Value*`
+- **b**: `Value*`
+
+Return Type: `a->type()`
+
+Type Checks:
+
+- `a->type() == b->type()`
+- `is_float(a->type())`
+
+### MulF
+
+Arguments
+
+- **a**: `Value*`
+- **b**: `Value*`
+
+Return Type: `a->type()`
+
+Type Checks:
+
+- `a->type() == b->type()`
+- `is_float(a->type())`
+
+### DivF
+
+Arguments
+
+- **a**: `Value*`
+- **b**: `Value*`
+
+Return Type: `a->type()`
+
+Type Checks:
+
+- `a->type() == b->type()`
+- `is_float(a->type())`
+
 ### Eq
 
 Arguments
@@ -363,6 +447,34 @@ Type Checks:
 
 - `a->type() == b->type()`
 - `is_int(a->type())`
+
+### LtFO
+
+Arguments
+
+- **a**: `Value*`
+- **b**: `Value*`
+
+Return Type: `Type::Bool`
+
+Type Checks:
+
+- `a->type() == b->type()`
+- `is_float(a->type())`
+
+### LtFU
+
+Arguments
+
+- **a**: `Value*`
+- **b**: `Value*`
+
+Return Type: `Type::Bool`
+
+Type Checks:
+
+- `a->type() == b->type()`
+- `is_float(a->type())`
 
 ### Branch
 
