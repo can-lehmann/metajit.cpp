@@ -892,6 +892,12 @@ namespace metajit {
         });
 
         std::vector<ActionGroup*> build_deps = {const_group, used_group, last_build_group};
+        if (dynamic_cast<FreezeInst*>(inst)) {
+          build_deps.push_back(emit_group);
+          if (const_groups.find(inst->arg(0)) != const_groups.end()) {
+            build_deps.push_back(const_groups.at(inst->arg(0)));
+          }
+        }
         build_group->add("build", PRIO_MAX, build_deps, {}, [inst, this](){
           emit_build_inst(inst);
         });
