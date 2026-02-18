@@ -73,6 +73,34 @@ namespace metajit {
       }
     }
 
+    void lower_jump(llvm::BasicBlock* from, llvm::BasicBlock* to) {
+      Block* lowered_to = _blocks.at(to);
+      std::vector<Value*> args;
+      for (llvm::PHINode& phi : to->phis()) {
+        llvm::Value* value = phi.getIncomingValueForBlock(from);
+        args.push_back(lower_operand(value));
+      }
+      _builder.build_jump(lowered_to, args);
+    }
+
+    Block* lower_jump_if_required(llvm::BasicBlock* from, llvm::BasicBlock* to) {
+      // Only jump instructions can pass block arguments.
+      Block* lowered_to = _blocks.at(to);
+      if (lowered_to->args().size() == 0) {
+        return lowered_to;
+      } else {
+        Block* current_block = _builder.block();
+        Inst* current_before = _builder.before();
+
+        Block* jump_block = _builder.build_block_before(current_block->next());
+        _builder.move_to_end(jump_block);
+        lower_jump(from, to);
+        
+        _builder.move_to(current_block, current_before);
+        return jump_block;
+      }
+    }
+
     Value* lower_intrinsic(llvm::StringRef name, std::vector<llvm::Value*> args, Type return_type) {
       if (name.starts_with("__metajit_freeze")) {
         assert(args.size() == 1);
@@ -181,25 +209,18 @@ namespace metajit {
         }
         return ptr;
       } else if (llvm::PHINode* phi = llvm::dyn_cast<llvm::PHINode>(inst)) {
-        PhiInst* phi_inst = _builder.build_phi(
-          lower_type(phi->getType()),
-          phi->getNumIncomingValues()
-        );
-        for (unsigned int it = 0; it < phi->getNumIncomingValues(); it++) {
-          Value* value = lower_operand(phi->getIncomingValue(it));
-          Block* from = _blocks.at(phi->getIncomingBlock(it));
-          phi_inst->set_incoming(it, value, from);
-        }
-        return phi_inst;
+        assert(_values.find(phi) != _values.end()); // PHI nodes are handled in lower_block
+        return _values.at(phi);
       } else if (llvm::BranchInst* branch = llvm::dyn_cast<llvm::BranchInst>(inst)) {
+        llvm::BasicBlock* from = branch->getParent();
         if (branch->isUnconditional()) {
-          _builder.fold_jump(_blocks.at(branch->getSuccessor(0)));
+          lower_jump(from, branch->getSuccessor(0));
         } else {
           Value* cond = lower_operand(branch->getCondition());
           _builder.fold_branch(
             cond,
-            _blocks.at(branch->getSuccessor(0)),
-            _blocks.at(branch->getSuccessor(1))
+            lower_jump_if_required(from, branch->getSuccessor(0)),
+            lower_jump_if_required(from, branch->getSuccessor(1))
           );
         }
         return nullptr;
@@ -221,6 +242,20 @@ namespace metajit {
 
       #undef fail_lowering
     }
+
+    Block* lower_block(llvm::BasicBlock* block) {
+      std::vector<Type> arg_types;
+      std::vector<llvm::Value*> phis;
+      for (llvm::PHINode& phi : block->phis()) {
+        phis.push_back(&phi);
+        arg_types.push_back(lower_type(phi.getType()));
+      }
+      Block* result = _builder.build_block(arg_types);
+      for (size_t it = 0; it < phis.size(); it++) {
+        _values[phis[it]] = result->arg(it);
+      }
+      return result;
+    }
   public:
     LowerLLVM(llvm::Function* function, Section* section):
         _function(function),
@@ -228,13 +263,21 @@ namespace metajit {
         _section(section),
         _builder(section) {
       
+      std::vector<Type> entry_arg_types;
       for (llvm::Argument& arg : function->args()) {
-        _values[&arg] = _builder.build_input(lower_type(arg.getType()));
+        entry_arg_types.push_back(lower_type(arg.getType()));
+      }
+      Block* entry_block = _builder.build_block(entry_arg_types);
+      for (llvm::Argument& arg : function->args()) {
+        _values[&arg] = _builder.entry_arg(arg.getArgNo());
       }
 
       for (llvm::BasicBlock& block : *function) {
-        _blocks[&block] = _builder.build_block();
+        _blocks[&block] = lower_block(&block);
       }
+
+      _builder.move_to_end(entry_block);
+      _builder.fold_jump(_blocks.at(&function->getEntryBlock()));
 
       for (llvm::BasicBlock& block : *function) {
         _builder.move_to_end(_blocks.at(&block));

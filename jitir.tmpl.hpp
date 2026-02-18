@@ -938,6 +938,11 @@ namespace metajit {
     Block* block() const { return _block; }
     Inst* before() const { return _before; }
 
+    void move_to(Block* block, Inst* before) {
+      _block = block;
+      _before = before;
+    }
+
     void move_to_end(Block* block) {
       _block = block;
       _before = nullptr;
