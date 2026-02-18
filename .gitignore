@@ -6,5 +6,6 @@ asm.bin
 section.json
 tests/test_insts
 tests/test_fuzzer
+tests/test_cfg
 tests/output
 tests/fuzzer

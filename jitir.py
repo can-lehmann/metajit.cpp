@@ -192,6 +192,9 @@ def binop(name, type_checks = None):
         ]
     )
 
+def binop_f(name):
+    return binop(name, type_checks = ["is_float(a->type())"])
+
 def cmp(name, type_checks):
     return Inst(name,
         args = [Arg("a"), Arg("b")],
@@ -251,6 +254,22 @@ jitir = IR(
             ],
             doc = "Extend or truncate value. If extending, the new bits are undefined."
         ),
+        Inst("IntToFloatS",
+            args = [Arg("a"), Arg("type", Type("Type"))],
+            type = "type",
+            type_checks = [
+                "is_int(a->type())",
+                "is_float(type)"
+            ]
+        ),
+        Inst("FloatToIntS",
+            args = [Arg("a"), Arg("type", Type("Type"))],
+            type = "type",
+            type_checks = [
+                "is_float(a->type())",
+                "is_int(type)"
+            ]
+        ),
         Inst("Load",
             args = [
                 Arg("ptr", getter=Getter.Always),
@@ -296,9 +315,15 @@ jitir = IR(
         binop("ShrU"),
         binop("ShrS"),
         binop("Shl"),
+        binop_f("AddF"),
+        binop_f("SubF"),
+        binop_f("MulF"),
+        binop_f("DivF"),
         cmp("Eq", type_checks = []),
         cmp("LtU", type_checks = ["is_int(a->type())"]),
         cmp("LtS", type_checks = ["is_int(a->type())"]),
+        cmp("LtFO", type_checks = ["is_float(a->type())"]),
+        cmp("LtFU", type_checks = ["is_float(a->type())"]),
         Inst("Branch",
             args = [
                 Arg("cond", getter=Getter.Always),

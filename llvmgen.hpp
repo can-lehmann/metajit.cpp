@@ -87,6 +87,8 @@ namespace metajit {
         case Type::Int16: return llvm::Type::getInt16Ty(_context);
         case Type::Int32: return llvm::Type::getInt32Ty(_context);
         case Type::Int64: return llvm::Type::getInt64Ty(_context);
+        case Type::Float32: return llvm::Type::getFloatTy(_context);
+        case Type::Float64: return llvm::Type::getDoubleTy(_context);
         case Type::Ptr: return llvm::PointerType::get(_context, 0);
       }
       assert(false && "Unknown type");
@@ -150,6 +152,16 @@ namespace metajit {
           emit_arg(resize_x->arg(0)),
           emit_type(resize_x->type())
         );
+      } else if (dynmatch(FloatToIntSInst, float_to_int_s, inst)) {
+        return _builder.CreateFPToSI(
+          emit_arg(float_to_int_s->arg(0)),
+          emit_type(float_to_int_s->type())
+        );
+      } else if (dynmatch(IntToFloatSInst, int_to_float_s, inst)) {
+        return _builder.CreateSIToFP(
+          emit_arg(int_to_float_s->arg(0)),
+          emit_type(int_to_float_s->type())
+        );
       } else if (dynmatch(LoadInst, load, inst)) {
         return _builder.CreateLoad(
           emit_type(load->type()),
@@ -166,6 +178,18 @@ namespace metajit {
           emit_arg(add_ptr->arg(0)),
           {emit_arg(add_ptr->arg(1))}
         );
+      } else if (dynmatch(EqInst, eq, inst)) {
+        if (is_float(eq->arg(0)->type())) {
+          return _builder.CreateFCmpUEQ(
+            emit_arg(eq->arg(0)),
+            emit_arg(eq->arg(1))
+          );
+        } else {
+          return _builder.CreateICmpEQ(
+            emit_arg(eq->arg(0)),
+            emit_arg(eq->arg(1))
+          );
+        }
       }
 
       #define binop(Name, LLVMName) \
@@ -189,9 +213,14 @@ namespace metajit {
       binop(Shl, Shl)
       binop(ShrU, LShr)
       binop(ShrS, AShr)
-      binop(Eq, ICmpEQ)
+      binop(AddF, FAdd)
+      binop(SubF, FSub)
+      binop(MulF, FMul)
+      binop(DivF, FDiv)
       binop(LtU, ICmpULT)
       binop(LtS, ICmpSLT)
+      binop(LtFO, FCmpOLT)
+      binop(LtFU, FCmpULT)
 
       #undef binop
 

@@ -30,6 +30,9 @@
 
 #define dynmatch(Type, name, value) Type* name = dynamic_cast<Type*>(value)
 
+using float32_t = float;
+using float64_t = double;
+
 namespace metajit {
   class ArenaAllocator {
   private:
@@ -171,7 +174,11 @@ namespace metajit {
   };
 
   enum class Type {
-    Void, Bool, Int8, Int16, Int32, Int64, Ptr
+    Void,
+    Bool,
+    Int8, Int16, Int32, Int64,
+    Float32, Float64,
+    Ptr
   };
 
   inline bool is_int(Type type) {
@@ -179,6 +186,11 @@ namespace metajit {
            type == Type::Int16 ||
            type == Type::Int32 ||
            type == Type::Int64;
+  }
+
+  inline bool is_float(Type type) {
+    return type == Type::Float32 ||
+           type == Type::Float64;
   }
 
   inline bool is_int_or_bool(Type type) {
@@ -193,6 +205,8 @@ namespace metajit {
       case Type::Int16: return 2;
       case Type::Int32: return 4;
       case Type::Int64: return 8;
+      case Type::Float32: return 4;
+      case Type::Float64: return 8;
       case Type::Ptr: return sizeof(void*);
     }
     assert(false && "Unknown type");
@@ -223,7 +237,11 @@ namespace metajit {
 
 std::ostream& operator<<(std::ostream& stream, metajit::Type type) {
   static const char* names[] = {
-    "Void", "Bool", "Int8", "Int16", "Int32", "Int64", "Ptr"
+    "Void",
+    "Bool",
+    "Int8", "Int16", "Int32", "Int64",
+    "Float32", "Float64",
+    "Ptr"
   };
   stream << names[(size_t) type];
   return stream;
@@ -1034,6 +1052,19 @@ namespace metajit {
       new (constant) Const(type, value);
       return constant;
     }
+
+    #define define_build_const(name) \
+      Const* name(float32_t value) { \
+        return name(Type::Float32, (uint64_t) *(uint32_t*) &value); \
+      } \
+      Const* name(float64_t value) { \
+        return name(Type::Float64, *(uint64_t*) &value); \
+      }
+
+    define_build_const(build_const)
+    define_build_const(build_const_fast)
+
+    #undef define_build_const
 
     ${builder}
 
