@@ -2080,12 +2080,23 @@ namespace metajit {
         return mask == type_mask(type);
       }
 
+      #define switch_type(op) \
+        switch (type) { \
+          case Type::Int8: res = (int8_t(a) op int8_t(b)); break; \
+          case Type::Int16: res = (int16_t(a) op int16_t(b)); break; \
+          case Type::Int32: res = (int32_t(a) op int32_t(b)); break; \
+          case Type::Int64: res = (int64_t(a) op int64_t(b)); break; \
+          default: assert(false && "Unsupported type"); \
+        }
+
       static Bits div_u(Type type, uint64_t a, uint64_t b) {
         return Bits::constant(type, a / b);
       }
 
       static Bits div_s(Type type, uint64_t a, uint64_t b) {
-        return Bits(type, 0, 0);  // TODO
+        uint64_t res = 0;
+        switch_type(/)
+        return Bits::constant(type, res);
       }
 
       static Bits mod_u(Type type, uint64_t a, uint64_t b) {
@@ -2093,7 +2104,9 @@ namespace metajit {
       }
 
       static Bits mod_s(Type type, uint64_t a, uint64_t b) {
-        return Bits(type, 0, 0);  // TODO
+        uint64_t res = 0;
+        switch_type(%)
+        return Bits::constant(type, res);
       }
 
       static Bits lt_u(Type type, uint64_t a, uint64_t b) {
@@ -2102,15 +2115,11 @@ namespace metajit {
 
       static Bits lt_s(Type type, uint64_t a, uint64_t b) {
         bool res = false;
-        switch (type) {
-          case Type::Int8: res = (int8_t(a) < int8_t(b)); break;
-          case Type::Int16: res = (int16_t(a) < int16_t(b)); break;
-          case Type::Int32: res = (int32_t(a) < int32_t(b)); break;
-          case Type::Int64: res = (int64_t(a) < int64_t(b)); break;
-          default: assert(false); // Unsupported type
-        }
+        switch_type(<)
         return Bits::constant(res);
       }
+
+      #undef switch_type
 
       #define const_binop(name, expr) \
         Bits name(const Bits& other) const { \

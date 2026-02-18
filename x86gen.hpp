@@ -347,6 +347,11 @@ namespace metajit {
       X86Inst* name(X86Inst::RM rm) { \
         return &build(X86Inst::Kind::kind).set_rm(rm); \
       }
+    
+    #define op0_x86_inst(kind, name, ...) \
+      X86Inst* name() { \
+        return &build(X86Inst::Kind::kind); \
+      }
 
     #include "x86insts.inc.hpp"
 
@@ -356,10 +361,6 @@ namespace metajit {
     
     X86Inst* lea64(Reg dst, X86Inst::Mem src) {
       return &build(X86Inst::Kind::Lea64).set_reg(dst).set_rm(src);
-    }
-
-    X86Inst* ret() {
-      return &build(X86Inst::Kind::Ret);
     }
   };
 
@@ -696,35 +697,61 @@ namespace metajit {
         _builder.mov64(vreg(inst), vreg(mul->arg(0)));
         _builder.imul64(vreg(inst), vreg(mul->arg(1)));
       } else if (dynamic_cast<DivUInst*>(inst) ||
-                 dynamic_cast<ModUInst*>(inst)) {
-        if (inst->type() == Type::Int8) {
-          Reg rax = fix_to_preg(vreg(), REG_RAX);
-          _builder.movzx8to64(rax, vreg(inst->arg(0)));
-          _builder.div8(vreg(inst->arg(1)));
-          if (dynamic_cast<ModUInst*>(inst)) {
-            _builder.shr16_imm(rax, (uint64_t) 8);
+                 dynamic_cast<ModUInst*>(inst) ||
+                 dynamic_cast<DivSInst*>(inst) ||
+                 dynamic_cast<ModSInst*>(inst)) {
+
+        Reg rdx = fix_to_preg(vreg(), REG_RDX);
+        Reg rax = fix_to_preg(vreg(), REG_RAX);
+
+        if (dynamic_cast<DivSInst*>(inst) || dynamic_cast<ModSInst*>(inst)) {
+          if (inst->type() == Type::Int8) {
+            _builder.movsx8to64(rax, vreg(inst->arg(0)));
+            _builder.movsx8to64(vreg(inst->arg(1)), vreg(inst->arg(1)));
+          } else {
+            _builder.mov64(rax, vreg(inst->arg(0)));
           }
-          _builder.mov64(vreg(inst), rax);
-        } else {
-          Reg rdx = fix_to_preg(vreg(), REG_RDX);
-          Reg rax = fix_to_preg(vreg(), REG_RAX);
-          _builder.mov64_imm(rdx, (uint64_t) 0);
-          _builder.mov64(rax, vreg(inst->arg(0)));
 
           switch (inst->type()) {
+            case Type::Int8:
+            case Type::Int16:
+              _builder.cwd(rdx);
+              _builder.idiv16(vreg(inst->arg(1)));
+            break;
+            case Type::Int32:
+              _builder.cdq(rdx);
+              _builder.idiv32(vreg(inst->arg(1)));
+            break;
+            case Type::Int64:
+              _builder.cqo(rdx);
+              _builder.idiv64(vreg(inst->arg(1)));
+            break;
+            default: assert(false && "Unsupported type");
+          }
+        } else {
+          _builder.mov64_imm(rdx, (uint64_t) 0);
+          if (inst->type() == Type::Int8) {
+            _builder.movzx8to64(rax, vreg(inst->arg(0)));
+            _builder.movzx8to64(vreg(inst->arg(1)), vreg(inst->arg(1)));
+          } else {
+            _builder.mov64(rax, vreg(inst->arg(0)));
+          }
+
+          switch (inst->type()) {
+            case Type::Int8:
             case Type::Int16: _builder.div16(vreg(inst->arg(1))); break;
             case Type::Int32: _builder.div32(vreg(inst->arg(1))); break;
             case Type::Int64: _builder.div64(vreg(inst->arg(1))); break;
             default: assert(false && "Unsupported type");
           }
+        }
 
-          if (dynamic_cast<ModUInst*>(inst)) {
-            _builder.mov64(vreg(inst), rdx);
-            _builder.pseudo_use(rax);
-          } else {
-            _builder.mov64(vreg(inst), rax);
-            _builder.pseudo_use(rdx);
-          }
+        if (dynamic_cast<ModUInst*>(inst) || dynamic_cast<ModSInst*>(inst)) {
+          _builder.mov64(vreg(inst), rdx);
+          _builder.pseudo_use(rax);
+        } else {
+          _builder.mov64(vreg(inst), rax);
+          _builder.pseudo_use(rdx);
         }
       } else if (dynmatch(AndInst, and_inst, inst)) {
         _builder.mov64(vreg(inst), vreg(and_inst->arg(0)));

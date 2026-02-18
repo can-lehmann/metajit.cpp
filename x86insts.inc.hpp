@@ -32,6 +32,10 @@
 #define unop_x86_inst(name, lowercase, usedef, is_64_bit, opcode) x86_inst(name, lowercase, usedef, is_64_bit, opcode)
 #endif
 
+#ifndef op0_x86_inst
+#define op0_x86_inst(name, lowercase, usedef, is_64_bit, opcode) x86_inst(name, lowercase, usedef, is_64_bit, opcode)
+#endif
+
 #ifndef x86_inst
 #define x86_inst(name, lowercase, usedef, is_64_bit, opcode)
 #endif
@@ -80,6 +84,15 @@ unop_x86_inst(Div8, div8, { use(rm); }, true, { reg = Reg::phys(6); rex(); byte(
 unop_x86_inst(Div16, div16, { use(rm); }, true, { reg = Reg::phys(6); byte(0x66); rex_opt(); byte(0xf7); modrm(); })
 unop_x86_inst(Div32, div32, { use(rm); }, true, { reg = Reg::phys(6); rex_opt(); byte(0xf7); modrm(); })
 unop_x86_inst(Div64, div64, { use(rm); }, true, { reg = Reg::phys(6); rex_w(); byte(0xf7); modrm(); })
+
+unop_x86_inst(IDiv8, idiv8, { use(rm); }, true, { reg = Reg::phys(7); rex(); byte(0xf6); modrm(); })
+unop_x86_inst(IDiv16, idiv16, { use(rm); }, true, { reg = Reg::phys(7); byte(0x66); rex_opt(); byte(0xf7); modrm(); })
+unop_x86_inst(IDiv32, idiv32, { use(rm); }, true, { reg = Reg::phys(7); rex_opt(); byte(0xf7); modrm(); })
+unop_x86_inst(IDiv64, idiv64, { use(rm); }, true, { reg = Reg::phys(7); rex_w(); byte(0xf7); modrm(); })
+
+unop_x86_inst(Cwd, cwd, {}, true, { byte(0x66); byte(0x99); })
+unop_x86_inst(Cdq, cdq, {}, true, { byte(0x99); })
+unop_x86_inst(Cqo, cqo, {}, true, { rex_w(); byte(0x99); })
 
 rev_binop_x86_inst(Add8Mem, add8_mem, binop_usedef, true, { rex(); byte(0x00); modrm(); })
 rev_binop_x86_inst(Add16Mem, add16_mem, binop_usedef, true, { byte(0x66); rex_opt(); byte(0x01); modrm(); })
@@ -148,7 +161,7 @@ jmp_x86_inst(JNE, jne, {}, true, { byte(0x0f); byte(0x85); imm_n(4); })
 jmp_x86_inst(JE, je, {}, true, { byte(0x0f); byte(0x84); imm_n(4); })
 jmp_x86_inst(JL, jl, {}, true, { byte(0x0f); byte(0x8c); imm_n(4); })
 jmp_x86_inst(JB, jb, {}, true, { byte(0x0f); byte(0x82); imm_n(4); })
-x86_inst(Ret, ret, {}, true, { byte(0xc3); })
+op0_x86_inst(Ret, ret, {}, true, { byte(0xc3); })
 
 #undef x86_inst
 #undef binop_x86_inst
@@ -156,3 +169,4 @@ x86_inst(Ret, ret, {}, true, { byte(0xc3); })
 #undef imm_binop_x86_inst
 #undef jmp_x86_inst
 #undef unop_x86_inst
+#undef op0_x86_inst

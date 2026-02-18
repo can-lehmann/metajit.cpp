@@ -86,9 +86,9 @@ void test_div_mod() {
     div_mod_type(name, Int64);
 
   div_mod(div_u)
-  //div_mod(div_s)
+  div_mod(div_s)
   div_mod(mod_u)
-  //div_mod(mod_s)
+  div_mod(mod_s)
 }
 
 void test_select() {
