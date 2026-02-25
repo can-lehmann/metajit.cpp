@@ -1104,38 +1104,137 @@ namespace metajit {
     // Folding
 
   private:
-    template <class Fn>
-    Value* fold_into_const_select(Value* value_a,
-                                  Const* const_b,
-                                  Type type,
-                                  const Fn& const_prop) {
-      
-      // For a binary operator # and constants a, b and c:
-      //   (cond ? a : b) # c => (cond ? (a # c) : (b # c))
-      // where both (a # c) and (b # c) are constant folded.
-      
-      if (dynmatch(SelectInst, const_select, value_a)) {
-        dynmatch(Const, true_const, const_select->arg(1));
-        dynmatch(Const, false_const, const_select->arg(2));
+    struct ConstSelect {
+      Value* cond = nullptr;
+      Const* true_const = nullptr;
+      Const* false_const = nullptr;
+
+      operator bool() const {
+        return cond != nullptr;
+      }
+    };
+
+    ConstSelect is_const_select(Value* value) {
+      if (dynmatch(SelectInst, select, value)) {
+        dynmatch(Const, true_const, select->arg(1));
+        dynmatch(Const, false_const, select->arg(2));
 
         if (true_const && false_const) {
-          uint64_t true_prop = const_prop(true_const, const_b);
-          uint64_t false_prop = const_prop(false_const, const_b);
-
-          if (true_prop == false_prop) {
-            return build_const(type, true_prop);
-          } else {
-            return fold_select(
-              const_select->cond(),
-              build_const(type, true_prop),
-              build_const(type, false_prop)
-            );
-          }
+          return {
+            select->cond(),
+            true_const,
+            false_const
+          };
         }
       }
+
+      return {};
+    }
+
+    ConstSelect is_const_select_like(Value* value, Value* cond) {
+      if (dynmatch(Const, const_value, value)) {
+        return {
+          cond,
+          const_value,
+          const_value
+        };
+      } else if (ConstSelect const_select = is_const_select(value)) {
+        if (const_select.cond == cond) {
+          return const_select;
+        }
+      }
+
+      return {};
+    }
+
+    Value* fold_select(Value* cond, Type type, uint64_t true_value, uint64_t false_value) {
+      true_value &= type_mask(type);
+      false_value &= type_mask(type);
+
+      if (true_value == false_value) {
+        return build_const(type, true_value);
+      } else {
+        return fold_select(
+          cond,
+          build_const(type, true_value),
+          build_const(type, false_value)
+        );
+      }
+    }
+
+    template <class Fn>
+    __attribute__((always_inline))
+    inline Value* do_binop_const_prop(ConstSelect a, ConstSelect b, Type type, const Fn& const_prop) {
+      assert(a.cond && b.cond && a.cond == b.cond);
+
+      // For a binary operator # and constants a, b, c and d:
+      //   (cond ? a : b) # (cond ? c : d) => (cond ? (a # c) : (b # d))
+      // where both (a # c) and (b # d) are constant folded.
+
+      uint64_t true_prop = const_prop(a.true_const, b.true_const);
+      uint64_t false_prop = const_prop(a.false_const, b.false_const);
+      return fold_select(a.cond, type, true_prop, false_prop);
+    }
+
+    template <class Fn>
+    __attribute__((always_inline))
+    inline Value* do_binop_const_prop(Value* a, Value* b, Type type, const Fn& const_prop) {
+      dynmatch(Const, const_a, a);
+      dynmatch(Const, const_b, b);
+
+      if (const_a && const_b) {
+        uint64_t result = const_prop(const_a, const_b);
+        return build_const(type, result);
+      } else if (ConstSelect const_select_a = is_const_select(a)) {
+        ConstSelect const_select_b = is_const_select_like(b, const_select_a.cond);
+        if (const_select_b) {
+          return do_binop_const_prop(const_select_a, const_select_b, type, const_prop);
+        }
+      } else if (ConstSelect const_select_b = is_const_select(b)) {
+        ConstSelect const_select_a = is_const_select_like(a, const_select_b.cond);
+        if (const_select_a) {
+          return do_binop_const_prop(const_select_a, const_select_b, type, const_prop);
+        }
+      }
+
       return nullptr;
     }
+
+    template <class Fn>
+    __attribute__((always_inline))
+    inline Value* do_unop_const_prop(Value* a, Type type, const Fn& const_prop) {
+      dynmatch(Const, const_a, a);
+
+      if (const_a) {
+        uint64_t result = const_prop(const_a);
+        return build_const(type, result);
+      } else if (ConstSelect const_select_a = is_const_select(a)) {
+        // For a unary operator # and constants a, b and c:
+        //   #(cond ? a : b) => (cond ? (#a) : (#b))
+        // where both (#a) and (#b) are constant folded.
+
+        uint64_t true_prop = const_prop(const_select_a.true_const);
+        uint64_t false_prop = const_prop(const_select_a.false_const);
+        return fold_select(const_select_a.cond, type, true_prop, false_prop);
+      }
+
+      return nullptr;
+    }
+
+    #define binop_const_prop(type, expr) \
+      if (Value* res = do_binop_const_prop(a, b, type, [](Const* const_a, Const* const_b) { \
+        return (expr); \
+      })) { \
+        return res; \
+      }
   
+    #define unop_const_prop(type, expr) \
+      if (Value* res = do_unop_const_prop(a, type, [](Const* const_a) { \
+        return (expr); \
+      })) { \
+        return res; \
+      }
+
   public:
 
     Value* fold_add(Value* a, Value* b) {
@@ -1161,6 +1260,8 @@ namespace metajit {
         }
       }
 
+      binop_const_prop(a->type(), const_a->value() + const_b->value());
+
       return build_add(a, b);
     }
 
@@ -1173,6 +1274,8 @@ namespace metajit {
           return fold_add(a, b_neg);
         }
       }
+
+      binop_const_prop(a->type(), const_a->value() - const_b->value());
 
       return build_sub(a, b);
     }
@@ -1189,6 +1292,8 @@ namespace metajit {
           return a;
         }
       }
+
+      binop_const_prop(a->type(), const_a->value() * const_b->value());
 
       return build_mul(a, b);
     }
@@ -1245,11 +1350,10 @@ namespace metajit {
         return a;
       }
 
+      binop_const_prop(a->type(), const_a->value() & const_b->value());
+
       if (dynmatch(Const, const_b, b)) {
-        if (dynmatch(Const, const_a, a)) {
-          uint64_t result = const_a->value() & const_b->value();
-          return build_const(a->type(), result);
-        } else if (const_b->value() == type_mask(a->type())) {
+        if (const_b->value() == type_mask(a->type())) {
           return a;
         } else if (const_b->value() == 0) {
           return const_b;
@@ -1281,6 +1385,8 @@ namespace metajit {
         return a;
       }
 
+      binop_const_prop(a->type(), const_a->value() | const_b->value());
+
       if (dynmatch(Const, constant, b)) {
         if (constant->value() == 0) {
           return a;
@@ -1295,6 +1401,8 @@ namespace metajit {
       if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
       }
+
+      binop_const_prop(a->type(), const_a->value() ^ const_b->value());
 
       if (dynmatch(Const, constant, b)) {
         if (constant->value() == 0) {
@@ -1323,16 +1431,9 @@ namespace metajit {
         return build_const(Type::Bool, 1);
       }
 
+      binop_const_prop(Type::Bool, const_a->value() == const_b->value());
+
       if (dynmatch(Const, const_b, b)) {
-        // (cond ? a : b) == c => (cond ? (a == c) : (b == c))
-        Value* res = fold_into_const_select(a, const_b, Type::Bool, [](Const* a, Const* b){
-          return a->value() == b->value() ? 1 : 0;
-        });
-
-        if (res) {
-          return res;
-        }
-
         if (a->type() == Type::Bool) {
           if (const_b->value()) {
             // a == 1 => a
@@ -1363,6 +1464,8 @@ namespace metajit {
     }
 
     Value* fold_lt_u(Value* a, Value* b) {
+      binop_const_prop(a->type(), const_a->value() < const_b->value());
+
       if (dynmatch(Const, const_b, b)) {
         if (const_b->value() == 0) {
           // a < 0 => 0
@@ -1470,6 +1573,9 @@ namespace metajit {
         uint64_t value = constant->value() & type_mask(type);
         return build_const(type, value);
       }
+
+      unop_const_prop(type, const_a->value());
+
       return build_resize_u(a, type);
     }
 
@@ -1477,10 +1583,23 @@ namespace metajit {
       if (a->type() == type) {
         return a;
       }
+
       return build_resize_s(a, type);
     }
 
+    Value* fold_resize_x(Value* a, Type type) {
+      if (a->type() == type) {
+        return a;
+      }
+
+      unop_const_prop(type, const_a->value());
+      
+      return build_resize_x(a, type);
+    }
+
     Value* fold_shl(Value* a, Value* b) {
+      binop_const_prop(a->type(), const_a->value() << const_b->value());
+
       if (dynmatch(Const, const_b, b)) {
         if (dynmatch(Const, const_a, a)) {
           uint64_t result = const_a->value() << const_b->value();
@@ -1490,6 +1609,7 @@ namespace metajit {
           return a;
         }
       }
+
       return build_shl(a, b);
     }
 
@@ -1499,11 +1619,14 @@ namespace metajit {
     }
 
     Value* fold_shr_u(Value* a, Value* b) {
+      binop_const_prop(a->type(), const_a->value() >> const_b->value());
+      
       if (dynmatch(Const, constant, b)) {
         if (constant->value() == 0) {
           return a;
         }
       }
+
       return build_shr_u(a, b);
     }
 
@@ -1551,6 +1674,9 @@ namespace metajit {
 
       return build_store(ptr, value, aliasing, offset);
     }
+
+    #undef binop_const_prop
+    #undef unop_const_prop
   };
 
   struct Pointer {
@@ -1734,6 +1860,14 @@ namespace metajit {
 
     Value* build_resize_u(Value* a, Type type) {
       return Builder::fold_resize_u(a, type);
+    }
+
+    Value* build_resize_s(Value* a, Type type) {
+      return Builder::fold_resize_s(a, type);
+    }
+
+    Value* build_resize_x(Value* a, Type type) {
+      return Builder::fold_resize_x(a, type);
     }
 
     Value* build_shl(Value* a, Value* b) {
