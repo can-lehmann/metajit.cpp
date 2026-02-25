@@ -1168,6 +1168,9 @@ namespace metajit {
       if (dynmatch(Const, const_b, b)) {
         if (const_b->value() == 0) {
           return a;
+        } else {
+          Const* b_neg = build_const(b->type(), -const_b->value());
+          return fold_add(a, b_neg);
         }
       }
 
@@ -1219,39 +1222,6 @@ namespace metajit {
       return build_mod_u(a, b);
     }
 
-    Value* fold_and(Value* a, Value* b) {
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-
-      if (dynmatch(Const, const_b, b)) {
-        if (dynmatch(Const, const_a, a)) {
-          uint64_t result = const_a->value() & const_b->value();
-          return build_const(a->type(), result);
-        } else if (const_b->value() == type_mask(a->type())) {
-          return a;
-        } else if (const_b->value() == 0) {
-          return const_b;
-        }
-      }
-      return build_and(a, b);
-    }
-
-    Value* fold_or(Value* a, Value* b) {
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-
-      if (dynmatch(Const, constant, b)) {
-        if (constant->value() == 0) {
-          return a;
-        } else if (constant->value() == type_mask(a->type())) {
-          return constant;
-        }
-      }
-      return build_or(a, b);
-    }
-  
   private:
     XorInst* is_not(Value* value) {
       if (dynmatch(XorInst, xor_inst, value)) {
@@ -1265,6 +1235,62 @@ namespace metajit {
     }
 
   public:
+    Value* fold_and(Value* a, Value* b) {
+      if (dynamic_cast<Const*>(a)) {
+        std::swap(a, b);
+      }
+
+      if (a == b) {
+        // (a & a) => a
+        return a;
+      }
+
+      if (dynmatch(Const, const_b, b)) {
+        if (dynmatch(Const, const_a, a)) {
+          uint64_t result = const_a->value() & const_b->value();
+          return build_const(a->type(), result);
+        } else if (const_b->value() == type_mask(a->type())) {
+          return a;
+        } else if (const_b->value() == 0) {
+          return const_b;
+        }
+      }
+
+      if (XorInst* not_a = is_not(a)) {
+        // !a & a => 0
+        if (not_a->arg(0) == b) {
+          return build_const(a->type(), 0);
+        }
+      } else if (XorInst* not_b = is_not(b)) {
+        // a & !a => 0
+        if (not_b->arg(0) == a) {
+          return build_const(a->type(), 0);
+        }
+      }
+
+      return build_and(a, b);
+    }
+
+    Value* fold_or(Value* a, Value* b) {
+      if (dynamic_cast<Const*>(a)) {
+        std::swap(a, b);
+      }
+
+      if (a == b) {
+        // (a | a) => a
+        return a;
+      }
+
+      if (dynmatch(Const, constant, b)) {
+        if (constant->value() == 0) {
+          return a;
+        } else if (constant->value() == type_mask(a->type())) {
+          return constant;
+        }
+      }
+      return build_or(a, b);
+    }
+  
     Value* fold_xor(Value* a, Value* b) {
       if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
@@ -1314,6 +1340,13 @@ namespace metajit {
           } else {
             // a == 0 => !a
             return fold_not(a);
+          }
+        }
+
+        if (const_b->value() == 0) {
+          if (dynmatch(XorInst, xor_a, a)) {
+            // (a ^ b) == 0 => a == b
+            return fold_eq(xor_a->arg(0), xor_a->arg(1));
           }
         }
       }
