@@ -1531,6 +1531,19 @@ namespace metajit {
         }
       }
 
+      if (dynmatch(SelectInst, true_select, true_value)) {
+        if (true_select->cond() == cond) {
+          // (cond ? (cond ? a : b) : c) => (cond ? a : c)
+          return fold_select(cond, true_select->arg(1), false_value);
+        }
+      }
+
+      if (dynmatch(SelectInst, false_select, false_value)) {
+        if (false_select->cond() == cond) {
+          // (cond ? a : (cond ? b : c)) => (cond ? a : c)
+          return fold_select(cond, true_value, false_select->arg(2));
+        }
+      }
 
       return build_select(cond, true_value, false_value);
     }
@@ -1915,6 +1928,22 @@ namespace metajit {
       }
     }
 
+  private:
+    bool is_always_equal(Value* a, Value* b) {
+      if (a == b) {
+        return true;
+      } else if (a && b && a->type() == b->type()) {
+        if (dynmatch(Const, const_a, a)) {
+          if (dynmatch(Const, const_b, b)) {
+            return const_a->value() == const_b->value();
+          }
+        }
+      }
+
+      return false;
+    }
+
+  public:
     Value* build_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
       if (dynmatch(AddPtrInst, add_ptr, ptr)) {
         if (dynmatch(Const, const_offset, add_ptr->offset())) {
@@ -1924,7 +1953,7 @@ namespace metajit {
       }
 
       if (aliasing < 0) {
-        if (_exact_memory[-aliasing] == value) {
+        if (is_always_equal(_exact_memory[-aliasing], value)) {
           return nullptr;
         }
         _exact_memory[-aliasing] = value;
