@@ -2974,6 +2974,21 @@ namespace metajit {
             if (b.is_const() && ((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
               return and_inst->arg(0);
             }
+          } else if (dynmatch(ResizeUInst, resize_u, inst)) {
+            if (dynamic_cast<ResizeXInst*>(resize_u->arg(0)) ||
+                dynamic_cast<ResizeUInst*>(resize_u->arg(0)) ||
+                dynamic_cast<ResizeSInst*>(resize_u->arg(0))) {
+
+              // ResizeU(ResizeX/U/S(arg)) => arg if all upper bits of arg are known
+              // to be zero and the source type is equal to the target type
+              Value* arg = ((Inst*) resize_u->arg(0))->arg(0);
+              KnownBits::Bits arg_bits = known_bits.at(arg);
+              if (arg->type() == resize_u->type() &&
+                  type_width(resize_u->type()) > type_width(resize_u->arg(0)->type()) &&
+                  ((~arg_bits.mask | arg_bits.value) & ~type_mask(resize_u->arg(0)->type()) & type_mask(resize_u->type())) == 0) {
+                return arg;
+              }
+            }
           }
           return nullptr;
         });
