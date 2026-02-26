@@ -942,12 +942,17 @@ namespace metajit {
     Section* _section = nullptr;
     Block* _block = nullptr;
     Inst* _before = nullptr;
+    size_t _next_name = 0;
   public:
-    Builder(Section* section): _section(section) {}
+    Builder(Section* section): _section(section), _next_name(section->name_count()) {}
 
     Section* section() const { return _section; }
     Block* block() const { return _block; }
     Inst* before() const { return _before; }
+
+    size_t next_name() const { return _next_name; }
+    void set_next_name(size_t next_name) { _next_name = next_name; }
+    void set_next_name() { _next_name = _section->name_count(); }
 
     void move_to(Block* block, Inst* before) {
       _block = block;
@@ -987,12 +992,19 @@ namespace metajit {
       return _section->entry()->arg(index);
     }
 
-    void insert(Inst* inst) {
+    void insert_named(Inst* inst) {
       _block->insert_before(_before, inst);
     }
 
+    void insert(Inst* inst) {
+      inst->set_name(_next_name++);
+      insert_named(inst);
+    }
+
     Arg* alloc_arg(Type type, size_t index) {
-      return new (_section->allocator().alloc<Arg>()) Arg(type, index);
+      Arg* arg = new (_section->allocator().alloc<Arg>()) Arg(type, index);
+      arg->set_name(_next_name++);
+      return arg;
     }
 
     Block* alloc_block() {
@@ -2059,6 +2071,8 @@ namespace metajit {
       _data = new T[_size]();
     }
 
+    size_t size() const { return _size; }
+
     T& at(NamedValue* value) {
       assert(value->name() < _size);
       return _data[value->name()];
@@ -2381,11 +2395,19 @@ namespace metajit {
       const_binop(mod_u, mod_u(type, value, other.value))
       const_binop(mod_s, mod_s(type, value, other.value))
 
-      const_binop(eq, Bits::constant(Type::Bool, value == other.value))
       const_binop(lt_u, lt_u(type, value, other.value))
       const_binop(lt_s, lt_s(type, value, other.value))
 
       #undef const_binop
+
+      Bits eq(const Bits& other) const {
+        if ((mask & other.mask & value) != (mask & other.mask & other.value)) {
+          return Bits::constant(false);
+        } else if (is_const() && other.is_const()) {
+          return Bits::constant(value == other.value);
+        }
+        return Bits(Type::Bool, 0, 0);
+      }
 
       Bits operator&(const Bits& other) const {
         return Bits(
@@ -2531,7 +2553,11 @@ namespace metajit {
             constant->value()
           );
         } else if (value->is_named()) {
-          return values.at((NamedValue*) value);
+          NamedValue* named_value = (NamedValue*) value;
+          if (named_value->name() > values.size()) {
+            return Bits(value->type(), 0, 0);
+          }
+          return values.at(named_value);
         } else {
           assert(false); // Unreachable
           return Bits();
@@ -2963,9 +2989,19 @@ namespace metajit {
         changed = false;
 
         section->autoname();
+        _builder.set_next_name();
         KnownBits known_bits(section);
 
         changed |= substitute([&](Inst* inst) -> Value* {
+          if (!inst->has_side_effect() &&
+              !inst->is_terminator() &&
+              inst->type() != Type::Void &&
+              known_bits.at(inst).is_const()) {
+            
+            assert(known_bits.at(inst).type == inst->type());
+            return _builder.build_const(inst->type(), known_bits.at(inst).value);
+          }
+
           if (dynmatch(AndInst, and_inst, inst)) {
             KnownBits::Bits a = known_bits.at(and_inst->arg(0));
             KnownBits::Bits b = known_bits.at(and_inst->arg(1));
@@ -2994,6 +3030,7 @@ namespace metajit {
         });
 
         section->autoname();
+        _builder.set_next_name();
         UsedBits used_bits(section);
         
         changed |= substitute([&](Inst* inst) -> Value* {
@@ -3203,7 +3240,7 @@ namespace metajit {
           if (invariant) {
             _invariant[inst] = true;
             inst_it = inst_it.erase();
-            builder.insert(inst);
+            builder.insert_named(inst);
           } else {
             inst_it++;
           }
