@@ -83,43 +83,24 @@ namespace metajit {
 
   extern "C" {
     void* jitir_build_const(void* builder_ptr, uint32_t type, uint64_t value) {
-      Builder& builder = *(Builder*)builder_ptr;
+      TraceBuilder& builder = *(TraceBuilder*)builder_ptr;
       return (void*) builder.build_const((Type) type, value);
     }
 
     void* jitir_build_const_fast(void* builder_ptr, uint32_t type, uint64_t value) {
-      Builder& builder = *(Builder*)builder_ptr;
+      TraceBuilder& builder = *(TraceBuilder*)builder_ptr;
       return (void*) builder.build_const_fast((Type) type, value);
     }
 
     void jitir_build_guard(void* builder_ptr, void* value_ptr, uint32_t expected) {
-      Builder& builder = *(Builder*)builder_ptr;
+      TraceBuilder& builder = *(TraceBuilder*)builder_ptr;
       Value* value = (Value*)value_ptr;
-
-      if (dynmatch(Const, constant, value)) {
-        if ((constant->value() && expected) || (!constant->value() && !expected)) {
-          return; // Always true
-        }
-      }
-
-      Block* failure = builder.build_block();
-      Block* success = builder.build_block();
-
-      Block* a = success;
-      Block* b = failure;
-      if (!expected) {
-        std::swap(a, b);
-      }
-      builder.fold_branch(value, a, b);
-      
-      builder.move_to_end(failure);
-      builder.build_exit();
-
-      builder.move_to_end(success);
+      assert(expected <= 1); // Bool
+      builder.build_guard(value, expected);
     }
 
     void* jitir_entry_arg(void* builder_ptr, uint64_t index) {
-      Builder& builder = *(Builder*)builder_ptr;
+      TraceBuilder& builder = *(TraceBuilder*)builder_ptr;
       return (void*) builder.entry_arg(index);
     }
 

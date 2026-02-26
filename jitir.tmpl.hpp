@@ -763,6 +763,17 @@ namespace metajit {
     }
   }
 
+  inline XorInst* is_not(Value* value) {
+    if (dynmatch(XorInst, xor_inst, value)) {
+      if (dynmatch(Const, const_arg, xor_inst->arg(1))) {
+        if (const_arg->value() == type_mask(value->type())) {
+          return xor_inst;
+        }
+      }
+    }
+    return nullptr;
+  }
+
   class Section {
   private:
     Context& _context;
@@ -1327,19 +1338,6 @@ namespace metajit {
       return build_mod_u(a, b);
     }
 
-  private:
-    XorInst* is_not(Value* value) {
-      if (dynmatch(XorInst, xor_inst, value)) {
-        if (dynmatch(Const, const_arg, xor_inst->arg(1))) {
-          if (const_arg->value() == type_mask(value->type())) {
-            return xor_inst;
-          }
-        }
-      }
-      return nullptr;
-    }
-
-  public:
     Value* fold_and(Value* a, Value* b) {
       if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
@@ -1796,6 +1794,8 @@ namespace metajit {
     std::unordered_map<AliasingGroup, GroupState> _memory;
     ExpandingVector<Value*> _exact_memory;
 
+    std::unordered_map<Value*, bool> _guards;
+
     bool could_alias(LoadInst* load, Value* ptr, Type type, AliasingGroup aliasing, uint64_t offset) {
       if (load->aliasing() != aliasing) {
         return false;
@@ -1983,6 +1983,48 @@ namespace metajit {
 
         return Builder::build_store(ptr, value, aliasing, offset);
       }
+    }
+
+    void build_guard(Value* value, bool expected) {
+      assert(value->type() == Type::Bool);
+
+      if (XorInst* xor_inst = is_not(value)) {
+        value = xor_inst->arg(0);
+        expected = !expected;
+      }
+
+      std::optional<bool> known_value;
+      if (dynmatch(Const, constant, value)) {
+        known_value = constant->value() & 1;
+      } else if (_guards.find(value) != _guards.end()) {
+        known_value = _guards[value];
+      }
+
+      if (known_value.has_value()) {
+        if (known_value.value() == expected) {
+          return; // Always true
+        } else {
+          // Always false
+          assert(false && "Unreachable code due to guard");
+        }
+      }
+
+      _guards[value] = expected;
+
+      Block* failure = build_block();
+      Block* success = build_block();
+
+      Block* a = success;
+      Block* b = failure;
+      if (!expected) {
+        std::swap(a, b);
+      }
+      build_branch(value, a, b);
+      
+      move_to_end(failure);
+      build_exit();
+
+      move_to_end(success);
     }
 
     void init_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
