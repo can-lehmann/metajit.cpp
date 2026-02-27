@@ -7,6 +7,8 @@
 - `Type::Int16`
 - `Type::Int32`
 - `Type::Int64`
+- `Type::Float32`
+- `Type::Float64`
 - `Type::Ptr`
 
 ## Instructions
