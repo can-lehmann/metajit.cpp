@@ -656,6 +656,11 @@ namespace metajit {
       return Self(_flags | other._flags);
     }
 
+    Self& operator|=(const Self& other) {
+      _flags |= other._flags;
+      return (Self&) *this;
+    }
+
     void write(PrettyStream& stream) const {
       stream << "{";
       bool is_first = true;
@@ -689,18 +694,23 @@ namespace metajit {
   public:
     enum : uint32_t {
       None = 0,
+      // Pure function of the address
       Pure = 1 << 0,
-      InBounds = 1 << 1
+      // Guaranteed to be in bounds of an allocation, so will not trap
+      InBounds = 1 << 1,
+      // The value of this load is known at section entry
+      EntryFrozen = 1 << 2
     };
 
     using BaseFlags<LoadFlags>::BaseFlags;
 
     constexpr static const char* NAMES[] = {
       "Pure",
-      "InBounds"
+      "InBounds",
+      "EntryFrozen"
     };
 
-    constexpr static size_t COUNT = 2;
+    constexpr static size_t COUNT = 3;
   };
 }
 
@@ -999,6 +1009,17 @@ namespace metajit {
     void insert(Inst* inst) {
       inst->set_name(_next_name++);
       insert_named(inst);
+    }
+
+    template <class T>
+    lwir::Span<T> alloc_span(size_t count) {
+      T* data = (T*) _section->allocator().alloc(sizeof(T) * count, alignof(T));
+      return lwir::Span<T>(data, count);
+    }
+
+    template <class T>
+    lwir::Span<T> alloc_span(const std::vector<T>& data) {
+      return alloc_span<T>(data.size()).copy_from(data.begin(), data.end());
     }
 
     Arg* alloc_arg(Type type, size_t index) {
@@ -3149,6 +3170,11 @@ namespace metajit {
     Block* _header = nullptr;
     Block* _extent = nullptr;
     Block* _preheader = nullptr;
+
+    // Loop has only a single backedge and no internal branches.
+    // This is especially the case for loops produced by tracing.
+    // The extent block terminates with a jump to the header.
+    bool _is_linear = false;
   public:
     Loop(Section* section, Block* header, Block* extent):
         _section(section), _header(header), _extent(extent) {}
@@ -3161,6 +3187,9 @@ namespace metajit {
     Block* preheader() const { return _preheader; }
     void set_preheader(Block* preheader) { _preheader = preheader; }
 
+    bool is_linear() const { return _is_linear; }
+    void set_linear(bool is_linear) { _is_linear = is_linear; }
+
     using iterator = decltype(_section->begin());
 
     lwir::Range<iterator> range() {
@@ -3172,6 +3201,83 @@ namespace metajit {
 
     size_t first_name() const {
       return (*_header->begin())->name();
+    }
+  };
+
+  // Promotes memory accesses with exact aliasing inside the loop to registers.
+  class LinearLoopMem2Reg: public Pass<LinearLoopMem2Reg> {
+  private:
+    Loop* _loop;
+  public:
+    LinearLoopMem2Reg(Loop* loop):
+        Pass(loop->section()),
+        _loop(loop) {
+      
+      assert(loop->is_linear());
+      assert(loop->preheader());
+
+      ExpandingVector<Value*> current_values;
+      NameMap<Value*> substs(loop->section());
+
+      std::vector<Arg*> args; // Header args
+      std::vector<Value*> initial; // Preheader jump args
+      std::vector<AliasingGroup> arg_groups; // Aliasing groups for each header arg, used for backedge
+      size_t index = 0;
+
+      Builder builder(loop->section());
+      builder.move_before(loop->preheader(), loop->preheader()->terminator());
+
+      for (Block* block : loop->range()) {
+        for (auto inst_it = block->begin(); inst_it != block->end(); ) {
+          Inst* inst = *inst_it;
+          inst->substitute_args(substs);
+
+          if (dynmatch(LoadInst, load, inst)) {
+            if (load->aliasing() < 0 && load->flags().has(LoadFlags::InBounds)) {
+              if (!current_values[-load->aliasing()]) {
+                bool is_ptr_loop_invariant = !load->ptr()->is_named() || ((NamedValue*) load->ptr())->name() < loop->first_name();
+                if (is_ptr_loop_invariant) {
+                  inst_it = inst_it.erase();
+                  Arg* arg = builder.alloc_arg(load->type(), index++);
+                  args.push_back(arg);
+                  initial.push_back(load);
+                  arg_groups.push_back(load->aliasing());
+                  builder.insert_named(load);
+                  current_values[-load->aliasing()] = arg;
+                } else {
+                  current_values[-load->aliasing()] = load;
+                  inst_it++;
+                }
+              } else {
+                inst_it = inst_it.erase();
+              }
+              substs[load] = current_values[-load->aliasing()];
+              continue;
+            }
+          } else if (dynmatch(StoreInst, store, inst)) {
+            if (store->aliasing() < 0) {
+              current_values[-store->aliasing()] = store->value();
+            }
+          }
+
+          inst_it++;
+        }
+      }
+
+      loop->header()->set_args(builder.alloc_span(args));
+
+      dynmatch(JumpInst, preheader_jump, loop->preheader()->terminator());
+      assert(preheader_jump);
+      preheader_jump->set_args(builder.alloc_span(initial));
+
+      dynmatch(JumpInst, extent_jump, loop->extent()->terminator());
+      assert(extent_jump);
+      extent_jump->set_args(builder.alloc_span<Value*>(arg_groups.size()).zeroed());
+      for (size_t it = 0; it < arg_groups.size(); it++) {
+        Value* value = current_values[-arg_groups[it]];
+        assert(value);
+        extent_jump->set_arg(it, value);
+      }
     }
   };
 
