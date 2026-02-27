@@ -23,6 +23,13 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/PassManager.h"
+
+#include "llvm/Passes/OptimizationLevel.h"
+#include "llvm/Passes/PassBuilder.h"
+
+#include "llvm/Analysis/CGSCCPassManager.h"
+#include "llvm/Analysis/LoopAnalysisManager.h"
 
 #include "llvm/Support/TargetSelect.h"
 
@@ -1162,6 +1169,28 @@ namespace metajit {
     static void initilize_llvm_jit() {
       llvm::InitializeNativeTarget();
       llvm::InitializeNativeTargetAsmPrinter();
+    }
+
+    static void optimize_llvm(llvm::Module& module, llvm::OptimizationLevel level) {
+      llvm::LoopAnalysisManager loop_analysis_manager;
+      llvm::FunctionAnalysisManager function_analysis_manager;
+      llvm::CGSCCAnalysisManager cgscc_analysis_manager;
+      llvm::ModuleAnalysisManager module_analysis_manager;
+
+      llvm::PassBuilder pass_builder;
+      pass_builder.registerModuleAnalyses(module_analysis_manager);
+      pass_builder.registerCGSCCAnalyses(cgscc_analysis_manager);
+      pass_builder.registerFunctionAnalyses(function_analysis_manager);
+      pass_builder.registerLoopAnalyses(loop_analysis_manager);
+      pass_builder.crossRegisterProxies(
+        loop_analysis_manager,
+        function_analysis_manager,
+        cgscc_analysis_manager,
+        module_analysis_manager
+      );
+
+      llvm::ModulePassManager module_pass_manager = pass_builder.buildPerModuleDefaultPipeline(level);
+      module_pass_manager.run(module, module_analysis_manager);
     }
   };
 }
