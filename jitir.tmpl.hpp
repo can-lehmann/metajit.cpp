@@ -1784,6 +1784,32 @@ namespace metajit {
     auto end() { return _data.end(); }
   };
 
+  // A chain is a sequence of blocks where each block is the idom of the next one.
+  // Chains essentially form extended basic blocks. Note that traces are chains.
+  class Chain {
+  private:
+    std::vector<Block*> _blocks;
+  public:
+    Chain() {}
+    Chain(const std::vector<Block*>& blocks): _blocks(blocks) {}
+
+    size_t size() const { return _blocks.size(); }
+
+    auto begin() const { return _blocks.begin(); }
+    auto end() const { return _blocks.end(); }
+
+    void add(Block* block) { _blocks.push_back(block); }
+    void add(const Chain& other) {
+      _blocks.insert(_blocks.end(), other._blocks.begin(), other._blocks.end());
+    }
+
+    Block* at(size_t index) const { return _blocks.at(index); }
+    Block* front() const { return _blocks.front(); }
+    Block* back() const { return _blocks.back(); }
+
+    void clear() { _blocks.clear(); }
+  };
+
   class TraceBuilder: public Builder {
   private:
     // We perform optimizations during trace generation
@@ -1847,8 +1873,13 @@ namespace metajit {
 
       return load_interval.intersects(store_interval);
     }
+
+    Chain* _chain = nullptr;
   public:
     using Builder::Builder;
+
+    Chain* chain() { return _chain; }
+    void set_chain(Chain* chain) { _chain = chain; }
 
     // Use folding versions so that we get short-circuit behavior and simplifications
 
@@ -2016,6 +2047,15 @@ namespace metajit {
 
         return Builder::build_store(ptr, value, aliasing, offset);
       }
+    }
+
+    template <class... Args>
+    Block* build_block(Args... args) {
+      Block* block = Builder::build_block(args...);
+      if (_chain) {
+        _chain->add(block);
+      }
+      return block;
     }
 
     void build_guard(Value* value, bool expected) {
@@ -3172,9 +3212,8 @@ namespace metajit {
     Block* _preheader = nullptr;
 
     // Loop has only a single backedge and no internal branches.
-    // This is especially the case for loops produced by tracing.
     // The extent block terminates with a jump to the header.
-    bool _is_linear = false;
+    Chain* _chain = nullptr;
   public:
     Loop(Section* section, Block* header, Block* extent):
         _section(section), _header(header), _extent(extent) {}
@@ -3187,8 +3226,12 @@ namespace metajit {
     Block* preheader() const { return _preheader; }
     void set_preheader(Block* preheader) { _preheader = preheader; }
 
-    bool is_linear() const { return _is_linear; }
-    void set_linear(bool is_linear) { _is_linear = is_linear; }
+    Chain* chain() const { return _chain; }
+    void set_chain(Chain* chain) {
+      assert(chain->front() == _header);
+      assert(chain->back() == _extent);
+      _chain = chain;
+    }
 
     using iterator = decltype(_section->begin());
 
@@ -3205,15 +3248,15 @@ namespace metajit {
   };
 
   // Promotes memory accesses with exact aliasing inside the loop to registers.
-  class LinearLoopMem2Reg: public Pass<LinearLoopMem2Reg> {
+  class ChainLoopMem2Reg: public Pass<ChainLoopMem2Reg> {
   private:
     Loop* _loop;
   public:
-    LinearLoopMem2Reg(Loop* loop):
+    ChainLoopMem2Reg(Loop* loop):
         Pass(loop->section()),
         _loop(loop) {
       
-      assert(loop->is_linear());
+      assert(loop->chain());
       assert(loop->preheader());
 
       ExpandingVector<Value*> current_values;
@@ -3227,7 +3270,7 @@ namespace metajit {
       Builder builder(loop->section());
       builder.move_before(loop->preheader(), loop->preheader()->terminator());
 
-      for (Block* block : loop->range()) {
+      for (Block* block : *loop->chain()) {
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
           inst->substitute_args(substs);
