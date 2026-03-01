@@ -524,9 +524,11 @@ namespace metajit {
       _insts.insert_before(before, inst);
     }
 
-    void add(Inst* inst) {
-      _insts.add(inst);
-    }
+    void add(Inst* inst) { _insts.add(inst); }
+    void add(Inst* first, Inst* last) { _insts.add(first, last); }
+    
+    void remove(Inst* inst) { _insts.remove(inst); }
+    void remove(Inst* first, Inst* last) { _insts.remove(first, last); }
 
     Inst* terminator() const;
     std::vector<Block*> successors() const;
@@ -810,6 +812,7 @@ namespace metajit {
     size_t name_count() const { return _name_count; }
 
     void add(Block* block) { _blocks.add(block); }
+    void remove(Block* block) { _blocks.remove(block); }
 
     void insert_before(Block* before, Block* block) {
       _blocks.insert_before(before, block);
