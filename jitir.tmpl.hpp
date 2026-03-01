@@ -1772,6 +1772,12 @@ namespace metajit {
     ExpandingVector() {}
 
     size_t real_size() const { return _data.size(); }
+    size_t set_min_real_size(size_t size) {
+      if (_data.size() < size) {
+        _data.resize(size);
+      }
+      return _data.size();
+    }
 
     T& operator[](size_t index) {
       if (index >= _data.size()) {
