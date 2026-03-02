@@ -2378,7 +2378,9 @@ namespace metajit {
       Bits(Type _type, uint64_t _mask, uint64_t _value):
         type(_type),
         mask(_mask & type_mask(_type)),
-        value(_value & type_mask(_type)) {}
+        value(_value & type_mask(_type) & _mask) {
+        assert ((value & ~mask) == 0);
+      }
 
       static Bits constant(Type type, uint64_t value) {
         return Bits(type, type_mask(type), value);
