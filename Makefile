@@ -5,7 +5,8 @@ TEST_HEADER_FILES := $(wildcard tests/*.hpp)
 run: main
 	./main
 
-test: tests/test_insts tests/test_cfg tests/test_fuzzer
+test: tests/test_knownbits tests/test_insts tests/test_cfg tests/test_fuzzer
+	./tests/test_knownbits
 	./tests/test_insts
 	./tests/test_cfg
 	./tests/test_fuzzer
@@ -14,6 +15,9 @@ fuzz: tests/fuzzer
 	./tests/fuzzer
 
 main: main.cpp jitir.hpp jitir_llvmapi.hpp llvmgen.hpp x86gen.hpp
+	clang++ ${CFLAGS} -o $@ $<
+
+tests/test_knownbits: tests/test_knownbits.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
 tests/test_insts: tests/test_insts.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
@@ -36,6 +40,7 @@ jitir_llvmapi.hpp: jitir.py jitir_llvmapi.tmpl.hpp
 
 clean:
 	-rm main
+	-rm tests/test_knownbits
 	-rm tests/test_insts
 	-rm tests/test_fuzzer
 	-rm tests/test_cfg

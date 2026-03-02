@@ -1,0 +1,157 @@
+// Copyright 2025 Can Joshua Lehmann
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include <bitset>
+#include "diff.hpp"
+
+#include "../../unittest.cpp/unittest.hpp"
+
+using namespace metajit;
+using namespace metajit::test;
+
+using Bits = KnownBits::Bits;
+
+const std::string output_path = "tests/output/test_knownbits";
+
+uint64_t rand64() {
+  return (uint64_t(rand()) << 32) | rand();
+}
+
+const int num_examples = 1000000;
+
+std::pair<uint64_t, Bits> random_value_and_bits(Type type) {
+  // half the time produce a constant
+  if (rand() % 2 == 0) {
+    uint64_t value = rand64();
+    Bits bits = Bits::constant(type, value);
+    return {value & type_mask(type), bits};
+  }
+  uint64_t mask = rand64();
+  uint64_t concrete_value = rand64() & type_mask(type);
+  uint64_t value = concrete_value & mask;
+  Bits bits(type, mask, value);
+  assert(bits.matches_const(concrete_value));
+  return {concrete_value, bits};
+}
+
+void test_random() {
+  for (int i = 0; i < num_examples; i++) {
+    auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
+    auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
+
+    assert ((bits_a & bits_b).matches_const(value_a & value_b));
+    assert ((bits_a | bits_b).matches_const(value_a | value_b));
+    assert ((bits_a ^ bits_b).matches_const(value_a ^ value_b));
+    assert ((bits_a * bits_b).matches_const(value_a * value_b));
+    if (value_b != 0) {
+      assert (bits_a.div_u(bits_b).matches_const(value_a / value_b));
+      assert (bits_a.div_s(bits_b).matches_const((int64_t)value_a / (int64_t)value_b));
+      assert (bits_a.mod_u(bits_b).matches_const(value_a % value_b));
+      assert (bits_a.mod_s(bits_b).matches_const((int64_t)value_a % (int64_t)value_b));
+    }
+    assert (bits_a.eq(bits_b).matches_const(value_a == value_b));
+    assert (bits_a.lt_s(bits_b).matches_const((int64_t)value_a < (int64_t)value_b));
+    assert (bits_a.lt_u(bits_b).matches_const(value_a < value_b));
+
+    auto [value_bool, bits_bool] = random_value_and_bits(Type::Bool);
+    assert (bits_bool.select(bits_a, bits_b).matches_const(value_bool ? value_a : value_b));
+  }
+}
+
+void test_random_add() {
+  for (int i = 0; i < num_examples; i++) {
+    auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
+    auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
+    Bits c = bits_a + bits_b;
+    assert (c.matches_const(value_a + value_b));
+    if (bits_a.is_const() && bits_b.is_const()) {
+      assert (c.is_const());
+    }
+  }
+}
+
+void test_random_sub() {
+  for (int i = 0; i < num_examples; i++) {
+    auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
+    auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
+    Bits c = bits_a - bits_b;
+    assert (c.matches_const(value_a - value_b));
+    if (bits_a.is_const() && bits_b.is_const()) {
+      assert (c.is_const());
+    }
+  }
+}
+
+void test_random_shifts() {
+  for (int i = 0; i < num_examples; i++) {
+    auto [value, bits] = random_value_and_bits(Type::Int64);
+    uint64_t shift = rand() % 64;
+    Bits shift_bits = Bits::constant(Type::Int64, shift);
+
+    assert (bits.shr_u(shift_bits).matches_const(value >> shift));
+    assert (bits.shr_s(shift_bits).matches_const((int64_t)value >> shift));
+    assert (bits.shl(shift_bits).matches_const(value << shift));
+  }
+}
+
+void test_random_resize() {
+  for (int i = 0; i < num_examples; i++) {
+    auto [value, bits] = random_value_and_bits(Type::Int32);
+    Bits bits_u64 = bits.resize_u(Type::Int64);
+    Bits bits_s64 = bits.resize_s(Type::Int64);
+
+    assert (bits_u64.matches_const(value));
+    assert (bits_s64.matches_const((int64_t)(int32_t)value));
+  }
+}
+
+void test_add_example() {
+  Bits a = Bits(Type::Int64, 0b1011011011, 0b0010010010); // ?10?10?10
+  Bits b = Bits(Type::Int64, 0b000111111, 0b000111000); // ???111000
+  Bits c = a + b; //?01?10
+  assert (c.mask == 0b11011);
+  assert (c.value == 0b01010);
+
+  a = Bits(Type::Int64, 0b111, 0); // alignment scenario
+  b = Bits::constant(Type::Int64, 8);
+  c = a + b;
+  assert (c.mask == 0b111);
+  assert (c.value == 0b0);
+}
+
+void test_sub_example() {
+  Bits a = Bits(Type::Int64, 0b1011011011, 0b0010010010); // ?10?10?10
+  Bits b = Bits(Type::Int64, 0b000111111, 0b000111000); // ???111000
+  Bits c = a - b; //?11?10
+  assert (c.mask == 0b11011);
+  assert (c.value == 0b11010);
+
+  a = Bits(Type::Int64, 0b111, 0); // alignment scenario
+  b = Bits::constant(Type::Int64, 8);
+  c = a - b;
+  assert (c.mask == 0b111);
+  assert (c.value == 0b0);
+}
+
+int main() {
+  test_add_example();
+  test_sub_example();
+  test_random();
+  test_random_add();
+  test_random_sub();
+  test_random_shifts();
+  test_random_resize();
+
+  return 0;
+}
