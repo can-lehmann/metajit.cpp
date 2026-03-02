@@ -2407,6 +2407,10 @@ namespace metajit {
         return mask == type_mask(type);
       }
 
+      bool matches_const(uint64_t other) const {
+        return (mask & other) == (mask & value);
+      }
+
       #define switch_type(op) \
         switch (type) { \
           case Type::Int8: res = (int8_t(a) op int8_t(b)); break; \
@@ -2456,8 +2460,6 @@ namespace metajit {
           return Bits(type, 0, 0); \
         }
       
-      const_binop(operator+, Bits::constant(type, value + other.value))
-      const_binop(operator-, Bits::constant(type, value - other.value))
       const_binop(operator*, Bits::constant(type, value * other.value))
 
       const_binop(div_u, div_u(type, value, other.value))
@@ -2501,6 +2503,35 @@ namespace metajit {
           mask & other.mask,
           value ^ other.value
         );
+      }
+
+      Bits operator+(const Bits& other) const {
+        // compute value and mask following the approach of "Sound, Precise, and
+        // Fast Abstract Interpretation with Tristate Numbers"
+        // https://arxiv.org/abs/2105.05398
+        // see also https://pypy.org/posts/2024/08/toy-knownbits.html
+        uint64_t sum_values = value + other.value;
+        uint64_t this_unknowns = ~mask;
+        uint64_t other_unknowns = ~other.mask;
+
+        uint64_t sum_unknowns = this_unknowns + other_unknowns;
+        uint64_t all_carries = sum_values + sum_unknowns;
+        uint64_t ones_carries = all_carries ^ sum_values;
+        uint64_t unknowns = this_unknowns | other_unknowns | ones_carries;
+        Bits c = Bits(type, ~unknowns, sum_values & ~unknowns);
+        return c;
+      }
+
+      Bits operator-(const Bits& other) const {
+        uint64_t diff_value = value - other.value;
+        uint64_t this_unknowns = ~mask;
+        uint64_t other_unknowns = ~other.mask;
+
+        uint64_t val_borrows = (diff_value + this_unknowns) ^ (diff_value - other_unknowns);
+        uint64_t unknowns = this_unknowns | other_unknowns | val_borrows;
+        uint64_t value = diff_value & ~unknowns;
+        Bits c = Bits(type, ~unknowns, diff_value & ~unknowns);
+        return c;
       }
 
       Bits shl(size_t shift) const {
