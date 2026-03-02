@@ -7,5 +7,6 @@ section.json
 tests/test_insts
 tests/test_fuzzer
 tests/test_cfg
+tests/test_knownbits
 tests/output
 tests/fuzzer

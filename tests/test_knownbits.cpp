@@ -46,102 +46,116 @@ std::pair<uint64_t, Bits> random_value_and_bits(Type type) {
 }
 
 void test_random() {
-  for (int i = 0; i < num_examples; i++) {
-    auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
-    auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
+  unittest::Test("random").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
+      auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
 
-    assert ((bits_a & bits_b).matches_const(value_a & value_b));
-    assert ((bits_a | bits_b).matches_const(value_a | value_b));
-    assert ((bits_a ^ bits_b).matches_const(value_a ^ value_b));
-    assert ((bits_a * bits_b).matches_const(value_a * value_b));
-    if (value_b != 0) {
-      assert (bits_a.div_u(bits_b).matches_const(value_a / value_b));
-      assert (bits_a.div_s(bits_b).matches_const((int64_t)value_a / (int64_t)value_b));
-      assert (bits_a.mod_u(bits_b).matches_const(value_a % value_b));
-      assert (bits_a.mod_s(bits_b).matches_const((int64_t)value_a % (int64_t)value_b));
+      unittest_assert ((bits_a & bits_b).matches_const(value_a & value_b));
+      unittest_assert ((bits_a | bits_b).matches_const(value_a | value_b));
+      unittest_assert ((bits_a ^ bits_b).matches_const(value_a ^ value_b));
+      unittest_assert ((bits_a * bits_b).matches_const(value_a * value_b));
+      if (value_b != 0) {
+        unittest_assert (bits_a.div_u(bits_b).matches_const(value_a / value_b));
+        unittest_assert (bits_a.div_s(bits_b).matches_const((int64_t)value_a / (int64_t)value_b));
+        unittest_assert (bits_a.mod_u(bits_b).matches_const(value_a % value_b));
+        unittest_assert (bits_a.mod_s(bits_b).matches_const((int64_t)value_a % (int64_t)value_b));
+      }
+      unittest_assert (bits_a.eq(bits_b).matches_const(value_a == value_b));
+      unittest_assert (bits_a.lt_s(bits_b).matches_const((int64_t)value_a < (int64_t)value_b));
+      unittest_assert (bits_a.lt_u(bits_b).matches_const(value_a < value_b));
+
+      auto [value_bool, bits_bool] = random_value_and_bits(Type::Bool);
+      unittest_assert (bits_bool.select(bits_a, bits_b).matches_const(value_bool ? value_a : value_b));
     }
-    assert (bits_a.eq(bits_b).matches_const(value_a == value_b));
-    assert (bits_a.lt_s(bits_b).matches_const((int64_t)value_a < (int64_t)value_b));
-    assert (bits_a.lt_u(bits_b).matches_const(value_a < value_b));
-
-    auto [value_bool, bits_bool] = random_value_and_bits(Type::Bool);
-    assert (bits_bool.select(bits_a, bits_b).matches_const(value_bool ? value_a : value_b));
-  }
+  });
 }
 
 void test_random_add() {
-  for (int i = 0; i < num_examples; i++) {
-    auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
-    auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
-    Bits c = bits_a + bits_b;
-    assert (c.matches_const(value_a + value_b));
-    if (bits_a.is_const() && bits_b.is_const()) {
-      assert (c.is_const());
+  unittest::Test("random_add").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
+      auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
+      Bits c = bits_a + bits_b;
+      unittest_assert (c.matches_const(value_a + value_b));
+      if (bits_a.is_const() && bits_b.is_const()) {
+        unittest_assert (c.is_const());
+      }
     }
-  }
+  });
 }
 
 void test_random_sub() {
-  for (int i = 0; i < num_examples; i++) {
-    auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
-    auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
-    Bits c = bits_a - bits_b;
-    assert (c.matches_const(value_a - value_b));
-    if (bits_a.is_const() && bits_b.is_const()) {
-      assert (c.is_const());
+  unittest::Test("random_sub").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
+      auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
+      Bits c = bits_a - bits_b;
+      unittest_assert (c.matches_const(value_a - value_b));
+      if (bits_a.is_const() && bits_b.is_const()) {
+        unittest_assert (c.is_const());
+      }
     }
-  }
+  });
 }
 
 void test_random_shifts() {
-  for (int i = 0; i < num_examples; i++) {
-    auto [value, bits] = random_value_and_bits(Type::Int64);
-    uint64_t shift = rand() % 64;
-    Bits shift_bits = Bits::constant(Type::Int64, shift);
+  unittest::Test("random_shifts").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      auto [value, bits] = random_value_and_bits(Type::Int64);
+      uint64_t shift = rand() % 64;
+      Bits shift_bits = Bits::constant(Type::Int64, shift);
 
-    assert (bits.shr_u(shift_bits).matches_const(value >> shift));
-    assert (bits.shr_s(shift_bits).matches_const((int64_t)value >> shift));
-    assert (bits.shl(shift_bits).matches_const(value << shift));
-  }
+      unittest_assert (bits.shr_u(shift_bits).matches_const(value >> shift));
+      unittest_assert (bits.shr_s(shift_bits).matches_const((int64_t)value >> shift));
+      unittest_assert (bits.shl(shift_bits).matches_const(value << shift));
+    }
+  });
 }
 
 void test_random_resize() {
-  for (int i = 0; i < num_examples; i++) {
-    auto [value, bits] = random_value_and_bits(Type::Int32);
-    Bits bits_u64 = bits.resize_u(Type::Int64);
-    Bits bits_s64 = bits.resize_s(Type::Int64);
+  unittest::Test("random_resize").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      auto [value, bits] = random_value_and_bits(Type::Int32);
+      Bits bits_u64 = bits.resize_u(Type::Int64);
+      Bits bits_s64 = bits.resize_s(Type::Int64);
 
-    assert (bits_u64.matches_const(value));
-    assert (bits_s64.matches_const((int64_t)(int32_t)value));
-  }
+      unittest_assert (bits_u64.matches_const(value));
+      unittest_assert (bits_s64.matches_const((int64_t)(int32_t)value));
+    }
+  });
 }
 
 void test_add_example() {
-  Bits a = Bits(Type::Int64, 0b1011011011, 0b0010010010); // ?10?10?10
-  Bits b = Bits(Type::Int64, 0b000111111, 0b000111000); // ???111000
-  Bits c = a + b; //?01?10
-  assert (c.mask == 0b11011);
-  assert (c.value == 0b01010);
+  unittest::Test("add_example").run([]() {
+    Bits a = Bits(Type::Int64, 0b1011011011, 0b0010010010); // ?10?10?10
+    Bits b = Bits(Type::Int64, 0b000111111, 0b000111000); // ???111000
+    Bits c = a + b; //?01?10
+    unittest_assert (c.mask == 0b11011);
+    unittest_assert (c.value == 0b01010);
 
-  a = Bits(Type::Int64, 0b111, 0); // alignment scenario
-  b = Bits::constant(Type::Int64, 8);
-  c = a + b;
-  assert (c.mask == 0b111);
-  assert (c.value == 0b0);
+    a = Bits(Type::Int64, 0b111, 0); // alignment scenario
+    b = Bits::constant(Type::Int64, 8);
+    c = a + b;
+    unittest_assert (c.mask == 0b111);
+    unittest_assert (c.value == 0b0);
+  });
 }
 
 void test_sub_example() {
-  Bits a = Bits(Type::Int64, 0b1011011011, 0b0010010010); // ?10?10?10
-  Bits b = Bits(Type::Int64, 0b000111111, 0b000111000); // ???111000
-  Bits c = a - b; //?11?10
-  assert (c.mask == 0b11011);
-  assert (c.value == 0b11010);
+  unittest::Test("sub_example").run([]() {
+    Bits a = Bits(Type::Int64, 0b1011011011, 0b0010010010); // ?10?10?10
+    Bits b = Bits(Type::Int64, 0b000111111, 0b000111000); // ???111000
+    Bits c = a - b; //?11?10
+    unittest_assert (c.mask == 0b11011);
+    unittest_assert (c.value == 0b11010);
 
-  a = Bits(Type::Int64, 0b111, 0); // alignment scenario
-  b = Bits::constant(Type::Int64, 8);
-  c = a - b;
-  assert (c.mask == 0b111);
-  assert (c.value == 0b0);
+    a = Bits(Type::Int64, 0b111, 0); // alignment scenario
+    b = Bits::constant(Type::Int64, 8);
+    c = a - b;
+    unittest_assert (c.mask == 0b111);
+    unittest_assert (c.value == 0b0);
+  });
 }
 
 int main() {
