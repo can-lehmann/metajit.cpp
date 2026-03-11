@@ -1563,6 +1563,14 @@ namespace metajit {
             return fold_xor(cond, build_const(Type::Bool, 1));
           }
         }
+        if (cond == true_value) {
+          // (cond ? cond : x) => cond | x
+          return fold_or(cond, false_value);
+        }
+        if (cond == false_value) {
+          // (cond ? x : cond) => cond & x
+          return fold_and(cond, true_value);
+        }
       }
 
       if (dynmatch(SelectInst, true_select, true_value)) {
