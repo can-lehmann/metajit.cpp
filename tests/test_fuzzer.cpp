@@ -97,9 +97,6 @@ int main() {
   });
 
   DiffTest("bug_fold_lt_u", output_path).run([](Builder& builder, TestData& data) {
-
-    Value* a = data.input(Type::Int32);
-    Value* b = data.input(RandomRange(Type::Int32, 0, 31));
     Value* lt = builder.fold_lt_u(
       builder.build_const(Type::Int64, 1271752347623423UL),
       builder.build_const(Type::Int64, 2347782347823478UL));
@@ -108,6 +105,7 @@ int main() {
     builder.fold_branch(lt, true_block, false_block);
 
     builder.move_to_end(true_block);
+    data.output(lt);
     builder.build_exit();
 
     builder.move_to_end(false_block);
