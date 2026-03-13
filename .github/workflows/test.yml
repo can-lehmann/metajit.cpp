@@ -3,6 +3,8 @@ name: test
 on:
   push:
     branches: ["main"]
+  pull_request:
+    branches: [ "main" ]
 
 jobs:
   test:
@@ -39,3 +41,8 @@ jobs:
         run: |
           make clean
           make test
+      - name: Fuzz a bit
+        working-directory: metajit.cpp
+        run: |
+          make tests/fuzzer
+          tests/fuzzer --number-of-runs=100
