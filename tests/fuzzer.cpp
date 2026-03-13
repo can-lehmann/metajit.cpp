@@ -257,16 +257,38 @@ namespace metajit {
   }
 }
 
-int main() {
+namespace cl = llvm::cl;
+
+cl::OptionCategory category("Options");
+
+cl::opt<int> seed("seed", cl::desc("seed for the rng, to reproduce crashes"), cl::cat(category));
+cl::opt<int> number_of_runs("number-of-runs", cl::desc("How many random programs to test (default is run forever)"), cl::cat(category));
+
+int main(int argc, char** argv) {
   using namespace metajit;
   using namespace metajit::test;
+  cl::HideUnrelatedOptions(category);
+  cl::ParseCommandLineOptions(argc, argv, "fuzzer");
 
   metajit::LLVMCodeGen::initilize_llvm_jit();
-
-  srand(1234);
-
   Fuzzer fuzzer;
-  while (true) {
+
+  if (!seed) {
+    srand(time(NULL));
+  } else {
+    srand(seed);
+    fuzzer.run_once();
+    return 0;
+  }
+
+  if (!number_of_runs) {
+      number_of_runs = -1;
+  }
+
+  for (int i = 0; i != number_of_runs; i++) {
+    int curr_seed = rand();
+    srand(curr_seed);
+    std::cout << "seed: " << curr_seed << "\n";
     fuzzer.run_once();
   }
 

@@ -30,7 +30,7 @@ tests/test_cfg: tests/test_cfg.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
 tests/fuzzer: tests/fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
-	clang++ ${CFLAGS} -o $@ $<
+	clang++ -g ${CFLAGS} -o $@ $<
 
 jitir.hpp: jitir.py jitir.tmpl.hpp
 	PYTHONPATH="../lwir.cpp" python3 $<
