@@ -1677,6 +1677,11 @@ namespace metajit {
       return build_shr_u(a, b);
     }
 
+    Value* fold_shr_u(Value* a, size_t shift) {
+      assert(shift <= type_size(a->type()) * 8);
+      return fold_shr_u(a, build_const(a->type(), shift));
+    }
+
     Value* fold_shr_s(Value* a, Value* b) {
       if (dynmatch(Const, constant, b)) {
         if (constant->value() == 0) {
@@ -1684,6 +1689,11 @@ namespace metajit {
         }
       }
       return build_shr_s(a, b);
+    }
+
+    Value* fold_shr_s(Value* a, size_t shift) {
+      assert(shift <= type_size(a->type()) * 8);
+      return fold_shr_s(a, build_const(a->type(), shift));
     }
 
     Value* fold_jump(Block* block) {
