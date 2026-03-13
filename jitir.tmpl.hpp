@@ -1498,7 +1498,7 @@ namespace metajit {
     }
 
     Value* fold_lt_u(Value* a, Value* b) {
-      binop_const_prop(a->type(), const_a->value() < const_b->value());
+      binop_const_prop(Type::Bool, const_a->value() < const_b->value());
 
       if (dynmatch(Const, const_b, b)) {
         if (const_b->value() == 0) {

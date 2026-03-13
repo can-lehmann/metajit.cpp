@@ -96,6 +96,21 @@ int main() {
     );
   });
 
+  DiffTest("bug_fold_lt_u", output_path).run([](Builder& builder, TestData& data) {
+    Value* lt = builder.fold_lt_u(
+      builder.build_const(Type::Int64, 1271752347623423UL),
+      builder.build_const(Type::Int64, 2347782347823478UL));
+    Block* true_block = builder.build_block();
+    Block* false_block = builder.build_block();
+    builder.fold_branch(lt, true_block, false_block);
 
+    builder.move_to_end(true_block);
+    data.output(lt);
+    builder.build_exit();
+
+    builder.move_to_end(false_block);
+    data.output(lt);
+    builder.build_exit();
+  });
   return 0;
 }
