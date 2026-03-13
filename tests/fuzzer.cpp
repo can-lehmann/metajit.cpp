@@ -26,7 +26,12 @@ namespace metajit {
       size_t _max_depth = 16;
 
       Type gen_type() {
-        return (Type) (rand() % 6 + 1);
+        Type res = (Type) (rand() % 6 + 1);
+        // don't generate Float types
+        if (res == Type::Float32) {
+          res = Type::Ptr;
+        }
+        return res;
       }
 
       Type gen_int_type() {
