@@ -53,6 +53,6 @@ b0(%0: Ptr):
   Store %0, %2, aliasing=0, offset=16
 }
 )", builder.section());
-  return 0;
     });
+  return 0;
 }
