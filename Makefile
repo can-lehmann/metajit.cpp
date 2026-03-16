@@ -5,11 +5,12 @@ TEST_HEADER_FILES := $(wildcard tests/*.hpp)
 run: main
 	./main
 
-test: tests/test_knownbits tests/test_insts tests/test_cfg tests/test_fuzzer
+test: tests/test_knownbits tests/test_insts tests/test_cfg tests/test_fuzzer tests/test_opt
 	./tests/test_knownbits
 	./tests/test_insts
 	./tests/test_cfg
 	./tests/test_fuzzer
+	./tests/test_opt
 
 fuzz: tests/fuzzer
 	./tests/fuzzer
@@ -29,6 +30,9 @@ tests/test_fuzzer: tests/test_fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 tests/test_cfg: tests/test_cfg.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
+tests/test_opt: tests/test_opt.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${CFLAGS} -o $@ $<
+
 tests/fuzzer: tests/fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ -g ${CFLAGS} -o $@ $<
 
@@ -44,6 +48,7 @@ clean:
 	-rm tests/test_insts
 	-rm tests/test_fuzzer
 	-rm tests/test_cfg
+	-rm tests/test_opt
 	-rm tests/fuzzer
 	-rm jitir.hpp
 	-rm jitir_llvmapi.hpp
@@ -51,3 +56,4 @@ clean:
 	mkdir -p tests/output/test_insts
 	mkdir -p tests/output/test_fuzzer
 	mkdir -p tests/output/test_cfg
+	mkdir -p tests/output/test_opt
