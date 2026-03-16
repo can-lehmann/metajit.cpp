@@ -3146,6 +3146,15 @@ namespace metajit {
                 return arg;
               }
             }
+          } else if (dynmatch(SelectInst, select, inst)) {
+            KnownBits::Bits cond = known_bits.at(select->cond());
+            if (cond.is_const()) {
+              if (cond.value != 0) {
+                return select->arg(1);
+              } else {
+                return select->arg(2);
+              }
+            }
           }
           return nullptr;
         });
