@@ -1427,6 +1427,18 @@ namespace metajit {
         } else if (constant->value() == type_mask(a->type())) {
           return constant;
         }
+      } else if (dynmatch(AndInst, and_a, a)) {
+        // (x & c1) | (x & c2) => x & (c1 | c2)
+        if (dynmatch(AndInst, and_b, b)) {
+          if (dynmatch(Const, const_a, and_a->arg(1))) {
+            if (dynmatch(Const, const_b, and_b->arg(1))) {
+              if (and_a->arg(0) == and_b->arg(0)) {
+                return fold_and(and_a->arg(0), build_const(a->type(), const_a->value() | const_b->value()));
+              }
+            }
+          }
+        }
+
       }
       return build_or(a, b);
     }
