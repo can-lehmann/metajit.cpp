@@ -1665,7 +1665,25 @@ namespace metajit {
         } else if (const_b->value() == 0) {
           return a;
         }
+        // ((x >> c) & m) << c => x & (m << c)
+        if (dynmatch(AndInst, andinst, a)) {
+          Value* and_arg_a = andinst->arg(0);
+          Value* and_arg_b = andinst->arg(1);
+          if (dynmatch(Const, and_arg_b_const, and_arg_b)) {
+            if (dynmatch(ShrUInst, shr_u, and_arg_a)) {
+              Value* shr_u_arg_a = shr_u->arg(0);
+              Value* shr_u_arg_b = shr_u->arg(1);
+              if (dynmatch(Const, shr_u_arg_b_const, shr_u_arg_b)) {
+                if (shr_u_arg_b_const->value() == const_b->value()) {
+                  uint64_t mask = and_arg_b_const->value() << const_b->value();
+                  return fold_and(shr_u_arg_a, build_const(a->type(), type_mask(a->type()) & mask));
+                }
+              }
+            }
+          }
+        }
       }
+
 
       return build_shl(a, b);
     }
