@@ -26,11 +26,30 @@ void check_simplify(const std::string& expected, Section* section) {
   metajit::Simplify::run(section, 1);
   std::stringstream ss;
   section->write(ss);
+  section->write(std::cout);
   unittest_assert(ss.str() == expected);
 }
 
 int main() {
   metajit::LLVMCodeGen::initilize_llvm_jit();
+  DiffTest("resize_resize_to_mask", output_path).run([](Builder& builder, TestData& data) {
+
+    Value* input = data.input(Type::Int64);
+    Value* smaller = builder.fold_resize_x(input, Type::Int8);
+    Value* wide = builder.fold_resize_u(smaller, Type::Int64);
+    data.output(wide);
+
+    // it's really the smart constructors that do this.
+    // the ResizeX would be removed by DeadCodeElim
+    check_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  %2 = ResizeX %1, type=Int8
+  %3 = And %1, 255
+  Store %0, %3, aliasing=0, offset=8
+}
+)", builder.section());
+  });
 
   DiffTest("select_and_knownbits", output_path).run([](Builder& builder, TestData& data) {
 

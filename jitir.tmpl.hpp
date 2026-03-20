@@ -1627,10 +1627,12 @@ namespace metajit {
       } else if (dynmatch(Const, constant, a)) {
         uint64_t value = constant->value() & type_mask(type);
         return build_const(type, value);
+      } else if (dynmatch(ResizeXInst, resize_a, a)) {
+        if (resize_a->arg(0)->type() == type) {
+          return fold_and(resize_a->arg(0), build_const(type, type_mask(resize_a->type())));
+        }
       }
-
       unop_const_prop(type, const_a->value());
-
       return build_resize_u(a, type);
     }
 
