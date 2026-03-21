@@ -26,7 +26,6 @@ void check_simplify(const std::string& expected, Section* section) {
   metajit::Simplify::run(section, 1);
   std::stringstream ss;
   section->write(ss);
-  section->write(std::cout);
   unittest_assert(ss.str() == expected);
 }
 
