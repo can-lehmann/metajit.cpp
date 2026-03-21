@@ -31,6 +31,59 @@ void check_simplify(const std::string& expected, Section* section) {
 
 int main() {
   metajit::LLVMCodeGen::initilize_llvm_jit();
+  DiffTest("resize_resize_to_mask", output_path).run([](Builder& builder, TestData& data) {
+
+    Value* input = data.input(Type::Int64);
+    Value* smaller = builder.fold_resize_x(input, Type::Int8);
+    Value* wide = builder.fold_resize_u(smaller, Type::Int64);
+    data.output(wide);
+
+    // it's really the smart constructors that do this.
+    // the ResizeX would be removed by DeadCodeElim
+    check_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  %2 = ResizeX %1, type=Int8
+  %3 = And %1, 255
+  Store %0, %3, aliasing=0, offset=8
+}
+)", builder.section());
+  });
+
+  DiffTest("shru_and_shl_to_and", output_path).run([](Builder& builder, TestData& data) {
+
+    Value* input = data.input(Type::Int64);
+    Value* shifted = builder.fold_shr_u(input, builder.build_const(Type::Int64, 1));
+    Value* anded = builder.fold_and(shifted, builder.build_const(Type::Int64, 3));
+    Value* back = builder.fold_shl(anded, builder.build_const(Type::Int64, 1));
+    data.output(back);
+
+    // it's really the smart constructors that do this.
+    check_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  %2 = ShrU %1, 1
+  %3 = And %1, 6
+  Store %0, %3, aliasing=0, offset=8
+}
+)", builder.section());
+  });
+
+  DiffTest("or_and_and_to_or", output_path).run([](Builder& builder, TestData& data) {
+    Value* input = data.input(Type::Int64);
+    Value* part1 = builder.fold_and(input, builder.build_const(Type::Int64, 3));
+    Value* part2 = builder.fold_and(input, builder.build_const(Type::Int64, 12));
+    Value* result = builder.fold_or(part1, part2);
+    data.output(result);
+
+    check_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  %2 = And %1, 15
+  Store %0, %2, aliasing=0, offset=8
+}
+)", builder.section());
+  });
 
   DiffTest("select_and_knownbits", output_path).run([](Builder& builder, TestData& data) {
 

@@ -1427,6 +1427,18 @@ namespace metajit {
         } else if (constant->value() == type_mask(a->type())) {
           return constant;
         }
+      } else if (dynmatch(AndInst, and_a, a)) {
+        // (x & c1) | (x & c2) => x & (c1 | c2)
+        if (dynmatch(AndInst, and_b, b)) {
+          if (dynmatch(Const, const_a, and_a->arg(1))) {
+            if (dynmatch(Const, const_b, and_b->arg(1))) {
+              if (and_a->arg(0) == and_b->arg(0)) {
+                return fold_and(and_a->arg(0), build_const(a->type(), const_a->value() | const_b->value()));
+              }
+            }
+          }
+        }
+
       }
       return build_or(a, b);
     }
@@ -1627,10 +1639,12 @@ namespace metajit {
       } else if (dynmatch(Const, constant, a)) {
         uint64_t value = constant->value() & type_mask(type);
         return build_const(type, value);
+      } else if (dynmatch(ResizeXInst, resize_a, a)) {
+        if (resize_a->arg(0)->type() == type) {
+          return fold_and(resize_a->arg(0), build_const(type, type_mask(resize_a->type())));
+        }
       }
-
       unop_const_prop(type, const_a->value());
-
       return build_resize_u(a, type);
     }
 
@@ -1663,7 +1677,25 @@ namespace metajit {
         } else if (const_b->value() == 0) {
           return a;
         }
+        // ((x >> c) & m) << c => x & (m << c)
+        if (dynmatch(AndInst, andinst, a)) {
+          Value* and_arg_a = andinst->arg(0);
+          Value* and_arg_b = andinst->arg(1);
+          if (dynmatch(Const, and_arg_b_const, and_arg_b)) {
+            if (dynmatch(ShrUInst, shr_u, and_arg_a)) {
+              Value* shr_u_arg_a = shr_u->arg(0);
+              Value* shr_u_arg_b = shr_u->arg(1);
+              if (dynmatch(Const, shr_u_arg_b_const, shr_u_arg_b)) {
+                if (shr_u_arg_b_const->value() == const_b->value()) {
+                  uint64_t mask = and_arg_b_const->value() << const_b->value();
+                  return fold_and(shr_u_arg_a, build_const(a->type(), type_mask(a->type()) & mask));
+                }
+              }
+            }
+          }
+        }
       }
+
 
       return build_shl(a, b);
     }
