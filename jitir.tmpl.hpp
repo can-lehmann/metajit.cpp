@@ -2717,6 +2717,16 @@ namespace metajit {
         }
       }
 
+      bool and_idempotent_condition(const Bits& b) const {
+        // If there is no case where b_i is 0 and a_i is 1 or _, then a & b == a
+        return ((b.value ^ type_mask(b.type)) & (~mask | value)) == 0;
+      }
+
+      bool or_idempotent_condition(const Bits& b) const {
+        // the condition for or is the same, just with arguments swapped
+        return b.and_idempotent_condition(*this);
+      }
+
       static Bits eval(Inst* inst, NameMap<Bits>& values) {
         if (dynamic_cast<FreezeInst*>(inst) ||
             dynamic_cast<AssumeConstInst*>(inst)) {
@@ -3159,9 +3169,21 @@ namespace metajit {
             KnownBits::Bits a = known_bits.at(and_inst->arg(0));
             KnownBits::Bits b = known_bits.at(and_inst->arg(1));
 
-            // If there is no case where b_i is 0 and a_i is 1 or _, then a & b == a
-            if (b.is_const() && ((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
+            if (a.and_idempotent_condition(b)) {
               return and_inst->arg(0);
+            }
+            if (b.and_idempotent_condition(a)) {
+              return and_inst->arg(1);
+            }
+          } else if (dynmatch(OrInst, or_inst, inst)) {
+            KnownBits::Bits a = known_bits.at(or_inst->arg(0));
+            KnownBits::Bits b = known_bits.at(or_inst->arg(1));
+
+            if (a.or_idempotent_condition(b)) {
+              return or_inst->arg(0);
+            }
+            if (b.or_idempotent_condition(a)) {
+              return or_inst->arg(1);
             }
           } else if (dynmatch(ResizeUInst, resize_u, inst)) {
             if (dynamic_cast<ResizeXInst*>(resize_u->arg(0)) ||
