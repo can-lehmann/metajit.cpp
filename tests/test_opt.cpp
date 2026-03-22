@@ -127,6 +127,25 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
+  DiffTest("and_or_and_shortcut", output_path).run([](Builder& builder, TestData& data) {
+    Value* input1 = data.input(Type::Int64);
+    Value* input2 = data.input(Type::Int64);
+    Value* part1 = builder.fold_and(input1, builder.build_const(Type::Int64, 0xff00));
+    Value* part2 = builder.fold_or(input2, part1);
+    Value* result = builder.fold_and(part2, builder.build_const(Type::Int64, 0xffff00ff));
+    data.output(result);
+
+    check_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
+  %3 = Or %2, %1
+  %4 = And %2, 4294902015
+  Store %0, %4, aliasing=0, offset=16
+}
+)", builder.section());
+  });
+
   DiffTest("select_and_knownbits", output_path).run([](Builder& builder, TestData& data) {
 
     Value* cond = data.input(Type::Bool);
