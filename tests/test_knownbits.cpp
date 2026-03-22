@@ -158,6 +158,27 @@ void test_sub_example() {
   });
 }
 
+void test_idempotent_conditions() {
+  unittest::Test("idempotent_conditions").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      auto [value_a, bits_a] = random_value_and_bits(Type::Int8);
+      auto [value_b, bits_b] = random_value_and_bits(Type::Int8);
+      if (bits_a.and_idempotent_condition(bits_b)) {
+        unittest_assert ((value_a & value_b) == value_a);
+      }
+      if (bits_b.and_idempotent_condition(bits_a)) {
+        unittest_assert ((value_a & value_b) == value_b);
+      }
+      if (bits_a.or_idempotent_condition(bits_b)) {
+        unittest_assert ((value_a | value_b) == value_a);
+      }
+      if (bits_b.or_idempotent_condition(bits_a)) {
+        unittest_assert ((value_a | value_b) == value_b);
+      }
+    }
+  });
+}
+
 int main() {
   test_add_example();
   test_sub_example();
@@ -166,6 +187,6 @@ int main() {
   test_random_sub();
   test_random_shifts();
   test_random_resize();
-
+  test_idempotent_conditions();
   return 0;
 }
