@@ -1710,11 +1710,28 @@ namespace metajit {
                                   build_const(a->type(), type_mask(a->type()) & mask));
                 }
               }
+            } else if (dynmatch(ShlInst, shl, and_arg_a)) {
+              Value* shl_arg_a = shl->arg(0);
+              Value* shl_arg_b = shl->arg(1);
+              if (dynmatch(Const, shl_arg_b_const, shl_arg_b)) {
+                uint64_t c1 = shl_arg_b_const->value();
+                uint64_t c2 = const_b->value();
+                uint64_t mask = and_arg_b_const->value() << c2;
+                uint64_t width = type_width(a->type());
+                if (c1 < width && c2 < width && c1 + c2 < width) {
+                   // ((x << c1) & m) << c2 => (x << (c1 + c2)) & (m << c2)
+                  return fold_and(fold_shl(shl_arg_a, build_const(a->type(), c1 + c2)),
+                                  build_const(a->type(), type_mask(a->type()) & mask));
+                }
+                if (c1 < width && c2 < width && c1 + c2 >= width) {
+                  // if we shift (in sum) by more than the width, the result is 0
+                  return build_const(a->type(), 0);
+                }
+              }
             }
           }
         }
       }
-
 
       return build_shl(a, b);
     }

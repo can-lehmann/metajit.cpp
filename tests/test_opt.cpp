@@ -111,6 +111,26 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
+
+  DiffTest("shl_and_shl_to_shl", output_path).run([](Builder& builder, TestData& data) {
+
+    Value* input = data.input(Type::Int64);
+    Value* shifted = builder.fold_shl(input, builder.build_const(Type::Int64, 1));
+    Value* anded = builder.fold_and(shifted, builder.build_const(Type::Int64, 0xff));
+    Value* back = builder.fold_shl(anded, builder.build_const(Type::Int64, 3));
+    data.output(back);
+
+    check_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  %2 = Shl %1, 1
+  %3 = Shl %1, 4
+  %4 = And %3, 2040
+  Store %0, %4, aliasing=0, offset=8
+}
+)", builder.section());
+  });
+
   DiffTest("or_and_and_to_or", output_path).run([](Builder& builder, TestData& data) {
     Value* input = data.input(Type::Int64);
     Value* part1 = builder.fold_and(input, builder.build_const(Type::Int64, 3));
