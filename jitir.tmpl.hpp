@@ -3211,6 +3211,23 @@ namespace metajit {
             if (b.and_idempotent_condition(a)) {
               return and_inst->arg(1);
             }
+            while (dynmatch(OrInst, or_inst, and_inst->arg(0))) {
+              // (x | y) & b => x & b if y & b == 0
+              Value* x = or_inst->arg(0);
+              Value* y = or_inst->arg(1);
+              KnownBits::Bits bits_x = known_bits.at(x);
+              KnownBits::Bits bits_y = known_bits.at(y);
+              KnownBits::Bits x_and_b = bits_x & b;
+              KnownBits::Bits y_and_b = bits_y & b;
+              if (x_and_b.is_const() and x_and_b.value == 0) {
+                and_inst->set_arg(0, y);
+                continue; // if y is also Or, we can maybe simplify further
+              } else if (y_and_b.is_const() and y_and_b.value == 0) {
+                and_inst->set_arg(0, x);
+                continue;
+              }
+              break;
+            }
           } else if (dynmatch(OrInst, or_inst, inst)) {
             KnownBits::Bits a = known_bits.at(or_inst->arg(0));
             KnownBits::Bits b = known_bits.at(or_inst->arg(1));

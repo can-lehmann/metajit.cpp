@@ -221,5 +221,28 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
+  DiffTest("or_and_one_component", output_path).run([](Builder& builder, TestData& data) {
+    Value* value1 = data.input(Type::Int16);
+    Value* value2 = data.input(Type::Int16);
+    Value* value3 = data.input(Type::Int16);
+    Value* masked = builder.fold_and(value3, builder.build_const(Type::Int16, 0xf000));
+    Value* shifted = builder.fold_shl(value2, builder.build_const(Type::Int16, 14));
+    Value* orop1 = builder.fold_or(masked, value1);
+    Value* orop2 = builder.fold_or(orop1, shifted);
+    data.output(builder.fold_and(orop2, builder.build_const(Type::Int16, 0xfff)));
+    check_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int16, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int16, flags={}, aliasing=0, offset=2
+  %3 = Load %0, type=Int16, flags={}, aliasing=0, offset=4
+  %4 = Shl %2, 14
+  %5 = Or %3, %1
+  %6 = Or %5, %4
+  %7 = And %1, 4095
+  Store %0, %7, aliasing=0, offset=6
+}
+)", builder.section());
+  });
+
   return 0;
 }
