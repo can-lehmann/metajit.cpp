@@ -1391,6 +1391,15 @@ namespace metajit {
           return a;
         } else if (const_b->value() == 0) {
           return const_b;
+        } else if (dynmatch(OrInst, or_a, a)) {
+          if (dynmatch(AndInst, and_arg1_a, or_a->arg(1))) {
+            if (dynmatch(Const, const2, and_arg1_a->arg(1))) {
+              if ((const2->value() & const_b->value()) == 0) {
+                // (x | (y & m1)) & m2 == x & m2 if m1 & m2 == 0
+                return fold_and(or_a->arg(0), const_b);
+              }
+            }
+          }
         }
       }
 
@@ -1677,7 +1686,6 @@ namespace metajit {
         } else if (const_b->value() == 0) {
           return a;
         }
-        // ((x >> c) & m) << c => x & (m << c)
         if (dynmatch(AndInst, andinst, a)) {
           Value* and_arg_a = andinst->arg(0);
           Value* and_arg_b = andinst->arg(1);
@@ -1686,16 +1694,44 @@ namespace metajit {
               Value* shr_u_arg_a = shr_u->arg(0);
               Value* shr_u_arg_b = shr_u->arg(1);
               if (dynmatch(Const, shr_u_arg_b_const, shr_u_arg_b)) {
-                if (shr_u_arg_b_const->value() == const_b->value()) {
-                  uint64_t mask = and_arg_b_const->value() << const_b->value();
+                uint64_t c1 = shr_u_arg_b_const->value();
+                uint64_t c2 = const_b->value();
+                uint64_t mask = and_arg_b_const->value() << c2;
+                if (c1 == c2) {
+                  // ((x >> c1) & m) << c2 => x & (m << c) if c1 == c2
                   return fold_and(shr_u_arg_a, build_const(a->type(), type_mask(a->type()) & mask));
+                } else if (c1 > c2) {
+                  // ((x >> c1) & m) << c2 => (x >> (c1 - c2)) & (m << c2) if c1 > c2
+                  return fold_and(fold_shr_u(shr_u_arg_a, build_const(a->type(), c1 - c2)),
+                                  build_const(a->type(), type_mask(a->type()) & mask));
+                } else {
+                  // ((x >> c1) & m) << c2 => (x >> (c2 - c1)) & (m << c2) if c1 < c2
+                  return fold_and(fold_shl(shr_u_arg_a, build_const(a->type(), c2 - c1)),
+                                  build_const(a->type(), type_mask(a->type()) & mask));
+                }
+              }
+            } else if (dynmatch(ShlInst, shl, and_arg_a)) {
+              Value* shl_arg_a = shl->arg(0);
+              Value* shl_arg_b = shl->arg(1);
+              if (dynmatch(Const, shl_arg_b_const, shl_arg_b)) {
+                uint64_t c1 = shl_arg_b_const->value();
+                uint64_t c2 = const_b->value();
+                uint64_t mask = and_arg_b_const->value() << c2;
+                uint64_t width = type_width(a->type());
+                if (c1 < width && c2 < width && c1 + c2 < width) {
+                   // ((x << c1) & m) << c2 => (x << (c1 + c2)) & (m << c2)
+                  return fold_and(fold_shl(shl_arg_a, build_const(a->type(), c1 + c2)),
+                                  build_const(a->type(), type_mask(a->type()) & mask));
+                }
+                if (c1 < width && c2 < width && c1 + c2 >= width) {
+                  // if we shift (in sum) by more than the width, the result is 0
+                  return build_const(a->type(), 0);
                 }
               }
             }
           }
         }
       }
-
 
       return build_shl(a, b);
     }
