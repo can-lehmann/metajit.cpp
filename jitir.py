@@ -324,6 +324,17 @@ jitir = IR(
         cmp("LtS", type_checks = ["is_int(a->type())"]),
         cmp("LtFO", type_checks = ["is_float(a->type())"]),
         cmp("LtFU", type_checks = ["is_float(a->type())"]),
+        Inst("Call",
+            args = [
+                Arg("callee", getter=Getter.Always),
+                Arg("type", Type("Type")),
+            ],
+            type = "type",
+            type_checks = [
+                "callee->type() == Type::Ptr"
+            ],
+            doc = "Call a function pointer."
+        ),
         Inst("Branch",
             args = [
                 Arg("cond", getter=Getter.Always),

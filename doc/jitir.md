@@ -478,6 +478,21 @@ Type Checks:
 - `a->type() == b->type()`
 - `is_float(a->type())`
 
+### Call
+
+Call a function pointer.
+
+Arguments
+
+- **callee**: `Value*`
+- **type**: `Type`
+
+Return Type: `type`
+
+Type Checks:
+
+- `callee->type() == Type::Ptr`
+
 ### Branch
 
 Conditional jump.
