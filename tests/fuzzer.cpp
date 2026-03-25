@@ -56,7 +56,7 @@ namespace metajit {
               gen(RandomRange(random_range.type())), \
               _builder->build_and(\
                 gen(RandomRange(random_range.type())), \
-                _builder->build_const(random_range.type(), type_size(random_range.type()) - 1)) \
+                _builder->build_const(random_range.type(), type_width(random_range.type()) - 1)) \
             ); \
 
           case 0: binop(add)
