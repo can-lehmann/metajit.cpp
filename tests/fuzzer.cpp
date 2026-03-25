@@ -21,6 +21,7 @@ namespace metajit {
     private:
       Builder* _builder = nullptr;
       TestData* _data = nullptr;
+      std::vector<Value*> _all_values;
       size_t _depth = 0;
 
       size_t _max_depth = 16;
@@ -53,7 +54,9 @@ namespace metajit {
           #define shift(name) \
             return _builder->build_##name( \
               gen(RandomRange(random_range.type())), \
-              gen(RandomRange(random_range.type(), 0, type_size(random_range.type()) * 8 - 1)) \
+              _builder->build_and(\
+                gen(RandomRange(random_range.type())), \
+                _builder->build_const(random_range.type(), type_size(random_range.type()) - 1)) \
             ); \
 
           case 0: binop(add)
@@ -166,8 +169,17 @@ namespace metajit {
         Value* result = nullptr;
         if (random_range.type() == Type::Ptr) {
           result = gen_ptr(random_range);
-        } else {
-          switch (rand() % 8) {
+        } else if (_depth > 1 && _all_values.size() && rand() % 10 == 0) {
+          // in 10% of cases try to re-use a previous result
+          for (size_t i = rand() % _all_values.size(); i < _all_values.size(); i++) {
+            if (_all_values[i]->type() == random_range.type()) {
+              result = _all_values[i];
+              break;
+            }
+          }
+        }
+        if (!result) {
+          switch (rand() % 9) {
             case 0: result = random_range.gen_const(*_builder); break;
             case 1: result = _data->input(random_range); break;
             default:
@@ -208,6 +220,9 @@ namespace metajit {
         }
 
         _depth--;
+        if (dynmatch(Inst, inst, result)) {
+          _all_values.push_back(result);
+        }
         return result;
       }
     public:
@@ -217,7 +232,7 @@ namespace metajit {
         
       }
 
-      void run_once() {
+      bool run_once() {
         Context context;
         Allocator allocator;
         Section* section = new Section(context, allocator);
@@ -228,9 +243,14 @@ namespace metajit {
         }));
 
         _data = new TestData(*_builder);
-
         _depth = 0;
         _data->output(gen(RandomRange(gen_type())));
+        if (_all_values.size()) {
+          for (int i = 0; i < 5; i++) {
+            // output five random other values
+            _data->output(_all_values[rand() % _all_values.size()]);
+          }
+        }
         assert(_depth == 0);
 
         _builder->build_exit();
@@ -239,19 +259,23 @@ namespace metajit {
           exit(1);
         }
 
+        bool result = true;
+
         try {
-          check_codegen_differential("", section, *_data);
+          check_codegen_differential("", section, *_data, 2048, true);
         } catch (unittest::AssertionError& err) {
           section->write(std::cout);
           std::cerr << "Test failed: " << err.message() << std::endl;
+          result = false;
         }
 
         delete _data;
         _data = nullptr;
         delete _builder;
         _builder = nullptr;
-
+        _all_values.clear();
         delete section;
+        return result;
       }
     };
   }
@@ -289,7 +313,9 @@ int main(int argc, char** argv) {
     int curr_seed = rand();
     srand(curr_seed);
     std::cout << "seed: " << curr_seed << "\n";
-    fuzzer.run_once();
+    if (!fuzzer.run_once() && number_of_runs > 0) {
+      return -1;
+    }
   }
 
   return 0;
