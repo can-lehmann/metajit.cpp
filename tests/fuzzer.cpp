@@ -232,7 +232,7 @@ namespace metajit {
         
       }
 
-      void run_once() {
+      bool run_once() {
         Context context;
         Allocator allocator;
         Section* section = new Section(context, allocator);
@@ -259,11 +259,14 @@ namespace metajit {
           exit(1);
         }
 
+        bool result = true;
+
         try {
           check_codegen_differential("", section, *_data, 2048, true);
         } catch (unittest::AssertionError& err) {
           section->write(std::cout);
           std::cerr << "Test failed: " << err.message() << std::endl;
+          result = false;
         }
 
         delete _data;
@@ -272,6 +275,7 @@ namespace metajit {
         _builder = nullptr;
         _all_values.clear();
         delete section;
+        return result;
       }
     };
   }
@@ -309,7 +313,9 @@ int main(int argc, char** argv) {
     int curr_seed = rand();
     srand(curr_seed);
     std::cout << "seed: " << curr_seed << "\n";
-    fuzzer.run_once();
+    if (!fuzzer.run_once() && number_of_runs > 0) {
+      return -1;
+    }
   }
 
   return 0;
