@@ -188,7 +188,8 @@ namespace metajit {
     inline void check_codegen_differential(std::string output_path,
                                            Section* section,
                                            TestData& data,
-                                           size_t sample_count = 1024) {
+                                           size_t sample_count = 1024,
+                                           bool optimize_section_for_interpreter = false) {
       if (!output_path.empty()) {
         std::ofstream stream(output_path + ".jitir");
         section->write(stream);
@@ -280,6 +281,17 @@ namespace metajit {
               stream.str()
             );
           }
+        }
+        if (optimize_section_for_interpreter && sample == sample_count / 2) {
+          // optimize the section. that way the second half of the samples
+          // runs in the interpreter with the optimized section,
+          // spotting bugs in the optimizer
+          DeadCodeElim::run(section);
+          RefineAliasing::run(section);
+          DeadStoreElim::run(section);
+          metajit::DeadCodeElim::run(section);
+          Simplify::run(section, 10);
+          DeadCodeElim::run(section);
         }
       }
     }
