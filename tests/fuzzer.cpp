@@ -53,7 +53,9 @@ namespace metajit {
           #define shift(name) \
             return _builder->build_##name( \
               gen(RandomRange(random_range.type())), \
-              gen(RandomRange(random_range.type(), 0, type_size(random_range.type()) * 8 - 1)) \
+              _builder->build_and(\
+                gen(RandomRange(random_range.type())), \
+                _builder->build_const(random_range.type(), type_size(random_range.type()) - 1)) \
             ); \
 
           case 0: binop(add)
