@@ -794,8 +794,10 @@ namespace metajit {
           return;
         }
 
-        _builder.mov64(fix_to_preg(vreg(), REG_RCX), vreg(shl->arg(1)));
+        Reg rcx = fix_to_preg(vreg(), REG_RCX);
+        _builder.mov64(rcx, vreg(shl->arg(1)));
         _builder.shl64(vreg(inst));
+        _builder.pseudo_use(rcx);
       } else if (dynmatch(ShrUInst, shr_u, inst)) {
         _builder.mov64(vreg(inst), vreg(shr_u->arg(0)));
 
@@ -809,8 +811,8 @@ namespace metajit {
           }
           return;
         }
-
-        _builder.mov64(fix_to_preg(vreg(), REG_RCX), vreg(shr_u->arg(1)));
+        Reg rcx = fix_to_preg(vreg(), REG_RCX);
+        _builder.mov64(rcx, vreg(shr_u->arg(1)));
         switch (type_size(shr_u->arg(0)->type())) {
           case 1: _builder.shr8(vreg(inst)); break;
           case 2: _builder.shr16(vreg(inst)); break;
@@ -818,6 +820,7 @@ namespace metajit {
           case 8: _builder.shr64(vreg(inst)); break;
           default: assert(false && "Unsupported type");
         }
+        _builder.pseudo_use(rcx);
       } else if (dynmatch(ShrSInst, shr_s, inst)) {
         _builder.mov64(vreg(inst), vreg(shr_s->arg(0)));
 
@@ -832,7 +835,8 @@ namespace metajit {
           return;
         }
 
-        _builder.mov64(fix_to_preg(vreg(), REG_RCX), vreg(shr_s->arg(1)));
+        Reg rcx = fix_to_preg(vreg(), REG_RCX);
+        _builder.mov64(rcx, vreg(shr_s->arg(1)));
         switch (type_size(shr_s->arg(0)->type())) {
           case 1: _builder.sar8(vreg(inst)); break;
           case 2: _builder.sar16(vreg(inst)); break;
@@ -840,6 +844,7 @@ namespace metajit {
           case 8: _builder.sar64(vreg(inst)); break;
           default: assert(false && "Unsupported type");
         }
+        _builder.pseudo_use(rcx);
       } else if (dynamic_cast<EqInst*>(inst) ||
                  dynamic_cast<LtSInst*>(inst) ||
                  dynamic_cast<LtUInst*>(inst)) {
