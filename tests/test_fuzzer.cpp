@@ -112,5 +112,17 @@ int main() {
     data.output(lt);
     builder.build_exit();
   });
+
+  DiffTest("bug_used_bits_transfer_shr_s", output_path).run([](Builder& builder, TestData& data) {
+    Value* input8 = data.input(Type::Int8);
+    Value* input64 = builder.build_resize_s(input8, Type::Int64);
+    Value* shr = builder.build_shr_s(input64, builder.build_const(Type::Int64, 53));
+    Value* shr2 = builder.build_shr_u(shr, builder.build_const(Type::Int64, 49));
+    data.output(shr2);
+    builder.build_exit();
+    check_codegen_differential("", builder.section(), data, 1024, true);
+  });
+
+
   return 0;
 }
