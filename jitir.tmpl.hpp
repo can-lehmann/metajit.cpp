@@ -3099,14 +3099,12 @@ namespace metajit {
             if (dynmatch(Const, const_b, inst->arg(1))) {
               if (const_b->value() < type_size(inst->type()) * 8) {
                 Bits result = _values[inst];
-                uint64_t arg_0_used;
                 if (dynamic_cast<ShrUInst*>(inst)) {
-                  arg_0_used = result.shr_u_arg_0(const_b->value());
+                  use(inst->arg(0), result.shr_u_arg_0(const_b->value()));
                 } else {
                   assert (dynamic_cast<ShrSInst*>(inst));
-                  arg_0_used = result.shr_s_arg_0(const_b->value());
+                  use(inst->arg(0), result.shr_s_arg_0(const_b->value()));
                 }
-                use(inst->arg(0), arg_0_used);
               } else {
                 use(inst->arg(0), 0);
               }
