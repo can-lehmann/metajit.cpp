@@ -179,6 +179,39 @@ void test_idempotent_conditions() {
   });
 }
 
+void test_usedbits_shr_s_bug() {
+  unittest::Test("usedbits_shr_s_bug").run([]() {
+    using Bits = UsedBits::Bits;
+    Bits result(Type::Int32, 0xff000000);
+    uint64_t used_bits_arg_shr_s = result.shr_s_arg_0(16);
+    Bits arg(Type::Int32, used_bits_arg_shr_s);
+    unittest_assert (used_bits_arg_shr_s == 0x80000000); // sign bit is needed
+  });
+}
+
+void test_usedbits_shr() {
+  using Bits = UsedBits::Bits;
+  unittest::Test("usedbits_shr").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      uint8_t x = rand() & 0xff;
+      uint8_t y_extra_bits = rand() & 0xff;
+      uint8_t shift = rand() & 7;
+      Bits result(Type::Int8, rand() & 0xff);
+      uint8_t used_bits_arg_shr_s = result.shr_s_arg_0(shift);
+      uint8_t y = (x & used_bits_arg_shr_s) | (y_extra_bits & ~used_bits_arg_shr_s);
+      unittest_assert ((x & used_bits_arg_shr_s) == (y & used_bits_arg_shr_s));
+      unittest_assert (((int8_t(x) >> int8_t(shift)) & result.used) ==
+                       ((int8_t(y) >> int8_t(shift)) & result.used));
+
+      uint8_t used_bits_arg_shr_u = result.shr_u_arg_0(shift);
+      y = (x & used_bits_arg_shr_u) | (y_extra_bits & ~used_bits_arg_shr_u);
+      unittest_assert ((x & used_bits_arg_shr_u) == (y & used_bits_arg_shr_u));
+      unittest_assert (((uint8_t(x) >> uint8_t(shift)) & result.used) ==
+                       ((uint8_t(y) >> uint8_t(shift)) & result.used));
+    }
+  });
+}
+
 int main() {
   test_add_example();
   test_sub_example();
@@ -188,5 +221,7 @@ int main() {
   test_random_shifts();
   test_random_resize();
   test_idempotent_conditions();
+  test_usedbits_shr_s_bug();
+  test_usedbits_shr();
   return 0;
 }

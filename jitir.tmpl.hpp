@@ -3001,6 +3001,22 @@ namespace metajit {
         return (used & (uint64_t(1) << bit)) != 0;
       }
 
+      uint64_t shr_u_arg_0(uint64_t shift) {
+        return (used << shift) & type_mask(type);
+      }
+
+      uint64_t shr_s_arg_0(uint64_t shift) {
+        // the uppermost shift bits are set in this
+        uint64_t sign_extend_mask = ((1ull << shift) - 1) << (type_width(type) - shift);
+        uint64_t result = (used << shift);
+        if (used & sign_extend_mask) {
+          // we care about bits that are created by the sign extension.
+          // thus we also care about the sign bit
+          result |= (1ull << (type_width(type) - 1));
+        }
+        return result & type_mask(type);
+      }
+
       void write(std::ostream& stream) const {
         size_t bits = type == Type::Bool ? 1 : type_size(type) * 8;
         for (size_t it = bits; it-- > 0; ) {
@@ -3082,7 +3098,13 @@ namespace metajit {
                      dynamic_cast<ShrSInst*>(inst)) {
             if (dynmatch(Const, const_b, inst->arg(1))) {
               if (const_b->value() < type_size(inst->type()) * 8) {
-                use(inst->arg(0), (_values[inst].used << const_b->value()) & type_mask(inst->type()));  
+                Bits result = _values[inst];
+                if (dynamic_cast<ShrUInst*>(inst)) {
+                  use(inst->arg(0), result.shr_u_arg_0(const_b->value()));
+                } else {
+                  assert (dynamic_cast<ShrSInst*>(inst));
+                  use(inst->arg(0), result.shr_s_arg_0(const_b->value()));
+                }
               } else {
                 use(inst->arg(0), 0);
               }
