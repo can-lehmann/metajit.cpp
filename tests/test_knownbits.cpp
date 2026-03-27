@@ -204,8 +204,8 @@ void test_usedbits_shr() {
       uint8_t used_bits_arg_shr_u = result.shr_u_arg_0(shift);
       y = (x & used_bits_arg_shr_u) | (y_extra_bits & ~used_bits_arg_shr_u);
       unittest_assert ((x & used_bits_arg_shr_u) == (y & used_bits_arg_shr_u));
-      unittest_assert (((int8_t(x) >> int8_t(shift)) & result.used) ==
-                       ((int8_t(y) >> int8_t(shift)) & result.used));
+      unittest_assert (((uint8_t(x) >> uint8_t(shift)) & result.used) ==
+                       ((uint8_t(y) >> uint8_t(shift)) & result.used));
     }
   });
 }
