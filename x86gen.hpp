@@ -1289,6 +1289,12 @@ namespace metajit {
           } else if (is_foldable_mov(inst)) {
             Reg src = std::get<Reg>(inst->rm());
             Reg dst = inst->reg();
+
+            if (src == dst) {
+              it = it.erase();
+              continue;
+            }
+
             VRegInfo& src_info = _vreg_info[src.id()];
             VRegInfo& dst_info = _vreg_info[dst.id()];
 
@@ -1304,6 +1310,8 @@ namespace metajit {
               VRegInfo& info = _vreg_info[reg.id()];
               if (info.current_reg.is_invalid() && info.fixed.is_physical()) {
                 spill_and_unspill(reg_file, info.fixed, reg, is_def_only(reg, inst));
+              } else if (info.current_reg.is_physical()) {
+                reg_file.touch(info.current_reg);
               }
             });
 
