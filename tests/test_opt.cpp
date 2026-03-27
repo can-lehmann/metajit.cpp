@@ -19,9 +19,6 @@
 using namespace metajit;
 using namespace metajit::test;
 
-
-const std::string output_path = "tests/output/test_opt";
-
 void check_simplify(const std::string& expected, Section* section) {
   metajit::Simplify::run(section, 1);
   std::stringstream ss;
@@ -34,7 +31,10 @@ void check_simplify(const std::string& expected, Section* section) {
 
 int main() {
   metajit::LLVMCodeGen::initilize_llvm_jit();
-  DiffTest("resize_resize_to_mask", output_path).run([](Builder& builder, TestData& data) {
+
+  DiffTestSuite suite("tests/output/test_opt");
+
+  suite.diff_test("resize_resize_to_mask").run([](Builder& builder, TestData& data) {
 
     Value* input = data.input(Type::Int64);
     Value* smaller = builder.fold_resize_x(input, Type::Int8);
@@ -53,7 +53,7 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
-  DiffTest("shru_and_shl_to_and", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("shru_and_shl_to_and").run([](Builder& builder, TestData& data) {
 
     Value* input = data.input(Type::Int64);
     Value* shifted = builder.fold_shr_u(input, builder.build_const(Type::Int64, 1));
@@ -72,7 +72,7 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
-  DiffTest("shru_and_shl_to_shr", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("shru_and_shl_to_shr").run([](Builder& builder, TestData& data) {
 
     Value* input = data.input(Type::Int64);
     Value* shifted = builder.fold_shr_u(input, builder.build_const(Type::Int64, 10));
@@ -92,7 +92,7 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
-  DiffTest("shru_and_shl_to_shl", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("shru_and_shl_to_shl").run([](Builder& builder, TestData& data) {
 
     Value* input = data.input(Type::Int64);
     Value* shifted = builder.fold_shr_u(input, builder.build_const(Type::Int64, 1));
@@ -112,7 +112,7 @@ b0(%0: Ptr):
   });
 
 
-  DiffTest("shl_and_shl_to_shl", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("shl_and_shl_to_shl").run([](Builder& builder, TestData& data) {
 
     Value* input = data.input(Type::Int64);
     Value* shifted = builder.fold_shl(input, builder.build_const(Type::Int64, 1));
@@ -131,7 +131,7 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
-  DiffTest("or_and_and_to_or", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("or_and_and_to_or").run([](Builder& builder, TestData& data) {
     Value* input = data.input(Type::Int64);
     Value* part1 = builder.fold_and(input, builder.build_const(Type::Int64, 3));
     Value* part2 = builder.fold_and(input, builder.build_const(Type::Int64, 12));
@@ -147,7 +147,7 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
-  DiffTest("and_or_and_shortcut", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("and_or_and_shortcut").run([](Builder& builder, TestData& data) {
     Value* input1 = data.input(Type::Int64);
     Value* input2 = data.input(Type::Int64);
     Value* part1 = builder.fold_and(input1, builder.build_const(Type::Int64, 0xff00));
@@ -166,7 +166,7 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
-  DiffTest("select_and_knownbits", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("select_and_knownbits").run([](Builder& builder, TestData& data) {
 
     Value* cond = data.input(Type::Bool);
     Value* value = data.input(Type::Int64);
@@ -189,7 +189,7 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
-  DiffTest("and_idempotent_not_constant", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("and_idempotent_not_constant").run([](Builder& builder, TestData& data) {
     Value* in1 = data.input(Type::Int8);
     Value* in2 = data.input(Type::Int8);
     Value* x = builder.build_and(in1, builder.build_const(Type::Int8, 0b11110000));
@@ -206,7 +206,7 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
-  DiffTest("or_idempotent", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("or_idempotent").run([](Builder& builder, TestData& data) {
     Value* value = data.input(Type::Int16);
     Value* value2 = builder.build_or(value, builder.build_const(Type::Int16, 0b11));
     // the second or is unnecessary
@@ -221,7 +221,7 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
-  DiffTest("or_and_one_component", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("or_and_one_component").run([](Builder& builder, TestData& data) {
     Value* value1 = data.input(Type::Int16);
     Value* value2 = data.input(Type::Int16);
     Value* value3 = data.input(Type::Int16);
@@ -244,5 +244,5 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
-  return 0;
+  return suite.finish();
 }

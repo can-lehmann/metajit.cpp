@@ -19,14 +19,14 @@
 using namespace metajit;
 using namespace metajit::test;
 
-const std::string output_path = "tests/output/test_fuzzer";
-
 int main() {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
+  DiffTestSuite suite("tests/output/test_fuzzer");
+
   // These are all the test cases that were found by the fuzzer
 
-  DiffTest("select_large_int", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("select_large_int").run([](Builder& builder, TestData& data) {
     data.output(
       builder.build_select(
         data.input(Type::Bool),
@@ -41,7 +41,7 @@ int main() {
   // it would be nice to test the instruction encoding of
   //   mov64_imm64 r8, 14624083866164270481
   // directly. Not a priority right now though.
-  DiffTest("mov64_imm64_rexw", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("mov64_imm64_rexw").run([](Builder& builder, TestData& data) {
     Value* a = data.input(Type::Int32);
     Value* b = data.input(Type::Int32);
     Value* c = data.input(Type::Int32);
@@ -61,7 +61,7 @@ int main() {
     );
   });
 
-  DiffTest("shr_multiple_blocks", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("shr_multiple_blocks").run([](Builder& builder, TestData& data) {
     Value* a = data.input(Type::Bool);
     Value* b = data.input(Type::Int8);
     Value* c = data.input(Type::Int8);
@@ -84,7 +84,7 @@ int main() {
     builder.build_exit();
   });
 
-  DiffTest("resize_u_shl", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("resize_u_shl").run([](Builder& builder, TestData& data) {
     Value* a = data.input(Type::Int32);
     Value* b = data.input(RandomRange(Type::Int32, 0, 31));
 
@@ -96,7 +96,7 @@ int main() {
     );
   });
 
-  DiffTest("bug_fold_lt_u", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("bug_fold_lt_u").run([](Builder& builder, TestData& data) {
     Value* lt = builder.fold_lt_u(
       builder.build_const(Type::Int64, 1271752347623423UL),
       builder.build_const(Type::Int64, 2347782347823478UL));
@@ -113,7 +113,7 @@ int main() {
     builder.build_exit();
   });
 
-  DiffTest("bug_used_bits_transfer_shr_s", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("bug_used_bits_transfer_shr_s").run([](Builder& builder, TestData& data) {
     Value* input8 = data.input(Type::Int8);
     Value* input64 = builder.build_resize_s(input8, Type::Int64);
     Value* shr = builder.build_shr_s(input64, builder.build_const(Type::Int64, 53));
@@ -124,5 +124,5 @@ int main() {
   });
 
 
-  return 0;
+  return suite.finish();
 }

@@ -296,15 +296,15 @@ namespace metajit {
       }
     }
 
-    class DiffTest: public unittest::Test {
+    class DiffTest: public unittest::BaseTest<DiffTest> {
     private:
       std::string _output_path;
     public:
       DiffTest(const std::string& name, const std::string& output_path):
-        unittest::Test(name), _output_path(output_path) {}
+        unittest::BaseTest<DiffTest>(name), _output_path(output_path) {}
 
       void run(const std::function<void(Builder&, TestData&)>& body) && {
-        unittest::Test::run([&]() {
+        unittest::BaseTest<DiffTest>::run([&]() {
           Context context;
           Allocator allocator;
           Section* section = new Section(context, allocator);
@@ -323,6 +323,18 @@ namespace metajit {
 
           delete section;
         });
+      }
+    };
+
+    class DiffTestSuite: public unittest::Suite {
+    private:
+      std::string _output_path;
+    public:
+      DiffTestSuite(const std::string& output_path):
+        unittest::Suite(), _output_path(output_path) {}
+
+      DiffTest diff_test(const std::string& name) {
+        return DiffTest(name, _output_path).suite(*this);
       }
     };
   }

@@ -19,12 +19,12 @@
 using namespace metajit;
 using namespace metajit::test;
 
-const std::string output_path = "tests/output/test_cfg";
-
 int main() {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
-  DiffTest("branch", output_path).run([](Builder& builder, TestData& data) {
+  DiffTestSuite suite("tests/output/test_cfg");
+
+  suite.diff_test("branch").run([](Builder& builder, TestData& data) {
     Block* a = builder.build_block();
     Block* b = builder.build_block();
     Block* cont = builder.build_block({Type::Int64});
@@ -46,7 +46,7 @@ int main() {
 
   });
 
-  DiffTest("sum_to", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("sum_to").run([](Builder& builder, TestData& data) {
     Block* loop_header = builder.build_block({Type::Int64, Type::Int64}); // (i, sum)
     Block* loop_body = builder.build_block();
     Block* loop_end = builder.build_block();
@@ -84,7 +84,7 @@ int main() {
     data.output(loop_header->arg(1));
   });
 
-  DiffTest("fib", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("fib").run([](Builder& builder, TestData& data) {
     Block* loop_header = builder.build_block({Type::Int64, Type::Int64, Type::Int64}); // (i, a, b)
     Block* loop_body = builder.build_block();
     Block* loop_end = builder.build_block();
@@ -124,7 +124,7 @@ int main() {
     data.output(loop_header->arg(1));
   });
 
-  DiffTest("swap_loop", output_path).run([](Builder& builder, TestData& data) {
+  suite.diff_test("swap_loop").run([](Builder& builder, TestData& data) {
     Block* loop_header = builder.build_block({Type::Bool, Type::Int64, Type::Int64}); // (cond, a, b)
     Block* loop_body = builder.build_block();
     Block* loop_end = builder.build_block();
@@ -154,5 +154,5 @@ int main() {
     data.output(loop_header->arg(2));
   });
 
-  return 0;
+  return suite.finish();
 }

@@ -22,8 +22,6 @@ using namespace metajit::test;
 
 using Bits = KnownBits::Bits;
 
-const std::string output_path = "tests/output/test_knownbits";
-
 uint64_t rand64() {
   return (uint64_t(rand()) << 32) | rand();
 }
@@ -45,8 +43,8 @@ std::pair<uint64_t, Bits> random_value_and_bits(Type type) {
   return {concrete_value, bits};
 }
 
-void test_random() {
-  unittest::Test("random").run([]() {
+void test_random(unittest::Suite& suite) {
+  suite.test("random").run([]() {
     for (int i = 0; i < num_examples; i++) {
       auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
       auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
@@ -71,8 +69,8 @@ void test_random() {
   });
 }
 
-void test_random_add() {
-  unittest::Test("random_add").run([]() {
+void test_random_add(unittest::Suite& suite) {
+  suite.test("random_add").run([]() {
     for (int i = 0; i < num_examples; i++) {
       auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
       auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
@@ -85,8 +83,8 @@ void test_random_add() {
   });
 }
 
-void test_random_sub() {
-  unittest::Test("random_sub").run([]() {
+void test_random_sub(unittest::Suite& suite) {
+  suite.test("random_sub").run([]() {
     for (int i = 0; i < num_examples; i++) {
       auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
       auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
@@ -99,8 +97,8 @@ void test_random_sub() {
   });
 }
 
-void test_random_shifts() {
-  unittest::Test("random_shifts").run([]() {
+void test_random_shifts(unittest::Suite& suite) {
+  suite.test("random_shifts").run([]() {
     for (int i = 0; i < num_examples; i++) {
       auto [value, bits] = random_value_and_bits(Type::Int64);
       uint64_t shift = rand() % 64;
@@ -113,8 +111,8 @@ void test_random_shifts() {
   });
 }
 
-void test_random_resize() {
-  unittest::Test("random_resize").run([]() {
+void test_random_resize(unittest::Suite& suite) {
+  suite.test("random_resize").run([]() {
     for (int i = 0; i < num_examples; i++) {
       auto [value, bits] = random_value_and_bits(Type::Int32);
       Bits bits_u64 = bits.resize_u(Type::Int64);
@@ -126,8 +124,8 @@ void test_random_resize() {
   });
 }
 
-void test_add_example() {
-  unittest::Test("add_example").run([]() {
+void test_add_example(unittest::Suite& suite) {
+  suite.test("add_example").run([]() {
     Bits a = Bits(Type::Int64, 0b1011011011, 0b0010010010); // ?10?10?10
     Bits b = Bits(Type::Int64, 0b000111111, 0b000111000); // ???111000
     Bits c = a + b; //?01?10
@@ -142,8 +140,8 @@ void test_add_example() {
   });
 }
 
-void test_sub_example() {
-  unittest::Test("sub_example").run([]() {
+void test_sub_example(unittest::Suite& suite) {
+  suite.test("sub_example").run([]() {
     Bits a = Bits(Type::Int64, 0b1011011011, 0b0010010010); // ?10?10?10
     Bits b = Bits(Type::Int64, 0b000111111, 0b000111000); // ???111000
     Bits c = a - b; //?11?10
@@ -158,8 +156,8 @@ void test_sub_example() {
   });
 }
 
-void test_idempotent_conditions() {
-  unittest::Test("idempotent_conditions").run([]() {
+void test_idempotent_conditions(unittest::Suite& suite) {
+  suite.test("idempotent_conditions").run([]() {
     for (int i = 0; i < num_examples; i++) {
       auto [value_a, bits_a] = random_value_and_bits(Type::Int8);
       auto [value_b, bits_b] = random_value_and_bits(Type::Int8);
@@ -179,8 +177,8 @@ void test_idempotent_conditions() {
   });
 }
 
-void test_usedbits_shr_s_bug() {
-  unittest::Test("usedbits_shr_s_bug").run([]() {
+void test_usedbits_shr_s_bug(unittest::Suite& suite) {
+  suite.test("usedbits_shr_s_bug").run([]() {
     using Bits = UsedBits::Bits;
     Bits result(Type::Int32, 0xff000000);
     uint64_t used_bits_arg_shr_s = result.shr_s_arg_0(16);
@@ -189,9 +187,9 @@ void test_usedbits_shr_s_bug() {
   });
 }
 
-void test_usedbits_shr() {
+void test_usedbits_shr(unittest::Suite& suite) {
   using Bits = UsedBits::Bits;
-  unittest::Test("usedbits_shr").run([]() {
+  suite.test("usedbits_shr").run([]() {
     for (int i = 0; i < num_examples; i++) {
       uint8_t x = rand() & 0xff;
       uint8_t y_extra_bits = rand() & 0xff;
@@ -213,15 +211,18 @@ void test_usedbits_shr() {
 }
 
 int main() {
-  test_add_example();
-  test_sub_example();
-  test_random();
-  test_random_add();
-  test_random_sub();
-  test_random_shifts();
-  test_random_resize();
-  test_idempotent_conditions();
-  test_usedbits_shr_s_bug();
-  test_usedbits_shr();
-  return 0;
+  unittest::Suite suite;
+
+  test_add_example(suite);
+  test_sub_example(suite);
+  test_random(suite);
+  test_random_add(suite);
+  test_random_sub(suite);
+  test_random_shifts(suite);
+  test_random_resize(suite);
+  test_idempotent_conditions(suite);
+  test_usedbits_shr_s_bug(suite);
+  test_usedbits_shr(suite);
+
+  return suite.finish();
 }

@@ -19,14 +19,12 @@
 using namespace metajit;
 using namespace metajit::test;
 
-const std::string output_path = "tests/output/test_insts";
-
-void test_binop() {
+void test_binop(DiffTestSuite& suite) {
   #define binop_type(name, type) \
-    DiffTest(#name "_" #type, output_path).run([](Builder& builder, TestData& data) { \
+    suite.diff_test(#name "_" #type).run([](Builder& builder, TestData& data) { \
       data.output(builder.build_##name(data.input(Type::type), data.input(Type::type))); \
     }); \
-    DiffTest(#name "_" #type "_imm", output_path).run([](Builder& builder, TestData& data) { \
+    suite.diff_test(#name "_" #type "_imm").run([](Builder& builder, TestData& data) { \
       data.output(builder.build_##name(data.input(Type::type), RandomRange(Type::type).gen_const(builder))); \
     });
 
@@ -50,13 +48,13 @@ void test_binop() {
   binop(lt_s, false)
 }
 
-void test_shift() {
+void test_shift(DiffTestSuite& suite) {
   #define shift_type(name, type) \
-    DiffTest(#name "_" #type, output_path).run([](Builder& builder, TestData& data) { \
+    suite.diff_test(#name "_" #type).run([](Builder& builder, TestData& data) { \
       Value* by = data.input(RandomRange(Type::type, 0, type_size(Type::type) * 8 - 1)); \
       data.output(builder.build_##name(data.input(Type::type), by)); \
     }); \
-    DiffTest(#name "_" #type "_imm", output_path).run([](Builder& builder, TestData& data) { \
+    suite.diff_test(#name "_" #type "_imm").run([](Builder& builder, TestData& data) { \
       Value* by = RandomRange(Type::type, 0, type_size(Type::type) * 8 - 1).gen_const(builder); \
       data.output(builder.build_##name(data.input(Type::type), by)); \
     });
@@ -72,9 +70,9 @@ void test_shift() {
   shift(shl)
 }
 
-void test_div_mod() {
+void test_div_mod(DiffTestSuite& suite) {
   #define div_mod_type(name, type) \
-    DiffTest(#name "_" #type, output_path).run([](Builder& builder, TestData& data) { \
+    suite.diff_test(#name "_" #type).run([](Builder& builder, TestData& data) { \
       Value* divisor = data.input(RandomRange(Type::type, 1, type_mask(Type::type))); \
       data.output(builder.build_##name(data.input(Type::type), divisor)); \
     });
@@ -91,9 +89,9 @@ void test_div_mod() {
   div_mod(mod_s)
 }
 
-void test_select() {
+void test_select(DiffTestSuite& suite) {
   #define select_type(type) \
-    DiffTest("select_" #type, output_path).run([](Builder& builder, TestData& data) { \
+    suite.diff_test("select_" #type).run([](Builder& builder, TestData& data) { \
       data.output(builder.build_select( \
         data.input(Type::Bool), \
         data.input(Type::type), \
@@ -108,9 +106,9 @@ void test_select() {
   select_type(Int64)
 }
 
-void test_resize() {
+void test_resize(DiffTestSuite& suite) {
   #define resize_type(name, from_type, to_type) \
-    DiffTest(#name "_" #from_type "_to_" #to_type, output_path).run([](Builder& builder, TestData& data) { \
+    suite.diff_test(#name "_" #from_type "_to_" #to_type).run([](Builder& builder, TestData& data) { \
       data.output(builder.build_##name(data.input(Type::from_type), Type::to_type)); \
     });
   
@@ -147,11 +145,13 @@ void test_resize() {
 int main() {
   LLVMCodeGen::initilize_llvm_jit();
 
-  test_binop();
-  test_shift();
-  test_div_mod();
-  test_select();
-  test_resize();
+  DiffTestSuite suite("tests/output/test_insts");
 
-  return 0;
+  test_binop(suite);
+  test_shift(suite);
+  test_div_mod(suite);
+  test_select(suite);
+  test_resize(suite);
+
+  return suite.finish();
 }
