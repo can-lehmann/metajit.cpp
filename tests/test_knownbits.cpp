@@ -180,11 +180,13 @@ void test_idempotent_conditions() {
 }
 
 void test_usedbits_shr_s_bug() {
-  using Bits = UsedBits::Bits;
-  Bits result(Type::Int32, 0xff000000);
-  uint64_t used_bits_arg_shr_s = result.shr_s_arg_0(16);
-  Bits arg(Type::Int32, used_bits_arg_shr_s);
-  unittest_assert (used_bits_arg_shr_s == 0x80000000); // sign bit is needed
+  unittest::Test("usedbits_shr_s_bug").run([]() {
+    using Bits = UsedBits::Bits;
+    Bits result(Type::Int32, 0xff000000);
+    uint64_t used_bits_arg_shr_s = result.shr_s_arg_0(16);
+    Bits arg(Type::Int32, used_bits_arg_shr_s);
+    unittest_assert (used_bits_arg_shr_s == 0x80000000); // sign bit is needed
+  });
 }
 
 void test_usedbits_shr() {
