@@ -33,6 +33,9 @@ tests/test_cfg: tests/test_cfg.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 tests/test_opt: tests/test_opt.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
+tests/test_reader: tests/test_reader.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${CFLAGS} -g -o $@ $<
+
 tests/fuzzer: tests/fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ -g ${CFLAGS} -o $@ $<
 
@@ -49,6 +52,7 @@ clean:
 	-rm tests/test_fuzzer
 	-rm tests/test_cfg
 	-rm tests/test_opt
+	-rm tests/test_reader
 	-rm tests/fuzzer
 	-rm jitir.hpp
 	-rm jitir_llvmapi.hpp
@@ -57,3 +61,4 @@ clean:
 	mkdir -p tests/output/test_fuzzer
 	mkdir -p tests/output/test_cfg
 	mkdir -p tests/output/test_opt
+	mkdir -p tests/output/test_reader
