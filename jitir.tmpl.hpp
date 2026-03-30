@@ -3079,8 +3079,7 @@ namespace metajit {
               use(or_inst->arg(0), _values[inst]);
             }
             use(or_inst->arg(1), _values[inst]);
-          } else if (dynamic_cast<OrInst*>(inst) ||
-                     dynamic_cast<XorInst*>(inst)) {
+          } else if (dynamic_cast<XorInst*>(inst)) {
             // Element-wise instructions
             for (Value* arg : inst->args()) {
               use(arg, _values[inst]);
