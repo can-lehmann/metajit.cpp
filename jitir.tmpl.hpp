@@ -3426,6 +3426,7 @@ namespace metajit {
 
     Block* header() const { return _header; }
     Block* extent() const { return _extent; }
+    void set_extent(Block* extent) { _extent = extent; }
 
     Block* preheader() const { return _preheader; }
     void set_preheader(Block* preheader) { _preheader = preheader; }
