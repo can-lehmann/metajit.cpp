@@ -130,6 +130,45 @@ class InstTrailingConstructorPlugin:
 
         return code
 
+
+class InstReadPlugin:
+    def run(self, ir):
+        code = "Inst* read_opcode(std::string opcode) {\n"
+        else_prefix = ""
+        for inst in ir.insts:
+            code += f"  {else_prefix}if (opcode == \"{inst.name}\") {{\n"
+            # read arguments
+            need_comma = False
+            for arg in inst.args:
+                if need_comma:
+                    code += "    expect_char(','); skip_whitespace();\n"
+                need_comma = True
+                if arg.type == ValueType():
+                    code += f"    Value* {arg.name} = read_value_arg();\n"
+                    continue
+                code += f'    if (get_word() != "{arg.name}") {{ error("expected \'{arg.name}\'"); }}\n'
+                code += f"    expect_char('=');\n"
+                if arg.type == Type("Block*"):
+                    code += f"    Block* {arg.name} = read_block_argument();\n"
+                elif arg.type == Type("Type"):
+                    code += f"    Type {arg.name} = read_type();\n"
+                elif arg.type == Type("LoadFlags"):
+                    code += f"    LoadFlags {arg.name} = read_load_flags();\n"
+                elif arg.type == Type("AliasingGroup") or arg.type == Type("uint64_t"):
+                    code += f"    uint64_t {arg.name} = read_uint64();\n"
+                elif arg.type == Type("const char*"):
+                    code += f'    error("const char* argument not supported yet"); char * {arg.name};\n'
+                else:
+                    import pdb;pdb.set_trace()
+                    assert False, f"Unknown argument type: {arg.type}"
+            build_args = ", ".join(arg.name for arg in inst.args)
+            code += f"    return _builder.{inst.format_builder_name(ir)}({build_args});\n"
+            else_prefix = "} else "
+        code += '  } else { error("unknown operation " + opcode); return nullptr; }\n'
+        code += "}"
+        return dict(read_opcode=code)
+
+
 class PrettyInstWritePlugin(InstWritePlugin):
     def __init__(self):
         super().__init__(
@@ -407,7 +446,8 @@ lwir(
                 Type("const char*"): "const char*",
                 ValueType(): "void*"
             }
-        )
+        ),
+        InstReadPlugin(),
     ],
     placeholder = lambda name: "/* ${" + name + "} */"
 )

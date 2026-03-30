@@ -36,6 +36,9 @@ tests/test_cfg: tests/test_cfg.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 tests/test_opt: tests/test_opt.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
+tests/test_reader: tests/test_reader.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${CFLAGS} -g -o $@ $<
+
 TEST_SOURCE_LL_FILES := \
 	$(patsubst tests/source/%.c,tests/source/%.o0.ll,$(wildcard tests/source/*.c)) \
 	$(patsubst tests/source/%.cpp,tests/source/%.o0.ll,$(wildcard tests/source/*.cpp)) \
@@ -77,6 +80,7 @@ clean:
 	-rm tests/test_cfg
 	-rm tests/test_opt
 	-rm tests/test_source
+	-rm tests/test_reader
 	-rm tests/fuzzer
 	-rm jitir.hpp
 	-rm jitir_llvmapi.hpp
@@ -87,3 +91,4 @@ clean:
 	mkdir -p tests/output/test_cfg
 	mkdir -p tests/output/test_opt
 	mkdir -p tests/output/test_source
+	mkdir -p tests/output/test_reader
