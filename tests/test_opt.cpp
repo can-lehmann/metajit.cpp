@@ -244,5 +244,20 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
+  suite.diff_test("or_usedbits").run([](Builder& builder, TestData& data) {
+    Value* value1 = data.input(Type::Int16);
+    Value* value2 = builder.build_resize_s(value1, Type::Int32);
+    Value* value3 = builder.build_or(value2, builder.build_const(Type::Int32, 0xffff0000));
+    data.output(value3);
+    check_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int16, flags={}, aliasing=0, offset=0
+  %2 = ResizeX %1, type=Int32
+  %3 = Or %2, 4294901760
+  Store %0, %3, aliasing=0, offset=4
+}
+)", builder.section());
+  });
+
   return suite.finish();
 }
