@@ -11,3 +11,4 @@ tests/test_knownbits
 tests/test_opt
 tests/output
 tests/fuzzer
+tests/test_tv

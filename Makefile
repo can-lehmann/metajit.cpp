@@ -1,4 +1,5 @@
 CFLAGS := $(shell llvm-config --cflags --libs)
+Z3_FLAGS := -I/usr/include/z3 -lz3
 HEADER_FILES := jitir.hpp jitir_llvmapi.hpp $(wildcard *.hpp)
 TEST_HEADER_FILES := $(wildcard tests/*.hpp)
 
@@ -35,6 +36,9 @@ tests/test_opt: tests/test_opt.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 
 tests/fuzzer: tests/fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ -g ${CFLAGS} -o $@ $<
+
+tests/test_tv: tests/test_tv.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ -g ${CFLAGS} ${Z3_FLAGS} -o $@ $<
 
 jitir.hpp: jitir.py jitir.tmpl.hpp
 	PYTHONPATH="../lwir.cpp" python3 $<
