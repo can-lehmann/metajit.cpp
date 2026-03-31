@@ -94,5 +94,35 @@ int main() {
     return z3::ite(args[0].bit2bool(0), args[1], args[2]);
   });
 
+  suite.tv_test("abs_branch").run({Type::Int32}, [](Builder& builder) {
+    Block* true_block = builder.build_block();
+    Block* false_block = builder.build_block();
+    Block* cont_block = builder.build_block({Type::Int32});
+
+    Value* is_neg = builder.build_lt_s(builder.entry_arg(0), builder.build_const(Type::Int32, 0));
+    builder.build_branch(is_neg, true_block, false_block);
+
+    builder.move_to_end(true_block);
+    Value* negated = builder.build_sub(builder.build_const(Type::Int32, 0), builder.entry_arg(0));
+    builder.build_jump(cont_block, {negated});
+
+    builder.move_to_end(false_block);
+    builder.build_jump(cont_block, {builder.entry_arg(0)});
+
+    builder.move_to_end(cont_block);
+    return cont_block->arg(0);
+  }, [](z3::context& context, std::vector<z3::expr> args) {
+    return z3::ite(z3::slt(args[0], context.bv_val(0, 32)), -args[0], args[0]);
+  });
+
+  suite.tv_test("abs_select").run({Type::Int32}, [](Builder& builder) {
+    Value* is_neg = builder.build_lt_s(builder.entry_arg(0), builder.build_const(Type::Int32, 0));
+    Value* negated = builder.build_sub(builder.build_const(Type::Int32, 0), builder.entry_arg(0));
+    return builder.build_select(is_neg, negated, builder.entry_arg(0));
+  }, [](z3::context& context, std::vector<z3::expr> args) {
+    return z3::ite(z3::slt(args[0], context.bv_val(0, 32)), -args[0], args[0]);
+  });
+
+
   return suite.finish();
 }

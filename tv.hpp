@@ -54,6 +54,10 @@ namespace metajit {
         }
       }
 
+      z3::expr bool2bit(z3::expr cond) {
+        return z3::ite(cond, _context.bv_val(1, 1), _context.bv_val(0, 1));
+      }
+
     private:
       z3::expr resize(z3::expr value, size_t new_width, bool is_signed) {
         size_t old_width = value.get_sort().bv_size();
@@ -84,7 +88,7 @@ namespace metajit {
         if (dynamic_cast<FreezeInst*>(inst) || dynamic_cast<AssumeConstInst*>(inst)) {
           return emit(inst->arg(0));
         } else if (dynmatch(SelectInst, select, inst)) {
-          z3::expr cond = emit(select->arg(0));
+          z3::expr cond = emit(select->arg(0)).bit2bool(0);
           z3::expr true_val = emit(select->arg(1));
           z3::expr false_val = emit(select->arg(2));
           return z3::ite(cond, true_val, false_val);
@@ -122,9 +126,9 @@ namespace metajit {
         binop(ShlInst, z3::shl(a, b))
         binop(ShrUInst, z3::lshr(a, b))
         binop(ShrSInst, z3::ashr(a, b))
-        binop(EqInst, a == b)
-        binop(LtUInst, z3::ult(a, b))
-        binop(LtSInst, z3::slt(a, b))
+        binop(EqInst, bool2bit(a == b))
+        binop(LtUInst, bool2bit(z3::ult(a, b)))
+        binop(LtSInst, bool2bit(z3::slt(a, b)))
 
         #undef binop
 
