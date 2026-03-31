@@ -71,6 +71,7 @@ namespace metajit {
       }
 
       void enter(Block* block, Block* from, z3::expr enable, std::vector<z3::expr> args) {
+        assert(enable.get_sort().is_bool());
         z3::expr taken = enable && _blocks.at(from).active;
         BlockData& block_data = _blocks.at(block);
         block_data.active = block_data.active || taken;
@@ -128,7 +129,7 @@ namespace metajit {
         #undef binop
 
         else if (dynmatch(BranchInst, branch, inst)) {
-          z3::expr cond = emit(branch->arg(0));
+          z3::expr cond = emit(branch->arg(0)).bit2bool(0);
           enter(branch->true_block(), block, cond, {});
           enter(branch->false_block(), block, !cond, {});
           return z3::expr(_context);

@@ -16,46 +16,83 @@
 
 #include "../../unittest.cpp/unittest.hpp"
 
+namespace metajit {
+  namespace test {
+    class TVTest: public unittest::BaseTest<TVTest> {
+    public:
+      TVTest(const std::string& name): unittest::BaseTest<TVTest>(name) {}
+
+      void run(std::vector<Type> entry_args,
+              std::function<Value*(Builder&)> build,
+              std::function<z3::expr(z3::context&, std::vector<z3::expr>)> expected) {
+        
+        unittest::BaseTest<TVTest>::run([&]() {
+          Context context;
+          Allocator allocator;
+          Section* section = new Section(context, allocator);
+
+          Builder builder(section);
+          builder.move_to_end(builder.build_block(entry_args));
+          Value* result = build(builder);
+          builder.build_exit();
+          
+          z3::context z3_context;
+          std::vector<z3::expr> z3_entry_args;
+          for (size_t it = 0; it < entry_args.size(); it++) {
+            z3_entry_args.push_back(z3_context.bv_const(("arg" + std::to_string(it)).c_str(), type_width(entry_args[it])));
+          }
+
+          tv::Z3CodeGen codegen(section, z3_context, z3_entry_args);
+
+          z3::solver solver(z3_context);
+          solver.add(codegen.emit(result) != expected(z3_context, z3_entry_args));
+          unittest_assert(solver.check() == z3::unsat);
+        });
+      }
+    };
+
+    class TVTestSuite: public unittest::Suite {
+    private:
+    public:
+      TVTestSuite(): unittest::Suite() {}
+
+      TVTest tv_test(const std::string& name) {
+        return TVTest(name).suite(*this);
+      }
+    };
+  }
+}
+
 using namespace metajit;
+using namespace metajit::test;
 
 int main() {
-  unittest::Suite suite;
+  TVTestSuite suite;
 
-  suite.test("add").run([]() {
-    Context context;
-    Allocator allocator;
-    Section* section = new Section(context, allocator);
-
-    Value* add = nullptr;
-
-    {
-      Builder builder(section);
-      builder.move_to_end(builder.build_block({
-        Type::Int32, // a
-        Type::Int32  // b
-      }));
-
-      Arg* a = builder.entry_arg(0);
-      Arg* b = builder.entry_arg(1);
-
-      add = builder.build_add(a, b);
-      builder.build_exit();
-    }
-    
-    {
-      z3::context z3_context;
-      z3::expr a = z3_context.bv_const("a", 32);
-      z3::expr b = z3_context.bv_const("b", 32);
-      tv::Z3CodeGen codegen(section, z3_context, {a, b});
-
-      z3::solver solver(z3_context);
-      solver.add(codegen.emit(add) != a + b);
-
-      std::cout << solver << std::endl;
-
-      assert(solver.check() == z3::unsat);
-    }
+  suite.tv_test("add").run({Type::Int32, Type::Int32}, [](Builder& builder) {
+    return builder.build_add(builder.entry_arg(0), builder.entry_arg(1));
+  }, [](z3::context& context, std::vector<z3::expr> args) {
+    return args[0] + args[1];
   });
 
-  return 0;
+  suite.tv_test("branch").run({Type::Bool, Type::Int32, Type::Int32}, [](Builder& builder) {
+    Block* true_block = builder.build_block();
+    Block* false_block = builder.build_block();
+    Block* cont_block = builder.build_block({Type::Int32});
+
+    builder.build_branch(builder.entry_arg(0), true_block, false_block);
+
+    builder.move_to_end(true_block);
+    builder.build_jump(cont_block, {builder.entry_arg(1)});
+
+    builder.move_to_end(false_block);
+    builder.build_jump(cont_block, {builder.entry_arg(2)});
+
+    builder.move_to_end(cont_block);
+    return cont_block->arg(0);
+  }, [](z3::context& context, std::vector<z3::expr> args) {
+    return z3::ite(args[0].bit2bool(0), args[1], args[2]);
+  });
+
+  return suite.finish();
 }
