@@ -183,5 +183,28 @@ int main() {
     return args[1].value();
   });
 
+  suite.tv_test("abs_branch_memory").run({Type::Int32, Type::Ptr}, [](Builder& builder) {
+    Block* true_block = builder.build_block();
+    Block* false_block = builder.build_block();
+    Block* cont_block = builder.build_block();
+
+    Value* is_neg = builder.build_lt_s(builder.entry_arg(0), builder.build_const(Type::Int32, 0));
+    builder.build_branch(is_neg, true_block, false_block);
+
+    builder.move_to_end(true_block);
+    Value* negated = builder.build_sub(builder.build_const(Type::Int32, 0), builder.entry_arg(0));
+    builder.build_store(builder.entry_arg(1), negated, AliasingGroup(0), 0);
+    builder.build_jump(cont_block);
+
+    builder.move_to_end(false_block);
+    builder.build_store(builder.entry_arg(1), builder.entry_arg(0), AliasingGroup(0), 0);
+    builder.build_jump(cont_block);
+
+    builder.move_to_end(cont_block);
+    return builder.build_load(builder.entry_arg(1), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+  }, [](z3::context& context, std::vector<tv::ValueState> args) {
+    return z3::ite(z3::slt(args[0].value(), context.bv_val(0, 32)), -args[0].value(), args[0].value());
+  });
+
   return suite.finish();
 }

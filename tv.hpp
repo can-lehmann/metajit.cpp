@@ -320,6 +320,12 @@ namespace metajit {
         for (size_t it = 0; it < args.size(); it++) {
           block_data.args[it].merge(args[it], taken);
         }
+
+        if (block_data.memory_state.has_value()) {
+          block_data.memory_state->merge(memory_state(from), taken);
+        } else {
+          block_data.memory_state = memory_state(from);
+        }
       }
 
       MemoryState& memory_state(Block* block) {
