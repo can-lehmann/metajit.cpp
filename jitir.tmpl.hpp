@@ -714,6 +714,11 @@ namespace metajit {
 
     constexpr static size_t COUNT = 3;
   };
+
+  enum class CallConv {
+    Default,
+    PreserveNone
+  };
 }
 
 template <>
@@ -731,6 +736,27 @@ std::ostream& operator<<(std::ostream& stream, metajit::LoadFlags flags) {
 
 metajit::PrettyStream& operator<<(metajit::PrettyStream& stream, const metajit::LoadFlags& flags) {
   flags.write(stream);
+  return stream;
+}
+
+std::ostream& operator<<(std::ostream& stream, metajit::CallConv call_conv) {
+  static const char* names[] = {
+    "Default",
+    "PreserveNone"
+  };
+  stream << names[(size_t) call_conv];
+  return stream;
+}
+
+template <>
+struct std::hash<metajit::CallConv> {
+  size_t operator()(const metajit::CallConv& call_conv) const {
+    return std::hash<size_t>()((size_t) call_conv);
+  }
+};
+
+metajit::PrettyStream& operator<<(metajit::PrettyStream& stream, const metajit::CallConv& call_conv) {
+  stream.ostream() << call_conv;
   return stream;
 }
 
@@ -1146,6 +1172,26 @@ namespace metajit {
 
     JumpInst* build_jump(Block* block, const std::vector<Value*>& args) {
       return build_jump(block, lwir::Span<Value*>((Value**) args.data(), args.size()));
+    }
+
+    CallInst* build_call(Value* callee, Type type, const lwir::Span<Value*>& args, CallConv call_conv = CallConv::Default) {
+      CallInst* call = (CallInst*) _section->allocator().alloc(
+        sizeof(CallInst) + sizeof(Value*) * (1 + args.size()),
+        alignof(CallInst)
+      );
+      new (call) CallInst(callee, type, call_conv);
+      lwir::Span<Value*> trailing_span = lwir::Span<Value*>::trailing<CallInst>(call, 1 + args.size());
+      trailing_span[0] = callee;
+      for (size_t it = 0; it < args.size(); it++) {
+        trailing_span[it + 1] = args[it];
+      }
+      call->set_args(trailing_span);
+      insert(call);
+      return call;
+    }
+
+    CallInst* build_call(Value* callee, Type type, const std::vector<Value*>& args, CallConv call_conv = CallConv::Default) {
+      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv);
     }
 
     // Folding

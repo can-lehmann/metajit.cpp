@@ -146,7 +146,7 @@ class PrettyInstWritePlugin(InstWritePlugin):
         code = f"{stream} << Highlight::ArgName << \"{arg.name}=\" << Highlight::None; "
         if arg.type == Type("Block*"):
             code += f"{value}->write_arg({stream});"
-        elif arg.type == Type("Type"):
+        elif arg.type == Type("Type") or arg.type == Type("CallConv"):
             code += f"{stream} << Highlight::Type << {value} << Highlight::None;"
         elif arg.type == Type("LoadFlags"):
             code += f"{stream} << {value};"
@@ -169,7 +169,7 @@ class JitirInstWriteJsonPlugin(InstWriteJsonPlugin):
     def write_arg(self, arg, value, stream):
         if arg.type == Type("Block*"):
             return f"{stream} << {value}->name()"
-        elif arg.type == Type("Type"):
+        elif arg.type == Type("Type") or arg.type == Type("CallConv"):
             return f"{stream} << \"\\\"\" << {value} << \"\\\"\""
         elif arg.type == Type("LoadFlags"):
             return f"{value}.write_json({stream})"
@@ -328,6 +328,7 @@ jitir = IR(
             args = [
                 Arg("callee", getter=Getter.Always),
                 Arg("type", Type("Type")),
+                Arg("call_conv", Type("CallConv"), setter=True),
             ],
             type = "type",
             type_checks = [
@@ -388,6 +389,7 @@ lwir(
                 Type("size_t"): "uint64_t",
                 Type("uint64_t"): "uint64_t",
                 Type("Type"): "uint32_t",
+                Type("CallConv"): "uint32_t",
                 Type("LoadFlags"): "uint32_t",
                 Type("InputFlags"): "uint32_t",
                 Type("Block*"): "void*",
@@ -403,6 +405,7 @@ llvm_type_substitutions = {
     Type("size_t"): "llvm::Type::getInt64Ty(context)",
     Type("uint64_t"): "llvm::Type::getInt64Ty(context)",
     Type("Type"): "llvm::Type::getInt32Ty(context)",
+    Type("CallConv"): "llvm::Type::getInt32Ty(context)",
     Type("LoadFlags"): "llvm::Type::getInt32Ty(context)",
     Type("InputFlags"): "llvm::Type::getInt32Ty(context)",
     Type("Block*"): "llvm::PointerType::get(context, 0)",

@@ -486,6 +486,7 @@ Arguments
 
 - **callee**: `Value*`
 - **type**: `Type`
+- **call_conv**: `CallConv`
 
 Return Type: `type`
 
