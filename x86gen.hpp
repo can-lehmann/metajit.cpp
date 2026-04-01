@@ -40,6 +40,23 @@ namespace metajit {
       return Reg(Kind::Physical, id);
     }
 
+    static constexpr Reg X86_RAX() { return phys(0); }
+    static constexpr Reg X86_RCX() { return phys(1); }
+    static constexpr Reg X86_RDX() { return phys(2); }
+    static constexpr Reg X86_RBX() { return phys(3); }
+    static constexpr Reg X86_RSP() { return phys(4); }
+    static constexpr Reg X86_RBP() { return phys(5); }
+    static constexpr Reg X86_RSI() { return phys(6); }
+    static constexpr Reg X86_RDI() { return phys(7); }
+    static constexpr Reg X86_R8() { return phys(8); }
+    static constexpr Reg X86_R9() { return phys(9); }
+    static constexpr Reg X86_R10() { return phys(10); }
+    static constexpr Reg X86_R11() { return phys(11); }
+    static constexpr Reg X86_R12() { return phys(12); }
+    static constexpr Reg X86_R13() { return phys(13); }
+    static constexpr Reg X86_R14() { return phys(14); }
+    static constexpr Reg X86_R15() { return phys(15); }
+
     static constexpr Reg virt(size_t id) {
       return Reg(Kind::Virtual, id);
     }
@@ -73,6 +90,7 @@ namespace metajit {
       }
     }
   };
+
 }
 
 std::ostream& operator<<(std::ostream& stream, const metajit::Reg& reg) {
@@ -364,6 +382,58 @@ namespace metajit {
     }
   };
 
+  class CallConvInfo {
+  private:
+    lwir::Span<const Reg> _arg_regs;
+    lwir::Span<const Reg> _clobbered_regs;
+    Reg _ret_reg;
+
+    static constexpr Reg preserve_none_arg_regs[] = {
+      Reg::X86_R12(), Reg::X86_R13(), Reg::X86_R14(), Reg::X86_R15(),
+      Reg::X86_RDI(), Reg::X86_RSI(), Reg::X86_RDX(), Reg::X86_RCX(),
+      Reg::X86_R8(), Reg::X86_R9(), Reg::X86_R11(), Reg::X86_RAX()
+    };
+
+    static constexpr Reg preserve_none_clobbered_regs[] = {
+      Reg::X86_RAX(), Reg::X86_RBX(), Reg::X86_RCX(), Reg::X86_RDX(),
+      Reg::X86_RSI(), Reg::X86_RDI(),
+      Reg::X86_R8(), Reg::X86_R9(), Reg::X86_R10(), Reg::X86_R11(),
+      Reg::X86_R12(), Reg::X86_R13(), Reg::X86_R14(), Reg::X86_R15()
+    };
+
+    static constexpr Reg default_arg_regs[] = {
+      Reg::X86_RDI(), Reg::X86_RSI(), Reg::X86_RDX(), Reg::X86_RCX(),
+      Reg::X86_R8(), Reg::X86_R9()
+    };
+
+    static constexpr Reg default_clobbered_regs[] = {
+      Reg::X86_RAX(), Reg::X86_RCX(), Reg::X86_RDX(),
+      Reg::X86_RSI(), Reg::X86_RDI(),
+      Reg::X86_R8(), Reg::X86_R9(), Reg::X86_R10(), Reg::X86_R11()
+    };
+  public:
+    CallConvInfo(CallConv call_conv) {
+      switch (call_conv) {
+        case CallConv::PreserveNone:
+          _arg_regs = lwir::Span<const Reg>(preserve_none_arg_regs, sizeof(preserve_none_arg_regs) / sizeof(preserve_none_arg_regs[0]));
+          _clobbered_regs = lwir::Span<const Reg>(preserve_none_clobbered_regs, sizeof(preserve_none_clobbered_regs) / sizeof(preserve_none_clobbered_regs[0]));
+          _ret_reg = Reg::X86_RAX();
+        break;
+        case CallConv::Default:
+          _arg_regs = lwir::Span<const Reg>(default_arg_regs, sizeof(default_arg_regs) / sizeof(default_arg_regs[0]));
+          _clobbered_regs = lwir::Span<const Reg>(default_clobbered_regs, sizeof(default_clobbered_regs) / sizeof(default_clobbered_regs[0]));
+          _ret_reg = Reg::X86_RAX();
+        break;
+        default:
+          assert(false && "Unsupported calling convention");
+      }
+    }
+
+    const lwir::Span<const Reg>& arg_regs() const { return _arg_regs; }
+    const lwir::Span<const Reg>& clobbered_regs() const { return _clobbered_regs; }
+    Reg ret_reg() const { return _ret_reg; }
+  };
+
   class X86CodeGen: public Pass<X86CodeGen> {
   private:
     Section* _section;
@@ -405,7 +475,7 @@ namespace metajit {
       Reg fixed;
       Interval interval;
       Reg current_reg;
-      size_t stack_offset = 0;
+      size_t stack_offset = ~size_t(0);
     };
 
     NameMap<Reg> _vregs;
@@ -427,6 +497,11 @@ namespace metajit {
           } else if (dynmatch(StoreInst, store, inst)) {
             find_dep(store);
             last_store[store->aliasing()] = store;
+          } else if (dynamic_cast<CallInst*>(inst)) {
+            _memory_deps[inst] = (void*) block;
+            for (auto& [aliasing, dep] : last_store) {
+              dep = (void*) inst;
+            }
           } else {
             _memory_deps[inst] = nullptr;
           }
@@ -701,8 +776,8 @@ namespace metajit {
                  dynamic_cast<DivSInst*>(inst) ||
                  dynamic_cast<ModSInst*>(inst)) {
 
-        Reg rdx = fix_to_preg(vreg(), REG_RDX);
-        Reg rax = fix_to_preg(vreg(), REG_RAX);
+        Reg rdx = fix_to_preg(vreg(), Reg::X86_RDX());
+        Reg rax = fix_to_preg(vreg(), Reg::X86_RAX());
 
         if (dynamic_cast<DivSInst*>(inst) || dynamic_cast<ModSInst*>(inst)) {
           if (inst->type() == Type::Int8) {
@@ -794,7 +869,7 @@ namespace metajit {
           return;
         }
 
-        Reg rcx = fix_to_preg(vreg(), REG_RCX);
+        Reg rcx = fix_to_preg(vreg(), Reg::X86_RCX());
         _builder.mov64(rcx, vreg(shl->arg(1)));
         _builder.shl64(vreg(inst));
         _builder.pseudo_use(rcx);
@@ -811,7 +886,7 @@ namespace metajit {
           }
           return;
         }
-        Reg rcx = fix_to_preg(vreg(), REG_RCX);
+        Reg rcx = fix_to_preg(vreg(), Reg::X86_RCX());
         _builder.mov64(rcx, vreg(shr_u->arg(1)));
         switch (type_size(shr_u->arg(0)->type())) {
           case 1: _builder.shr8(vreg(inst)); break;
@@ -835,7 +910,7 @@ namespace metajit {
           return;
         }
 
-        Reg rcx = fix_to_preg(vreg(), REG_RCX);
+        Reg rcx = fix_to_preg(vreg(), Reg::X86_RCX());
         _builder.mov64(rcx, vreg(shr_s->arg(1)));
         switch (type_size(shr_s->arg(0)->type())) {
           case 1: _builder.sar8(vreg(inst)); break;
@@ -857,6 +932,39 @@ namespace metajit {
           _builder.setb8(vreg(inst));
         } else {
           assert(false);
+        }
+      } else if (dynmatch(CallInst, call, inst)) {
+        CallConvInfo info(call->call_conv());
+
+        assert(call->arg_count() >= 1);
+        assert(call->arg_count() - 1 <= info.arg_regs().size() && "Call with too many register arguments");
+
+        std::vector<Reg> arg_copies;
+        arg_copies.reserve(call->arg_count() - 1);
+        for (size_t it = 1; it < call->arg_count(); it++) {
+          Reg copy = vreg();
+          _builder.mov64(copy, vreg(call->arg(it)));
+          arg_copies.push_back(copy);
+        }
+
+        for (Reg preg : info.clobbered_regs()) {
+          Reg clobber = fix_to_preg(vreg(), preg);
+          _builder.pseudo_def(clobber);
+        }
+
+        for (size_t it = 0; it < arg_copies.size(); it++) {
+          Reg arg_reg = fix_to_preg(vreg(), info.arg_regs()[it]);
+          _builder.mov64(arg_reg, arg_copies[it]);
+        }
+
+        Reg callee_reg = fix_to_preg(vreg(), Reg::X86_R10());
+        _builder.mov64(callee_reg, vreg(call->callee()));
+        _stack_offset_alloc.require_call_alignment();
+        _builder.call(callee_reg);
+
+        if (call->type() != Type::Void) {
+          Reg ret_reg = fix_to_preg(vreg(), info.ret_reg());
+          _builder.mov64(vreg(call), ret_reg);
         }
       } else if (dynmatch(BranchInst, branch, inst)) {
         if (branch->arg(0)->is_inst()) {
@@ -960,13 +1068,31 @@ namespace metajit {
     private:
       size_t _max_offset = 0;
       std::vector<size_t> _returned_offsets;
+      bool _needs_call_alignment = false;
     public:
       StackOffsetAlloc() {}
 
+      size_t max_offset() const {
+        return _max_offset;
+      }
+
+      void require_call_alignment() {
+        _needs_call_alignment = true;
+      }
+
+      size_t frame_size() const {
+        size_t size = _max_offset;
+        if (_needs_call_alignment && (size % 16) != 8) {
+          size += 8;
+        }
+        return size;
+      }
+
       size_t alloc() {
         if (_returned_offsets.empty()) {
+          size_t offset = _max_offset;
           _max_offset += 8;
-          return _max_offset;
+          return offset;
         } else {
           size_t offset = _returned_offsets.back();
           _returned_offsets.pop_back();
@@ -978,13 +1104,6 @@ namespace metajit {
         _returned_offsets.push_back(offset);
       }
     };
-
-    constexpr static Reg REG_RAX = Reg::phys(0);
-    constexpr static Reg REG_RCX = Reg::phys(1);
-    constexpr static Reg REG_RDX = Reg::phys(2);
-    constexpr static Reg REG_RBX = Reg::phys(3);
-    constexpr static Reg REG_RSP = Reg::phys(4);
-    constexpr static Reg REG_RBP = Reg::phys(5);
 
     class RegFileState {
     private:
@@ -999,8 +1118,8 @@ namespace metajit {
         _regs.resize(16, Reg());
         _lru.resize(16, 0);
 
-        disable(REG_RSP);
-        disable(REG_RBP);
+        disable(Reg::X86_RSP());
+        disable(Reg::X86_RBP());
 
         _free = _max_free;
       }
@@ -1137,14 +1256,13 @@ namespace metajit {
           info.current_reg = free_reg;
           reg_file.set(free_reg, vreg);
         } else {
-          if (info.stack_offset == 0) {
+          if (info.stack_offset == ~size_t(0)) {
             info.stack_offset = _stack_offset_alloc.alloc();
-            assert(info.stack_offset != 0);
           }
           _builder.mov64_mem(
             X86Inst::Mem(
-              REG_RSP,
-              -(int64_t) info.stack_offset
+              Reg::X86_RSP(),
+              (int32_t) info.stack_offset
             ),
             preg
           );
@@ -1162,12 +1280,12 @@ namespace metajit {
         _builder.mov64(preg, info.current_reg);
         reg_file.free(info.current_reg);
       } else {
-        assert(info.stack_offset != 0);
+        assert(info.stack_offset != ~size_t(0));
         _builder.mov64(
           preg,
           X86Inst::Mem(
-            REG_RSP,
-            -(int64_t) info.stack_offset
+            Reg::X86_RSP(),
+            (int32_t) info.stack_offset
           )
         );
       }
@@ -1284,7 +1402,8 @@ namespace metajit {
           X86Inst* inst = *it;
           _builder.move_before(block, inst);
 
-          if (inst->kind() == X86Inst::Kind::PseudoUse) {
+          if (inst->kind() == X86Inst::Kind::PseudoUse ||
+              inst->kind() == X86Inst::Kind::PseudoDef) {
             it = it.erase(); // Not needed after regalloc
           } else if (is_foldable_mov(inst)) {
             Reg src = std::get<Reg>(inst->rm());
@@ -1309,7 +1428,13 @@ namespace metajit {
             inst->visit_regs([&](Reg reg) {
               VRegInfo& info = _vreg_info[reg.id()];
               if (info.current_reg.is_invalid() && info.fixed.is_physical()) {
-                spill_and_unspill(reg_file, info.fixed, reg, is_def_only(reg, inst));
+                spill_and_unspill(
+                  reg_file,
+                  info.fixed,
+                  reg,
+                  is_def_only(reg, inst),
+                  inst->kind() != X86Inst::Kind::PseudoDef
+                );
               } else if (info.current_reg.is_physical()) {
                 reg_file.touch(info.current_reg);
               }
@@ -1352,7 +1477,7 @@ namespace metajit {
             if (inst->name() == info->interval.max) {
               reg_file.free(info->current_reg);
               info->current_reg = Reg();
-              if (info->stack_offset != 0) {
+              if (info->stack_offset != ~size_t(0)) {
                 _stack_offset_alloc.free(info->stack_offset);
               }
             }
@@ -1436,6 +1561,25 @@ namespace metajit {
       }
     }
 
+    void insert_stack_frame() {
+      size_t stack_frame_size = _stack_offset_alloc.frame_size();
+      if (stack_frame_size == 0) {
+        return;
+      }
+
+      _builder.move_to_begin(_blocks[0]);
+      _builder.sub64_imm(Reg::X86_RSP(), (uint64_t) stack_frame_size);
+
+      for (X86Block* block : _blocks) {
+        for (X86Inst* inst : *block) {
+          if (inst->kind() == X86Inst::Kind::Ret) {
+            _builder.move_before(block, inst);
+            _builder.add64_imm(Reg::X86_RSP(), (uint64_t) stack_frame_size);
+          }
+        }
+      }
+    }
+
     void run(const std::vector<Reg>& input_pregs) {
       _memory_deps.init(_section);
       _vregs.init(_section);
@@ -1455,7 +1599,10 @@ namespace metajit {
       memory_deps();
       isel();
       autoname_insts();
+
       regalloc();
+
+      insert_stack_frame();
       peephole();
     }
   public:

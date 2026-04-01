@@ -48,6 +48,7 @@
 #define cmp_imm_usedef { use(rm); }
 
 unop_x86_inst(PseudoUse, pseudo_use, { use(rm); }, false, { })
+unop_x86_inst(PseudoDef, pseudo_def, { def(rm); }, false, { })
 
 binop_x86_inst(Mov8, mov8, mov_usedef, false, { rex(); byte(0x8a); modrm(); })
 binop_x86_inst(Mov16, mov16, mov_usedef, false, { byte(0x66); rex_opt(); byte(0x8b); modrm(); })
@@ -161,6 +162,7 @@ jmp_x86_inst(JNE, jne, {}, true, { byte(0x0f); byte(0x85); imm_n(4); })
 jmp_x86_inst(JE, je, {}, true, { byte(0x0f); byte(0x84); imm_n(4); })
 jmp_x86_inst(JL, jl, {}, true, { byte(0x0f); byte(0x8c); imm_n(4); })
 jmp_x86_inst(JB, jb, {}, true, { byte(0x0f); byte(0x82); imm_n(4); })
+unop_x86_inst(Call, call, { use(rm); }, true, { reg = Reg::phys(2); rex_w(); byte(0xff); modrm(); })
 op0_x86_inst(Ret, ret, {}, true, { byte(0xc3); })
 
 #undef x86_inst
