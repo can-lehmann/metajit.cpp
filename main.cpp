@@ -48,6 +48,9 @@ int main() {
 
   builder.build_exit();
 
+  // The example section is single-block and already in natural order.
+  section->set_ordering(BlockOrdering::Natural);
+
   section->write(std::cout);
 
   {
