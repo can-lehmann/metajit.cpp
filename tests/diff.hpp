@@ -16,9 +16,12 @@
 
 #include <memory>
 #include <fstream>
+#include <filesystem>
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/Support/SourceMgr.h"
 
 #include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
@@ -31,6 +34,7 @@
 #include "../jitir.hpp"
 #include "../llvmgen.hpp"
 #include "../x86gen.hpp"
+#include "../lowerllvm.hpp"
 
 namespace metajit {
   namespace test {
@@ -86,13 +90,19 @@ namespace metajit {
         RandomInput(Value* _value, const RandomRange& _range):
           value(_value), range(_range) {}
       };
+
+      struct Output {
+        size_t offset = 0;
+        Type type = Type::Void;
+        Value* value = nullptr;
+      };
     private:
-      Builder& _builder;
-      Arg* _data;
+      Builder* _builder = nullptr;
+      Arg* _data = nullptr;
       size_t _data_size = 0;
       std::vector<size_t> _input_bytes;
       std::map<size_t, RandomInput> _inputs;
-      std::map<size_t, Value*> _outputs;
+      std::vector<Output> _outputs;
 
       size_t alloc(Type type) {
         if (_data_size % type_size(type) != 0) {
@@ -103,34 +113,54 @@ namespace metajit {
         return offset;
       }
     public:
-      TestData(Builder& builder): _builder(builder) {
-        _data = _builder.entry_arg(0);
+      TestData() {}
+      TestData(Builder& builder): _builder(&builder) {
+        _data = _builder->entry_arg(0);
       }
 
       size_t data_size() const { return _data_size; }
       const std::vector<size_t>& input_bytes() const { return _input_bytes; }
-      const std::map<size_t, Value*>& outputs() const { return _outputs; }
+      const std::vector<Output>& outputs() const { return _outputs; }
 
-      Value* input(RandomRange random_range) {
+      size_t alloc_input(RandomRange random_range) {
         size_t offset = alloc(random_range.type());
         for (size_t it = 0; it < type_size(random_range.type()); it++) {
           _input_bytes.push_back(offset + it);
         }
-        Value* value = _builder.build_load(
+        _inputs[offset] = RandomInput(nullptr, random_range);
+        return offset;
+      }
+
+      size_t alloc_output(Type type) {
+        size_t offset = alloc(type);
+        
+        Output output;
+        output.offset = offset;
+        output.type = type;
+        _outputs.push_back(output);
+
+        return offset;
+      }
+
+      Value* input(RandomRange random_range) {
+        assert(_builder && _data);
+        size_t offset = alloc_input(random_range);
+        Value* value = _builder->build_load(
           _data,
           random_range.type(),
           LoadFlags::None,
           AliasingGroup(0),
           offset
         );
-        _inputs[offset] = RandomInput(value, random_range);
+        _inputs[offset].value = value;
         return value;
       }
 
       void output(Value* value) {
-        size_t offset = alloc(value->type());
-        _outputs[offset] = value;
-        _builder.build_store(
+        assert(_builder && _data);
+        size_t offset = alloc_output(value->type());
+        _outputs.back().value = value;
+        _builder->build_store(
           _data,
           value,
           AliasingGroup(0),
@@ -165,11 +195,15 @@ namespace metajit {
       }
 
       void write_outputs(std::ostream& stream, uint8_t* data) {
-        for (auto [offset, value] : _outputs) {
+        for (const Output& output : _outputs) {
           stream << "  ";
-          value->write_arg(stream);
+          if (output.value) {
+            output.value->write_arg(stream);
+          } else {
+            stream << "[" << output.offset << "]";
+          }
           stream << " = ";
-          write_value_of_type(stream, value->type(), data + offset);
+          write_value_of_type(stream, output.type, data + output.offset);
           stream << "\n";
         }
       }
@@ -178,7 +212,7 @@ namespace metajit {
         for (auto [offset, input] : _inputs) {
           uint64_t value = input.range.gen();
           // Assume little-endian, which is fine since we are on x86_64
-          for (size_t it = 0; it < type_size(input.value->type()); it++) {
+          for (size_t it = 0; it < type_size(input.range.type()); it++) {
             data[offset + it] = (uint8_t)((value >> (it * 8)) & 0xFF);
           }
         }
@@ -257,11 +291,11 @@ namespace metajit {
           }
         }
         
-        for (auto [offset, value] : data.outputs()) {
+        for (const TestData::Output& output : data.outputs()) {
           bool is_equal = true;
-          for (size_t it = 0; it < type_size(value->type()); it++) {
-            if (llvm_data[offset + it] != x86_data[offset + it] ||
-                (verify_interpreter && llvm_data[offset + it] != interp_data[offset + it])) {
+          for (size_t it = 0; it < type_size(output.type); it++) {
+            if (llvm_data[output.offset + it] != x86_data[output.offset + it] ||
+                (verify_interpreter && llvm_data[output.offset + it] != interp_data[output.offset + it])) {
               is_equal = false;
               break;
             }
@@ -353,6 +387,99 @@ namespace metajit {
 
       DiffTest diff_test(const std::string& name) {
         return DiffTest(name, _output_path).suite(*this);
+      }
+    };
+
+    class SourceTest: public unittest::BaseTest<SourceTest> {
+    private:
+      std::string _output_path;
+      std::string _ll_file;
+
+      std::vector<RandomRange> _inputs;
+      std::vector<Type> _outputs;
+    public:
+      SourceTest(const std::string& name,
+                 const std::string& output_path,
+                 const std::string& ll_file):
+        unittest::BaseTest<SourceTest>(name),
+        _output_path(output_path),
+        _ll_file(ll_file) {}
+
+      void run() && {
+        unittest::BaseTest<SourceTest>::run([&]() {
+          llvm::LLVMContext llvm_context;
+          llvm::SMDiagnostic error;
+          std::unique_ptr<llvm::Module> module = llvm::parseIRFile(_ll_file, error, llvm_context);
+          
+          if (!module) {
+            std::string error_msg;
+            llvm::raw_string_ostream stream(error_msg);
+            error.print("test_source", stream);
+            throw unittest::AssertionError(
+              "Unable to parse LLVM IR",
+              __LINE__,
+              __FILE__,
+              error_msg
+            );
+          }
+
+          llvm::Function* function = module->getFunction("run");
+          if (!function) {
+            throw unittest::AssertionError(
+              "Expected function `run` in LLVM IR",
+              __LINE__,
+              __FILE__,
+              _ll_file
+            );
+          }
+
+          Context context;
+          Allocator allocator;
+          Section* section = new Section(context, allocator);
+
+          LowerLLVM(function, section);
+          unittest_assert(!section->verify(std::cout));
+
+          TestData data;
+          for (const RandomRange& range : _inputs) {
+            data.alloc_input(range);
+          }
+          for (const Type& type : _outputs) {
+            data.alloc_output(type);
+          }
+
+          check_codegen_differential(
+            _output_path + "/" + name(),
+            section,
+            data,
+            128
+          );
+
+          delete section;
+        });
+      }
+
+      SourceTest&& inputs(const std::vector<RandomRange>& input_ranges) && {
+        _inputs = input_ranges;
+        return std::move(*this);
+      }
+
+      SourceTest&& outputs(const std::vector<Type>& output_types) && {
+        _outputs = output_types;
+        return std::move(*this);
+      }
+    };
+
+    class SourceTestSuite: public unittest::Suite {
+    private:
+      std::string _output_path;
+    public:
+      SourceTestSuite(const std::string& output_path):
+        unittest::Suite(), _output_path(output_path) {}
+
+      SourceTest source_test(const std::string& ll_file) {
+        std::string name = std::filesystem::path(ll_file).stem().string();
+        return SourceTest(name, _output_path, ll_file).suite(*this);
       }
     };
   }

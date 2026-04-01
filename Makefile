@@ -6,12 +6,13 @@ TEST_HEADER_FILES := $(wildcard tests/*.hpp)
 run: main
 	./main
 
-test: tests/test_knownbits tests/test_insts tests/test_cfg tests/test_fuzzer tests/test_opt
+test: tests/test_knownbits tests/test_insts tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_source
 	./tests/test_knownbits
 	./tests/test_insts
 	./tests/test_cfg
 	./tests/test_fuzzer
 	./tests/test_opt
+	./tests/test_source
 
 fuzz: tests/fuzzer
 	./tests/fuzzer
@@ -34,6 +35,19 @@ tests/test_cfg: tests/test_cfg.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 tests/test_opt: tests/test_opt.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
+TEST_SOURCE_LL_FILES := \
+	$(patsubst tests/source/%.c,tests/source/%.ll,$(wildcard tests/source/*.c)) \
+	$(patsubst tests/source/%.cpp,tests/source/%.ll,$(wildcard tests/source/*.cpp))
+
+tests/test_source: tests/test_source.cpp ${TEST_SOURCE_LL_FILES} ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${CFLAGS} -o $@ $<
+
+tests/source/%.ll: tests/source/%.c
+	clang -emit-llvm -S -O1 -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -o $@ $<
+
+tests/source/%.ll: tests/source/%.cpp
+	clang++ -emit-llvm -S -O1 -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -o $@ $<
+
 tests/fuzzer: tests/fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ -g ${CFLAGS} -o $@ $<
 
@@ -53,11 +67,14 @@ clean:
 	-rm tests/test_fuzzer
 	-rm tests/test_cfg
 	-rm tests/test_opt
+	-rm tests/test_source
 	-rm tests/fuzzer
 	-rm jitir.hpp
 	-rm jitir_llvmapi.hpp
+	-rm tests/source/*.ll
 	-rm -r tests/output
 	mkdir -p tests/output/test_insts
 	mkdir -p tests/output/test_fuzzer
 	mkdir -p tests/output/test_cfg
 	mkdir -p tests/output/test_opt
+	mkdir -p tests/output/test_source
