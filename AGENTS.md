@@ -55,5 +55,8 @@ metajit.cpp uses a generating extension for tracing.
 
 ## Testing
 
-- You can run the test suite using `make test`. This also regenerates the JITIR headers if needed.
+Make automatically regenerates the JITIR headers.
+
+- You can run the entire test suite using `make test`.
+- You can run individual tests using `make tests/test_* && ./tests/test_*`
 - You can run the fuzzer using `make fuzz`.

@@ -210,6 +210,43 @@ void test_call_default_void_store(uint32_t* out, uint32_t a, uint32_t b) {
   *out = a + b + 1;
 }
 
+void test_alloca(DiffTestSuite& suite) {
+  suite.diff_test("alloca_store_load_Int32").run([](Builder& builder, TestData& data) {
+    Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8));
+    Value* val = data.input(Type::Int32);
+    builder.build_store(ptr, val, AliasingGroup(0), 0);
+    Value* loaded = builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+    data.output(loaded);
+  });
+
+  suite.diff_test("alloca_store_load_Int64").run([](Builder& builder, TestData& data) {
+    Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 16));
+    Value* val = data.input(Type::Int64);
+    builder.build_store(ptr, val, AliasingGroup(0), 0);
+    Value* loaded = builder.build_load(ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), 0);
+    data.output(loaded);
+  });
+
+  suite.diff_test("alloca_multiple_stores").run([](Builder& builder, TestData& data) {
+    Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 16));
+    Value* val1 = data.input(Type::Int32);
+    Value* val2 = data.input(Type::Int32);
+    builder.build_store(ptr, val1, AliasingGroup(0), 0);
+    builder.build_store(ptr, val2, AliasingGroup(0), 0);
+    Value* loaded = builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+    data.output(loaded);
+  });
+
+  suite.diff_test("alloca_add_ptr_store_load_Int32").run([](Builder& builder, TestData& data) {
+    Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 16));
+    Value* ptr_off = builder.build_add_ptr(ptr, builder.build_const(Type::Int64, 4));
+    Value* val = data.input(Type::Int32);
+    builder.build_store(ptr_off, val, AliasingGroup(0), 0);
+    Value* loaded = builder.build_load(ptr_off, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+    data.output(loaded);
+  });
+}
+
 void test_call(DiffTestSuite& suite) {
   suite.diff_test("call_preserve_none").interpreter(false).run([](Builder& builder, TestData& data) {
     Value* a = data.input(Type::Int64);
@@ -364,6 +401,7 @@ int main() {
   test_div_mod(suite);
   test_select(suite);
   test_resize(suite);
+  test_alloca(suite);
   test_call(suite);
 
   return suite.finish();

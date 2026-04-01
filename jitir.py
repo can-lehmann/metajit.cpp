@@ -291,6 +291,16 @@ jitir = IR(
             type = "Type::Void",
             type_checks = ["ptr->type() == Type::Ptr"]
         ),
+        Inst("Alloca",
+            args = [
+                Arg("size", getter=Getter.Always)
+            ],
+            type = "Type::Ptr",
+            type_checks = [
+                "size->type() == Type::Int64"
+            ],
+            doc = "Allocate untyped memory on the stack."
+        ),
         Inst("AddPtr",
             args = [
                 Arg("ptr", getter=Getter.Always),

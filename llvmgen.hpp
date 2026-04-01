@@ -190,6 +190,11 @@ namespace metajit {
           emit_arg(store->arg(1)),
           emit_add_offset(emit_arg(store->arg(0)), store->offset())
         );
+      } else if (dynmatch(AllocaInst, alloca, inst)) {
+        return _builder.CreateAlloca(
+          llvm::Type::getInt8Ty(_context),
+          emit_arg(alloca->size())
+        );
       } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
         return _builder.CreateGEP(
           llvm::Type::getInt8Ty(_context),

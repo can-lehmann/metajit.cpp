@@ -753,6 +753,16 @@ namespace metajit {
           default:
             assert(false && "Unsupported store type");
         }
+      } else if (dynmatch(AllocaInst, alloca, inst)) {
+        dynmatch(Const, size_const, alloca->size());
+        assert(size_const && "x86 backend currently requires constant-size Alloca");
+
+        size_t size = size_const->value();
+        assert(size > 0 && "Alloca size must be non-zero");
+
+        size_t offset = _stack_offset_alloc.alloc_bytes(size, 8);
+        Reg rsp = fix_to_preg(vreg(), Reg::X86_RSP());
+        _builder.lea64(vreg(inst), X86Inst::Mem(rsp, (int32_t) offset));
       } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
         build_add(vreg(inst), add_ptr->ptr(), add_ptr->offset());
       } else if (dynmatch(AddInst, add, inst)) {
@@ -1069,6 +1079,11 @@ namespace metajit {
       size_t _max_offset = 0;
       std::vector<size_t> _returned_offsets;
       bool _needs_call_alignment = false;
+
+      size_t align_pad(size_t value, size_t align) const {
+        size_t delta = value % align;
+        return delta ? align - delta : 0;
+      }
     public:
       StackOffsetAlloc() {}
 
@@ -1098,6 +1113,15 @@ namespace metajit {
           _returned_offsets.pop_back();
           return offset;
         }
+      }
+
+      size_t alloc_bytes(size_t size, size_t alignment = 8) {
+        assert(size > 0);
+        assert(alignment > 0);
+        size_t padding = align_pad(_max_offset, alignment);
+        size_t offset = _max_offset + padding;
+        _max_offset += padding + size;
+        return offset;
       }
 
       void free(size_t offset) {

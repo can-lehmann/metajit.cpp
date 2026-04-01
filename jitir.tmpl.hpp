@@ -2933,6 +2933,7 @@ namespace metajit {
   private:
     Section* _section;
     NameMap<Bits> _values;
+    std::vector<uint8_t*> _alloca_storage;
 
     // Program Counter
     Block* _block = nullptr;
@@ -2944,6 +2945,12 @@ namespace metajit {
       _section->autoname();
       _values.init(_section);
       enter(section->entry(), entry_args);
+    }
+
+    ~Interpreter() {
+      for (uint8_t* allocation : _alloca_storage) {
+        delete[] allocation;
+      }
     }
 
     Section* section() const { return _section; }
@@ -3017,6 +3024,16 @@ namespace metajit {
             assert(false); // Unreachable
         }
         _values[store] = Bits();
+      } else if (dynmatch(AllocaInst, alloca_inst, _inst)) {
+        Bits size_bits = at(alloca_inst->size());
+        assert(size_bits.is_const());
+
+        size_t size = size_bits.value;
+        assert(size > 0 && "Alloca size must be non-zero");
+
+        uint8_t* allocation = new uint8_t[size];
+        _alloca_storage.push_back(allocation);
+        _values[alloca_inst] = Bits::constant(Type::Ptr, (uint64_t) (uintptr_t) allocation);
       } else if (dynmatch(ResizeXInst, resize_x, _inst)) {
         // We don't want to introduce any unknown bits, so we just zero-extend
         Bits arg = at(resize_x->arg(0));

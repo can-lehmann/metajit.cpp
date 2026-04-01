@@ -157,6 +157,20 @@ Type Checks:
 
 - `ptr->type() == Type::Ptr`
 
+### Alloca
+
+Allocate untyped memory on the stack.
+
+Arguments
+
+- **size**: `Value*`
+
+Return Type: `Type::Ptr`
+
+Type Checks:
+
+- `size->type() == Type::Int64`
+
 ### AddPtr
 
 Arguments
