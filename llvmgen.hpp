@@ -104,6 +104,17 @@ namespace metajit {
 
     llvm::Value* emit_arg(Value* value) {
       if (dynmatch(Const, constant, value)) {
+        if (constant->type() == Type::Ptr) {
+          llvm::Value* addr = llvm::ConstantInt::get(
+            llvm::Type::getInt64Ty(_context),
+            constant->value(),
+            false
+          );
+          return llvm::ConstantExpr::getIntToPtr(
+            (llvm::Constant*) addr,
+            llvm::PointerType::get(_context, 0)
+          );
+        }
         return llvm::ConstantInt::get(
           emit_type(constant->type()),
           constant->value(),
@@ -185,6 +196,32 @@ namespace metajit {
           emit_arg(add_ptr->arg(0)),
           {emit_arg(add_ptr->arg(1))}
         );
+      } else if (dynmatch(CallInst, call, inst)) {
+        std::vector<llvm::Type*> arg_types;
+        std::vector<llvm::Value*> args;
+        for (size_t it = 1; it < call->arg_count(); it++) {
+          Value* arg = call->arg(it);
+          arg_types.push_back(emit_type(arg->type()));
+          args.push_back(emit_arg(arg));
+        }
+
+        llvm::FunctionType* function_type = llvm::FunctionType::get(
+          emit_type(call->type()),
+          arg_types,
+          false
+        );
+
+        llvm::CallInst* call_inst = _builder.CreateCall(
+          function_type,
+          emit_arg(call->callee()),
+          args
+        );
+
+        if (call->call_conv() == CallConv::PreserveNone) {
+          call_inst->setCallingConv(llvm::CallingConv::PreserveNone);
+        }
+
+        return call_inst;
       } else if (dynmatch(EqInst, eq, inst)) {
         if (is_float(eq->arg(0)->type())) {
           return _builder.CreateFCmpUEQ(
