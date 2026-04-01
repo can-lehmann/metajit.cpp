@@ -780,7 +780,7 @@ metajit::PrettyStream& operator<<(metajit::PrettyStream& stream, const metajit::
 namespace metajit {
   using AliasingGroup = int32_t;
 
-  ${insts}
+  /* ${insts} */
 
   bool Inst::has_side_effect() const {
     return dynamic_cast<const StoreInst*>(this) ||
@@ -1166,7 +1166,7 @@ namespace metajit {
 
     #undef define_build_const
 
-    ${builder}
+    /* ${builder} */
 
     ShlInst* build_shl(Value* a, size_t shift) {
       assert(shift <= type_size(a->type()) * 8);
@@ -2298,7 +2298,7 @@ namespace metajit {
 
   };
 
-  ${capi}
+  /* ${capi} */
 
   template<class T>
   class NameMap {

@@ -19,7 +19,7 @@
 namespace metajit {
   class LLVM_API {
   public:
-    ${llvmapi_defs}
+    /* ${llvmapi_defs} */
     llvm::FunctionCallee build_const;
     llvm::FunctionCallee build_const_fast;
     llvm::FunctionCallee build_guard;
@@ -28,7 +28,7 @@ namespace metajit {
 
     LLVM_API(llvm::Module* module) {
       llvm::LLVMContext& context = module->getContext();
-      ${llvmapi_inits}
+      /* ${llvmapi_inits} */
 
       llvm::FunctionType* build_const_type = llvm::FunctionType::get(
         llvm::PointerType::get(context, 0),
@@ -110,7 +110,7 @@ namespace metajit {
     }
   }
 
-  ${build_build_inst}
+  /* ${build_build_inst} */
 
   inline llvm::Error map_symbols(llvm::orc::LLJIT& jit) {
     llvm::orc::SymbolMap symbol_map;
@@ -124,7 +124,7 @@ namespace metajit {
         ) \
       });
 
-    ${map_symbols}
+    /* ${map_symbols} */
 
     map_symbol(jitir_build_const)
     map_symbol(jitir_build_const_fast)

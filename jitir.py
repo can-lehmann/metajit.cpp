@@ -408,7 +408,8 @@ lwir(
                 ValueType(): "void*"
             }
         )
-    ]
+    ],
+    placeholder = lambda name: "/* ${" + name + "} */"
 )
 
 llvm_type_substitutions = {
@@ -439,7 +440,8 @@ lwir(
         MapSymbolsInstPlugin(
             prefix = "jitir"
         )
-    ]
+    ],
+    placeholder = lambda name: "/* ${" + name + "} */"
 )
 
 class MarkdownPlugin:
