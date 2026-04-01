@@ -766,7 +766,8 @@ namespace metajit {
   ${insts}
 
   bool Inst::has_side_effect() const {
-    return dynamic_cast<const StoreInst*>(this);
+    return dynamic_cast<const StoreInst*>(this) ||
+           dynamic_cast<const CallInst*>(this);
   }
 
   bool Inst::is_terminator() const {
@@ -2016,8 +2017,22 @@ namespace metajit {
     }
 
     Chain* _chain = nullptr;
+
+    void invalidate_memory_state() {
+      _valid_loads.clear();
+      _memory.clear();
+
+      for (LoadInst*& load : _exact_loads) {
+        load = nullptr;
+      }
+
+      for (Value*& value : _exact_memory) {
+        value = nullptr;
+      }
+    }
   public:
     using Builder::Builder;
+    using Builder::build_call;
 
     Chain* chain() { return _chain; }
     void set_chain(Chain* chain) { _chain = chain; }
@@ -2188,6 +2203,17 @@ namespace metajit {
 
         return Builder::build_store(ptr, value, aliasing, offset);
       }
+    }
+
+    Value* build_call(Value* callee, Type type, const lwir::Span<Value*>& args, CallConv call_conv = CallConv::Default) {
+      // Calls may read/write memory reachable through pointers, so invalidate
+      // forwarding and exact aliasing state conservatively.
+      invalidate_memory_state();
+      return Builder::build_call(callee, type, args, call_conv);
+    }
+
+    Value* build_call(Value* callee, Type type, const std::vector<Value*>& args, CallConv call_conv = CallConv::Default) {
+      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv);
     }
 
     template <class... Args>
@@ -2480,6 +2506,14 @@ namespace metajit {
               StoreInst* store = last_store[-load->aliasing()];
               if (store) {
                 unused[store] = false;
+              }
+            }
+          } else if (dynamic_cast<CallInst*>(inst)) {
+            // Calls may observe memory from all exact groups.
+            for (StoreInst*& store : last_store) {
+              if (store) {
+                unused[store] = false;
+                store = nullptr;
               }
             }
           }
@@ -3429,6 +3463,14 @@ namespace metajit {
               }
             }
             valid_loads[store->aliasing()] = remaining_loads;
+          } else if (dynamic_cast<CallInst*>(inst)) {
+            // Calls can invalidate any cached memory-derived value.
+            for (auto& [group, loads] : valid_loads) {
+              for (LoadInst* load : loads) {
+                canon.erase(Lookup(load));
+              }
+            }
+            valid_loads.clear();
           }
 
           if (inst->has_side_effect() ||
@@ -3510,6 +3552,15 @@ namespace metajit {
       assert(loop->chain());
       assert(loop->preheader());
 
+      for (Block* block : *loop->chain()) {
+        for (Inst* inst : *block) {
+          if (dynamic_cast<CallInst*>(inst)) {
+            // Conservative: calls can touch memory backing promoted aliases.
+            return;
+          }
+        }
+      }
+
       ExpandingVector<Value*> current_values;
       NameMap<Value*> substs(loop->section());
 
@@ -3590,12 +3641,15 @@ namespace metajit {
 
       // ExpandingVector<bool> does not work due to std::vector<bool>
       ExpandingVector<uint8_t> stores;
+      bool has_unknown_memory_write = false;
       for (Block* block : loop->range()) {
         for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst)) {
             if (store->aliasing() < 0) {
               stores[-store->aliasing()] = 1;
             }
+          } else if (dynamic_cast<CallInst*>(inst)) {
+            has_unknown_memory_write = true;
           }
         }
       }
@@ -3626,8 +3680,10 @@ namespace metajit {
 
           if (invariant) {
             if (dynmatch(LoadInst, load, inst)) {
-              if (load->flags().has(LoadFlags::InBounds) &&
-                  load->aliasing() < 0) {
+              if (has_unknown_memory_write) {
+                invariant = false;
+              } else if (load->flags().has(LoadFlags::InBounds) &&
+                         load->aliasing() < 0) {
                 if (stores[-load->aliasing()]) {
                   invariant = false;
                 }
