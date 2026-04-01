@@ -189,7 +189,8 @@ namespace metajit {
                                            Section* section,
                                            TestData& data,
                                            size_t sample_count = 1024,
-                                           bool optimize_section_for_interpreter = false) {
+                                           bool optimize_section_for_interpreter = false,
+                                           bool verify_interpreter = true) {
       if (!output_path.empty()) {
         std::ofstream stream(output_path + ".jitir");
         section->write(stream);
@@ -241,24 +242,26 @@ namespace metajit {
         llvm_func(llvm_data);
         x86_func(x86_data);
 
-        Interpreter interpreter(section, {
-          Interpreter::Bits::constant(interp_data)
-        });
+        if (verify_interpreter) {
+          Interpreter interpreter(section, {
+            Interpreter::Bits::constant(interp_data)
+          });
 
-        Interpreter::Event event = interpreter.run();
-        if (event != Interpreter::Event::Exit) {
-          throw unittest::AssertionError(
-            "Interpreter did not exit cleanly",
-            __LINE__,
-            __FILE__
-          );
+          Interpreter::Event event = interpreter.run();
+          if (event != Interpreter::Event::Exit) {
+            throw unittest::AssertionError(
+              "Interpreter did not exit cleanly",
+              __LINE__,
+              __FILE__
+            );
+          }
         }
         
         for (auto [offset, value] : data.outputs()) {
           bool is_equal = true;
           for (size_t it = 0; it < type_size(value->type()); it++) {
             if (llvm_data[offset + it] != x86_data[offset + it] ||
-                llvm_data[offset + it] != interp_data[offset + it]) {
+                (verify_interpreter && llvm_data[offset + it] != interp_data[offset + it])) {
               is_equal = false;
               break;
             }
@@ -271,8 +274,10 @@ namespace metajit {
             data.write_outputs(stream, llvm_data);
             stream << "x86 Output:\n";
             data.write_outputs(stream, x86_data);
-            stream << "Interpreter Output:\n";
-            data.write_outputs(stream, interp_data);
+            if (verify_interpreter) {
+              stream << "Interpreter Output:\n";
+              data.write_outputs(stream, interp_data);
+            }
             stream << "\n";
             throw unittest::AssertionError(
               "Output mismatch",
@@ -282,7 +287,7 @@ namespace metajit {
             );
           }
         }
-        if (optimize_section_for_interpreter && sample == sample_count / 2) {
+        if (verify_interpreter && optimize_section_for_interpreter && sample == sample_count / 2) {
           // optimize the section. that way the second half of the samples
           // runs in the interpreter with the optimized section,
           // spotting bugs in the optimizer
@@ -299,9 +304,15 @@ namespace metajit {
     class DiffTest: public unittest::BaseTest<DiffTest> {
     private:
       std::string _output_path;
+      bool _verify_interpreter = true;
     public:
       DiffTest(const std::string& name, const std::string& output_path):
         unittest::BaseTest<DiffTest>(name), _output_path(output_path) {}
+
+      DiffTest&& interpreter(bool verify_interpreter) && {
+        _verify_interpreter = verify_interpreter;
+        return std::move(*this);
+      }
 
       void run(const std::function<void(Builder&, TestData&)>& body) && {
         unittest::BaseTest<DiffTest>::run([&]() {
@@ -319,7 +330,14 @@ namespace metajit {
 
           unittest_assert(!section->verify(std::cout));
 
-          check_codegen_differential(_output_path + "/" + name(), section, data);
+          check_codegen_differential(
+            _output_path + "/" + name(),
+            section,
+            data,
+            1024,
+            false,
+            _verify_interpreter
+          );
 
           delete section;
         });
