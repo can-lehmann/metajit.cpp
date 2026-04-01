@@ -209,6 +209,8 @@ namespace metajit {
         }
       }
 
+      size_t provenance_width() const { return _provenance_width; }
+
       ValueState load(ValueState pointer, Type type) {
         assert(pointer.has_provenance());
 

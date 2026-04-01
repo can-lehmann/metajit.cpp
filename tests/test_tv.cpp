@@ -39,18 +39,32 @@ namespace metajit {
           section->autoname();
           
           z3::context z3_context;
+
+          std::vector<std::optional<size_t>> regions;
+          for (Type type : entry_args) {
+            regions.emplace_back();
+          }
+          tv::MemoryState memory_state(z3_context, regions);
+
           std::vector<tv::ValueState> z3_entry_args;
+          size_t region_id = 0;
+
           for (size_t it = 0; it < entry_args.size(); it++) {
-            z3_entry_args.push_back(tv::ValueState(
+            tv::ValueState arg_state(
               entry_args[it],
               z3_context.bv_const(
                 ("arg" + std::to_string(it)).c_str(),
                 type_width(entry_args[it])
               )
-            ));
+            );
+            if (entry_args[it] == Type::Ptr) {
+              arg_state.set_provenance(z3_context.bv_val(
+                region_id++, memory_state.provenance_width()
+              ));
+            }
+            z3_entry_args.push_back(arg_state);
           }
 
-          tv::MemoryState memory_state(z3_context, {});
           tv::Z3CodeGen codegen(section, z3_context, z3_entry_args, memory_state);
 
           z3::solver solver(z3_context);
@@ -160,7 +174,6 @@ int main() {
     return z3::ite(z3::slt(args[0].value(), context.bv_val(0, 32)), -args[0].value(), args[0].value());
   });
 
-  /*
   suite.tv_test("store_load").run({Type::Ptr, Type::Int32}, [](Builder& builder) {
     Value* ptr = builder.entry_arg(0);
     Value* value = builder.entry_arg(1);
@@ -169,7 +182,6 @@ int main() {
   }, [](z3::context& context, std::vector<tv::ValueState> args) {
     return args[1].value();
   });
-  */
 
   return suite.finish();
 }
