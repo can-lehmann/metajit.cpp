@@ -1113,6 +1113,8 @@ namespace metajit {
         _constness(section),
         _trace_capabilities(section, _constness) {
       
+      assert(_section->ordering() >= BlockOrdering::Dominator);
+
       std::vector<llvm::Type*> args;
       for (Arg* arg : _section->entry()->args()) {
         args.push_back(emit_type(arg->type()));

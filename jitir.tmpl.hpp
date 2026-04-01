@@ -233,6 +233,13 @@ namespace metajit {
         }
     }
   }
+
+  enum class BlockOrdering {
+    None,
+    Dominator, // if a dominates b then a < b
+    Natural, // Topological sort except for backedges in natural loops
+    Topological // Full topological sort
+  };
 }
 
 std::ostream& operator<<(std::ostream& stream, metajit::Type type) {
@@ -254,10 +261,20 @@ struct std::hash<metajit::Type> {
   }
 };
 
-
 template <class T>
 metajit::PrettyStream& operator<<(metajit::PrettyStream& stream, const T& value) {
   stream.ostream() << value;
+  return stream;
+}
+
+std::ostream& operator<<(std::ostream& stream, metajit::BlockOrdering ordering) {
+  static const char* names[] = {
+    "None",
+    "Dominator",
+    "Natural",
+    "Topological"
+  };
+  stream << names[(size_t) ordering];
   return stream;
 }
 
@@ -818,6 +835,7 @@ namespace metajit {
     Context& _context;
     Allocator& _allocator;
     lwir::LinkedList<Block> _blocks;
+    BlockOrdering _ordering = BlockOrdering::None;
     size_t _block_count = 0;
     size_t _name_count = 0;
   public:
@@ -834,6 +852,9 @@ namespace metajit {
 
     auto range() { return _blocks.range(); }
     auto rev_range() { return _blocks.rev_range(); }
+
+    BlockOrdering ordering() const { return _ordering; }
+    void set_ordering(BlockOrdering ordering) { _ordering = ordering; }
 
     size_t block_count() const { return _block_count; }
     size_t name_count() const { return _name_count; }
@@ -2904,6 +2925,7 @@ namespace metajit {
     NameMap<Bits> _values;
   public:
     KnownBits(Section* section): _section(section), _values(section) {
+      assert(_section->ordering() >= BlockOrdering::Dominator);
       for (Block* block : *section) {
         for (Arg* arg : block->args()) {
           _values[arg] = Bits(arg->type(), 0, 0);
@@ -3151,6 +3173,7 @@ namespace metajit {
     }
   public:
     UsedBits(Section* section): _section(section), _values(section) {
+      assert(_section->ordering() >= BlockOrdering::Dominator);
       for (Block* block : section->rev_range()) {
         for (Inst* inst : block->rev_range()) {
           if (_values[inst].type != inst->type()) {
@@ -3308,6 +3331,8 @@ namespace metajit {
     Simplify(Section* section, size_t max_iters):
         Pass(section), _section(section), _builder(section) {
       
+      assert(_section->ordering() >= BlockOrdering::Dominator);
+
       bool changed = true;
       for (size_t iter = 0; changed && iter < max_iters; iter++) {
         changed = false;
@@ -3445,6 +3470,8 @@ namespace metajit {
     };
   public:
     CommonSubexprElim(Section* section): Pass(section) {
+      assert(section->ordering() >= BlockOrdering::Dominator);
+
       std::unordered_map<Value*, Value*> substs;
       std::unordered_map<Lookup, Const*, LookupHash> consts;
       for (Block* block : *section) {
@@ -3566,6 +3593,8 @@ namespace metajit {
         Pass(loop->section()),
         _loop(loop) {
       
+      assert(loop->section()->ordering() >= BlockOrdering::Natural);
+
       assert(loop->chain());
       assert(loop->preheader());
 
@@ -3652,6 +3681,8 @@ namespace metajit {
         Pass(loop->section()),
         _loop(loop),
         _invariant(loop->section()) {
+      
+      assert(loop->section()->ordering() >= BlockOrdering::Natural);
       
       assert(loop->preheader());
       assert(loop->preheader()->terminator());
@@ -3746,6 +3777,8 @@ namespace metajit {
         _section(section),
         _groups(section) {
       
+      assert(_section->ordering() >= BlockOrdering::Dominator);
+
       for (Block* block : *section) {
         for (Arg* arg : block->args()) {
           _groups[arg] = _next_group++;
@@ -3862,6 +3895,8 @@ namespace metajit {
         _can_trace_inst(section),
         _can_trace_const(section) {
     
+      assert(_section->ordering() >= BlockOrdering::Dominator);
+
       for (Block* block : section->rev_range()) {
         for (Inst* inst : block->rev_range()) {
           if (inst->has_side_effect() ||

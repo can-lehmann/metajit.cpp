@@ -1636,6 +1636,7 @@ namespace metajit {
         _allocator(section->allocator()),
         _builder(section->allocator(), nullptr) {
 
+      assert(_section->ordering() >= BlockOrdering::Natural);
       run(input_pregs);
     }
 
