@@ -835,7 +835,7 @@ namespace metajit {
     Context& _context;
     Allocator& _allocator;
     lwir::LinkedList<Block> _blocks;
-    BlockOrdering _ordering = BlockOrdering::None;
+    BlockOrdering _ordering = BlockOrdering::Natural;
     size_t _block_count = 0;
     size_t _name_count = 0;
   public:
