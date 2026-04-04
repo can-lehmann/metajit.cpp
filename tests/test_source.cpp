@@ -22,7 +22,12 @@ int main() {
 
   SourceTestSuite suite("tests/output/test_source");
 
-  suite.source_test("tests/source/fib.ll")
+  suite.source_test("tests/source/fib.o0.ll")
+    .inputs({ RandomRange(Type::Int32, 0, 40) })
+    .outputs({ Type::Int32 })
+    .run();
+
+  suite.source_test("tests/source/fib.o1.ll")
     .inputs({ RandomRange(Type::Int32, 0, 40) })
     .outputs({ Type::Int32 })
     .run();

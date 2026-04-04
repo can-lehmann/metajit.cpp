@@ -36,17 +36,25 @@ tests/test_opt: tests/test_opt.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
 TEST_SOURCE_LL_FILES := \
-	$(patsubst tests/source/%.c,tests/source/%.ll,$(wildcard tests/source/*.c)) \
-	$(patsubst tests/source/%.cpp,tests/source/%.ll,$(wildcard tests/source/*.cpp))
+	$(patsubst tests/source/%.c,tests/source/%.o0.ll,$(wildcard tests/source/*.c)) \
+	$(patsubst tests/source/%.cpp,tests/source/%.o0.ll,$(wildcard tests/source/*.cpp)) \
+	$(patsubst tests/source/%.c,tests/source/%.o1.ll,$(wildcard tests/source/*.c)) \
+	$(patsubst tests/source/%.cpp,tests/source/%.o1.ll,$(wildcard tests/source/*.cpp))
 
 tests/test_source: tests/test_source.cpp ${TEST_SOURCE_LL_FILES} ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
-tests/source/%.ll: tests/source/%.c
+tests/source/%.o1.ll: tests/source/%.c
 	clang -emit-llvm -S -O1 -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -o $@ $<
 
-tests/source/%.ll: tests/source/%.cpp
+tests/source/%.o1.ll: tests/source/%.cpp
 	clang++ -emit-llvm -S -O1 -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -o $@ $<
+
+tests/source/%.o0.ll: tests/source/%.c
+	clang -emit-llvm -S -O0 -o $@ $<
+
+tests/source/%.o0.ll: tests/source/%.cpp
+	clang++ -emit-llvm -S -O0 -o $@ $<
 
 tests/fuzzer: tests/fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ -g ${CFLAGS} -o $@ $<

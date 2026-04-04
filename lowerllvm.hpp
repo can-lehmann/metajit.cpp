@@ -200,12 +200,18 @@ namespace metajit {
         Value* ptr = lower_operand(gep->getPointerOperand());
         assert(ptr->type() == Type::Ptr);
         for (auto it = llvm::gep_type_begin(gep), end = llvm::gep_type_end(gep); it != end; ++it) {
-          Value* index = _builder.fold_resize_u(lower_operand(it.getOperand()), Type::Int64);
-          uint64_t stride = it.getSequentialElementStride(_data_layout).getFixedValue();
-          if (stride != 1) {
-            index = _builder.fold_mul(index, _builder.build_const(Type::Int64, stride));
+          if (it.isStruct()) {
+            size_t index = llvm::cast<llvm::ConstantInt>(it.getOperand())->getZExtValue();
+            uint64_t offset = _data_layout.getStructLayout(it.getStructType())->getElementOffset(index);
+            ptr = _builder.fold_add_ptr(ptr, _builder.build_const(Type::Int64, offset));
+          } else {
+            Value* index = _builder.fold_resize_u(lower_operand(it.getOperand()), Type::Int64);
+            uint64_t stride = it.getSequentialElementStride(_data_layout).getFixedValue();
+            if (stride != 1) {
+              index = _builder.fold_mul(index, _builder.build_const(Type::Int64, stride));
+            }
+            ptr = _builder.fold_add_ptr(ptr, index);
           }
-          ptr = _builder.fold_add_ptr(ptr, index);
         }
         return ptr;
       } else if (llvm::PHINode* phi = llvm::dyn_cast<llvm::PHINode>(inst)) {
@@ -236,6 +242,17 @@ namespace metajit {
         } else {
           fail_lowering("Unable to lower call instruction");
         }
+      } else if (llvm::AllocaInst* alloca = llvm::dyn_cast<llvm::AllocaInst>(inst)) {
+        llvm::TypeSize type_size = _data_layout.getTypeAllocSize(alloca->getAllocatedType());
+        Type size_type = int_type_of_width(type_width(Type::Ptr));
+        Value* size = _builder.build_const(size_type, type_size.getFixedValue());
+        if (alloca->getArraySize()) {
+          size = _builder.fold_mul(
+            size,
+            _builder.fold_resize_u(lower_operand(alloca->getArraySize()), size_type)
+          );
+        }
+        return _builder.build_alloca(size);
       } else {
         fail_lowering("Unable to lower instruction");
       }

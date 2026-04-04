@@ -234,6 +234,21 @@ namespace metajit {
     }
   }
 
+  inline Type int_type_of_width(size_t width) {
+    switch (width) {
+      case 1: return Type::Bool;
+      case 8: return Type::Int8;
+      case 16: return Type::Int16;
+      case 32: return Type::Int32;
+      case 64: return Type::Int64;
+      default: assert(false && "Unknown integer width"); return Type::Int32;
+    }
+  }
+
+  inline Type int_type_of_size(size_t size) {
+    return int_type_of_width(size * 8);
+  } 
+
   enum class BlockOrdering {
     None,
     Dominator, // if a dominates b then a < b
