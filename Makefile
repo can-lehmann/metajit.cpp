@@ -1,5 +1,6 @@
-CFLAGS := $(shell llvm-config --cflags --libs)
+LLVM_FLAGS := $(shell llvm-config --cflags --libs)
 Z3_FLAGS := -I/usr/include/z3 -lz3
+CFLAGS := ${LLVM_FLAGS} -g
 HEADER_FILES := jitir.hpp jitir_llvmapi.hpp $(wildcard *.hpp)
 TEST_HEADER_FILES := $(wildcard tests/*.hpp)
 

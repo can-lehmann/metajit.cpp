@@ -225,9 +225,19 @@ namespace metajit {
                                            size_t sample_count = 1024,
                                            bool optimize_section_for_interpreter = false,
                                            bool verify_interpreter = true) {
+      
+      
+      section->autoname();
+      
       if (!output_path.empty()) {
         std::ofstream stream(output_path + ".jitir");
         section->write(stream);
+      }
+
+      if (!output_path.empty()) {
+        std::ofstream stream(output_path + ".domtree.dot");
+        DominatorTree dom_tree(section);
+        dom_tree.write_dot(stream);
       }
 
       llvm::LLVMContext llvm_context;

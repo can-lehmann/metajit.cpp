@@ -25,6 +25,7 @@
 #include <map>
 #include <optional>
 #include <cstring>
+#include <fstream>
 
 #include "../lwir.cpp/lwir_utils.hpp"
 
@@ -3965,6 +3966,111 @@ namespace metajit {
         stream << "group=" << _constness.at(inst);
       });
       _section->write(stream, &info_writer);
+    }
+  };
+
+  class DominatorTree {
+  private:
+    Section* _section;
+    std::vector<Block*> _idom;
+
+    void traverse(Block* block,
+                  std::vector<std::vector<Block*>>& incoming,
+                  std::vector<Block*>& post_order,
+                  std::vector<size_t>& nums) {
+      
+      assert(block);
+      for (Block* succ : block->successors()) {
+        if (!_idom[succ->name()]) {
+          _idom[succ->name()] = block;
+          traverse(succ, incoming, post_order, nums);
+        }
+        incoming[succ->name()].push_back(block);
+      }
+      nums[block->name()] = post_order.size();
+      post_order.push_back(block);
+    }
+  public:
+    DominatorTree(Section* section): _section(section), _idom(section->block_count(), nullptr) {
+      // Loosely based on ideas from Keith D. Cooper, Timothy J. Harvey,
+      // and Ken Kennedy "A Simple, Fast Dominance Algorithm"
+      
+      std::vector<std::vector<Block*>> incoming(section->block_count());
+      std::vector<Block*> post_order;
+      std::vector<size_t> nums(section->block_count(), ~size_t(0));
+
+      traverse(section->entry(), incoming, post_order, nums);
+
+      post_order.pop_back();
+
+      bool changed = true;
+      while (changed) {
+        changed = false;
+
+        for (size_t it = post_order.size(); it-- > 0; ) {
+          Block* block = post_order[it];
+          
+          Block* idom = _idom[block->name()];
+          assert(idom);
+          for (Block* pred : incoming[block->name()]) {
+            while (pred != idom) {
+              if (nums[pred->name()] < nums[idom->name()]) {
+                pred = _idom[pred->name()];
+              } else {
+                idom = _idom[idom->name()];
+              }
+            }
+          }
+
+          if (idom != _idom[block->name()]) {
+            _idom[block->name()] = idom;
+            changed = true;
+          }
+        }
+      }
+    }
+
+    Block* idom(Block* block) const {
+      return _idom[block->name()];
+    }
+
+    bool dominates(Block* dominator, Block* dominated) const {
+      while (dominated && dominated != dominator) {
+        dominated = idom(dominated);
+      }
+      return dominated == dominator;
+    }
+
+    void write_dot(std::ostream& stream, bool non_tree_edges = true) {
+      stream << "digraph {\n";
+      for (Block* block : *_section) {
+        stream << "  b" << block->name() << " [shape=box";
+        if (block->terminator() && dynamic_cast<ExitInst*>(block->terminator())) {
+          stream << ", peripheries=2";
+        }
+        stream << "];\n";
+      }
+      for (Block* block : *_section) {
+        if (idom(block)) {
+          stream << "  b" << idom(block)->name() << " -> b" << block->name() << ";\n";
+        }
+        if (non_tree_edges) {
+          for (Block* succ : block->successors()) {
+            if (idom(succ) != block) {
+              stream << "  b" << block->name() << " -> b" << succ->name() << " [style=dashed, weight=0];\n";
+            }
+          }
+        }
+      }
+      stream << "}\n";
+    }
+
+    void save_dot(const std::string& path) {
+      std::ofstream file(path);
+      if (!file) {
+        throw std::runtime_error("Failed to open file for writing: " + path);
+      }
+      write_dot(file);
     }
   };
 }
