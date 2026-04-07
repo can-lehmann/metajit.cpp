@@ -2426,6 +2426,15 @@ namespace metajit {
         }
       }
 
+      void expect_word(std::string expected) {
+        skip_whitespace();
+        std::string word = get_word();
+        skip_whitespace();
+        if (word != expected) {
+          error(std::string("Expected \"") + expected + "\"" + ", got \"" + word + "\"");
+        }
+      }
+
       void error(const std::string& message) {
         throw std::runtime_error("Error reading section: " + message + " at line " + std::to_string(lineno) + ", column " + std::to_string(columno));
       }
@@ -2450,6 +2459,17 @@ namespace metajit {
           return Type::Ptr;
         } else {
           error("Unknown type '" + type_name + "'");
+        }
+      }
+
+      CallConv read_call_conv() {
+        std::string call_conv_name = get_word();
+        if (call_conv_name == "Default") {
+          return CallConv::Default;
+        } else if (call_conv_name == "PreserveNone") {
+          return CallConv::PreserveNone;
+        } else {
+          error("Unknown calling convention '" + call_conv_name + "'");
         }
       }
 
@@ -2485,6 +2505,27 @@ namespace metajit {
         }
       }
 
+      std::vector<Value*> read_value_arg_list() {
+        std::vector<Value*> args;
+        // read comma separated list of value args (starting with % or a constant)
+        while (true) {
+          skip_whitespace();
+          char c = _stream.peek();
+          if (c != '%' && !std::isdigit(c)) {
+            break;
+          }
+          args.push_back(read_value_arg());
+          skip_whitespace();
+          // it can either be a comma or the end of the line
+          if (_stream.peek() == ',') {
+            get_char();
+            continue;
+          }
+          break;
+        }
+        return args;
+      }
+
       Value* read_const() {
         uint64_t value = read_uint64();
         expect_char(':');
@@ -2492,12 +2533,53 @@ namespace metajit {
         return _builder.build_const(type, value);
       }
 
+      template<typename FlagsType>
+      FlagsType read_flags() {
+        expect_char('{');
+
+        uint32_t flags_bits = 0;
+
+        skip_whitespace();
+        if (_stream.peek() == '}') {
+          get_char();
+          return FlagsType(flags_bits);
+        }
+
+        // Parse flags
+        while (true) {
+          std::string flag_name = get_word();
+
+          // Linear search through FlagsType::NAMES
+          bool found = false;
+          for (size_t i = 0; i < FlagsType::COUNT; i++) {
+            if (flag_name == FlagsType::NAMES[i]) {
+              flags_bits |= (1 << i);
+              found = true;
+              break;
+            }
+          }
+
+          if (!found) {
+            error("Unknown flag '" + flag_name + "'");
+          }
+          skip_whitespace();
+          if (_stream.peek() == ',') {
+            get_char();
+          } else {
+            expect_char('}');
+            break;
+          }
+        }
+        return FlagsType(flags_bits);
+      }
+
       LoadFlags read_load_flags() {
-        return LoadFlags::None; // TODO
+        // use the templated method to read flags
+        return read_flags<LoadFlags>();
       }
 
 
-${read_opcode}
+/* ${read_opcode} */
 
     public:
       SectionReader(Section* section, std::istream& stream): _builder(section), _stream(stream) {

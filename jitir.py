@@ -137,21 +137,38 @@ class InstReadPlugin:
         else_prefix = ""
         for inst in ir.insts:
             code += f"  {else_prefix}if (opcode == \"{inst.name}\") {{\n"
+            # special-case Jump and Call, which take arbitrary many args
+            # syntax: Jump 0:Int64, 1:Int64, 2:Int64, 3:Int64, 4:Int64, block=b3
+            if inst.name == 'Jump':
+                assert len(inst.args) == 1
+                args = [None, inst.args[0]]
+            elif inst.name == 'Call':
+                callee, typ, call_conv = inst.args
+                args = [callee, typ, None, call_conv]
+            else:
+                args = inst.args
+
             # read arguments
             need_comma = False
-            for arg in inst.args:
+            for arg in args:
                 if need_comma:
                     code += "    expect_char(','); skip_whitespace();\n"
                 need_comma = True
+                if arg is None:
+                    code += "    std::vector<Value*> value_args = read_value_arg_list();\n"
+                    need_comma = False # read_value_arg_list needs to consume the comma
+                    continue
                 if arg.type == ValueType():
                     code += f"    Value* {arg.name} = read_value_arg();\n"
                     continue
-                code += f'    if (get_word() != "{arg.name}") {{ error("expected \'{arg.name}\'"); }}\n'
+                code += f'    expect_word("{arg.name}");\n'
                 code += f"    expect_char('=');\n"
                 if arg.type == Type("Block*"):
                     code += f"    Block* {arg.name} = read_block_argument();\n"
                 elif arg.type == Type("Type"):
                     code += f"    Type {arg.name} = read_type();\n"
+                elif arg.type == Type("CallConv"):
+                    code += f"    CallConv {arg.name} = read_call_conv();\n"
                 elif arg.type == Type("LoadFlags"):
                     code += f"    LoadFlags {arg.name} = read_load_flags();\n"
                 elif arg.type == Type("AliasingGroup") or arg.type == Type("uint64_t"):
@@ -161,7 +178,8 @@ class InstReadPlugin:
                 else:
                     import pdb;pdb.set_trace()
                     assert False, f"Unknown argument type: {arg.type}"
-            build_args = ", ".join(arg.name for arg in inst.args)
+            if i
+            build_args = ", ".join((arg.name if arg is not None else 'value_args') for arg in args)
             code += f"    return _builder.{inst.format_builder_name(ir)}({build_args});\n"
             else_prefix = "} else "
         code += '  } else { error("unknown operation " + opcode); return nullptr; }\n'
