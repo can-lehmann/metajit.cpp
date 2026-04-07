@@ -2356,6 +2356,11 @@ namespace metajit {
       assert(name < _size);
       return _data[name];
     }
+
+    const T& at_name(size_t name) const {
+      assert(name < _size);
+      return _data[name];
+    }
   };
 
   void Inst::substitute_args(NameMap<Value*>& substs) {
@@ -3894,6 +3899,16 @@ namespace metajit {
       return at(value) == ALWAYS;
     }
 
+    size_t count_static() const {
+      size_t count = 0;
+      for (size_t name = 0; name < _section->name_count(); name++) {
+        if (_groups.at_name(name) == ALWAYS) {
+          count++;
+        }
+      }
+      return count;
+    }
+
     void write(std::ostream& stream) {
       InfoWriter info_writer([&](std::ostream& stream, Inst* inst) {
         size_t group = _groups.at(inst);
@@ -3988,6 +4003,26 @@ namespace metajit {
 
     bool any(NamedValue* value) const {
       return can_trace_const(value) || can_trace_inst(value);
+    }
+
+    size_t count_trace_const() const {
+      size_t count = 0;
+      for (size_t name = 0; name < _section->name_count(); name++) {
+        if (_can_trace_const.at_name(name)) {
+          count++;
+        }
+      }
+      return count;
+    }
+
+    size_t count_trace_inst() const {
+      size_t count = 0;
+      for (size_t name = 0; name < _section->name_count(); name++) {
+        if (_can_trace_inst.at_name(name)) {
+          count++;
+        }
+      }
+      return count;
     }
 
     void write(std::ostream& stream) {
@@ -4133,7 +4168,6 @@ namespace metajit {
             memory_written = true;
           } else if (dynmatch(BranchInst, branch, inst)) {
             if (memory_written && !binding_time_groups.is_static(branch->cond())) {
-              binding_time_groups.write(std::cerr);
               std::ostringstream stream;
               stream << "Branch condition ";
               branch->cond()->write_arg(stream);
@@ -4142,8 +4176,6 @@ namespace metajit {
             }
           } else if (dynmatch(FreezeInst, freeze, inst)) {
             if (memory_written && !binding_time_groups.is_static(freeze->arg(0))) {
-              binding_time_groups.write(std::cerr);
-
               std::ostringstream stream;
               stream << "Freeze instruction ";
               freeze->arg(0)->write_arg(stream);
