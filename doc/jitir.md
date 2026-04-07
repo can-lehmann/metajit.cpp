@@ -148,6 +148,7 @@ Arguments
 
 - **ptr**: `Value*`
 - **value**: `Value*`
+- **enable**: `Value*`
 - **aliasing**: `AliasingGroup`
 - **offset**: `uint64_t`
 
@@ -156,6 +157,7 @@ Return Type: `Type::Void`
 Type Checks:
 
 - `ptr->type() == Type::Ptr`
+- `enable->type() == Type::Bool`
 
 ### Alloca
 

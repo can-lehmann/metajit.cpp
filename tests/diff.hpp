@@ -163,6 +163,7 @@ namespace metajit {
         _builder->build_store(
           _data,
           value,
+          _builder->build_const(Type::Bool, 1),
           AliasingGroup(0),
           offset
         );

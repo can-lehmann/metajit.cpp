@@ -285,11 +285,15 @@ jitir = IR(
             args = [
                 Arg("ptr", getter=Getter.Always),
                 Arg("value", getter=Getter.Always),
+                Arg("enable", getter=Getter.Always),
                 Arg("aliasing", Type("AliasingGroup"), setter=True),
                 Arg("offset", Type("uint64_t"), setter=True)
             ],
             type = "Type::Void",
-            type_checks = ["ptr->type() == Type::Ptr"]
+            type_checks = [
+                "ptr->type() == Type::Ptr",
+                "enable->type() == Type::Bool"
+            ]
         ),
         Inst("Alloca",
             args = [

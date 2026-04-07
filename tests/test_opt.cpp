@@ -48,7 +48,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
   %2 = ResizeX %1, type=Int8
   %3 = And %1, 255
-  Store %0, %3, aliasing=0, offset=8
+  Store %0, %3, 1, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -67,7 +67,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
   %2 = ShrU %1, 1
   %3 = And %1, 6
-  Store %0, %3, aliasing=0, offset=8
+  Store %0, %3, 1, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -87,7 +87,7 @@ b0(%0: Ptr):
   %2 = ShrU %1, 10
   %3 = ShrU %1, 9
   %4 = And %3, 2
-  Store %0, %4, aliasing=0, offset=8
+  Store %0, %4, 1, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -106,7 +106,7 @@ b0(%0: Ptr):
   %2 = ShrU %1, 1
   %3 = Shl %1, 2
   %4 = And %3, 8
-  Store %0, %4, aliasing=0, offset=8
+  Store %0, %4, 1, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -126,7 +126,7 @@ b0(%0: Ptr):
   %2 = Shl %1, 1
   %3 = Shl %1, 4
   %4 = And %3, 2040
-  Store %0, %4, aliasing=0, offset=8
+  Store %0, %4, 1, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -142,7 +142,7 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
   %2 = And %1, 15
-  Store %0, %2, aliasing=0, offset=8
+  Store %0, %2, 1, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -161,7 +161,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
   %3 = Or %2, %1
   %4 = And %2, 4294902015
-  Store %0, %4, aliasing=0, offset=16
+  Store %0, %4, 1, aliasing=0, offset=16
 }
 )", builder.section());
   });
@@ -184,7 +184,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
   %3 = ResizeX %1, type=Int64
-  Store %0, %2, aliasing=0, offset=16
+  Store %0, %2, 1, aliasing=0, offset=16
 }
 )", builder.section());
   });
@@ -201,7 +201,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = And %1, 240
-  Store %0, %3, aliasing=0, offset=2
+  Store %0, %3, 1, aliasing=0, offset=2
 }
 )", builder.section());
   });
@@ -216,7 +216,7 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Int16, flags={}, aliasing=0, offset=0
   %2 = Or %1, 3
-  Store %0, %2, aliasing=0, offset=2
+  Store %0, %2, 1, aliasing=0, offset=2
 }
 )", builder.section());
   });
@@ -239,7 +239,7 @@ b0(%0: Ptr):
   %5 = Or %3, %1
   %6 = Or %5, %4
   %7 = And %1, 4095
-  Store %0, %7, aliasing=0, offset=6
+  Store %0, %7, 1, aliasing=0, offset=6
 }
 )", builder.section());
   });
@@ -254,7 +254,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int16, flags={}, aliasing=0, offset=0
   %2 = ResizeX %1, type=Int32
   %3 = Or %2, 4294901760
-  Store %0, %3, aliasing=0, offset=4
+  Store %0, %3, 1, aliasing=0, offset=4
 }
 )", builder.section());
   });

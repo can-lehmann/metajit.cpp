@@ -228,12 +228,13 @@ namespace metajit {
         return result.value_or(ValueState::invalid(*_context));
       }
 
-      void store(ValueState pointer, ValueState value) {
+      void store(ValueState pointer, ValueState value, z3::expr enable) {
         assert(pointer.has_provenance());
+        assert(enable.get_sort().is_bool());
 
         for (Region& region : _regions) {
           z3::expr in_region = pointer.provenance() == _context->bv_val(region.id, _provenance_width);
-          region.store(pointer.value(), value, in_region);
+          region.store(pointer.value(), value, in_region && enable);
         } 
       }
 
@@ -354,7 +355,7 @@ namespace metajit {
           return memory_state(block).load(pointer, load->type());
         } else if (dynmatch(StoreInst, store, inst)) {
           ValueState pointer = emit(store->arg(0)).add_ptr(store->offset());
-          memory_state(block).store(pointer, emit(store->arg(1)));
+          memory_state(block).store(pointer, emit(store->arg(1)), emit(store->enable()).value().bit2bool(0));
         } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
           ValueState pointer = emit(add_ptr->arg(0));
           ValueState offset = emit(add_ptr->arg(1));

@@ -356,6 +356,22 @@ namespace metajit {
     }
   };
 
+  inline bool is_true(Value* value) {
+    if (dynmatch(Const, constant, value)) {
+      return constant->type() == Type::Bool && constant->value() != 0;
+    } else {
+      return false;
+    }
+  }
+
+  inline bool is_false(Value* value) {
+    if (dynmatch(Const, constant, value)) {
+      return constant->type() == Type::Bool && constant->value() == 0;
+    } else {
+      return false;
+    }
+  }
+
   class Context {
   private:
     Allocator _const_allocator;
@@ -1881,7 +1897,7 @@ namespace metajit {
       return build_load(ptr, type, flags, aliasing, offset);
     }
 
-    Value* fold_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
+    Value* fold_store(Value* ptr, Value* value, Value* enable, AliasingGroup aliasing, uint64_t offset) {
       if (dynmatch(AddPtrInst, add_ptr, ptr)) {
         if (dynmatch(Const, const_offset, add_ptr->offset())) {
           ptr = add_ptr->ptr();
@@ -1889,7 +1905,7 @@ namespace metajit {
         }
       }
 
-      return build_store(ptr, value, aliasing, offset);
+      return build_store(ptr, value, enable, aliasing, offset);
     }
 
     #undef binop_const_prop
@@ -2201,12 +2217,27 @@ namespace metajit {
     }
 
   public:
-    Value* build_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
+    Value* build_store(Value* ptr, Value* value, Value* enable, AliasingGroup aliasing, uint64_t offset) {
       if (dynmatch(AddPtrInst, add_ptr, ptr)) {
         if (dynmatch(Const, const_offset, add_ptr->offset())) {
           ptr = add_ptr->ptr();
           offset += const_offset->value();
         }
+      }
+
+      if (is_false(enable)) {
+        return nullptr;
+      }
+
+      if (!is_true(enable)) {
+        if (aliasing < 0) {
+          _exact_memory[-aliasing] = nullptr;
+          _exact_loads[-aliasing] = nullptr;
+        } else {
+          _memory[aliasing].store(nullptr, 0, nullptr);
+          _valid_loads[aliasing].clear();
+        }
+        return Builder::build_store(ptr, value, enable, aliasing, offset);
       }
 
       if (aliasing < 0) {
@@ -2215,7 +2246,7 @@ namespace metajit {
         }
         _exact_memory[-aliasing] = value;
         _exact_loads[-aliasing] = nullptr;
-        return Builder::build_store(ptr, value, aliasing, offset);
+        return Builder::build_store(ptr, value, enable, aliasing, offset);
       } else {
         _memory[aliasing].store(ptr, offset, value);
 
@@ -2238,7 +2269,7 @@ namespace metajit {
           return nullptr;
         }
 
-        return Builder::build_store(ptr, value, aliasing, offset);
+        return Builder::build_store(ptr, value, enable, aliasing, offset);
       }
     }
 
@@ -2533,8 +2564,13 @@ namespace metajit {
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst)) {
-            Pointer pointer(store->ptr(), store->offset());
             if (store->aliasing() < 0) {
+              if (!is_true(store->enable())) {
+                StoreInst* last = last_store[-store->aliasing()];
+                if (last) {
+                  unused[last] = false;
+                }
+              }
               last_store[-store->aliasing()] = store;
               unused[store] = true;
             }
@@ -3047,19 +3083,23 @@ namespace metajit {
         }
         _values[load] = Bits::constant(load->type(), value);
       } else if (dynmatch(StoreInst, store, _inst)) {
-        Bits ptr_bits = at(store->ptr());
-        Bits value_bits = at(store->value());
-        assert(ptr_bits.is_const());
-        assert(value_bits.is_const());
-        uint8_t* ptr = (uint8_t*) ptr_bits.value + store->offset();
-        uint64_t value = value_bits.value;
-        switch (type_size(store->value()->type())) {
-          case 1: *ptr = (uint8_t) value; break;
-          case 2: *(uint16_t*) ptr = (uint16_t) value; break;
-          case 4: *(uint32_t*) ptr = (uint32_t) value; break;
-          case 8: *(uint64_t*) ptr = (uint64_t) value; break;
-          default:
-            assert(false); // Unreachable
+        Bits enable_bits = at(store->enable());
+        assert(enable_bits.is_const());
+        if (enable_bits.value & 1) {
+          Bits ptr_bits = at(store->ptr());
+          Bits value_bits = at(store->value());
+          assert(ptr_bits.is_const());
+          assert(value_bits.is_const());
+          uint8_t* ptr = (uint8_t*) ptr_bits.value + store->offset();
+          uint64_t value = value_bits.value;
+          switch (type_size(store->value()->type())) {
+            case 1: *ptr = (uint8_t) value; break;
+            case 2: *(uint16_t*) ptr = (uint16_t) value; break;
+            case 4: *(uint32_t*) ptr = (uint32_t) value; break;
+            case 8: *(uint64_t*) ptr = (uint64_t) value; break;
+            default:
+              assert(false); // Unreachable
+          }
         }
         _values[store] = Bits();
       } else if (dynmatch(AllocaInst, alloca_inst, _inst)) {

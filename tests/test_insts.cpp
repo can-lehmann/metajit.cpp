@@ -214,7 +214,7 @@ void test_alloca(DiffTestSuite& suite) {
   suite.diff_test("alloca_store_load_Int32").run([](Builder& builder, TestData& data) {
     Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8));
     Value* val = data.input(Type::Int32);
-    builder.build_store(ptr, val, AliasingGroup(0), 0);
+    builder.build_store(ptr, val, builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
     Value* loaded = builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
     data.output(loaded);
   });
@@ -222,7 +222,7 @@ void test_alloca(DiffTestSuite& suite) {
   suite.diff_test("alloca_store_load_Int64").run([](Builder& builder, TestData& data) {
     Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 16));
     Value* val = data.input(Type::Int64);
-    builder.build_store(ptr, val, AliasingGroup(0), 0);
+    builder.build_store(ptr, val, builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
     Value* loaded = builder.build_load(ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), 0);
     data.output(loaded);
   });
@@ -231,8 +231,8 @@ void test_alloca(DiffTestSuite& suite) {
     Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 16));
     Value* val1 = data.input(Type::Int32);
     Value* val2 = data.input(Type::Int32);
-    builder.build_store(ptr, val1, AliasingGroup(0), 0);
-    builder.build_store(ptr, val2, AliasingGroup(0), 0);
+    builder.build_store(ptr, val1, builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
+    builder.build_store(ptr, val2, builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
     Value* loaded = builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
     data.output(loaded);
   });
@@ -241,7 +241,7 @@ void test_alloca(DiffTestSuite& suite) {
     Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 16));
     Value* ptr_off = builder.build_add_ptr(ptr, builder.build_const(Type::Int64, 4));
     Value* val = data.input(Type::Int32);
-    builder.build_store(ptr_off, val, AliasingGroup(0), 0);
+    builder.build_store(ptr_off, val, builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
     Value* loaded = builder.build_load(ptr_off, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
     data.output(loaded);
   });
@@ -391,6 +391,18 @@ void test_call(DiffTestSuite& suite) {
   });
 }
 
+void test_store(DiffTestSuite& suite) {
+  suite.diff_test("store_enable").run([](Builder& builder, TestData& data) {
+    Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, type_size(Type::Int32)));
+    Value* a = data.input(Type::Int32);
+    Value* b = data.input(Type::Int32);
+    Value* enable = data.input(Type::Bool);
+    builder.build_store(ptr, a, builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
+    builder.build_store(ptr, b, enable, AliasingGroup(0), 0);
+    data.output(builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(0), 0));
+  });
+}
+
 int main() {
   LLVMCodeGen::initilize_llvm_jit();
 
@@ -403,6 +415,7 @@ int main() {
   test_resize(suite);
   test_alloca(suite);
   test_call(suite);
+  test_store(suite);
 
   return suite.finish();
 }

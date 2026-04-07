@@ -42,6 +42,7 @@ int main() {
       builder.build_load(a, Type::Int32, LoadFlags::None, AliasingGroup(0), 0),
       builder.build_load(b, Type::Int32, LoadFlags::None, AliasingGroup(0), 0)
     ),
+    builder.build_const(Type::Bool, 1),
     AliasingGroup(0),
     0
   );

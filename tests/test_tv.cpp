@@ -177,7 +177,7 @@ int main() {
   suite.tv_test("store_load").run({Type::Ptr, Type::Int32}, [](Builder& builder) {
     Value* ptr = builder.entry_arg(0);
     Value* value = builder.entry_arg(1);
-    builder.build_store(ptr, value, AliasingGroup(0), 0);
+    builder.build_store(ptr, value, builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
     return builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
   }, [](z3::context& context, std::vector<tv::ValueState> args) {
     return args[1].value();
@@ -193,11 +193,11 @@ int main() {
 
     builder.move_to_end(true_block);
     Value* negated = builder.build_sub(builder.build_const(Type::Int32, 0), builder.entry_arg(0));
-    builder.build_store(builder.entry_arg(1), negated, AliasingGroup(0), 0);
+    builder.build_store(builder.entry_arg(1), negated, builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
     builder.build_jump(cont_block);
 
     builder.move_to_end(false_block);
-    builder.build_store(builder.entry_arg(1), builder.entry_arg(0), AliasingGroup(0), 0);
+    builder.build_store(builder.entry_arg(1), builder.entry_arg(0), builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
     builder.build_jump(cont_block);
 
     builder.move_to_end(cont_block);

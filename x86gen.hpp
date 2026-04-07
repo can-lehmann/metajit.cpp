@@ -696,6 +696,37 @@ namespace metajit {
         }
       } else if (dynmatch(StoreInst, store, inst)) {
         X86Inst::Mem mem(vreg(store->arg(0)), store->offset());
+        bool enable_is_const = false;
+        if (dynmatch(Const, constant_enable, store->enable())) {
+          enable_is_const = true;
+          if ((constant_enable->value() & 1) == 0) {
+            return;
+          }
+        }
+
+        if (!enable_is_const) {
+          Reg selected = vreg();
+          switch (type_size(store->arg(1)->type())) {
+            case 1: _builder.mov8(selected, mem); break;
+            case 2: _builder.mov16(selected, mem); break;
+            case 4: _builder.mov32(selected, mem); break;
+            case 8: _builder.mov64(selected, mem); break;
+            default:
+              assert(false && "Unsupported store type");
+          }
+
+          build_cmov(selected, store->enable(), vreg(store->arg(1)));
+
+          switch (type_size(store->arg(1)->type())) {
+            case 1: _builder.mov8_mem(mem, selected); return;
+            case 2: _builder.mov16_mem(mem, selected); return;
+            case 4: _builder.mov32_mem(mem, selected); return;
+            case 8: _builder.mov64_mem(mem, selected); return;
+            default:
+              assert(false && "Unsupported store type");
+          }
+        }
+
         if (dynmatch(Const, constant_value, store->arg(1))) {
           switch (type_size(store->arg(1)->type())) {
             case 1: _builder.mov8_imm(mem, constant_value->value()); return;

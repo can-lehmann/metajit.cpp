@@ -186,10 +186,23 @@ namespace metajit {
           emit_add_offset(emit_arg(load->arg(0)), load->offset())
         );
       } else if (dynmatch(StoreInst, store, inst)) {
-        return _builder.CreateStore(
-          emit_arg(store->arg(1)),
-          emit_add_offset(emit_arg(store->arg(0)), store->offset())
+        llvm::Value* enable = emit_arg(store->enable());
+        llvm::Value* value = emit_arg(store->arg(1));
+        llvm::Value* ptr = emit_add_offset(emit_arg(store->arg(0)), store->offset());
+
+        if (is_true(store->enable())) {
+          return _builder.CreateStore(value, ptr);
+        }
+
+        emit_branch(
+          enable,
+          [&]() {
+            _builder.CreateStore(value, ptr);
+          },
+          [&]() {},
+          "store_enable_"
         );
+        return nullptr;
       } else if (dynmatch(AllocaInst, alloca, inst)) {
         return _builder.CreateAlloca(
           llvm::Type::getInt8Ty(_context),
