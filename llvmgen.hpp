@@ -54,7 +54,7 @@ namespace metajit {
 
     // Used for generating extension
     Uses _uses;
-    ConstnessAnalysis _constness;
+    BindingTimeGroups _binding_time_groups;
     TraceCapabilities _trace_capabilities;
 
     NameMap<llvm::Value*> _values;
@@ -1110,8 +1110,8 @@ namespace metajit {
         _builder(module->getContext()),
         _llvm_api(module),
         _uses(section),
-        _constness(section),
-        _trace_capabilities(section, _constness) {
+        _binding_time_groups(section),
+        _trace_capabilities(section, _binding_time_groups) {
       
       assert(_section->ordering() >= BlockOrdering::Dominator);
 
