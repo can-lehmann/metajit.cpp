@@ -4206,5 +4206,146 @@ namespace metajit {
     }
     return value;
   }
+
+  class ReentryClosures {
+  public:
+    struct Closure {
+      Inst* reuse = nullptr;
+      std::unordered_map<NamedValue*, size_t> values;
+      size_t size = 0;
+
+      void add(NamedValue* value) {
+        if (values.find(value) == values.end()) {
+          if (size % type_size(value->type())) {
+            size += type_size(value->type()) - size % type_size(value->type());
+          }
+          values[value] = size;
+          size += type_size(value->type());
+        }
+      }
+    };
+  private:
+    Section* _section;
+    BindingTimeGroups _binding_time_groups;
+    std::unordered_map<Inst*, Closure> _closures;
+
+    void find_reentry_points() {
+      _closures.emplace(*_section->entry()->begin(), Closure());
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(BranchInst, branch, inst)) {
+            if (!_binding_time_groups.is_static(branch->cond())) {
+              _closures.emplace(*branch->true_block()->begin(), Closure());
+              _closures.emplace(*branch->false_block()->begin(), Closure());
+            }
+          } else if (dynmatch(FreezeInst, freeze, inst)) {
+            if (!_binding_time_groups.is_static(freeze->arg(0))) {
+              _closures.emplace(freeze, Closure());
+            }
+          }
+        }
+      }
+    }
+
+    void find_closure_reuse() {
+      std::vector<std::optional<Inst*>> reusable_reentry_points(_section->block_count(), std::nullopt);
+      for (Block* block : *_section) {
+        Inst* reuse = nullptr;
+        if (reusable_reentry_points[block->name()].has_value()) {
+          reuse = reusable_reentry_points[block->name()].value();
+        }
+        for (Inst* inst : *block) {
+          if (_closures.find(inst) != _closures.end()) {
+            if (reuse) {
+              _closures[inst].reuse = reuse;
+            } else {
+              reuse = inst;
+            }
+          }
+          if (inst->has_side_effect()) {
+            reuse = nullptr;
+          }
+        }
+
+        for (Block* succ : block->successors()) {
+          if (reusable_reentry_points[succ->name()].has_value()) {
+            if (reusable_reentry_points[succ->name()].value()) {
+              reusable_reentry_points[succ->name()] = reuse;
+            }
+          }
+        }
+      }
+    }
+
+    void populate_closures() {
+      std::vector<std::set<NamedValue*>> live_before_block(_section->block_count());
+      for (Block* block : _section->rev_range()) {
+        std::set<NamedValue*> live;
+        for (Block* succ : block->successors()) {
+          for (NamedValue* value : live_before_block[succ->name()]) {
+            live.insert(value);
+          }
+        }
+
+        for (Inst* inst : block->rev_range()) {
+          live.erase(inst);
+          for (Value* arg : inst->args()) {
+            if (arg->is_named()) {
+              live.insert((NamedValue*) arg);
+            }
+          }
+
+          if (_closures.find(inst) != _closures.end()) {
+            Closure& closure = _closures.at(inst);
+            if (!closure.reuse) {
+              for (NamedValue* value : live) {
+                closure.add(value);
+              }
+            }
+          }
+        }
+
+        for (Arg* arg : block->args()) {
+          live.erase(arg);
+        }
+
+        live_before_block[block->name()] = live;
+      }
+    }
+  public:
+    ReentryClosures(Section* section):
+        _section(section),
+        _binding_time_groups(section) {
+      
+      assert(section->ordering() >= BlockOrdering::Dominator);
+
+      find_reentry_points();
+      find_closure_reuse();
+      populate_closures();
+    }
+
+    void write(std::ostream& stream) const {
+      InfoWriter info_writer([&](std::ostream& stream, Inst* inst) {
+        if (_closures.find(inst) != _closures.end()) {
+          const Closure& closure = _closures.at(inst);
+          if (closure.reuse) {
+            stream << "Reuse closure of ";
+            closure.reuse->write_arg(stream);
+          } else {
+            stream << "Closure of size " << closure.size << " capturing ";
+            bool is_first = true;
+            for (const auto& [value, offset] : closure.values) {
+              if (!is_first) {
+                stream << ", ";
+              }
+              value->write_arg(stream);
+              is_first = false;
+            }
+          }
+        }
+      });
+      _section->write(stream, &info_writer);
+    }
+  };
 }
 
