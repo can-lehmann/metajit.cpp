@@ -166,6 +166,54 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
+  suite.diff_test("branch_smart_constructor_constant_condition").run([](Builder& builder, TestData& data) {
+    Value* cond = builder.build_const(Type::Bool, 1);
+    Block* then_block = builder.build_block();
+    Block* else_block = builder.build_block();
+    Block* merge_block = builder.build_block();
+
+    builder.fold_branch(cond, then_block, else_block);
+    builder.move_to_end(then_block);
+    builder.build_jump(merge_block);
+    builder.move_to_end(else_block);
+    builder.build_jump(merge_block);
+    builder.move_to_end(merge_block);
+    data.output(builder.build_const(Type::Int64, 42));
+    builder.build_exit();
+
+    check_simplify(R"(section {
+b0(%0: Ptr):
+  Jump block=b1
+b1:
+  Jump block=b3
+b2:
+  Jump block=b3
+b3:
+  Store %0, 42, aliasing=0, offset=0
+  Exit
+}
+)", builder.section());
+  });
+
+  suite.diff_test("branch_smart_constructor_identical_targets").run([](Builder& builder, TestData& data) {
+    Value* cond = data.input(Type::Bool);
+    Block* merge_block = builder.build_block();
+
+    builder.fold_branch(cond, merge_block, merge_block);
+    builder.move_to_end(merge_block);
+    data.output(builder.build_const(Type::Int64, 42));
+    builder.build_exit();
+
+    check_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Jump block=b1
+b1:
+  Store %0, 42, aliasing=0, offset=8
+  Exit
+}
+)", builder.section());
+  });
   suite.diff_test("select_and_knownbits").run([](Builder& builder, TestData& data) {
 
     Value* cond = data.input(Type::Bool);

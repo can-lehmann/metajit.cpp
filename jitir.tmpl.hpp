@@ -1867,6 +1867,17 @@ namespace metajit {
         std::swap(true_block, false_block);
       }
 
+      if (true_block == false_block) {
+        // Branch cond, a, a => Branch _, a, a => Jump a
+        return fold_jump(true_block);
+      }
+      if (dynmatch(Const, const_cond, cond)) {
+        if (const_cond->value() != 0) {
+          return fold_jump(true_block);
+        } else {
+          return fold_jump(false_block);
+        }
+      }
       return build_branch(cond, true_block, false_block);
     }
 
