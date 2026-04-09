@@ -3860,13 +3860,12 @@ namespace metajit {
             // which is a jump, we can just jump to the final target
             if (dynmatch(JumpInst, target_jump, *target->begin())) {
               Block* final_target = target_jump->block();
-              if (final_target->args().size() > 0) {
-                break;
+              if (final_target->args().size() == 0) {
+                jump->set_block(final_target);
+                incoming[final_target->name()].push_back(block);
+                remove_from_incoming(block, target);
+                continue;
               }
-              jump->set_block(final_target);
-              incoming[final_target->name()].push_back(block);
-              remove_from_incoming(block, target);
-              continue;
             }
             // if the target block only has one incoming edge, we can merge it with the current block
             if (incoming[target->name()].size() == 1) {

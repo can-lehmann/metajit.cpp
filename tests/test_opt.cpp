@@ -334,11 +334,9 @@ b0(%0: Ptr):
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  Jump block=b1
-b1:
-  Jump %1, block=b2
-b2(%4: Int64):
-  Store %0, %4, aliasing=0, offset=8
+  Jump %1, block=b1
+b1(%3: Int64):
+  Store %0, %3, aliasing=0, offset=8
   Exit
 }
 )", builder.section());
