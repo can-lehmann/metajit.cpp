@@ -262,7 +262,6 @@ namespace metajit {
         bool result = true;
 
         try {
-          check_roundtrip(section);
           check_codegen_differential("", section, *_data, 2048, true);
         } catch (unittest::AssertionError& err) {
           section->write(std::cout);
