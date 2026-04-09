@@ -32,7 +32,6 @@ void check_simplify(const std::string& expected, Section* section) {
 void check_simplifycfg(const std::string& expected, Section* section) {
   unittest_assert (!section->verify(std::cout)); // make sure that we start from a valid cfg
   metajit::SimplifyCFG::run(section);
-  section->write(std::cout);
   unittest_assert (!section->verify(std::cout));
   std::stringstream ss;
   section->write(ss);
@@ -329,7 +328,6 @@ b0(%0: Ptr):
     builder.move_to_end(merge_block);
     data.output(merge_block->arg(0));
     builder.build_exit();
-    builder.section()->write(std::cout);
     // we can't optimize this right now, due to the arguments, but we can remove the branch
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
@@ -363,7 +361,6 @@ b1(%3: Int64):
     builder.move_to_end(merge_block);
     data.output(arg_block->arg(0));
     builder.build_exit();
-    builder.section()->write(std::cout);
 
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
@@ -385,8 +382,6 @@ b4:
 }
 )", builder.section());
   });
-
-  
 
   return suite.finish();
 }
