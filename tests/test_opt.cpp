@@ -290,10 +290,8 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   Jump block=b1
 b1:
-  Jump block=b3
+  Jump block=b2
 b2:
-  Jump block=b3
-b3:
   Store %0, 42, aliasing=0, offset=0
   Exit
 }

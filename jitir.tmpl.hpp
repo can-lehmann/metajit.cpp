@@ -3789,17 +3789,23 @@ namespace metajit {
   class SimplifyCFG: public Pass<SimplifyCFG> {
   private:
     Section* _section;
+    std::vector<std:: vector<Block*>> incoming;
+
+    void remove(Block* block) {
+      for (Block* succ : block->successors()) {
+        auto& succ_incoming = incoming[succ->name()];
+        succ_incoming.erase(std::remove(succ_incoming.begin(), succ_incoming.end(), block), succ_incoming.end());
+      }
+      _section->remove(block);
+    }
+
   public:
-    SimplifyCFG(Section* section): Pass(section), _section(section) {
+    SimplifyCFG(Section* section): Pass(section), _section(section), incoming(section->block_count()) {
       assert(_section->ordering() >= BlockOrdering::Dominator);
       // computing incoming edges
-      std::vector<std:: vector<Block*>> incoming(_section->block_count());
       for (Block* block : *_section) {
-        if (dynmatch(BranchInst, branch, block->terminator())) {
-          incoming[branch->true_block()->name()].push_back(block);
-          incoming[branch->false_block()->name()].push_back(block);
-        } else if (dynmatch(JumpInst, jump, block->terminator())) {
-          incoming[jump->block()->name()].push_back(block);
+        for (Block* succ : block->successors()) {
+          incoming[succ->name()].push_back(block);
         }
       }
 
@@ -3810,6 +3816,11 @@ namespace metajit {
       // - remove unreachable blocks
       Builder builder(_section);
       for (Block* block : *_section) {
+        // remove unreachable blocks
+        if (block != _section->entry() && incoming[block->name()].empty()) {
+          remove(block);
+           continue;
+        }
         while (true) {
           if (dynmatch(BranchInst, branch, block->terminator())) {
             if (dynmatch(Const, cond, branch->cond())) {
