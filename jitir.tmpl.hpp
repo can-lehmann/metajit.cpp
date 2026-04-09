@@ -3790,6 +3790,7 @@ namespace metajit {
   private:
     Section* _section;
     std::vector<std:: vector<Block*>> incoming;
+    Builder builder;
 
     void remove(Block* block) {
       for (Block* succ : block->successors()) {
@@ -3807,8 +3808,25 @@ namespace metajit {
       }
     }
 
+    void replace_cond_with_const(Value* cond, uint64_t const_value, Block* target) {
+      Value* replacement = nullptr;
+      for (Inst* inst : *target) {
+        auto _args = inst->args();
+        for (size_t it = 0; it < _args.size(); it++) {
+          Value* arg = _args.at(it);
+          if (arg == cond) {
+            if (!replacement) {
+              replacement = builder.build_const(Type::Bool, const_value);
+            }
+            inst->set_arg(it, replacement);
+          }
+        }
+      }
+    }
+
   public:
-    SimplifyCFG(Section* section): Pass(section), _section(section), incoming(section->block_count()) {
+    SimplifyCFG(Section* section): Pass(section), _section(section), incoming(section->block_count()),
+        builder(section) {
       assert(_section->ordering() >= BlockOrdering::Dominator);
       for (Block* block : *_section) {
         for (Block* succ : block->successors()) {
@@ -3816,7 +3834,6 @@ namespace metajit {
         }
       }
 
-      Builder builder(_section);
       for (Block* block : *_section) {
         // remove unreachable blocks
         if (block != _section->entry() && incoming[block->name()].empty()) {
@@ -3825,6 +3842,16 @@ namespace metajit {
         }
         while (true) {
           if (dynmatch(BranchInst, branch, block->terminator())) {
+            Value* cond = branch->cond();
+            // if the true_block and false_block have only one incoming edge (from this block),
+            // we can replace the condition with a constant in the respective block
+            // (in theory we should use the dominator tree to check this, but that would be more expensive)
+            if (incoming[branch->true_block()->name()].size() == 1) {
+              replace_cond_with_const(cond, 1, branch->true_block());
+            }
+            if (incoming[branch->false_block()->name()].size() == 1) {
+              replace_cond_with_const(cond, 0, branch->false_block());
+            }
             // if the targets are both the same, we can replace with a jump
             if (branch->true_block() == branch->false_block()) {
               Block* target = branch->true_block();

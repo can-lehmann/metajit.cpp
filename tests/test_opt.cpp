@@ -383,5 +383,44 @@ b4:
 )", builder.section());
   });
 
+  suite.diff_test("simplifycfg branch on same bool").run([](Builder& builder, TestData& data) {
+    Value* cond1 = data.input(Type::Bool);
+    Block* then_block = builder.build_block();
+    Block* else_block = builder.build_block();
+    Block* merge_block = builder.build_block();
+    Block* then_then_block = builder.build_block();
+    Block* then_else_block = builder.build_block();
+
+    builder.build_branch(cond1, then_block, else_block);
+    builder.move_to_end(then_block);
+    builder.build_branch(cond1, then_then_block, then_else_block);
+    builder.move_to_end(then_then_block);
+    data.output(builder.build_const(Type::Int64, 1));
+    builder.build_jump(merge_block);
+    builder.move_to_end(then_else_block);
+    data.output(builder.build_const(Type::Int64, 2));
+    builder.build_jump(merge_block);
+    builder.move_to_end(else_block);
+    builder.build_jump(merge_block);
+    builder.move_to_end(merge_block);
+    data.output(builder.build_const(Type::Int64, 42));
+    builder.build_exit();
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Store %0, 1, aliasing=0, offset=8
+  Jump block=b3
+b2:
+  Jump block=b3
+b3:
+  Store %0, 42, aliasing=0, offset=24
+  Exit
+}
+)", builder.section());
+  });
+
   return suite.finish();
 }
