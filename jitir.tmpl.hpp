@@ -2356,6 +2356,11 @@ namespace metajit {
       assert(name < _size);
       return _data[name];
     }
+
+    const T& at_name(size_t name) const {
+      assert(name < _size);
+      return _data[name];
+    }
   };
 
   void Inst::substitute_args(NameMap<Value*>& substs) {
@@ -4097,23 +4102,34 @@ namespace metajit {
     }
   };
 
-  class ConstnessAnalysis {
+  class BindingTimeGroups {
   public:
     static constexpr size_t ALWAYS = 0;
+    static constexpr size_t NEW_GROUP = ~size_t(0);
   private:
     Section* _section;
     NameMap<size_t> _groups;
+    std::vector<bool> _dynamic_branch;
     size_t _next_group = 1;
   public:
-    ConstnessAnalysis(Section* section):
+    BindingTimeGroups(Section* section):
         _section(section),
-        _groups(section) {
+        _groups(section),
+        _dynamic_branch(section->block_count(), false) {
       
       assert(_section->ordering() >= BlockOrdering::Dominator);
 
       for (Block* block : *section) {
         for (Arg* arg : block->args()) {
-          _groups[arg] = _next_group++;
+          _groups[arg] = ALWAYS;
+        }
+      }
+
+      for (Block* block : *section) {
+        for (Arg* arg : block->args()) {
+          if (_groups[arg] == NEW_GROUP || _section->ordering() < BlockOrdering::Topological) {
+            _groups[arg] = _next_group++;
+          }
         }
 
         for (Inst* inst : *block) {
@@ -4161,6 +4177,26 @@ namespace metajit {
             _groups[inst] = group;
           }
         }
+
+        if (_section->ordering() >= BlockOrdering::Topological) {
+          bool dynamic_branch = _dynamic_branch[block->name()];
+          if (dynmatch(BranchInst, branch, block->terminator())) {
+            if (!is_static(branch->cond())) {
+              dynamic_branch = true;
+            }
+          } else if (dynmatch(JumpInst, jump, block->terminator())) {
+            for (Arg* arg : jump->block()->args()) {
+              if (!is_static(jump->arg(arg->index())) || dynamic_branch) {
+                _groups[arg] = NEW_GROUP;
+              }
+            }
+          }
+          if (dynamic_branch) {
+            for (Block* succ : block->successors()) {
+              _dynamic_branch[succ->name()] = true;
+            }
+          }
+        }
       }
     }
 
@@ -4173,6 +4209,20 @@ namespace metajit {
         assert(false); // Unreachable
         return 0;
       }
+    }
+
+    bool is_static(Value* value) const {
+      return at(value) == ALWAYS;
+    }
+
+    size_t count_static() const {
+      size_t count = 0;
+      for (size_t name = 0; name < _section->name_count(); name++) {
+        if (_groups.at_name(name) == ALWAYS) {
+          count++;
+        }
+      }
+      return count;
     }
 
     void write(std::ostream& stream) {
@@ -4191,17 +4241,17 @@ namespace metajit {
   class TraceCapabilities {
   private:
     Section* _section;
-    ConstnessAnalysis& _constness;
+    BindingTimeGroups& _binding_time_groups;
     NameMap<bool> _can_trace_inst;
     NameMap<bool> _can_trace_const;
 
     void used_by(NamedValue* value, NamedValue* by) {
       if (_can_trace_inst.at(by)) {
-        if (_constness.at(by) != _constness.at(value) ||
+        if (_binding_time_groups.at(by) != _binding_time_groups.at(value) ||
             (is_int_or_bool(value->type()) && !is_int_or_bool(by->type()))) {
           _can_trace_const[value] = true;
         }
-        if (_constness.at(value) != ConstnessAnalysis::ALWAYS ||
+        if (!_binding_time_groups.is_static(value) ||
             !is_int_or_bool(value->type())) {
           _can_trace_inst[value] = true;
         }
@@ -4221,9 +4271,9 @@ namespace metajit {
       }
     }
   public:
-    TraceCapabilities(Section* section, ConstnessAnalysis& constness):
+    TraceCapabilities(Section* section, BindingTimeGroups& constness):
         _section(section),
-        _constness(constness),
+        _binding_time_groups(constness),
         _can_trace_inst(section),
         _can_trace_const(section) {
     
@@ -4271,6 +4321,26 @@ namespace metajit {
       return can_trace_const(value) || can_trace_inst(value);
     }
 
+    size_t count_trace_const() const {
+      size_t count = 0;
+      for (size_t name = 0; name < _section->name_count(); name++) {
+        if (_can_trace_const.at_name(name)) {
+          count++;
+        }
+      }
+      return count;
+    }
+
+    size_t count_trace_inst() const {
+      size_t count = 0;
+      for (size_t name = 0; name < _section->name_count(); name++) {
+        if (_can_trace_inst.at_name(name)) {
+          count++;
+        }
+      }
+      return count;
+    }
+
     void write(std::ostream& stream) {
       InfoWriter info_writer([&](std::ostream& stream, Inst* inst) {
         if (can_trace_const(inst)) {
@@ -4279,7 +4349,7 @@ namespace metajit {
         if (can_trace_inst(inst)) {
           stream << "trace_inst ";
         }
-        stream << "group=" << _constness.at(inst);
+        stream << "group=" << _binding_time_groups.at(inst);
       });
       _section->write(stream, &info_writer);
     }
@@ -4387,6 +4457,210 @@ namespace metajit {
         throw std::runtime_error("Failed to open file for writing: " + path);
       }
       write_dot(file);
+    }
+  };
+
+  // Verifies that all guards are emitted before any externally visible memory stores
+  class VerifySimpleReentry: public Pass<VerifySimpleReentry> {
+  public:
+    class SimpleReentryViolation: public std::runtime_error {
+    public:
+      using std::runtime_error::runtime_error;
+    };
+  private:
+  public:
+    VerifySimpleReentry(Section* section): Pass(section) {
+      assert(section->ordering() >= BlockOrdering::Topological);
+
+      BindingTimeGroups binding_time_groups(section);
+
+      std::vector<bool> memory_written_per_block(section->block_count(), false);
+      for (Block* block : *section) {
+        bool memory_written = memory_written_per_block[block->name()];
+        for (Inst* inst : *block) {
+          if (dynmatch(StoreInst, store, inst)) {
+            memory_written = true;
+          } else if (dynmatch(CallInst, call, inst)) {
+            memory_written = true;
+          } else if (dynmatch(BranchInst, branch, inst)) {
+            if (memory_written && !binding_time_groups.is_static(branch->cond())) {
+              std::ostringstream stream;
+              stream << "Branch condition ";
+              branch->cond()->write_arg(stream);
+              stream << " may produce a guard after memory write";
+              throw SimpleReentryViolation(stream.str());
+            }
+          } else if (dynmatch(FreezeInst, freeze, inst)) {
+            if (memory_written && !binding_time_groups.is_static(freeze->arg(0))) {
+              std::ostringstream stream;
+              stream << "Freeze instruction ";
+              freeze->arg(0)->write_arg(stream);
+              stream << " may produce a guard after memory write";
+              throw SimpleReentryViolation(stream.str());
+            }
+          }
+        }
+
+        if (memory_written) {
+          for (Block* succ : block->successors()) {
+            memory_written_per_block[succ->name()] = true;
+          }
+        }
+      }
+    }
+  };
+
+  inline Value* unwrap_binding(Value* value) {
+    while (true) {
+      if (dynmatch(FreezeInst, freeze, value)) {
+        value = freeze->arg(0);
+      } else if (dynmatch(AssumeConstInst, assume_const, value)) {
+        value = assume_const->arg(0);
+      } else {
+        break;
+      }
+    }
+    return value;
+  }
+
+  class ReentryClosures {
+  public:
+    struct Closure {
+      Inst* reuse = nullptr;
+      std::unordered_map<NamedValue*, size_t> values;
+      size_t size = 0;
+
+      void add(NamedValue* value) {
+        if (values.find(value) == values.end()) {
+          if (size % type_size(value->type())) {
+            size += type_size(value->type()) - size % type_size(value->type());
+          }
+          values[value] = size;
+          size += type_size(value->type());
+        }
+      }
+    };
+  private:
+    Section* _section;
+    BindingTimeGroups _binding_time_groups;
+    std::unordered_map<Inst*, Closure> _closures;
+
+    void find_reentry_points() {
+      _closures.emplace(*_section->entry()->begin(), Closure());
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(BranchInst, branch, inst)) {
+            if (!_binding_time_groups.is_static(branch->cond())) {
+              _closures.emplace(*branch->true_block()->begin(), Closure());
+              _closures.emplace(*branch->false_block()->begin(), Closure());
+            }
+          } else if (dynmatch(FreezeInst, freeze, inst)) {
+            if (!_binding_time_groups.is_static(freeze->arg(0))) {
+              _closures.emplace(freeze, Closure());
+            }
+          }
+        }
+      }
+    }
+
+    void find_closure_reuse() {
+      std::vector<std::optional<Inst*>> reusable_reentry_points(_section->block_count(), std::nullopt);
+      for (Block* block : *_section) {
+        Inst* reuse = nullptr;
+        if (reusable_reentry_points[block->name()].has_value()) {
+          reuse = reusable_reentry_points[block->name()].value();
+        }
+        for (Inst* inst : *block) {
+          if (_closures.find(inst) != _closures.end()) {
+            if (reuse) {
+              _closures[inst].reuse = reuse;
+            } else {
+              reuse = inst;
+            }
+          }
+          if (inst->has_side_effect()) {
+            reuse = nullptr;
+          }
+        }
+
+        for (Block* succ : block->successors()) {
+          if (reusable_reentry_points[succ->name()].has_value()) {
+            if (reusable_reentry_points[succ->name()].value()) {
+              reusable_reentry_points[succ->name()] = reuse;
+            }
+          }
+        }
+      }
+    }
+
+    void populate_closures() {
+      std::vector<std::set<NamedValue*>> live_before_block(_section->block_count());
+      for (Block* block : _section->rev_range()) {
+        std::set<NamedValue*> live;
+        for (Block* succ : block->successors()) {
+          for (NamedValue* value : live_before_block[succ->name()]) {
+            live.insert(value);
+          }
+        }
+
+        for (Inst* inst : block->rev_range()) {
+          live.erase(inst);
+          for (Value* arg : inst->args()) {
+            if (arg->is_named()) {
+              live.insert((NamedValue*) arg);
+            }
+          }
+
+          if (_closures.find(inst) != _closures.end()) {
+            Closure& closure = _closures.at(inst);
+            if (!closure.reuse) {
+              for (NamedValue* value : live) {
+                closure.add(value);
+              }
+            }
+          }
+        }
+
+        for (Arg* arg : block->args()) {
+          live.erase(arg);
+        }
+
+        live_before_block[block->name()] = live;
+      }
+    }
+  public:
+    ReentryClosures(Section* section):
+        _section(section),
+        _binding_time_groups(section) {
+      
+      assert(section->ordering() >= BlockOrdering::Dominator);
+
+      find_reentry_points();
+      find_closure_reuse();
+      populate_closures();
+    }
+
+    void write(std::ostream& stream) const {
+      InfoWriter info_writer([&](std::ostream& stream, Inst* inst) {
+        if (_closures.find(inst) != _closures.end()) {
+          const Closure& closure = _closures.at(inst);
+          if (closure.reuse) {
+            stream << "Reuse closure of ";
+            closure.reuse->write_arg(stream);
+          } else {
+            stream << "Closure of size " << closure.size << " capturing ";
+            bool is_first = true;
+            for (const auto& [value, offset] : closure.values) {
+              if (!is_first) {
+                stream << ", ";
+              }
+              value->write_arg(stream);
+              is_first = false;
+            }
+          }
+        }
+      });
+      _section->write(stream, &info_writer);
     }
   };
 }
