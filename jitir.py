@@ -178,9 +178,13 @@ class InstReadPlugin:
                 else:
                     import pdb;pdb.set_trace()
                     assert False, f"Unknown argument type: {arg.type}"
-            if i
-            build_args = ", ".join((arg.name if arg is not None else 'value_args') for arg in args)
-            code += f"    return _builder.{inst.format_builder_name(ir)}({build_args});\n"
+            if inst.name == 'Jump':
+                assert len(inst.args) == 1
+                args = [None, inst.args[0]]
+                code += f"    return _builder.{inst.format_builder_name(ir)}(block, value_args);\n"
+            else:
+                build_args = ", ".join((arg.name if arg is not None else 'value_args') for arg in args)
+                code += f"    return _builder.{inst.format_builder_name(ir)}({build_args});\n"
             else_prefix = "} else "
         code += '  } else { error("unknown operation " + opcode); return nullptr; }\n'
         code += "}"
