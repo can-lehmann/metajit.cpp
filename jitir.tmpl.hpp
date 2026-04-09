@@ -942,7 +942,7 @@ namespace metajit {
               return true;
             }
 
-            if (arg->is_inst() &&
+            if (arg->is_named() &&
                 defined.find(arg) == defined.end()) {
               errors << "Instruction ";
               inst->write_arg(errors);
