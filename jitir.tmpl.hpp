@@ -2441,7 +2441,7 @@ namespace metajit {
         }
       }
 
-      void error(const std::string& message) {
+      [[noreturn]] void error(const std::string& message) {
         throw std::runtime_error("Error reading section: " + message + " at line " + std::to_string(lineno) + ", column " + std::to_string(columno));
       }
 
