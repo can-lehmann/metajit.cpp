@@ -297,5 +297,25 @@ b1:
 )", builder.section());
   });
 
+  suite.diff_test("simplifycfg branch with both targets same").run([](Builder& builder, TestData& data) {
+    Value* cond = data.input(Type::Bool);
+    Block* then_block = builder.build_block();
+    
+    builder.build_branch(cond, then_block, then_block);
+    builder.move_to_end(then_block);
+    data.output(builder.build_const(Type::Int64, 42));
+    builder.build_exit();
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Jump block=b1
+b1:
+  Store %0, 42, aliasing=0, offset=8
+  Exit
+}
+)", builder.section());
+  });
+
   return suite.finish();
 }

@@ -3828,6 +3828,21 @@ namespace metajit {
         }
         while (true) {
           if (dynmatch(BranchInst, branch, block->terminator())) {
+            // if the targets are both the same, we can replace with a jump
+            if (branch->true_block() == branch->false_block()) {
+              Block* target = branch->true_block();
+              builder.move_before(block, block->terminator());
+              builder.build_jump(target);
+              block->remove(block->terminator());
+              // incoming is a bit tricky. it contains block twice. we remove it once
+              auto& target_incoming = incoming[target->name()];
+              auto it = std::find(target_incoming.begin(), target_incoming.end(), block);
+              assert (it != target_incoming.end());
+              target_incoming.erase(it);
+              // check that it's still there once
+              assert (std::find(target_incoming.begin(), target_incoming.end(), block) != target_incoming.end());
+              continue;
+            }
             if (dynmatch(Const, cond, branch->cond())) {
               Block* target = cond->value() != 0 ? branch->true_block() : branch->false_block();
               builder.move_before(block, block->terminator());
