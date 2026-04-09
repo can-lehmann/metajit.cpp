@@ -29,6 +29,17 @@ void check_simplify(const std::string& expected, Section* section) {
   unittest_assert(ss.str() == expected);
 }
 
+void check_simplifycfg(const std::string& expected, Section* section) {
+  unittest_assert (!section->verify(std::cout)); // make sure that we start from a valid cfg
+  metajit::SimplifyCFG::run(section);
+  std::stringstream ss;
+  section->write(ss);
+  if (ss.str() != expected) {
+    std::cerr << "Expected:\n" << expected << "\n\nGot:\n" << ss.str() << std::endl;
+  }
+  unittest_assert(ss.str() == expected);
+}
+
 int main() {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
@@ -255,6 +266,36 @@ b0(%0: Ptr):
   %2 = ResizeX %1, type=Int32
   %3 = Or %2, 4294901760
   Store %0, %3, aliasing=0, offset=4
+}
+)", builder.section());
+  });
+
+  // tests for SimplifyCFG
+  suite.diff_test("simplifycfg branch with const true").run([](Builder& builder, TestData& data) {
+    Value* cond = builder.build_const(Type::Bool, 1);
+    Block* then_block = builder.build_block();
+    Block* else_block = builder.build_block();
+    Block* merge_block = builder.build_block();
+    
+    builder.build_branch(cond, then_block, else_block);
+    builder.move_to_end(then_block);
+    builder.build_jump(merge_block);
+    builder.move_to_end(else_block);
+    builder.build_jump(merge_block);
+    builder.move_to_end(merge_block);
+    data.output(builder.build_const(Type::Int64, 42));
+    builder.build_exit();
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  Jump block=b1
+b1:
+  Jump block=b3
+b2:
+  Jump block=b3
+b3:
+  Store %0, 42, aliasing=0, offset=0
+  Exit
 }
 )", builder.section());
   });

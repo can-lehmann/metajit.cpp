@@ -3786,6 +3786,51 @@ namespace metajit {
     }
   };
 
+  class SimplifyCFG: public Pass<SimplifyCFG> {
+  private:
+    Section* _section;
+  public:
+    SimplifyCFG(Section* section): Pass(section), _section(section) {
+      assert(_section->ordering() >= BlockOrdering::Dominator);
+      // computing incoming edges
+      std::vector<std:: vector<Block*>> incoming(_section->block_count());
+      for (Block* block : *_section) {
+        if (dynmatch(BranchInst, branch, block->terminator())) {
+          incoming[branch->true_block()->name()].push_back(block);
+          incoming[branch->false_block()->name()].push_back(block);
+        } else if (dynmatch(JumpInst, jump, block->terminator())) {
+          incoming[jump->block()->name()].push_back(block);
+        }
+      }
+
+      // simplify the CFG:
+      // - remove empty blocks that just jump to another block
+      // - merge blocks that have a single predecessor and that predecessor has a single successor
+      // - turn branches with constant condition into jumps
+      // - remove unreachable blocks
+      Builder builder(_section);
+      for (Block* block : *_section) {
+        while (true) {
+          if (dynmatch(BranchInst, branch, block->terminator())) {
+            if (dynmatch(Const, cond, branch->cond())) {
+              Block* target = cond->value() != 0 ? branch->true_block() : branch->false_block();
+              builder.move_before(block, block->terminator());
+              builder.build_jump(target);
+              block->rbegin().erase();
+              // remove from incoming of the other block
+              Block* other = cond->value() != 0 ? branch->false_block() : branch->true_block();
+              auto& other_incoming = incoming[other->name()];
+              other_incoming.erase(std::remove(other_incoming.begin(), other_incoming.end(), block), other_incoming.end());
+            } else {
+              break;
+            }
+          } else { break; }
+        }
+      }
+    }
+  };
+
+
   class BindingTimeGroups {
   public:
     static constexpr size_t ALWAYS = 0;
