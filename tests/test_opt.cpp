@@ -32,6 +32,7 @@ void check_simplify(const std::string& expected, Section* section) {
 void check_simplifycfg(const std::string& expected, Section* section) {
   unittest_assert (!section->verify(std::cout)); // make sure that we start from a valid cfg
   metajit::SimplifyCFG::run(section);
+  unittest_assert (!section->verify(std::cout));
   std::stringstream ss;
   section->write(ss);
   if (ss.str() != expected) {
@@ -288,10 +289,8 @@ b0(%0: Ptr):
 
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
-  Jump block=b2
+  Jump block=b1
 b1:
-  Jump block=b2
-b2:
   Store %0, 42, aliasing=0, offset=0
   Exit
 }

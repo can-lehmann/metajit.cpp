@@ -3848,8 +3848,8 @@ namespace metajit {
             if (dynmatch(JumpInst, target_jump, *target->begin())) {
               Block* final_target = target_jump->block();
               jump->set_block(final_target);
-              remove_from_incoming(target, block);
               incoming[final_target->name()].push_back(block);
+              remove_from_incoming(block, target);
               continue;
             }
           }
