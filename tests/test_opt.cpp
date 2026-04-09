@@ -32,6 +32,7 @@ void check_simplify(const std::string& expected, Section* section) {
 void check_simplifycfg(const std::string& expected, Section* section) {
   unittest_assert (!section->verify(std::cout)); // make sure that we start from a valid cfg
   metajit::SimplifyCFG::run(section);
+  section->write(std::cout);
   unittest_assert (!section->verify(std::cout));
   std::stringstream ss;
   section->write(ss);
@@ -289,8 +290,6 @@ b0(%0: Ptr):
 
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
-  Jump block=b1
-b1:
   Store %0, 42, aliasing=0, offset=0
   Exit
 }
@@ -309,9 +308,37 @@ b1:
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Store %0, 42, aliasing=0, offset=8
+  Exit
+}
+)", builder.section());
+  });
+
+  suite.diff_test("simplifycfg jump with args").run([](Builder& builder, TestData& data) {
+    Value* cond = builder.build_const(Type::Bool, 0);
+    Value* input = data.input(Type::Int64);
+    Block* then_block = builder.build_block();
+    Block* else_block = builder.build_block();
+    Block* merge_block = builder.build_block({Type::Int64});
+
+    builder.build_branch(cond, then_block, else_block);
+    builder.move_to_end(then_block);
+    builder.build_jump(merge_block, {builder.build_const(Type::Int64, 42)});
+    builder.move_to_end(else_block);
+    builder.build_jump(merge_block, {input});
+    builder.move_to_end(merge_block);
+    data.output(merge_block->arg(0));
+    builder.build_exit();
+    builder.section()->write(std::cout);
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
   Jump block=b1
 b1:
-  Store %0, 42, aliasing=0, offset=8
+  Jump %1, block=b2
+b2(%4: Int64):
+  Store %0, %4, aliasing=0, offset=8
   Exit
 }
 )", builder.section());

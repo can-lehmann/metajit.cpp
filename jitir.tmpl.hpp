@@ -3810,15 +3810,12 @@ namespace metajit {
   public:
     SimplifyCFG(Section* section): Pass(section), _section(section), incoming(section->block_count()) {
       assert(_section->ordering() >= BlockOrdering::Dominator);
-      // computing incoming edges
       for (Block* block : *_section) {
         for (Block* succ : block->successors()) {
           incoming[succ->name()].push_back(block);
         }
       }
 
-      // simplify the CFG:
-      // - merge blocks that have a single predecessor and that predecessor has a single successor
       Builder builder(_section);
       for (Block* block : *_section) {
         // remove unreachable blocks
@@ -3843,6 +3840,7 @@ namespace metajit {
               assert (std::find(target_incoming.begin(), target_incoming.end(), block) != target_incoming.end());
               continue;
             }
+            // if the condition is constant, we can just jump to the taken branch
             if (dynmatch(Const, cond, branch->cond())) {
               Block* target = cond->value() != 0 ? branch->true_block() : branch->false_block();
               builder.move_before(block, block->terminator());
@@ -3862,9 +3860,25 @@ namespace metajit {
             // which is a jump, we can just jump to the final target
             if (dynmatch(JumpInst, target_jump, *target->begin())) {
               Block* final_target = target_jump->block();
+              if (final_target->args().size() > 0) {
+                break;
+              }
               jump->set_block(final_target);
               incoming[final_target->name()].push_back(block);
               remove_from_incoming(block, target);
+              continue;
+            }
+            // if the target block only has one incoming edge, we can merge it with the current block
+            if (incoming[target->name()].size() == 1) {
+              block->remove(block->terminator());
+              Inst* first_inst = *target->begin();
+              Inst* last_inst = target->terminator();
+              target->remove(first_inst, last_inst);
+              block->add(first_inst, last_inst);
+              for (Block* succ : block->successors()) {
+                incoming[succ->name()].push_back(block);
+              }
+              remove(target);
               continue;
             }
           }
