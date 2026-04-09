@@ -26,6 +26,7 @@
 #include <optional>
 #include <cstring>
 #include <fstream>
+#include <algorithm>
 
 #include "../lwir.cpp/lwir_utils.hpp"
 
