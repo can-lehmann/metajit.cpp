@@ -288,7 +288,7 @@ b0(%0: Ptr):
 
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
-  Jump block=b1
+  Jump block=b2
 b1:
   Jump block=b2
 b2:

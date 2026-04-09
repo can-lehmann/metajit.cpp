@@ -3793,10 +3793,18 @@ namespace metajit {
 
     void remove(Block* block) {
       for (Block* succ : block->successors()) {
-        auto& succ_incoming = incoming[succ->name()];
-        succ_incoming.erase(std::remove(succ_incoming.begin(), succ_incoming.end(), block), succ_incoming.end());
+        remove_from_incoming(block, succ);
       }
       _section->remove(block);
+    }
+
+    void remove_from_incoming(Block* from, Block* to) {
+      auto& to_incoming = incoming[to->name()];
+      to_incoming.erase(std::remove(to_incoming.begin(), to_incoming.end(), from), to_incoming.end());
+      // if to has no more incoming edges and is not the entry, we can remove it
+      if (to != _section->entry() && to_incoming.empty()) {
+        remove(to);
+      }
     }
 
   public:
@@ -3810,10 +3818,7 @@ namespace metajit {
       }
 
       // simplify the CFG:
-      // - remove empty blocks that just jump to another block
       // - merge blocks that have a single predecessor and that predecessor has a single successor
-      // - turn branches with constant condition into jumps
-      // - remove unreachable blocks
       Builder builder(_section);
       for (Block* block : *_section) {
         // remove unreachable blocks
@@ -3827,15 +3832,28 @@ namespace metajit {
               Block* target = cond->value() != 0 ? branch->true_block() : branch->false_block();
               builder.move_before(block, block->terminator());
               builder.build_jump(target);
-              block->rbegin().erase();
+              block->remove(block->terminator());
               // remove from incoming of the other block
               Block* other = cond->value() != 0 ? branch->false_block() : branch->true_block();
-              auto& other_incoming = incoming[other->name()];
-              other_incoming.erase(std::remove(other_incoming.begin(), other_incoming.end(), block), other_incoming.end());
-            } else {
+              remove_from_incoming(block, other);
+              continue;
+            }
+          } else if (dynmatch(JumpInst, jump, block->terminator())) {
+            Block* target = jump->block();
+            if (target == block || target->args().size() > 0) {
               break;
             }
-          } else { break; }
+            // do jump-threading: if the target block only has a single instruction,
+            // which is a jump, we can just jump to the final target
+            if (dynmatch(JumpInst, target_jump, *target->begin())) {
+              Block* final_target = target_jump->block();
+              jump->set_block(final_target);
+              remove_from_incoming(target, block);
+              incoming[final_target->name()].push_back(block);
+              continue;
+            }
+          }
+          break;
         }
       }
     }
