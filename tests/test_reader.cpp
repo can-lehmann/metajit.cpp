@@ -25,7 +25,6 @@ void check_roundtrip(Section* section) {
     section->write(ss);
 
     std::string section_str = ss.str();
-    std::cout << section_str;
     std::istringstream iss(section_str);
     Section* section2 = read_section(section->context(), section->allocator(), iss);
     std::stringstream ss2;

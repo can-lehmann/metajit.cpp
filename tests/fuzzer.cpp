@@ -156,7 +156,7 @@ namespace metajit {
           value,
           _builder->build_const(range.type(), range.max())
         );
-        return _builder->fold_and(ge_min, le_max);
+        return _builder->build_and(ge_min, le_max);
       }
 
       Value* gen(RandomRange random_range) {
@@ -207,7 +207,7 @@ namespace metajit {
           Block* else_block = _builder->build_block();
           Block* then_block = _builder->build_block();
 
-          _builder->fold_branch(
+          _builder->build_branch(
             build_is_inside(result, random_range),
             then_block,
             else_block

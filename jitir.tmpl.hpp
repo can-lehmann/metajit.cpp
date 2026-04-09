@@ -2374,9 +2374,10 @@ namespace metajit {
     }
   }
 
+  template<class BuilderType = Builder>
   class SectionReader {
     private:
-      Builder _builder;
+      BuilderType _builder;
       std::istream& _stream;
       int lineno = 1;
       int columno = 0;
@@ -2666,19 +2667,25 @@ namespace metajit {
             value_name = "";
           }
           std::string opcode = get_word();
-          Inst* inst = read_opcode(opcode);
+          Value* value = read_opcode(opcode);
           if (!value_name.empty()) {
-            _value_labels[value_name] = inst;
-            if (inst->has_side_effect()) {
-              error("Instructions with side effects cannot be named");
+            _value_labels[value_name] = value;
+            if (dynmatch(Inst, inst, value)) {
+              if (inst->has_side_effect()) {
+                error("Instructions with side effects cannot be named");
+              }
             }
           } else {
-            if (!inst->has_side_effect() && !inst->is_terminator() && !dynamic_cast<CommentInst*>(inst)) {
-              error("Instructions without side effects must be named");
+            if (dynmatch(Inst, inst, value)) {
+              if (!inst->has_side_effect() && !inst->is_terminator() && !dynamic_cast<CommentInst*>(inst)) {
+                error("Instructions without side effects must be named");
+              }
             }
           }
-          if (inst->is_terminator()) {
-            break;
+          if (dynmatch(Inst, inst, value)) {
+            if (inst->is_terminator()) {
+              break;
+            }
           }
         }
       }
@@ -2686,7 +2693,14 @@ namespace metajit {
 
   Section* read_section(Context& context, Allocator& allocator,std::istream& stream) {
     Section* section = new Section(context, allocator);
-    SectionReader reader(section, stream);
+    SectionReader<Builder> reader(section, stream);
+    return section;
+  }
+
+  template<class BuilderType>
+  Section* read_section_with_builder(Context& context, Allocator& allocator, std::istream& stream) {
+    Section* section = new Section(context, allocator);
+    SectionReader<BuilderType> reader(section, stream);
     return section;
   }
 

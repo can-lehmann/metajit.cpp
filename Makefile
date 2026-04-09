@@ -61,7 +61,7 @@ tests/source/%.o0.ll: tests/source/%.cpp
 	clang++ -emit-llvm -S -O0 -o $@ $<
 
 tests/fuzzer: tests/fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
-	clang++ -g ${CFLAGS} -o $@ $<
+	clang++ -O3 -g ${CFLAGS} -o $@ $<
 
 tests/test_tv: tests/test_tv.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ -g ${CFLAGS} ${Z3_FLAGS} -o $@ $<

@@ -133,7 +133,7 @@ class InstTrailingConstructorPlugin:
 
 class InstReadPlugin:
     def run(self, ir):
-        code = "Inst* read_opcode(std::string opcode) {\n"
+        code = "Value* read_opcode(std::string opcode) {\n"
         else_prefix = ""
         for inst in ir.insts:
             code += f"  {else_prefix}if (opcode == \"{inst.name}\") {{\n"
