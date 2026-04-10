@@ -2608,6 +2608,12 @@ namespace metajit {
       }
     }
 
+    static Section* read_section(Context& context, Allocator& allocator, std::istream& stream) {
+      Section* section = new Section(context, allocator);
+      SectionReader<BuilderType> reader(section, stream);
+      return section;
+    }
+
     void read_block() {
       // syntax: b0(%0: Ptr):
       std::string block_name = get_word();
@@ -2690,13 +2696,6 @@ namespace metajit {
       }
     }
   };
-
-  template<class BuilderType = Builder>
-  Section* read_section(Context& context, Allocator& allocator,std::istream& stream) {
-    Section* section = new Section(context, allocator);
-    SectionReader<BuilderType> reader(section, stream);
-    return section;
-  }
 
   template <class Self>
   class Pass {

@@ -44,7 +44,7 @@ namespace metajit {
       section->write(ss);
       std::string section_str = ss.str();
       std::istringstream iss(section_str);
-      Section* section2 = read_section<TraceBuilder>(section->context(), section->allocator(), iss);
+      Section* section2 = SectionReader<TraceBuilder>::read_section(section->context(), section->allocator(), iss);
       DeadCodeElim::run(section2);
       RefineAliasing::run(section2);
       DeadStoreElim::run(section2);
