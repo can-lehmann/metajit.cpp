@@ -2691,14 +2691,8 @@ namespace metajit {
     }
   };
 
+  template<class BuilderType = Builder>
   Section* read_section(Context& context, Allocator& allocator,std::istream& stream) {
-    Section* section = new Section(context, allocator);
-    SectionReader<Builder> reader(section, stream);
-    return section;
-  }
-
-  template<class BuilderType>
-  Section* read_section_with_builder(Context& context, Allocator& allocator, std::istream& stream) {
     Section* section = new Section(context, allocator);
     SectionReader<BuilderType> reader(section, stream);
     return section;
