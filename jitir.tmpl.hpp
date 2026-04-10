@@ -2376,319 +2376,319 @@ namespace metajit {
 
   template<class BuilderType = Builder>
   class SectionReader {
-    private:
-      BuilderType _builder;
-      std::istream& _stream;
-      int lineno = 1;
-      int columno = 0;
+  private:
+    BuilderType _builder;
+    std::istream& _stream;
+    int lineno = 1;
+    int columno = 0;
 
-      std::unordered_map<std::string, Block*> _block_labels;
-      std::unordered_set<std::string> _seen_block_definitions;
-      std::unordered_map<std::string, Value*> _value_labels;
+    std::unordered_map<std::string, Block*> _block_labels;
+    std::unordered_set<std::string> _seen_block_definitions;
+    std::unordered_map<std::string, Value*> _value_labels;
 
-      char get_char() {
-        char c = _stream.get();
-        if (c == '\n') {
-          lineno++;
-          columno = 0;
-        } else {
-          columno++;
-        }
-        return c;
+    char get_char() {
+      char c = _stream.get();
+      if (c == '\n') {
+        lineno++;
+        columno = 0;
+      } else {
+        columno++;
       }
+      return c;
+    }
 
-      void skip_whitespace() {
-        while (std::isspace(_stream.peek())) {
-          get_char();
-        }
+    void skip_whitespace() {
+      while (std::isspace(_stream.peek())) {
+        get_char();
       }
+    }
 
-      std::string get_word() {
-        std::string word;
-        char c;
-        skip_whitespace();
-        while (true) {
-          c = _stream.peek();
-          if (c == EOF) {
-            return word;
-          }
-          if (!std::isalnum(c) && c != '_' && c != '.' && c != '%') {
-            break;
-          }
-          word += get_char();
+    std::string get_word() {
+      std::string word;
+      char c;
+      skip_whitespace();
+      while (true) {
+        c = _stream.peek();
+        if (c == EOF) {
+          return word;
         }
-        if (word.empty()) {
-          error("Expected a word");
-        }
-        skip_whitespace();
-        return word;
-      }
-
-      void expect_char(char expected) {
-        skip_whitespace();
-        char c = get_char();
-        if (c != expected) {
-          error(std::string("Expected '") + expected + "'" + ", got '" + c + "'");
-        }
-      }
-
-      void expect_word(std::string expected) {
-        skip_whitespace();
-        std::string word = get_word();
-        skip_whitespace();
-        if (word != expected) {
-          error(std::string("Expected \"") + expected + "\"" + ", got \"" + word + "\"");
-        }
-      }
-
-      [[noreturn]] void error(const std::string& message) {
-        throw std::runtime_error("Error reading section: " + message + " at line " + std::to_string(lineno) + ", column " + std::to_string(columno));
-      }
-
-      Type read_type() {
-        std::string type_name = get_word();
-        if (type_name == "Int8") {
-          return Type::Int8;
-        } else if (type_name == "Int16") {
-          return Type::Int16;
-        } else if (type_name == "Int32") {
-          return Type::Int32;
-        } else if (type_name == "Int64") {
-          return Type::Int64;
-        } else if (type_name == "Float32") {
-          return Type::Float32;
-        } else if (type_name == "Float64") {
-          return Type::Float64;
-        } else if (type_name == "Bool") {
-          return Type::Bool;
-        } else if (type_name == "Ptr") {
-          return Type::Ptr;
-        } else {
-          error("Unknown type '" + type_name + "'");
-        }
-      }
-
-      CallConv read_call_conv() {
-        std::string call_conv_name = get_word();
-        if (call_conv_name == "Default") {
-          return CallConv::Default;
-        } else if (call_conv_name == "PreserveNone") {
-          return CallConv::PreserveNone;
-        } else {
-          error("Unknown calling convention '" + call_conv_name + "'");
-        }
-      }
-
-      uint64_t read_uint64() {
-        std::string int_str = get_word();
-        try {
-          return std::stoull(int_str);
-        } catch (const std::exception& e) {
-          error("Invalid integer literal '" + int_str + "'");
-          return 0;
-        }
-      }
-
-      Block* read_block_argument() {
-        std::string block_name = get_word();
-        if (_block_labels.count(block_name) == 0) {
-          // create a forward reference to the block
-          _block_labels[block_name] = _builder.build_block();
-        }
-        return _block_labels[block_name];
-      }
-
-      Value* read_value_arg() {
-        char c = _stream.peek();
-        if (c == '%') {
-          std::string value_name = get_word();
-          if (_value_labels.count(value_name) == 0) {
-            error("Undefined value '" + value_name + "'");
-          }
-          return _value_labels[value_name];
-        } else {
-          return read_const();
-        }
-      }
-
-      std::vector<Value*> read_value_arg_list() {
-        std::vector<Value*> args;
-        // read comma separated list of value args (starting with % or a constant)
-        while (true) {
-          skip_whitespace();
-          char c = _stream.peek();
-          if (c != '%' && !std::isdigit(c)) {
-            break;
-          }
-          args.push_back(read_value_arg());
-          skip_whitespace();
-          // it can either be a comma or the end of the line
-          if (_stream.peek() == ',') {
-            get_char();
-            continue;
-          }
+        if (!std::isalnum(c) && c != '_' && c != '.' && c != '%') {
           break;
         }
-        return args;
+        word += get_char();
       }
-
-      Value* read_const() {
-        uint64_t value = read_uint64();
-        expect_char(':');
-        Type type = read_type();
-        return _builder.build_const(type, value);
+      if (word.empty()) {
+        error("Expected a word");
       }
+      skip_whitespace();
+      return word;
+    }
 
-      template<typename FlagsType>
-      FlagsType read_flags() {
-        expect_char('{');
+    void expect_char(char expected) {
+      skip_whitespace();
+      char c = get_char();
+      if (c != expected) {
+        error(std::string("Expected '") + expected + "'" + ", got '" + c + "'");
+      }
+    }
 
-        uint32_t flags_bits = 0;
+    void expect_word(std::string expected) {
+      skip_whitespace();
+      std::string word = get_word();
+      skip_whitespace();
+      if (word != expected) {
+        error(std::string("Expected \"") + expected + "\"" + ", got \"" + word + "\"");
+      }
+    }
 
+    [[noreturn]] void error(const std::string& message) {
+      throw std::runtime_error("Error reading section: " + message + " at line " + std::to_string(lineno) + ", column " + std::to_string(columno));
+    }
+
+    Type read_type() {
+      std::string type_name = get_word();
+      if (type_name == "Int8") {
+        return Type::Int8;
+      } else if (type_name == "Int16") {
+        return Type::Int16;
+      } else if (type_name == "Int32") {
+        return Type::Int32;
+      } else if (type_name == "Int64") {
+        return Type::Int64;
+      } else if (type_name == "Float32") {
+        return Type::Float32;
+      } else if (type_name == "Float64") {
+        return Type::Float64;
+      } else if (type_name == "Bool") {
+        return Type::Bool;
+      } else if (type_name == "Ptr") {
+        return Type::Ptr;
+      } else {
+        error("Unknown type '" + type_name + "'");
+      }
+    }
+
+    CallConv read_call_conv() {
+      std::string call_conv_name = get_word();
+      if (call_conv_name == "Default") {
+        return CallConv::Default;
+      } else if (call_conv_name == "PreserveNone") {
+        return CallConv::PreserveNone;
+      } else {
+        error("Unknown calling convention '" + call_conv_name + "'");
+      }
+    }
+
+    uint64_t read_uint64() {
+      std::string int_str = get_word();
+      try {
+        return std::stoull(int_str);
+      } catch (const std::exception& e) {
+        error("Invalid integer literal '" + int_str + "'");
+        return 0;
+      }
+    }
+
+    Block* read_block_argument() {
+      std::string block_name = get_word();
+      if (_block_labels.count(block_name) == 0) {
+        // create a forward reference to the block
+        _block_labels[block_name] = _builder.build_block();
+      }
+      return _block_labels[block_name];
+    }
+
+    Value* read_value_arg() {
+      char c = _stream.peek();
+      if (c == '%') {
+        std::string value_name = get_word();
+        if (_value_labels.count(value_name) == 0) {
+          error("Undefined value '" + value_name + "'");
+        }
+        return _value_labels[value_name];
+      } else {
+        return read_const();
+      }
+    }
+
+    std::vector<Value*> read_value_arg_list() {
+      std::vector<Value*> args;
+      // read comma separated list of value args (starting with % or a constant)
+      while (true) {
         skip_whitespace();
-        if (_stream.peek() == '}') {
+        char c = _stream.peek();
+        if (c != '%' && !std::isdigit(c)) {
+          break;
+        }
+        args.push_back(read_value_arg());
+        skip_whitespace();
+        // it can either be a comma or the end of the line
+        if (_stream.peek() == ',') {
           get_char();
-          return FlagsType(flags_bits);
+          continue;
         }
+        break;
+      }
+      return args;
+    }
 
-        // Parse flags
-        while (true) {
-          std::string flag_name = get_word();
+    Value* read_const() {
+      uint64_t value = read_uint64();
+      expect_char(':');
+      Type type = read_type();
+      return _builder.build_const(type, value);
+    }
 
-          // Linear search through FlagsType::NAMES
-          bool found = false;
-          for (size_t i = 0; i < FlagsType::COUNT; i++) {
-            if (flag_name == FlagsType::NAMES[i]) {
-              flags_bits |= (1 << i);
-              found = true;
-              break;
-            }
-          }
+    template<typename FlagsType>
+    FlagsType read_flags() {
+      expect_char('{');
 
-          if (!found) {
-            error("Unknown flag '" + flag_name + "'");
-          }
-          skip_whitespace();
-          if (_stream.peek() == ',') {
-            get_char();
-          } else {
-            expect_char('}');
-            break;
-          }
-        }
+      uint32_t flags_bits = 0;
+
+      skip_whitespace();
+      if (_stream.peek() == '}') {
+        get_char();
         return FlagsType(flags_bits);
       }
 
-      LoadFlags read_load_flags() {
-        // use the templated method to read flags
-        return read_flags<LoadFlags>();
+      // Parse flags
+      while (true) {
+        std::string flag_name = get_word();
+
+        // Linear search through FlagsType::NAMES
+        bool found = false;
+        for (size_t i = 0; i < FlagsType::COUNT; i++) {
+          if (flag_name == FlagsType::NAMES[i]) {
+            flags_bits |= (1 << i);
+            found = true;
+            break;
+          }
+        }
+
+        if (!found) {
+          error("Unknown flag '" + flag_name + "'");
+        }
+        skip_whitespace();
+        if (_stream.peek() == ',') {
+          get_char();
+        } else {
+          expect_char('}');
+          break;
+        }
       }
+      return FlagsType(flags_bits);
+    }
+
+    LoadFlags read_load_flags() {
+      // use the templated method to read flags
+      return read_flags<LoadFlags>();
+    }
 
 
 /* ${read_opcode} */
 
-    public:
-      SectionReader(Section* section, std::istream& stream): _builder(section), _stream(stream) {
-        std::string word = get_word();
-        if (word != "section") {
-          error("Expected 'section'");
-        }
+  public:
+    SectionReader(Section* section, std::istream& stream): _builder(section), _stream(stream) {
+      std::string word = get_word();
+      if (word != "section") {
+        error("Expected 'section'");
+      }
+      skip_whitespace();
+      expect_char('{');
+      while (true) {
         skip_whitespace();
-        expect_char('{');
+        if (_stream.eof()) {
+          error("Unexpected end of file");
+        }
+        if (_stream.peek() == '}') {
+          get_char();
+          break;
+        }
+        read_block();
+      }
+    }
+
+    void read_block() {
+      // syntax: b0(%0: Ptr):
+      std::string block_name = get_word();
+      // read arguments
+      std::vector<Type> arg_types;
+      std::vector<std::string> arg_names;
+      if (_stream.peek() == '(') {
+        expect_char('(');
         while (true) {
-          skip_whitespace();
-          if (_stream.eof()) {
-            error("Unexpected end of file");
-          }
-          if (_stream.peek() == '}') {
+          std::string arg_name = get_word();
+          arg_names.push_back(arg_name);
+          expect_char(':');
+          Type arg_type = read_type();
+          arg_types.push_back(arg_type);
+          if (_stream.peek() == ',') {
             get_char();
+          } else {
+            expect_char(')');
             break;
           }
-          read_block();
         }
       }
-
-      void read_block() {
-        // syntax: b0(%0: Ptr):
-        std::string block_name = get_word();
-        // read arguments
-        std::vector<Type> arg_types;
-        std::vector<std::string> arg_names;
-        if (_stream.peek() == '(') {
-          expect_char('(');
-          while (true) {
-            std::string arg_name = get_word();
-            arg_names.push_back(arg_name);
-            expect_char(':');
-            Type arg_type = read_type();
-            arg_types.push_back(arg_type);
-            if (_stream.peek() == ',') {
-              get_char();
-            } else {
-              expect_char(')');
-              break;
-            }
-          }
-        }
-        expect_char(':');
-        // create or get block. it might already be created if
-        // there was a forward reference to it, but it shouldn't
-        // be defined yet
-        if (_seen_block_definitions.count(block_name)) {
-          error("Block '" + block_name + "' is already defined");
-        }
-        _seen_block_definitions.insert(block_name);
-        Block* block;
-        if (_block_labels.count(block_name)) {
-          block = _block_labels[block_name];
-          // create arguments
-          std::vector<Arg*> args;
-          for (size_t i = 0; i < arg_types.size(); i++) {
-            args.push_back(_builder.alloc_arg(arg_types[i], i));
-          }
-          block->set_args(_builder.alloc_span(args));
-        } else {
-          block = _builder.build_block(arg_types);
-          _block_labels[block_name] = block;
-        }
+      expect_char(':');
+      // create or get block. it might already be created if
+      // there was a forward reference to it, but it shouldn't
+      // be defined yet
+      if (_seen_block_definitions.count(block_name)) {
+        error("Block '" + block_name + "' is already defined");
+      }
+      _seen_block_definitions.insert(block_name);
+      Block* block;
+      if (_block_labels.count(block_name)) {
+        block = _block_labels[block_name];
+        // create arguments
+        std::vector<Arg*> args;
         for (size_t i = 0; i < arg_types.size(); i++) {
-          _value_labels[arg_names[i]] = block->arg(i);
+          args.push_back(_builder.alloc_arg(arg_types[i], i));
         }
-        _builder.move_to_end(block);
+        block->set_args(_builder.alloc_span(args));
+      } else {
+        block = _builder.build_block(arg_types);
+        _block_labels[block_name] = block;
+      }
+      for (size_t i = 0; i < arg_types.size(); i++) {
+        _value_labels[arg_names[i]] = block->arg(i);
+      }
+      _builder.move_to_end(block);
 
-        // read instructions until we reach a terminator
-        while (true) {
-          skip_whitespace();
-          std::string value_name;
-          if (_stream.peek() == '%') {
-            value_name = get_word();
-            expect_char('=');
-          } else {
-            value_name = "";
-          }
-          std::string opcode = get_word();
-          Value* value = read_opcode(opcode);
-          if (!value_name.empty()) {
-            _value_labels[value_name] = value;
-            if (dynmatch(Inst, inst, value)) {
-              if (inst->has_side_effect()) {
-                error("Instructions with side effects cannot be named");
-              }
-            }
-          } else {
-            if (dynmatch(Inst, inst, value)) {
-              if (!inst->has_side_effect() && !inst->is_terminator() && !dynamic_cast<CommentInst*>(inst)) {
-                error("Instructions without side effects must be named");
-              }
-            }
-          }
+      // read instructions until we reach a terminator
+      while (true) {
+        skip_whitespace();
+        std::string value_name;
+        if (_stream.peek() == '%') {
+          value_name = get_word();
+          expect_char('=');
+        } else {
+          value_name = "";
+        }
+        std::string opcode = get_word();
+        Value* value = read_opcode(opcode);
+        if (!value_name.empty()) {
+          _value_labels[value_name] = value;
           if (dynmatch(Inst, inst, value)) {
-            if (inst->is_terminator()) {
-              break;
+            if (inst->has_side_effect()) {
+              error("Instructions with side effects cannot be named");
             }
+          }
+        } else {
+          if (dynmatch(Inst, inst, value)) {
+            if (!inst->has_side_effect() && !inst->is_terminator() && !dynamic_cast<CommentInst*>(inst)) {
+              error("Instructions without side effects must be named");
+            }
+          }
+        }
+        if (dynmatch(Inst, inst, value)) {
+          if (inst->is_terminator()) {
+            break;
           }
         }
       }
+    }
   };
 
   Section* read_section(Context& context, Allocator& allocator,std::istream& stream) {
