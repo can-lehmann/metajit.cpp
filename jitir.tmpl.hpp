@@ -4499,7 +4499,7 @@ namespace metajit {
         std::map<Value*, Value*> substs = _substs_at_entry.at(block);
 
         Inst* inst = *block->begin();
-        while (!_closures.has(inst)) {
+        while (inst && !_closures.has(inst)) {
           inst->substitute_args(substs);
           inst = inst->next();
         }
