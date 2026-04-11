@@ -47,7 +47,7 @@ int main() {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
   %2 = ResizeX %1, type=Int8
-  %3 = And %1, 255
+  %3 = And %1, 255:Int64
   Store %0, %3, aliasing=0, offset=8
 }
 )", builder.section());
@@ -65,8 +65,8 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = ShrU %1, 1
-  %3 = And %1, 6
+  %2 = ShrU %1, 1:Int64
+  %3 = And %1, 6:Int64
   Store %0, %3, aliasing=0, offset=8
 }
 )", builder.section());
@@ -84,9 +84,9 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = ShrU %1, 10
-  %3 = ShrU %1, 9
-  %4 = And %3, 2
+  %2 = ShrU %1, 10:Int64
+  %3 = ShrU %1, 9:Int64
+  %4 = And %3, 2:Int64
   Store %0, %4, aliasing=0, offset=8
 }
 )", builder.section());
@@ -103,9 +103,9 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = ShrU %1, 1
-  %3 = Shl %1, 2
-  %4 = And %3, 8
+  %2 = ShrU %1, 1:Int64
+  %3 = Shl %1, 2:Int64
+  %4 = And %3, 8:Int64
   Store %0, %4, aliasing=0, offset=8
 }
 )", builder.section());
@@ -123,9 +123,9 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = Shl %1, 1
-  %3 = Shl %1, 4
-  %4 = And %3, 2040
+  %2 = Shl %1, 1:Int64
+  %3 = Shl %1, 4:Int64
+  %4 = And %3, 2040:Int64
   Store %0, %4, aliasing=0, offset=8
 }
 )", builder.section());
@@ -141,7 +141,7 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = And %1, 15
+  %2 = And %1, 15:Int64
   Store %0, %2, aliasing=0, offset=8
 }
 )", builder.section());
@@ -160,7 +160,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
   %3 = Or %2, %1
-  %4 = And %2, 4294902015
+  %4 = And %2, 4294902015:Int64
   Store %0, %4, aliasing=0, offset=16
 }
 )", builder.section());
@@ -200,7 +200,7 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
-  %3 = And %1, 240
+  %3 = And %1, 240:Int8
   Store %0, %3, aliasing=0, offset=2
 }
 )", builder.section());
@@ -215,7 +215,7 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int16, flags={}, aliasing=0, offset=0
-  %2 = Or %1, 3
+  %2 = Or %1, 3:Int16
   Store %0, %2, aliasing=0, offset=2
 }
 )", builder.section());
@@ -235,10 +235,10 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int16, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int16, flags={}, aliasing=0, offset=2
   %3 = Load %0, type=Int16, flags={}, aliasing=0, offset=4
-  %4 = Shl %2, 14
+  %4 = Shl %2, 14:Int16
   %5 = Or %3, %1
   %6 = Or %5, %4
-  %7 = And %1, 4095
+  %7 = And %1, 4095:Int16
   Store %0, %7, aliasing=0, offset=6
 }
 )", builder.section());
@@ -253,7 +253,7 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Int16, flags={}, aliasing=0, offset=0
   %2 = ResizeX %1, type=Int32
-  %3 = Or %2, 4294901760
+  %3 = Or %2, 4294901760:Int32
   Store %0, %3, aliasing=0, offset=4
 }
 )", builder.section());

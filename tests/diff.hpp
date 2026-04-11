@@ -38,6 +38,22 @@
 
 namespace metajit {
   namespace test {
+    Section* copy_and_fold(Section* section) {
+      // recreate the section using the TraceBuilder
+      std::stringstream ss;
+      section->write(ss);
+      std::string section_str = ss.str();
+      std::istringstream iss(section_str);
+      Section* section2 = SectionReader<TraceBuilder>::read_section(section->context(), section->allocator(), iss);
+      DeadCodeElim::run(section2);
+      RefineAliasing::run(section2);
+      DeadStoreElim::run(section2);
+      metajit::DeadCodeElim::run(section2);
+      Simplify::run(section2, 10);
+      DeadCodeElim::run(section2);
+      return section2;
+    }
+
     class RandomRange {
     private:
       Type _type = Type::Void;
@@ -273,15 +289,20 @@ namespace metajit {
       }
       
       X86Func x86_func = (X86Func) x86cg.deploy();
-
+      Section* folded_section = nullptr;
+      if (optimize_section_for_interpreter) {
+        folded_section = copy_and_fold(section);
+      }
       uint8_t* llvm_data = new uint8_t[data.data_size()]();
       uint8_t* x86_data = new uint8_t[data.data_size()]();
       uint8_t* interp_data = new uint8_t[data.data_size()]();
+      uint8_t* interp_data2 = new uint8_t[data.data_size()]();
 
       for (size_t sample = 0; sample < sample_count; sample++) {
         data.gen(llvm_data);
         std::copy(llvm_data, llvm_data + data.data_size(), x86_data);
         std::copy(llvm_data, llvm_data + data.data_size(), interp_data);
+        std::copy(llvm_data, llvm_data + data.data_size(), interp_data2);
 
         llvm_func(llvm_data);
         x86_func(x86_data);
@@ -300,12 +321,28 @@ namespace metajit {
             );
           }
         }
+
+        if (optimize_section_for_interpreter) {
+          Interpreter interpreter(folded_section, {
+            Interpreter::Bits::constant(interp_data2)
+          });
+
+          Interpreter::Event event = interpreter.run();
+          if (event != Interpreter::Event::Exit) {
+            throw unittest::AssertionError(
+              "Interpreter of folded section did not exit cleanly",
+              __LINE__,
+              __FILE__
+            );
+          }
+        }
         
         for (const TestData::Output& output : data.outputs()) {
           bool is_equal = true;
           for (size_t it = 0; it < type_size(output.type); it++) {
             if (llvm_data[output.offset + it] != x86_data[output.offset + it] ||
-                (verify_interpreter && llvm_data[output.offset + it] != interp_data[output.offset + it])) {
+                (verify_interpreter && llvm_data[output.offset + it] != interp_data[output.offset + it]) ||
+                (optimize_section_for_interpreter && llvm_data[output.offset + it] != interp_data2[output.offset + it])) {
               is_equal = false;
               break;
             }
@@ -321,6 +358,10 @@ namespace metajit {
             if (verify_interpreter) {
               stream << "Interpreter Output:\n";
               data.write_outputs(stream, interp_data);
+            }
+            if (optimize_section_for_interpreter) {
+              stream << "Folded Interpreter Output:\n";
+              data.write_outputs(stream, interp_data2);
             }
             stream << "\n";
             throw unittest::AssertionError(
