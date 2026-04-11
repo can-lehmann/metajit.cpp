@@ -419,6 +419,7 @@ namespace metajit {
     Value* arg(size_t index) const { return _args.at(index); }
 
     void set_arg(size_t index, Value* value) {
+      assert(index < _args.size());
       assert(!value || !_args.at(index) || value->type() == _args.at(index)->type());
       _args[index] = value;
     }
@@ -1194,17 +1195,10 @@ namespace metajit {
     }
 
     JumpInst* build_jump(Block* block, const lwir::Span<Value*>& args) {
-      JumpInst* jump = (JumpInst*) _section->allocator().alloc(
-        sizeof(JumpInst) + sizeof(Value*) * args.size(),
-        alignof(JumpInst)
-      );
-      new (jump) JumpInst(block);
-      lwir::Span<Value*> trailing_span = lwir::Span<Value*>::trailing<JumpInst>(jump, args.size());
+      JumpInst* jump = build_jump(args.size(), block);
       for (size_t it = 0; it < args.size(); it++) {
-        trailing_span[it] = args[it];
+        jump->set_arg(it, args[it]);
       }
-      jump->set_args(trailing_span);
-      insert(jump);
       return jump;
     }
 
@@ -1212,19 +1206,15 @@ namespace metajit {
       return build_jump(block, lwir::Span<Value*>((Value**) args.data(), args.size()));
     }
 
+    JumpInst* build_jump(Block* block) {
+      return build_jump(0, block);
+    }
+
     CallInst* build_call(Value* callee, Type type, const lwir::Span<Value*>& args, CallConv call_conv = CallConv::Default) {
-      CallInst* call = (CallInst*) _section->allocator().alloc(
-        sizeof(CallInst) + sizeof(Value*) * (1 + args.size()),
-        alignof(CallInst)
-      );
-      new (call) CallInst(callee, type, call_conv);
-      lwir::Span<Value*> trailing_span = lwir::Span<Value*>::trailing<CallInst>(call, 1 + args.size());
-      trailing_span[0] = callee;
+      CallInst* call = build_call(callee, args.size(), type, call_conv);
       for (size_t it = 0; it < args.size(); it++) {
-        trailing_span[it + 1] = args[it];
+        call->set_arg(it + 1, args[it]);
       }
-      call->set_args(trailing_span);
-      insert(call);
       return call;
     }
 
@@ -1857,7 +1847,7 @@ namespace metajit {
     }
 
     Value* fold_jump(Block* block) {
-      return build_jump(block);
+      return build_jump(0, block);
     }
 
     Value* fold_branch(Value* cond, Block* true_block, Block* false_block) {

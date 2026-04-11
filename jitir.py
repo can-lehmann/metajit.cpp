@@ -14,6 +14,25 @@
 
 from lwir import *
 
+class CountVarargsValueType(BaseType):
+    def __init__(self):
+        super().__init__()
+
+    def is_value(self):
+        return True
+
+    def format(self, ir):
+        return "size_t"
+
+    def __hash__(self):
+        return hash("CountVarargsValueType")
+    
+    def __eq__(self, other):
+        return isinstance(other, CountVarargsValueType)
+
+    def __repr__(self):
+        return "CountVarargsValueType()"
+
 class LLVMAPIPlugin:
     def __init__(self, prefix, type_substitutions):
         self.prefix = prefix
@@ -53,21 +72,43 @@ class BuildBuildInstPlugin:
         code += f"                                    LLVM_API& api,\n"
         code += f"                                    Inst* inst,\n"
         code += f"                                    llvm::Value* jitir_builder,\n"
-        code += f"                                    std::vector<llvm::Value*> args) {{\n"
+        code += f"                                    const std::vector<llvm::Value*> args) {{\n"
         code += f"  llvm::LLVMContext& context = builder.GetInsertBlock()->getModule()->getContext();\n"
         for inst in ir.insts:
             name = inst.format_name(ir)
             code += f"  if ({name}* i = dynamic_cast<{name}*>(inst)) {{\n"
-            code += f"    args.insert(args.begin(), jitir_builder);\n"
+            code += f"    std::vector<llvm::Value*> build_args;\n"
+            code += f"    build_args.push_back(jitir_builder);\n"
+
+            value_index = 0
+            varargs = None
             for arg in inst.args:
-                if not arg.type.is_value():
-                    llvm_type = self.type_substitutions[arg.type]
-                    if "PointerType" in llvm_type:
-                        code += f"    args.push_back(builder.CreateIntToPtr(llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), (uint64_t)i->{arg.name}(), false), {llvm_type}));\n"
-                    else:
-                        code += f"    args.push_back(llvm::ConstantInt::get({llvm_type}, (uint64_t)i->{arg.name}(), false));\n"
-            code += f"    assert(args.size() == {len(inst.args) + 1});\n"
-            code += f"    return builder.CreateCall(api.{inst.format_builder_name(ir)}, args);\n"
+                match arg.type:
+                    case CountVarargsValueType():
+                        code += f"    build_args.push_back(llvm::ConstantInt::get({self.type_substitutions[arg.type]}, {arg.name}.size() - {value_index}, false));\n"
+                        varargs = arg
+                    case ValueType():
+                        code += f"    build_args.push_back(args[{value_index}]);\n"
+                        value_index += 1
+                    case Type():
+                        llvm_type = self.type_substitutions[arg.type]
+                        if "PointerType" in llvm_type:
+                            code += f"    build_args.push_back(builder.CreateIntToPtr(llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), (uint64_t)i->{arg.name}(), false), {llvm_type}));\n"
+                        else:
+                            code += f"    build_args.push_back(llvm::ConstantInt::get({llvm_type}, (uint64_t)i->{arg.name}(), false));\n"
+            code += f"    assert(build_args.size() == {len(inst.args) + 1});\n"
+            code += f"    llvm::Value* built = builder.CreateCall(api.{inst.format_builder_name(ir)}, build_args);\n"
+
+            if varargs is not None:
+                code += f"    for (size_t it = {value_index}; it < args.size(); it++) {{\n"
+                code += f"      builder.CreateCall(api.set_arg, {{\n"
+                code += f"        built,\n"
+                code += f"        llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), it, false),\n"
+                code += f"        args[it]\n"
+                code += f"      }});\n"
+                code += f"    }}\n"
+
+            code += f"    return built;\n"
             code += f"  }}\n"
         code += f"  assert(false && \"Unknown instruction\");\n"
         code += f"  return nullptr;\n"
@@ -86,15 +127,21 @@ class MapSymbolsInstPlugin:
         return {"map_symbols": code}
 
 class AllocatorBuilderPlugin(BuilderPlugin):
-    def __init__(self):
-        super().__init__(allocator = self.allocator)
-    
     def allocator(self, inst, ir):
         name = inst.format_name(ir)
         arg_count = 0
+        varargs = None
         for arg in inst.args:
-            if arg.type.is_value():
+            if isinstance(arg.type, CountVarargsValueType):
+                varargs = arg
+            elif arg.type.is_value():
                 arg_count += 1
+        
+        if varargs is None:
+            arg_count = str(arg_count)
+        else:
+            arg_count = f"({arg_count} + {varargs.name})"
+        
         size = f"sizeof({name}) + sizeof(Value*) * {arg_count}"
         return f"({name}*) _section->allocator().alloc({size}, alignof({name}))"
 
@@ -106,8 +153,11 @@ class InstTrailingConstructorPlugin:
         init_list = []
         arg_init = ""
         arg_count = 0
+        varargs = None
         for arg in inst.args:
             match arg.type:
+                case CountVarargsValueType():
+                    varargs = arg
                 case ValueType():
                     arg_init += f".with({arg_count}, {arg.name})"
                     arg_count += 1
@@ -116,6 +166,11 @@ class InstTrailingConstructorPlugin:
                 case _:
                     assert False, f"Unknown type: {arg.type}"
         
+        if varargs is None:
+            arg_count = str(arg_count)
+        else:
+            arg_count = f"({arg_count} + {varargs.name})"
+
         arg_init = f"lwir::Span<Value*>::trailing(this, {arg_count})" + arg_init
 
         init_list = [f"{base}({inst.type}, {arg_init})"] + init_list
@@ -337,6 +392,7 @@ jitir = IR(
         Inst("Call",
             args = [
                 Arg("callee", getter=Getter.Always),
+                Arg("args", type=CountVarargsValueType()),
                 Arg("type", Type("Type")),
                 Arg("call_conv", Type("CallConv"), setter=True),
             ],
@@ -357,7 +413,10 @@ jitir = IR(
             doc = "Conditional jump."
         ),
         Inst("Jump",
-            args = [Arg("block", type=Type("Block*"), setter=True)],
+            args = [
+                Arg("args", type=CountVarargsValueType()),
+                Arg("block", type=Type("Block*"), setter=True)
+            ],
             type = "Type::Void",
             type_checks = [],
             doc = "Unconditional jump."
@@ -405,7 +464,8 @@ lwir(
                 Type("Block*"): "void*",
                 Type("AliasingGroup"): "uint32_t", # Needs to be passed by LLVM IR
                 Type("const char*"): "const char*",
-                ValueType(): "void*"
+                ValueType(): "void*",
+                CountVarargsValueType(): "uint64_t"
             }
         )
     ],
@@ -423,6 +483,7 @@ llvm_type_substitutions = {
     Type("AliasingGroup"): "llvm::Type::getInt32Ty(context)",
     Type("const char*"): "llvm::PointerType::get(context, 0)",
     ValueType(): "llvm::PointerType::get(context, 0)",
+    CountVarargsValueType(): "llvm::Type::getInt64Ty(context)"
 }
 
 lwir(
@@ -453,7 +514,10 @@ class MarkdownPlugin:
                 code += f"{inst.doc}\n\n"
             code += f"Arguments\n\n"
             for arg in inst.args:
-                code += f"- **{arg.name}**: `{arg.type.format(ir)}`\n"
+                if isinstance(arg, CountVarargsValueType):
+                    code += f"- **{arg.name}**: Variable number of arguments"
+                else:
+                    code += f"- **{arg.name}**: `{arg.type.format(ir)}`\n"
             code += f"\n"
             code += f"Return Type: `{inst.type}`\n\n"
             if len(inst.type_checks) > 0:
