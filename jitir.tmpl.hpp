@@ -437,6 +437,15 @@ namespace metajit {
 
     void substitute_args(NameMap<Value*>& substs);
 
+    void substitute_args(const std::map<Value*, Value*>& substs) {
+      for (size_t it = 0; it < _args.size(); it++) {
+        Value* arg = _args.at(it);
+        if (arg && substs.find(arg) != substs.end()) {
+          set_arg(it, substs.at(arg));
+        }
+      }
+    }
+
     virtual void write(PrettyStream& stream) const = 0;
     virtual void write_json(std::ostream& stream) const = 0;
 
@@ -2858,6 +2867,31 @@ namespace metajit {
         }
       }
 
+      void store(uint8_t* ptr) {
+        assert(is_const());
+        switch (type_size(type)) {
+          case 1: *ptr = (uint8_t) value; break;
+          case 2: *(uint16_t*) ptr = (uint16_t) value; break;
+          case 4: *(uint32_t*) ptr = (uint32_t) value; break;
+          case 8: *(uint64_t*) ptr = (uint64_t) value; break;
+          default:
+            assert(false); // Unreachable
+        }
+      }
+
+      static Bits load(uint8_t* ptr, Type type) {
+        uint64_t value = 0;
+        switch (type_size(type)) {
+          case 1: value = *ptr; break;
+          case 2: value = *(uint16_t*) ptr; break;
+          case 4: value = *(uint32_t*) ptr; break;
+          case 8: value = *(uint64_t*) ptr; break;
+          default:
+            assert(false); // Unreachable
+        }
+        return Bits::constant(type, value);
+      }
+
       static Bits at(const NameMap<Bits>& values, Value* value) {
         if (dynmatch(Const, constant, value)) {
           return Bits(
@@ -3043,31 +3077,13 @@ namespace metajit {
         Bits ptr_bits = at(load->ptr());
         assert(ptr_bits.is_const());
         uint8_t* ptr = (uint8_t*) ptr_bits.value + load->offset();
-        uint64_t value = 0;
-        switch (type_size(load->type())) {
-          case 1: value = *ptr; break;
-          case 2: value = *(uint16_t*) ptr; break;
-          case 4: value = *(uint32_t*) ptr; break;
-          case 8: value = *(uint64_t*) ptr; break;
-          default:
-            assert(false); // Unreachable
-        }
-        _values[load] = Bits::constant(load->type(), value);
+        _values[load] = Bits::load(ptr, load->type());
       } else if (dynmatch(StoreInst, store, _inst)) {
         Bits ptr_bits = at(store->ptr());
         Bits value_bits = at(store->value());
         assert(ptr_bits.is_const());
-        assert(value_bits.is_const());
         uint8_t* ptr = (uint8_t*) ptr_bits.value + store->offset();
-        uint64_t value = value_bits.value;
-        switch (type_size(store->value()->type())) {
-          case 1: *ptr = (uint8_t) value; break;
-          case 2: *(uint16_t*) ptr = (uint16_t) value; break;
-          case 4: *(uint32_t*) ptr = (uint32_t) value; break;
-          case 8: *(uint64_t*) ptr = (uint64_t) value; break;
-          default:
-            assert(false); // Unreachable
-        }
+        value_bits.store(ptr);
         _values[store] = Bits();
       } else if (dynmatch(AllocaInst, alloca_inst, _inst)) {
         Bits size_bits = at(alloca_inst->size());
@@ -4335,7 +4351,7 @@ namespace metajit {
         _section(section),
         _binding_time_groups(section) {
       
-      assert(section->ordering() >= BlockOrdering::Dominator);
+      assert(section->ordering() >= BlockOrdering::Topological);
 
       find_reentry_points();
       find_closure_reuse();
@@ -4343,8 +4359,41 @@ namespace metajit {
       set_ids();
     }
 
+    ReentryClosures(Section* section, const std::set<Inst*>& reentry_points):
+        _section(section),
+        _binding_time_groups(section) {
+      
+      assert(section->ordering() >= BlockOrdering::Topological);
+
+      for (Inst* inst : reentry_points) {
+        _closures.emplace(inst, Closure());
+      }
+
+      populate_closures();
+      set_ids();
+    }
+
     auto begin() const { return _closures.begin(); }
     auto end() const { return _closures.end(); }
+
+    bool has(Inst* inst) const {
+      return _closures.find(inst) != _closures.end();
+    }
+
+    Closure& at(Inst* inst) {
+      assert(has(inst));
+      return _closures.at(inst);
+    }
+
+    size_t max_size() const {
+      size_t max = 0;
+      for (const auto& [inst, closure] : _closures) {
+        if (!closure.reuse && closure.size > max) {
+          max = closure.size;
+        }
+      }
+      return max;
+    }
 
     void write(std::ostream& stream) const {
       InfoWriter info_writer([&](std::ostream& stream, Inst* inst) {
@@ -4434,13 +4483,76 @@ namespace metajit {
 
     Builder _builder;
     Block* _original_entry;
-    std::vector<Block*> _entry_blocks;
+    std::unordered_map<Inst*, Block*> _entry_blocks;
+    std::unordered_map<Block*, std::map<Value*, Value*>> _substs_at_entry;
 
-    void slice_block(Block* block) {
+    void slice_blocks() {
+      _substs_at_entry.emplace(
+        _section->entry(),
+        std::map<Value*, Value*>()
+      );
 
+      Block* block = _section->entry();
+      while (block) {
+        Block* next_block = block->next();
+        
+        std::map<Value*, Value*> substs = _substs_at_entry.at(block);
+
+        Inst* inst = *block->begin();
+        while (!_closures.has(inst)) {
+          inst->substitute_args(substs);
+          inst = inst->next();
+        }
+
+        _builder.move_before(block, inst);
+
+        while (inst) {
+          Inst* next_inst = inst->next();
+
+          if (_closures.has(inst)) {
+            ReentryClosures::Closure& closure = _closures.at(inst);
+
+            std::vector<Arg*> args;
+            std::vector<Value*> jump_args;
+            std::map<Value*, Value*> new_substs;
+            for (const ReentryClosures::Capture& capture : closure.captures) {
+              Arg* arg = _builder.alloc_arg(capture.value->type(), args.size());
+              new_substs.emplace(capture.value, arg);
+              args.push_back(arg);
+              jump_args.push_back(capture.value);
+            }
+
+            Block* new_block = _builder.build_block_before(next_block, args);
+
+            _builder.build_jump(new_block, jump_args)->substitute_args(substs);
+            _builder.move_to_end(new_block);
+
+            _entry_blocks.emplace(inst, new_block);
+
+            substs = new_substs;
+          }
+
+          block->remove(inst);
+          _builder.insert(inst);
+
+          inst->substitute_args(substs);
+
+          inst = next_inst;
+        }
+
+        for (Block* succ : _builder.block()->successors()) {
+          if (_substs_at_entry.find(succ) == _substs_at_entry.end()) {
+            _substs_at_entry.emplace(succ, substs);
+          } else {
+            assert(_substs_at_entry[succ] == substs && "Re-convergence from different closures is currently not supported.");
+          }
+        }
+
+        block = next_block;
+      }
     }
 
-    void build_branch() {
+    void build_dispatcher() {
       Block* original_entry = _section->entry();
       Block* dispatch_entry = _builder.build_block_before(original_entry, {
         /* closure */ Type::Ptr
@@ -4461,8 +4573,16 @@ namespace metajit {
       Block* else_block = invalid_id;
       for (auto& [inst, closure] : _closures) {
         if (!closure.reuse) {
+          Block* check_block = _builder.build_block_before(else_block, {});
           Block* load_block = _builder.build_block_before(else_block, {});
           
+          _builder.move_to_end(check_block);
+          _builder.build_branch(
+            _builder.build_eq(id, _builder.build_const(Type::Int32, closure.id)),
+            load_block,
+            else_block
+          );
+
           _builder.move_to_end(load_block);
           std::vector<Value*> capture_values;
           for (const ReentryClosures::Capture& capture : closure.captures) {
@@ -4475,15 +4595,8 @@ namespace metajit {
             ));
           }
 
-          _builder.build_jump(_entry_blocks[closure.id], capture_values);
+          _builder.build_jump(_entry_blocks.at(inst), capture_values);
 
-          Block* check_block = _builder.build_block_before(else_block, {});
-          _builder.move_to_end(check_block);
-          _builder.build_branch(
-            _builder.build_eq(id, _builder.build_const(Type::Int32, closure.id)),
-            _entry_blocks[closure.id],
-            else_block
-          );
           
           else_block = check_block;
         }
@@ -4499,14 +4612,14 @@ namespace metajit {
         _closures(closures),
         _builder(section) {
       
-      Block* block = section->entry();
-      while (block) {
-        Block* next_block = block->next();
-        
-        block = next_block;
-      }
-
+      slice_blocks();
+      build_dispatcher();
     }
+
+    // TODO: Remove? Requires template magic
+    static void run(Section* section, ReentryClosures& closures) {
+      SliceReentryClosures src(section, closures);
+    };
   };
 }
 

@@ -16,3 +16,4 @@ tests/fuzzer
 tests/test_tv
 tests/source/*.ll
 tests/test_source
+tests/test_reentry
