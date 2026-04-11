@@ -170,6 +170,7 @@ class InstTrailingConstructorPlugin:
             arg_count = str(arg_count)
         else:
             arg_count = f"({arg_count} + {varargs.name})"
+            arg_init = f".zeroed()" + arg_init
 
         arg_init = f"lwir::Span<Value*>::trailing(this, {arg_count})" + arg_init
 
