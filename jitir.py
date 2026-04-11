@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import code
+
 from lwir import *
 
 class CountVarargsValueType(BaseType):
@@ -236,6 +238,42 @@ class JitirInstWriteJsonPlugin(InstWriteJsonPlugin):
         else:
             assert False
 
+class ClonePlugin:
+    def run(self, ir):
+        code = ""
+        for inst in ir.insts:
+            name = inst.format_name(ir)
+            code += f"if (dynamic_cast<{name}*>(inst)) {{\n"
+            code += f"  {name}* clone = _builder.{inst.format_builder_name(ir)}("
+            args = []
+            value_index = 0
+            varargs = None
+            for arg in inst.args:
+                match arg.type:
+                    case CountVarargsValueType():
+                        args.append(f"inst->arg_count() - {value_index}")
+                        varargs = arg
+                    case ValueType():
+                        args.append(f"clone_arg(inst->arg({value_index}))")
+                        value_index += 1
+                    case Type(name = "Block*"):
+                        args.append(f"_blocks[(({name}*) inst)->{arg.name}()->name()]")
+                    case Type():
+                        args.append(f"(({name}*) inst)->{arg.name}()")
+            code += ", ".join(args)
+            code += f");\n"
+
+            if varargs is not None:
+                code += f"  for (size_t it = {value_index}; it < inst->arg_count(); it++) {{\n"
+                code += f"    clone->set_arg(it, clone_arg(inst->arg(it)));\n"
+                code += f"  }}\n"
+
+            code += f"  return clone;\n"
+            code += f"}}\n"
+        code += f"assert(false && \"Unknown instruction\");\n"
+        code += f"return nullptr;\n"
+        return {"clone": code}
+
 def binop(name, type_checks = None):
     if type_checks is None:
         type_checks = ["is_int(a->type())"]
@@ -452,6 +490,7 @@ lwir(
             InstHashPlugin()
         ]),
         AllocatorBuilderPlugin(),
+        ClonePlugin(),
         CAPIPlugin(
             prefix = "jitir",
             builder_name = "::metajit::TraceBuilder",

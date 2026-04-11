@@ -550,6 +550,7 @@ namespace metajit {
     void set_args(const lwir::Span<Arg*>& args) { _args = args; }
 
     Arg* arg(size_t index) const { return _args.at(index); }
+    void set_arg(size_t index, Arg* arg) { _args[index] = arg; }
 
     size_t name() const { return _name; }
     void set_name(size_t name) { _name = name; }
@@ -4335,6 +4336,61 @@ namespace metajit {
         }
       });
       _section->write(stream, &info_writer);
+    }
+  };
+
+  class Clone: Pass<Clone> {
+  private:
+    Section* _section;
+    Section* _cloned_section;
+    Builder _builder;
+
+    std::vector<Block*> _blocks;
+    NameMap<Value*> _values;
+
+    Value* clone_arg(Value* value) {
+      if (value->is_named()) {
+        return _values.at((NamedValue*) value);
+      } else if (dynmatch(Const, constant, value)) {
+        return _builder.build_const(constant->type(), constant->value());
+      } else {
+        assert(false);
+      }
+    }
+
+    Inst* clone_inst(Inst* inst) {
+      /* ${clone} */
+    }
+  public:
+    Clone(Section* section, Section* cloned_section):
+        Pass<Clone>(section),
+        _section(section),
+        _cloned_section(cloned_section),
+        _builder(cloned_section),
+        _blocks(section->block_count(), nullptr),
+        _values(section) {
+      
+      assert(section->ordering() >= BlockOrdering::Dominator);
+
+      _cloned_section->set_ordering(_section->ordering());
+
+      for (Block* block : *_section) {
+        Block* cloned = _builder.build_block(block->args().size());
+        for (size_t it = 0; it < block->args().size(); it++) {
+          cloned->set_arg(it, block->arg(it));
+        }
+        _blocks[block->name()] = cloned;
+      }
+
+      for (Block* block : *_section) {
+        _builder.move_to_end(_blocks[block->name()]);
+
+        for (Inst* inst : *block) {
+          Inst* cloned = clone_inst(inst);
+          _builder.insert(cloned);
+          _values[inst] = cloned;
+        }
+      }
     }
   };
 }
