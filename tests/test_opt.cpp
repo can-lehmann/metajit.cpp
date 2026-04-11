@@ -29,6 +29,18 @@ void check_simplify(const std::string& expected, Section* section) {
   unittest_assert(ss.str() == expected);
 }
 
+void check_simplifycfg(const std::string& expected, Section* section) {
+  unittest_assert (!section->verify(std::cout)); // make sure that we start from a valid cfg
+  metajit::SimplifyCFG::run(section);
+  unittest_assert (!section->verify(std::cout));
+  std::stringstream ss;
+  section->write(ss);
+  if (ss.str() != expected) {
+    std::cerr << "Expected:\n" << expected << "\n\nGot:\n" << ss.str() << std::endl;
+  }
+  unittest_assert(ss.str() == expected);
+}
+
 int main() {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
@@ -255,6 +267,157 @@ b0(%0: Ptr):
   %2 = ResizeX %1, type=Int32
   %3 = Or %2, 4294901760
   Store %0, %3, aliasing=0, offset=4
+}
+)", builder.section());
+  });
+
+  // tests for SimplifyCFG
+  suite.diff_test("simplifycfg branch with const true").run([](Builder& builder, TestData& data) {
+    Value* cond = builder.build_const(Type::Bool, 1);
+    Block* then_block = builder.build_block();
+    Block* else_block = builder.build_block();
+    Block* merge_block = builder.build_block();
+    
+    builder.build_branch(cond, then_block, else_block);
+    builder.move_to_end(then_block);
+    builder.build_jump(merge_block);
+    builder.move_to_end(else_block);
+    builder.build_jump(merge_block);
+    builder.move_to_end(merge_block);
+    data.output(builder.build_const(Type::Int64, 42));
+    builder.build_exit();
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  Store %0, 42, aliasing=0, offset=0
+  Exit
+}
+)", builder.section());
+  });
+
+  suite.diff_test("simplifycfg branch with both targets same").run([](Builder& builder, TestData& data) {
+    Value* cond = data.input(Type::Bool);
+    Block* then_block = builder.build_block();
+    
+    builder.build_branch(cond, then_block, then_block);
+    builder.move_to_end(then_block);
+    data.output(builder.build_const(Type::Int64, 42));
+    builder.build_exit();
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Store %0, 42, aliasing=0, offset=8
+  Exit
+}
+)", builder.section());
+  });
+
+  suite.diff_test("simplifycfg jump with args").run([](Builder& builder, TestData& data) {
+    Value* cond = builder.build_const(Type::Bool, 0);
+    Value* input = data.input(Type::Int64);
+    Block* then_block = builder.build_block();
+    Block* else_block = builder.build_block();
+    Block* merge_block = builder.build_block({Type::Int64});
+
+    builder.build_branch(cond, then_block, else_block);
+    builder.move_to_end(then_block);
+    builder.build_jump(merge_block, {builder.build_const(Type::Int64, 42)});
+    builder.move_to_end(else_block);
+    builder.build_jump(merge_block, {input});
+    builder.move_to_end(merge_block);
+    data.output(merge_block->arg(0));
+    builder.build_exit();
+    // we can't optimize this right now, due to the arguments, but we can remove the branch
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  Jump %1, block=b1
+b1(%3: Int64):
+  Store %0, %3, aliasing=0, offset=8
+  Exit
+}
+)", builder.section());
+  });
+  suite.diff_test("simplifycfg jump with args further substs").run([](Builder& builder, TestData& data) {
+    // we can't optimize this right now, due to the arguments
+    Value* input = data.input(Type::Int64);
+    Block* arg_block = builder.build_block({Type::Int64});
+    builder.build_jump(arg_block, {input});
+    builder.move_to_end(arg_block);
+    data.output(arg_block->arg(0));
+    // now branch and use the arg after the branch
+    Value* cond = data.input(Type::Bool);
+    Block* then_block = builder.build_block();
+    Block* else_block = builder.build_block();
+    Block* merge_block = builder.build_block();
+    builder.build_branch(cond, then_block, else_block);
+    builder.move_to_end(then_block);
+    data.output(arg_block->arg(0));
+    builder.build_jump(merge_block);
+    builder.move_to_end(else_block);
+    data.output(arg_block->arg(0));
+    builder.build_jump(merge_block);
+    builder.move_to_end(merge_block);
+    data.output(arg_block->arg(0));
+    builder.build_exit();
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  Jump %1, block=b1
+b1(%3: Int64):
+  Store %0, %3, aliasing=0, offset=8
+  %5 = Load %0, type=Bool, flags={}, aliasing=0, offset=16
+  Branch %5, true_block=b2, false_block=b3
+b2:
+  Store %0, %3, aliasing=0, offset=24
+  Jump block=b4
+b3:
+  Store %0, %3, aliasing=0, offset=32
+  Jump block=b4
+b4:
+  Store %0, %3, aliasing=0, offset=40
+  Exit
+}
+)", builder.section());
+  });
+
+  suite.diff_test("simplifycfg branch on same bool").run([](Builder& builder, TestData& data) {
+    Value* cond1 = data.input(Type::Bool);
+    Block* then_block = builder.build_block();
+    Block* else_block = builder.build_block();
+    Block* merge_block = builder.build_block();
+    Block* then_then_block = builder.build_block();
+    Block* then_else_block = builder.build_block();
+
+    builder.build_branch(cond1, then_block, else_block);
+    builder.move_to_end(then_block);
+    builder.build_branch(cond1, then_then_block, then_else_block);
+    builder.move_to_end(then_then_block);
+    data.output(builder.build_const(Type::Int64, 1));
+    builder.build_jump(merge_block);
+    builder.move_to_end(then_else_block);
+    data.output(builder.build_const(Type::Int64, 2));
+    builder.build_jump(merge_block);
+    builder.move_to_end(else_block);
+    builder.build_jump(merge_block);
+    builder.move_to_end(merge_block);
+    data.output(builder.build_const(Type::Int64, 42));
+    builder.build_exit();
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Store %0, 1, aliasing=0, offset=8
+  Jump block=b3
+b2:
+  Jump block=b3
+b3:
+  Store %0, 42, aliasing=0, offset=24
+  Exit
 }
 )", builder.section());
   });
