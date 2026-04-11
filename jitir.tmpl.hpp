@@ -4211,19 +4211,26 @@ namespace metajit {
 
   class ReentryClosures {
   public:
+    struct Capture {
+      NamedValue* value = nullptr;
+      size_t offset = 0;
+
+      Capture() {}
+      Capture(NamedValue* value, size_t offset): value(value), offset(offset) {}
+    };
+
     struct Closure {
       Inst* reuse = nullptr;
-      std::unordered_map<NamedValue*, size_t> values;
-      size_t size = 0;
+      std::vector<Capture> captures;
+      size_t id = 0;
+      size_t size = 4;
 
       void add(NamedValue* value) {
-        if (values.find(value) == values.end()) {
-          if (size % type_size(value->type())) {
-            size += type_size(value->type()) - size % type_size(value->type());
-          }
-          values[value] = size;
-          size += type_size(value->type());
+        if (size % type_size(value->type())) {
+          size += type_size(value->type()) - size % type_size(value->type());
         }
+        captures.emplace_back(value, size);
+        size += type_size(value->type());
       }
     };
   private:
@@ -4314,6 +4321,15 @@ namespace metajit {
         live_before_block[block->name()] = live;
       }
     }
+
+    void set_ids() {
+      size_t id = 0;
+      for (auto& [inst, closure] : _closures) {
+        if (!closure.reuse) {
+          closure.id = id++;
+        }
+      }
+    }
   public:
     ReentryClosures(Section* section):
         _section(section),
@@ -4324,7 +4340,11 @@ namespace metajit {
       find_reentry_points();
       find_closure_reuse();
       populate_closures();
+      set_ids();
     }
+
+    auto begin() const { return _closures.begin(); }
+    auto end() const { return _closures.end(); }
 
     void write(std::ostream& stream) const {
       InfoWriter info_writer([&](std::ostream& stream, Inst* inst) {
@@ -4336,11 +4356,11 @@ namespace metajit {
           } else {
             stream << "Closure of size " << closure.size << " capturing ";
             bool is_first = true;
-            for (const auto& [value, offset] : closure.values) {
+            for (const auto& capture : closure.captures) {
               if (!is_first) {
                 stream << ", ";
               }
-              value->write_arg(stream);
+              capture.value->write_arg(stream);
               is_first = false;
             }
           }
@@ -4402,6 +4422,90 @@ namespace metajit {
           _values[inst] = clone_inst(inst);
         }
       }
+    }
+  };
+
+  // Adds a closure argument to the given section which is used to pick up execution from
+  // a given closure.
+  class SliceReentryClosures: public Pass<SliceReentryClosures> {
+  private:
+    Section* _section;
+    ReentryClosures& _closures;
+
+    Builder _builder;
+    Block* _original_entry;
+    std::vector<Block*> _entry_blocks;
+
+    void slice_block(Block* block) {
+
+    }
+
+    void build_branch() {
+      Block* original_entry = _section->entry();
+      Block* dispatch_entry = _builder.build_block_before(original_entry, {
+        /* closure */ Type::Ptr
+      });
+      _builder.move_to_end(dispatch_entry);
+      Value* id = _builder.build_load(
+        _builder.entry_arg(0),
+        Type::Int32,
+        LoadFlags::None,
+        AliasingGroup(0),
+        0
+      );
+
+      Block* invalid_id = _builder.build_block_before(original_entry, {});
+      _builder.move_to_end(invalid_id);
+      _builder.build_exit(); // Unreachable
+
+      Block* else_block = invalid_id;
+      for (auto& [inst, closure] : _closures) {
+        if (!closure.reuse) {
+          Block* load_block = _builder.build_block_before(else_block, {});
+          
+          _builder.move_to_end(load_block);
+          std::vector<Value*> capture_values;
+          for (const ReentryClosures::Capture& capture : closure.captures) {
+            capture_values.push_back(_builder.build_load(
+              _builder.entry_arg(0),
+              capture.value->type(),
+              LoadFlags::None,
+              AliasingGroup(0),
+              capture.offset
+            ));
+          }
+
+          _builder.build_jump(_entry_blocks[closure.id], capture_values);
+
+          Block* check_block = _builder.build_block_before(else_block, {});
+          _builder.move_to_end(check_block);
+          _builder.build_branch(
+            _builder.build_eq(id, _builder.build_const(Type::Int32, closure.id)),
+            _entry_blocks[closure.id],
+            else_block
+          );
+          
+          else_block = check_block;
+        }
+      }
+
+      _builder.move_to_end(dispatch_entry);
+      _builder.build_jump(else_block);
+    }
+  public:
+    SliceReentryClosures(Section* section, ReentryClosures& closures):
+        Pass(section),
+        _section(section),
+        _closures(closures),
+        _builder(section) {
+      
+      Block* block = section->entry();
+      while (block) {
+        Block* next_block = block->next();
+        
+        block = next_block;
+      }
+
     }
   };
 }
