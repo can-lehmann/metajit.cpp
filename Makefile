@@ -7,9 +7,10 @@ TEST_HEADER_FILES := $(wildcard tests/*.hpp)
 run: main
 	./main
 
-test: tests/test_knownbits tests/test_insts tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_source
+test: tests/test_knownbits tests/test_insts tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_source
 	./tests/test_knownbits
 	./tests/test_insts
+	./tests/test_clone
 	./tests/test_cfg
 	./tests/test_fuzzer
 	./tests/test_opt
@@ -25,6 +26,9 @@ tests/test_knownbits: tests/test_knownbits.cpp ${HEADER_FILES} ${TEST_HEADER_FIL
 	clang++ ${CFLAGS} -o $@ $<
 
 tests/test_insts: tests/test_insts.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${CFLAGS} -o $@ $<
+
+tests/test_clone: tests/test_clone.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
 tests/test_fuzzer: tests/test_fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}

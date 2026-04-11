@@ -108,6 +108,15 @@ namespace metajit {
       _ptr = _first->data;
       _left = USABLE_SIZE;
     }
+
+    void zero_all() {
+      Chunk* chunk = _first;
+      while (chunk) {
+        std::memset(chunk->data, 0, USABLE_SIZE);
+        chunk = chunk->next;
+      }
+      dealloc_all();
+    }
   };
 
   // WARNING: Does not deallocate, only use for testing
@@ -361,6 +370,8 @@ namespace metajit {
     Allocator _const_allocator;
   public:
     Context() {}
+
+    Allocator& const_allocator() { return _const_allocator; }
 
     Const* build_const(Type type, uint64_t value) {
       Const* constant = (Const*) _const_allocator.alloc(sizeof(Const), alignof(Const));
@@ -4339,7 +4350,7 @@ namespace metajit {
     }
   };
 
-  class Clone: Pass<Clone> {
+  class Clone: public Pass<Clone> {
   private:
     Section* _section;
     Section* _cloned_section;
@@ -4376,8 +4387,10 @@ namespace metajit {
 
       for (Block* block : *_section) {
         Block* cloned = _builder.build_block(block->args().size());
-        for (size_t it = 0; it < block->args().size(); it++) {
-          cloned->set_arg(it, block->arg(it));
+        for (Arg* arg : block->args()) {
+          Arg* cloned_arg = _builder.alloc_arg(arg->type(), arg->index());
+          cloned->set_arg(arg->index(), cloned_arg);
+          _values[arg] = cloned_arg;
         }
         _blocks[block->name()] = cloned;
       }
@@ -4386,9 +4399,7 @@ namespace metajit {
         _builder.move_to_end(_blocks[block->name()]);
 
         for (Inst* inst : *block) {
-          Inst* cloned = clone_inst(inst);
-          _builder.insert(cloned);
-          _values[inst] = cloned;
+          _values[inst] = clone_inst(inst);
         }
       }
     }
