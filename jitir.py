@@ -516,7 +516,7 @@ class MarkdownPlugin:
             code += f"Arguments\n\n"
             for arg in inst.args:
                 if isinstance(arg.type, CountVarargsValueType):
-                    code += f"- **{arg.name}**: Variable number of arguments"
+                    code += f"- **{arg.name}**: Variable number of arguments\n"
                 else:
                     code += f"- **{arg.name}**: `{arg.type.format(ir)}`\n"
             code += f"\n"
