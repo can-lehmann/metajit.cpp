@@ -499,8 +499,7 @@ Call a function pointer.
 Arguments
 
 - **callee**: `Value*`
-- **args**: `size_t`
-- **type**: `Type`
+- **args**: Variable number of arguments- **type**: `Type`
 - **call_conv**: `CallConv`
 
 Return Type: `type`
@@ -531,8 +530,7 @@ Unconditional jump.
 
 Arguments
 
-- **args**: `size_t`
-- **block**: `Block*`
+- **args**: Variable number of arguments- **block**: `Block*`
 
 Return Type: `Type::Void`
 
