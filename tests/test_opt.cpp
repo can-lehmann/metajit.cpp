@@ -340,7 +340,6 @@ b1(%3: Int64):
 )", builder.section());
   });
   suite.diff_test("simplifycfg jump with args further substs").run([](Builder& builder, TestData& data) {
-    // we can't optimize this right now, due to the arguments
     Value* input = data.input(Type::Int64);
     Block* arg_block = builder.build_block({Type::Int64});
     builder.build_jump(arg_block, {input});
@@ -365,19 +364,17 @@ b1(%3: Int64):
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  Jump %1, block=b1
-b1(%3: Int64):
-  Store %0, %3, aliasing=0, offset=8
-  %5 = Load %0, type=Bool, flags={}, aliasing=0, offset=16
-  Branch %5, true_block=b2, false_block=b3
+  Store %0, %1, aliasing=0, offset=8
+  %3 = Load %0, type=Bool, flags={}, aliasing=0, offset=16
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  Store %0, %1, aliasing=0, offset=24
+  Jump block=b3
 b2:
-  Store %0, %3, aliasing=0, offset=24
-  Jump block=b4
+  Store %0, %1, aliasing=0, offset=32
+  Jump block=b3
 b3:
-  Store %0, %3, aliasing=0, offset=32
-  Jump block=b4
-b4:
-  Store %0, %3, aliasing=0, offset=40
+  Store %0, %1, aliasing=0, offset=40
   Exit
 }
 )", builder.section());

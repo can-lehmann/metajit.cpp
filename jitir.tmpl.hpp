@@ -3809,6 +3809,7 @@ namespace metajit {
   private:
     Section* _section;
     std::vector<std:: vector<Block*>> incoming;
+    std::map<Value*, Value*> substs;
     Builder builder;
 
     void remove(Block* block) {
@@ -3859,6 +3860,11 @@ namespace metajit {
           remove(block);
            continue;
         }
+        if (substs.size()) {
+          for (Inst* inst : *block) {
+            inst->substitute_args(substs);
+          }
+        }
         while (true) {
           if (dynmatch(BranchInst, branch, block->terminator())) {
             Value* cond = branch->cond();
@@ -3899,14 +3905,14 @@ namespace metajit {
             }
           } else if (dynmatch(JumpInst, jump, block->terminator())) {
             Block* target = jump->block();
-            if (target == block || target->args().size() > 0) {
+            if (target == block) {
               break;
             }
             // do jump-threading: if the target block only has a single instruction,
             // which is a jump, we can just jump to the final target
             if (dynmatch(JumpInst, target_jump, *target->begin())) {
               Block* final_target = target_jump->block();
-              if (final_target->args().size() == 0) {
+              if (target->args().size() == 0 && final_target->args().size() == 0) {
                 jump->set_block(final_target);
                 incoming[final_target->name()].push_back(block);
                 remove_from_incoming(block, target);
@@ -3915,7 +3921,13 @@ namespace metajit {
             }
             // if the target block only has one incoming edge, we can merge it with the current block
             if (incoming[target->name()].size() == 1) {
-              block->remove(block->terminator());
+              for (size_t i = 0; i < target->args().size(); i++) {
+                substs[target->args().at(i)] = jump->arg(i);
+              }
+              for (Inst* inst : *target) {
+                inst->substitute_args(substs);
+              }
+              block->remove(jump);
               Inst* first_inst = *target->begin();
               Inst* last_inst = target->terminator();
               target->remove(first_inst, last_inst);
