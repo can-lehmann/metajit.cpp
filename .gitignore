@@ -6,6 +6,7 @@ main
 asm.bin
 section.json
 tests/test_insts
+tests/test_clone
 tests/test_fuzzer
 tests/test_cfg
 tests/test_knownbits
@@ -15,3 +16,4 @@ tests/fuzzer
 tests/test_tv
 tests/source/*.ll
 tests/test_source
+tests/test_reentry
