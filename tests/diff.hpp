@@ -44,14 +44,7 @@ namespace metajit {
       section->write(ss);
       std::string section_str = ss.str();
       std::istringstream iss(section_str);
-      Section* section2 = SectionReader<TraceBuilder>::read_section(section->context(), section->allocator(), iss);
-      DeadCodeElim::run(section2);
-      RefineAliasing::run(section2);
-      DeadStoreElim::run(section2);
-      metajit::DeadCodeElim::run(section2);
-      Simplify::run(section2, 10);
-      DeadCodeElim::run(section2);
-      return section2;
+      return SectionReader<TraceBuilder>::read_section(section->context(), section->allocator(), iss);
     }
 
     class RandomRange {
