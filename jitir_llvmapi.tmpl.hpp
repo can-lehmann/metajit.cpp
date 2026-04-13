@@ -25,6 +25,7 @@ namespace metajit {
     llvm::FunctionCallee build_guard;
     llvm::FunctionCallee entry_arg;
     llvm::FunctionCallee is_const_inst;
+    llvm::FunctionCallee set_arg;
 
     LLVM_API(llvm::Module* module) {
       llvm::LLVMContext& context = module->getContext();
@@ -78,6 +79,19 @@ namespace metajit {
           false
         )
       );
+
+      set_arg = module->getOrInsertFunction(
+        "jitir_set_arg",
+        llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          std::vector<llvm::Type*>({
+            llvm::PointerType::get(context, 0),
+            llvm::Type::getInt64Ty(context),
+            llvm::PointerType::get(context, 0)
+          }),
+          false
+        )
+      );
     }
   };
 
@@ -108,6 +122,12 @@ namespace metajit {
       Value* value = (Value*)value_ptr;
       return dynamic_cast<Const*>(value) != nullptr;
     }
+
+    void jitir_set_arg(void* inst_ptr, uint64_t index, void* value_ptr) {
+      Inst* inst = (Inst*)inst_ptr;
+      Value* value = (Value*)value_ptr;
+      inst->set_arg(index, value);
+    }
   }
 
   /* ${build_build_inst} */
@@ -131,6 +151,7 @@ namespace metajit {
     map_symbol(jitir_build_guard)
     map_symbol(jitir_entry_arg)
     map_symbol(jitir_is_const_inst)
+    map_symbol(jitir_set_arg)
 
     #undef map_symbol
 

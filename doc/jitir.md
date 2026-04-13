@@ -499,6 +499,7 @@ Call a function pointer.
 Arguments
 
 - **callee**: `Value*`
+- **args**: Variable number of arguments
 - **type**: `Type`
 - **call_conv**: `CallConv`
 
@@ -530,6 +531,7 @@ Unconditional jump.
 
 Arguments
 
+- **args**: Variable number of arguments
 - **block**: `Block*`
 
 Return Type: `Type::Void`

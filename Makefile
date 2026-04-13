@@ -7,12 +7,14 @@ TEST_HEADER_FILES := $(wildcard tests/*.hpp)
 run: main
 	./main
 
-test: tests/test_knownbits tests/test_insts tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_source
+test: tests/test_knownbits tests/test_insts tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_reentry tests/test_source
 	./tests/test_knownbits
 	./tests/test_insts
+	./tests/test_clone
 	./tests/test_cfg
 	./tests/test_fuzzer
 	./tests/test_opt
+	./tests/test_reentry
 	./tests/test_source
 
 fuzz: tests/fuzzer
@@ -27,6 +29,9 @@ tests/test_knownbits: tests/test_knownbits.cpp ${HEADER_FILES} ${TEST_HEADER_FIL
 tests/test_insts: tests/test_insts.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
+tests/test_clone: tests/test_clone.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${CFLAGS} -o $@ $<
+
 tests/test_fuzzer: tests/test_fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
@@ -38,6 +43,10 @@ tests/test_opt: tests/test_opt.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 
 tests/test_reader: tests/test_reader.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${CFLAGS} -g -o $@ $<
+
+tests/test_reentry: tests/test_reentry.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${CFLAGS} -o $@ $<
+
 
 TEST_SOURCE_LL_FILES := \
 	$(patsubst tests/source/%.c,tests/source/%.o0.ll,$(wildcard tests/source/*.c)) \
@@ -81,6 +90,8 @@ clean:
 	-rm tests/test_opt
 	-rm tests/test_source
 	-rm tests/test_reader
+	-rm tests/test_reentry
+	-rm tests/test_
 	-rm tests/fuzzer
 	-rm jitir.hpp
 	-rm jitir_llvmapi.hpp
