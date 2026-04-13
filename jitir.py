@@ -195,30 +195,25 @@ class InstReadPlugin:
         else_prefix = ""
         for inst in ir.insts:
             code += f"  {else_prefix}if (opcode == \"{inst.name}\") {{\n"
-            # special-case Jump and Call, which take arbitrary many args
-            # syntax: Jump 0:Int64, 1:Int64, 2:Int64, 3:Int64, 4:Int64, block=b3
-            if inst.name == 'Jump':
-                assert len(inst.args) == 1
-                args = [None, inst.args[0]]
-            elif inst.name == 'Call':
-                callee, typ, call_conv = inst.args
-                args = [callee, typ, None, call_conv]
-            else:
-                args = inst.args
-
             # read arguments
             need_comma = False
-            for arg in args:
+            varargs = None
+            build_args = []
+            for arg in inst.args:
                 if need_comma:
                     code += "    expect_char(','); skip_whitespace();\n"
                 need_comma = True
-                if arg is None:
-                    code += "    std::vector<Value*> value_args = read_value_arg_list();\n"
-                    need_comma = False # read_value_arg_list needs to consume the comma
-                    continue
                 if arg.type == ValueType():
                     code += f"    Value* {arg.name} = read_value_arg();\n"
+                    build_args.append(arg.name)
                     continue
+                elif arg.type == CountVarargsValueType():
+                    code += f"    std::vector<Value*> {arg.name} = read_value_arg_list();\n"
+                    need_comma = False # read_value_arg_list needs to consume the comma
+                    varargs = arg.name
+                    build_args.append(f"{arg.name}.size()")
+                    continue
+                build_args.append(arg.name)
                 code += f'    expect_word("{arg.name}");\n'
                 code += f"    expect_char('=');\n"
                 if arg.type == Type("Block*"):
@@ -236,13 +231,16 @@ class InstReadPlugin:
                 else:
                     import pdb;pdb.set_trace()
                     assert False, f"Unknown argument type: {arg.type}"
-            if inst.name == 'Jump':
-                assert len(inst.args) == 1
-                args = [None, inst.args[0]]
-                code += f"    return _builder.{inst.format_builder_name(ir)}(block, value_args);\n"
+            build_args = ", ".join(build_args)
+            builder_call = f"_builder.{inst.format_builder_name(ir)}({build_args})\n"
+            if varargs is not None:
+                code += f"    Inst* result = {builder_call};\n"
+                code += f"    for (size_t it = {0}; it < {varargs}.size(); it++) {{\n"
+                code += f"      result->set_arg(it, {varargs}[it]);\n"
+                code += f"    }}\n"
+                code += f"    return result;"
             else:
-                build_args = ", ".join((arg.name if arg is not None else 'value_args') for arg in args)
-                code += f"    return _builder.{inst.format_builder_name(ir)}({build_args});\n"
+                code += f"    return {builder_call};\n"
             else_prefix = "} else "
         code += '  } else { error("unknown operation " + opcode); return nullptr; }\n'
         code += "}"
