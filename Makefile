@@ -91,7 +91,6 @@ clean:
 	-rm tests/test_source
 	-rm tests/test_reader
 	-rm tests/test_reentry
-	-rm tests/test_
 	-rm tests/fuzzer
 	-rm jitir.hpp
 	-rm jitir_llvmapi.hpp
