@@ -188,6 +188,65 @@ class InstTrailingConstructorPlugin:
 
         return code
 
+
+class InstReadPlugin:
+    def run(self, ir):
+        code = "Value* read_opcode(std::string opcode) {\n"
+        else_prefix = ""
+        for inst in ir.insts:
+            code += f"  {else_prefix}if (opcode == \"{inst.name}\") {{\n"
+            # read arguments
+            need_comma = False
+            varargs = None
+            build_args = []
+            for arg in inst.args:
+                if need_comma:
+                    code += "    expect_char(','); skip_whitespace();\n"
+                need_comma = True
+                if arg.type == ValueType():
+                    code += f"    Value* {arg.name} = read_value_arg();\n"
+                    build_args.append(arg.name)
+                    continue
+                elif arg.type == CountVarargsValueType():
+                    code += f"    std::vector<Value*> {arg.name} = read_value_arg_list();\n"
+                    need_comma = False # read_value_arg_list needs to consume the comma
+                    varargs = arg.name
+                    build_args.append(f"{arg.name}.size()")
+                    continue
+                build_args.append(arg.name)
+                code += f'    expect_word("{arg.name}");\n'
+                code += f"    expect_char('=');\n"
+                if arg.type == Type("Block*"):
+                    code += f"    Block* {arg.name} = read_block_argument();\n"
+                elif arg.type == Type("Type"):
+                    code += f"    Type {arg.name} = read_type();\n"
+                elif arg.type == Type("CallConv"):
+                    code += f"    CallConv {arg.name} = read_call_conv();\n"
+                elif arg.type == Type("LoadFlags"):
+                    code += f"    LoadFlags {arg.name} = read_load_flags();\n"
+                elif arg.type == Type("AliasingGroup") or arg.type == Type("uint64_t"):
+                    code += f"    uint64_t {arg.name} = read_uint64();\n"
+                elif arg.type == Type("const char*"):
+                    code += f'    error("const char* argument not supported yet"); char * {arg.name};\n'
+                else:
+                    import pdb;pdb.set_trace()
+                    assert False, f"Unknown argument type: {arg.type}"
+            build_args = ", ".join(build_args)
+            builder_call = f"_builder.{inst.format_builder_name(ir)}({build_args})\n"
+            if varargs is not None:
+                code += f"    Inst* result = {builder_call};\n"
+                code += f"    for (size_t it = {0}; it < {varargs}.size(); it++) {{\n"
+                code += f"      result->set_arg(it, {varargs}[it]);\n"
+                code += f"    }}\n"
+                code += f"    return result;"
+            else:
+                code += f"    return {builder_call};\n"
+            else_prefix = "} else "
+        code += '  } else { error("unknown operation " + opcode); return nullptr; }\n'
+        code += "}"
+        return dict(read_opcode=code)
+
+
 class PrettyInstWritePlugin(InstWritePlugin):
     def __init__(self):
         super().__init__(
@@ -507,7 +566,8 @@ lwir(
                 ValueType(): "void*",
                 CountVarargsValueType(): "uint64_t"
             }
-        )
+        ),
+        InstReadPlugin(),
     ],
     placeholder = lambda name: "/* ${" + name + "} */"
 )
