@@ -26,6 +26,7 @@
 #include <optional>
 #include <cstring>
 #include <fstream>
+#include <algorithm>
 
 #include "../lwir.cpp/lwir_utils.hpp"
 
@@ -964,7 +965,7 @@ namespace metajit {
               return true;
             }
 
-            if (arg->is_inst() &&
+            if (arg->is_named() &&
                 defined.find(arg) == defined.end()) {
               errors << "Instruction ";
               inst->write_arg(errors);
@@ -4126,6 +4127,147 @@ namespace metajit {
       return true;
     }
   };
+
+  class SimplifyCFG: public Pass<SimplifyCFG> {
+  private:
+    Section* _section;
+    std::vector<std:: vector<Block*>> incoming;
+    std::map<Value*, Value*> substs;
+    Builder builder;
+
+    void remove(Block* block) {
+      for (Block* succ : block->successors()) {
+        remove_from_incoming(block, succ);
+      }
+      _section->remove(block);
+    }
+
+    void remove_from_incoming(Block* from, Block* to) {
+      auto& to_incoming = incoming[to->name()];
+      to_incoming.erase(std::remove(to_incoming.begin(), to_incoming.end(), from), to_incoming.end());
+      // if to has no more incoming edges and is not the entry, we can remove it
+      if (to != _section->entry() && to_incoming.empty()) {
+        remove(to);
+      }
+    }
+
+    void replace_cond_with_const(Value* cond, uint64_t const_value, Block* target) {
+      Value* replacement = nullptr;
+      for (Inst* inst : *target) {
+        auto _args = inst->args();
+        for (size_t it = 0; it < _args.size(); it++) {
+          Value* arg = _args.at(it);
+          if (arg == cond) {
+            if (!replacement) {
+              replacement = builder.build_const(Type::Bool, const_value);
+            }
+            inst->set_arg(it, replacement);
+          }
+        }
+      }
+    }
+
+  public:
+    SimplifyCFG(Section* section): Pass(section), _section(section), incoming(section->block_count()),
+        builder(section) {
+      assert(_section->ordering() >= BlockOrdering::Dominator);
+      for (Block* block : *_section) {
+        for (Block* succ : block->successors()) {
+          incoming[succ->name()].push_back(block);
+        }
+      }
+
+      for (Block* block : *_section) {
+        // remove unreachable blocks
+        if (block != _section->entry() && incoming[block->name()].empty()) {
+          remove(block);
+           continue;
+        }
+        if (substs.size()) {
+          for (Inst* inst : *block) {
+            inst->substitute_args(substs);
+          }
+        }
+        while (true) {
+          if (dynmatch(BranchInst, branch, block->terminator())) {
+            Value* cond = branch->cond();
+            // if the true_block and false_block have only one incoming edge (from this block),
+            // we can replace the condition with a constant in the respective block
+            // (in theory we should use the dominator tree to check this, but that would be more expensive)
+            if (incoming[branch->true_block()->name()].size() == 1) {
+              replace_cond_with_const(cond, 1, branch->true_block());
+            }
+            if (incoming[branch->false_block()->name()].size() == 1) {
+              replace_cond_with_const(cond, 0, branch->false_block());
+            }
+            // if the targets are both the same, we can replace with a jump
+            if (branch->true_block() == branch->false_block()) {
+              Block* target = branch->true_block();
+              builder.move_before(block, block->terminator());
+              builder.build_jump(target);
+              block->remove(block->terminator());
+              // incoming is a bit tricky. it contains block twice. we remove it once
+              auto& target_incoming = incoming[target->name()];
+              auto it = std::find(target_incoming.begin(), target_incoming.end(), block);
+              assert (it != target_incoming.end());
+              target_incoming.erase(it);
+              // check that it's still there once
+              assert (std::find(target_incoming.begin(), target_incoming.end(), block) != target_incoming.end());
+              continue;
+            }
+            // if the condition is constant, we can just jump to the taken branch
+            if (dynmatch(Const, cond, branch->cond())) {
+              Block* target = cond->value() != 0 ? branch->true_block() : branch->false_block();
+              builder.move_before(block, block->terminator());
+              builder.build_jump(target);
+              block->remove(block->terminator());
+              // remove from incoming of the other block
+              Block* other = cond->value() != 0 ? branch->false_block() : branch->true_block();
+              remove_from_incoming(block, other);
+              continue;
+            }
+          } else if (dynmatch(JumpInst, jump, block->terminator())) {
+            Block* target = jump->block();
+            if (target == block) {
+              break;
+            }
+            // do jump-threading: if the target block only has a single instruction,
+            // which is a jump, we can just jump to the final target
+            if (dynmatch(JumpInst, target_jump, *target->begin())) {
+              Block* final_target = target_jump->block();
+              if (target->args().size() == 0 && final_target->args().size() == 0) {
+                jump->set_block(final_target);
+                incoming[final_target->name()].push_back(block);
+                remove_from_incoming(block, target);
+                continue;
+              }
+            }
+            // if the target block only has one incoming edge, we can merge it with the current block
+            if (incoming[target->name()].size() == 1) {
+              for (size_t i = 0; i < target->args().size(); i++) {
+                substs[target->args().at(i)] = jump->arg(i);
+              }
+              for (Inst* inst : *target) {
+                inst->substitute_args(substs);
+              }
+              block->remove(jump);
+              Inst* first_inst = *target->begin();
+              Inst* last_inst = target->terminator();
+              target->remove(first_inst, last_inst);
+              block->add(first_inst, last_inst);
+              for (Block* succ : block->successors()) {
+                incoming[succ->name()].push_back(block);
+              }
+              remove(target);
+              continue;
+            }
+          }
+          break;
+        }
+      }
+    }
+  };
+
 
   class BindingTimeGroups {
   public:
