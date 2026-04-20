@@ -947,94 +947,7 @@ namespace metajit {
       stream << "}";
     }
 
-    bool verify(std::ostream& errors) {
-      autoname();
-
-      std::set<Value*> defined;
-      for (Block* block : *this) {
-        for (Arg* arg : block->args()) {
-          defined.insert(arg);
-        }
-
-        for (Inst* inst : *block) {
-          for (Value* arg : inst->args()) {
-            if (arg == nullptr) {
-              errors << "Instruction ";
-              inst->write_arg(errors);
-              errors << " has null argument\n";
-              return true;
-            }
-
-            if (arg->is_named() &&
-                defined.find(arg) == defined.end()) {
-              errors << "Instruction ";
-              inst->write_arg(errors);
-              errors << " uses undefined value ";
-              arg->write_arg(errors);
-              errors << "\n";
-              return true;
-            }
-          }
-
-          defined.insert(inst);
-        }
-
-        if (!block->terminator()) {
-          errors << "Block ";
-          block->write_arg(errors);
-          errors << " has no terminator\n";
-          return true;
-        }
-
-        if (dynmatch(JumpInst, jump, block->terminator())) {
-          if (jump->args().size() != jump->block()->args().size()) {
-            errors << "Block ";
-            block->write_arg(errors);
-            errors << " jumps to block ";
-            jump->block()->write_arg(errors);
-            errors << " which requires ";
-            errors << jump->block()->args().size();
-            errors << " arguments, but ";
-            errors << jump->args().size();
-            errors << " were provided\n";
-            return true;
-          }
-
-          for (Arg* arg : jump->block()->args()) {
-            if (arg->type() != jump->arg(arg->index())->type()) {
-              errors << "Block ";
-              block->write_arg(errors);
-              errors << " jumps to block ";
-              jump->block()->write_arg(errors);
-              errors << " with formal argument ";
-              arg->write_arg(errors);
-              errors << " of type ";
-              errors << arg->type();
-              errors << ", but provided argument ";
-              jump->arg(arg->index())->write_arg(errors);
-              errors << " has type ";
-              errors << jump->arg(arg->index())->type();
-              errors << "\n";
-              return true;
-            }
-          }
-        } else {
-          for (Block* succ : block->successors()) {
-            if (succ->args().size() != 0) {
-              errors << "Block ";
-              block->write_arg(errors);
-              errors << " jumps to block ";
-              succ->write_arg(errors);
-              errors << " which requires ";
-              errors << succ->args().size();
-              errors << " arguments, but none were provided\n";
-              return true;
-            }
-          }
-        }
-      }
-      return false;
-    }
+    bool verify(std::ostream& errors);
   };
 
   class Builder {
@@ -4626,6 +4539,112 @@ namespace metajit {
       write_dot(file);
     }
   };
+
+  bool Section::verify(std::ostream& errors) {
+    autoname();
+
+    std::optional<DominatorTree> dt;
+    if (_ordering >= BlockOrdering::Dominator) {
+      dt.emplace(this);
+    }
+
+    std::set<Value*> defined;
+    for (Block* block : *this) {
+      if (dt) {
+        Block* idom = dt->idom(block);
+        if (idom && idom != block && idom->name() >= block->name()) {
+          errors << "Block ";
+          block->write_arg(errors);
+          errors << " appears before its immediate dominator ";
+          idom->write_arg(errors);
+          errors << "\n";
+          return true;
+        }
+      }
+
+      for (Arg* arg : block->args()) {
+        defined.insert(arg);
+      }
+
+      for (Inst* inst : *block) {
+        for (Value* arg : inst->args()) {
+          if (arg == nullptr) {
+            errors << "Instruction ";
+            inst->write_arg(errors);
+            errors << " has null argument\n";
+            return true;
+          }
+
+          if (arg->is_named() &&
+              defined.find(arg) == defined.end()) {
+            errors << "Instruction ";
+            inst->write_arg(errors);
+            errors << " uses undefined value ";
+            arg->write_arg(errors);
+            errors << "\n";
+            return true;
+          }
+        }
+
+        defined.insert(inst);
+      }
+
+      if (!block->terminator()) {
+        errors << "Block ";
+        block->write_arg(errors);
+        errors << " has no terminator\n";
+        return true;
+      }
+
+      if (dynmatch(JumpInst, jump, block->terminator())) {
+        if (jump->args().size() != jump->block()->args().size()) {
+          errors << "Block ";
+          block->write_arg(errors);
+          errors << " jumps to block ";
+          jump->block()->write_arg(errors);
+          errors << " which requires ";
+          errors << jump->block()->args().size();
+          errors << " arguments, but ";
+          errors << jump->args().size();
+          errors << " were provided\n";
+          return true;
+        }
+
+        for (Arg* arg : jump->block()->args()) {
+          if (arg->type() != jump->arg(arg->index())->type()) {
+            errors << "Block ";
+            block->write_arg(errors);
+            errors << " jumps to block ";
+            jump->block()->write_arg(errors);
+            errors << " with formal argument ";
+            arg->write_arg(errors);
+            errors << " of type ";
+            errors << arg->type();
+            errors << ", but provided argument ";
+            jump->arg(arg->index())->write_arg(errors);
+            errors << " has type ";
+            errors << jump->arg(arg->index())->type();
+            errors << "\n";
+            return true;
+          }
+        }
+      } else {
+        for (Block* succ : block->successors()) {
+          if (succ->args().size() != 0) {
+            errors << "Block ";
+            block->write_arg(errors);
+            errors << " jumps to block ";
+            succ->write_arg(errors);
+            errors << " which requires ";
+            errors << succ->args().size();
+            errors << " arguments, but none were provided\n";
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
 
   // Verifies that all guards are emitted before any externally visible memory stores
   class VerifySimpleReentry: public Pass<VerifySimpleReentry> {

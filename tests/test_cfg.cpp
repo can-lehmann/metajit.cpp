@@ -154,5 +154,44 @@ int main() {
     data.output(loop_header->arg(2));
   });
 
+  suite.test("dominator_order_verify").run([]() {
+    Context context;
+    Allocator allocator;
+    Section* section = new Section(context, allocator);
+    Builder builder(section);
+
+    Block* entry = builder.build_block();
+    Block* a = builder.build_block();
+    Block* b = builder.build_block();
+
+    builder.move_to_end(entry);
+    builder.build_jump(a);
+
+    builder.move_to_end(a);
+    builder.build_jump(b);
+
+    builder.move_to_end(b);
+    builder.build_exit();
+
+    section->set_ordering(BlockOrdering::Dominator);
+
+    // Natural order [entry, a, b] should pass
+    {
+      std::stringstream ss;
+      unittest_assert(!section->verify(ss));
+    }
+
+    // Swapped order [entry, b, a] should fail (a dominates b, so a must come before b)
+    section->remove(a);
+    section->add(a);
+
+    {
+      std::stringstream ss;
+      unittest_assert(section->verify(ss));
+      unittest_assert(ss.str() == "Block b1 appears before its immediate dominator b2\n");
+    }
+
+    delete section;
+    });
   return suite.finish();
 }
