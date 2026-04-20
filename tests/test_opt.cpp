@@ -272,12 +272,31 @@ b0(%0: Ptr):
   });
 
   // tests for SimplifyCFG
+  suite.diff_test("simplifycfg unreachable blocks").run([](Builder& builder, TestData& data) {
+    Block* unreachable1 = builder.build_block();
+    Block* unreachable2 = builder.build_block();
+
+    data.output(builder.build_const(Type::Int64, 42));
+    builder.build_exit();
+
+    builder.move_to_end(unreachable1);
+    builder.build_jump(unreachable2);
+    builder.move_to_end(unreachable2);
+    builder.build_exit();
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  Store %0, 42:Int64, aliasing=0, offset=0
+  Exit
+}
+)", builder.section());
+  });
   suite.diff_test("simplifycfg branch with const true").run([](Builder& builder, TestData& data) {
     Value* cond = builder.build_const(Type::Bool, 1);
     Block* then_block = builder.build_block();
     Block* else_block = builder.build_block();
     Block* merge_block = builder.build_block();
-    
+
     builder.build_branch(cond, then_block, else_block);
     builder.move_to_end(then_block);
     builder.build_jump(merge_block);
@@ -298,7 +317,7 @@ b0(%0: Ptr):
   suite.diff_test("simplifycfg branch with both targets same").run([](Builder& builder, TestData& data) {
     Value* cond = data.input(Type::Bool);
     Block* then_block = builder.build_block();
-    
+
     builder.build_branch(cond, then_block, then_block);
     builder.move_to_end(then_block);
     data.output(builder.build_const(Type::Int64, 42));

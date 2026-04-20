@@ -4131,7 +4131,7 @@ namespace metajit {
   class SimplifyCFG: public Pass<SimplifyCFG> {
   private:
     Section* _section;
-    std::vector<std:: vector<Block*>> incoming;
+    std::vector<std::vector<Block*>> incoming;
     std::map<Value*, Value*> substs;
     Builder builder;
 
@@ -4181,7 +4181,7 @@ namespace metajit {
         // remove unreachable blocks
         if (block != _section->entry() && incoming[block->name()].empty()) {
           remove(block);
-           continue;
+          continue;
         }
         if (substs.size()) {
           for (Inst* inst : *block) {
@@ -4216,13 +4216,13 @@ namespace metajit {
               continue;
             }
             // if the condition is constant, we can just jump to the taken branch
-            if (dynmatch(Const, cond, branch->cond())) {
-              Block* target = cond->value() != 0 ? branch->true_block() : branch->false_block();
+            if (dynmatch(Const, const_cond, cond)) {
+              Block* target = const_cond->value() != 0 ? branch->true_block() : branch->false_block();
               builder.move_before(block, block->terminator());
               builder.build_jump(target);
               block->remove(block->terminator());
               // remove from incoming of the other block
-              Block* other = cond->value() != 0 ? branch->false_block() : branch->true_block();
+              Block* other = const_cond->value() != 0 ? branch->false_block() : branch->true_block();
               remove_from_incoming(block, other);
               continue;
             }
