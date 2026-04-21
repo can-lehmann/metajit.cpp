@@ -4619,6 +4619,7 @@ namespace metajit {
     std::vector<Block*> _ordered;
     std::unordered_set<Block*> _visited;
     BlockOrdering _target_ordering;
+    bool seen_loop = false;
 
     // Dominator ordering: pre-order traversal of dominator tree
     void traverse_dominator_tree(Block* block, std::vector<std::vector<Block*>>& dom_children) {
@@ -4647,13 +4648,15 @@ namespace metajit {
       }
       _visited.insert(block);
 
-      // Visit successors in reverse order to maintain stable block numbering
+      // visit successors in reverse order to maintain stable block numbering
       std::vector<Block*> succs = block->successors();
       for (auto it = succs.rbegin(); it != succs.rend(); ++it) {
         Block* succ = *it;
-        // A backedge is where the successor dominates the source block
+        // a backedge is where the successor dominates the source block
         if (!_dt.dominates(succ, block)) {
           dfs_natural(succ);
+        } else {
+          seen_loop = true;
         }
       }
 
@@ -4662,7 +4665,7 @@ namespace metajit {
 
     void order_natural() {
       dfs_natural(_section->entry());
-      // Reverse for topological order
+      // reverse for topological order
       std::reverse(_ordered.begin(), _ordered.end());
     }
 
@@ -4694,7 +4697,12 @@ namespace metajit {
         _section->add(block);
       }
 
-      _section->set_ordering(_target_ordering);
+      if (target_ordering == BlockOrdering::Natural && !seen_loop) {
+        // a Natural block ordering where we don't see a loop is Topological
+        _section->set_ordering(BlockOrdering::Topological);
+      } else {
+        _section->set_ordering(_target_ordering);
+      }
     }
   };
 
@@ -4734,6 +4742,13 @@ namespace metajit {
               errors << " appears after its successor ";
               succ->write_arg(errors);
               errors << " but it's not a backedge (violates Natural/Topological ordering)\n";
+              return true;
+            } else if (is_backedge && _ordering >= BlockOrdering::Topological) {
+              errors << "Backedge exists from ";
+              block->write_arg(errors);
+              errors << " to ";
+              succ->write_arg(errors);
+              errors << " but the ordering claims to be Topological\n";
               return true;
             }
           }

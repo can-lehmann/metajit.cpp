@@ -41,6 +41,17 @@ void check_simplifycfg(const std::string& expected, Section* section) {
   unittest_assert(ss.str() == expected);
 }
 
+void check_block_order(const std::string& expected, Section* section, BlockOrdering target_order = BlockOrdering::Natural) {
+  section->order_blocks(target_order);
+  unittest_assert (!section->verify(std::cout));
+  std::stringstream ss;
+  section->write(ss);
+  if (ss.str() != expected) {
+    std::cerr << "Expected:\n" << expected << "\n\nGot:\n" << ss.str() << std::endl;
+  }
+  unittest_assert(ss.str() == expected);
+}
+
 int main() {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
@@ -657,6 +668,97 @@ b6:
   Exit
 }
 )", builder.section());
+  });
+
+  suite.test("block order loop").run([]() {
+    Context context;
+    Allocator allocator;
+    Section* section = new Section(context, allocator);
+    Builder builder(section);
+    builder.move_to_end(builder.build_block({Type::Ptr}));
+    // build exit block first to make it not natural order
+    Block* after_block = builder.build_block();
+
+    Block* loop_block = builder.build_block({Type::Int32, Type::Int32});
+    Block* next_block = builder.build_block();
+
+    builder.build_jump(loop_block, {builder.build_const(Type::Int32, 0), builder.build_const(Type::Int32, 0)});
+    builder.move_to_end(loop_block);
+
+    Value* counter = loop_block->arg(0);
+    Value* sum = loop_block->arg(1);
+
+    builder.build_branch(
+      builder.build_lt_u(counter, builder.build_const(Type::Int32, 10)),
+      next_block,
+      after_block
+    );
+
+    builder.move_to_end(next_block);
+    builder.build_jump(loop_block, {
+      builder.build_add(counter, builder.build_const(Type::Int32, 1)),
+      builder.build_add(sum, builder.build_const(Type::Int32, 1))
+    });
+
+    builder.move_to_end(after_block);
+    builder.build_store(builder.entry_arg(0), sum, AliasingGroup(0), 0);
+    builder.build_exit();
+    builder.section()->set_ordering(BlockOrdering::None);
+    check_block_order(R"(section {
+b0(%0: Ptr):
+  Jump 0:Int32, 0:Int32, block=b1
+b1(%2: Int32, %3: Int32):
+  %4 = LtU %2, 10:Int32
+  Branch %4, true_block=b2, false_block=b3
+b2:
+  %6 = Add %2, 1:Int32
+  %7 = Add %3, 1:Int32
+  Jump %6, %7, block=b1
+b3:
+  Store %0, %3, aliasing=0, offset=0
+  Exit
+}
+)", section);
+    assert(section->ordering() == BlockOrdering::Natural);
+    // check that verify catches loops if BlockOrdering is Topological
+    std::stringstream ss;
+    builder.section()->set_ordering(BlockOrdering::Topological);
+    unittest_assert (section->verify(ss)); // invalid
+    delete section;
+  });
+
+  suite.diff_test("block order without loop becomes topological").run([](Builder& builder, TestData& data) {
+    Value* cond = data.input(Type::Bool);
+
+    // build exit block first to make it not natural order
+    Block* merge_block = builder.build_block();
+    Block* then_block = builder.build_block();
+    Block* else_block = builder.build_block();
+
+    builder.build_branch(cond, then_block, else_block);
+    builder.move_to_end(then_block);
+    builder.build_jump(merge_block);
+    builder.move_to_end(else_block);
+    builder.build_jump(merge_block);
+    builder.move_to_end(merge_block);
+    data.output(builder.build_const(Type::Int64, 42));
+    builder.build_exit();
+    builder.section()->set_ordering(BlockOrdering::None);
+
+    check_block_order(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Jump block=b3
+b2:
+  Jump block=b3
+b3:
+  Store %0, 42:Int64, aliasing=0, offset=8
+  Exit
+}
+)", builder.section());
+    assert(builder.section()->ordering() == BlockOrdering::Topological);
   });
 
   return suite.finish();
