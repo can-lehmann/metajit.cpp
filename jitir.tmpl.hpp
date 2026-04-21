@@ -4172,19 +4172,6 @@ namespace metajit {
             if (target == block) {
               break;
             }
-            // do jump-threading: if the target block only has a single instruction,
-            // which is a jump, we can just jump to the final target
-            if (dynmatch(JumpInst, target_jump, *target->begin())) {
-              Block* final_target = target_jump->block();
-              if (target->args().size() == 0 && final_target->args().size() == 0) {
-                if (final_target != target) {
-                  jump->set_block(final_target);
-                  incoming[final_target->name()].push_back(block);
-                  remove_from_incoming(block, target);
-                  continue;
-                }
-              }
-            }
             // if the target block only has one incoming edge, we can merge it with the current block
             if (incoming[target->name()].size() == 1) {
               for (size_t i = 0; i < target->args().size(); i++) {
@@ -4208,6 +4195,31 @@ namespace metajit {
               }
               remove(target);
               continue;
+            }
+            // do jump-threading: if the target block only has a single instruction,
+            // which is a jump, we can just jump to the final target
+            if (dynmatch(JumpInst, target_jump, *target->begin())) {
+              Block* final_target = target_jump->block();
+              if (final_target != target) {
+                std::map<Value*, Value*> local_substs;
+                for (size_t i = 0; i < target->args().size(); i++) {
+                  local_substs[target->args().at(i)] = jump->arg(i);
+                }
+                std::vector<Value*> new_args;
+                for (Value* final_arg : target_jump->args()) {
+                  Value* resolved = final_arg;
+                  if (local_substs.find(final_arg) != local_substs.end()) {
+                    resolved = local_substs.at(final_arg);
+                  }
+                  new_args.push_back(resolved);
+                }
+                builder.move_before(block, jump);
+                builder.build_jump(final_target, new_args);
+                block->remove(jump);
+                incoming[final_target->name()].push_back(block);
+                remove_from_incoming(block, target);
+                continue;
+              }
             }
           }
           break;

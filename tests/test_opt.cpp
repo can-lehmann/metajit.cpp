@@ -330,9 +330,66 @@ b0(%0: Ptr):
   Exit
 }
 )", builder.section());
-  });
+    });
 
-  suite.diff_test("simplifycfg jump with args").run([](Builder& builder, TestData& data) {
+    suite.diff_test("simplifycfg jump-threading with args").run([](Builder& builder, TestData& data) {
+    Value* cond1 = data.input(Type::Bool);
+    Value* cond2 = data.input(Type::Bool);
+
+    Block* b1 = builder.build_block();
+    Block* b1_false = builder.build_block();
+    Block* b1_true = builder.build_block();
+    Block* b1_false_local = builder.build_block();
+    Block* b2 = builder.build_block();
+    Block* pass_through = builder.build_block({Type::Int64});
+    Block* final_target = builder.build_block({Type::Int64});
+
+    builder.build_branch(cond1, b1, b1_false);
+
+    builder.move_to_end(b1_false);
+    builder.build_jump(final_target, {builder.build_const(Type::Int64, 3)});
+
+    builder.move_to_end(b1);
+    builder.build_branch(cond2, b1_true, b1_false_local);
+
+    builder.move_to_end(b1_true);
+    builder.build_jump(b2);
+
+    builder.move_to_end(b1_false_local);
+    builder.build_jump(pass_through, {builder.build_const(Type::Int64, 1)});
+
+    builder.move_to_end(b2);
+    builder.build_jump(pass_through, {builder.build_const(Type::Int64, 2)});
+
+    builder.move_to_end(pass_through);
+    builder.build_jump(final_target, {pass_through->arg(0)});
+
+    builder.move_to_end(final_target);
+    data.output(final_target->arg(0));
+    builder.build_exit();
+
+    // pass_through should be bypassed.
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Branch %2, true_block=b3, false_block=b4
+b2:
+  Jump 3:Int64, block=b5
+b3:
+  Jump 2:Int64, block=b5
+b4:
+  Jump 1:Int64, block=b5
+b5(%8: Int64):
+  Store %0, %8, aliasing=0, offset=8
+  Exit
+}
+)", builder.section());
+    });
+
+    suite.diff_test("simplifycfg jump with args further substs").run([](Builder& builder, TestData& data) {
     Value* cond = builder.build_const(Type::Bool, 0);
     Value* input = data.input(Type::Int64);
     Block* then_block = builder.build_block();
