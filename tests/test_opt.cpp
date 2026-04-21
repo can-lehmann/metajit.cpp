@@ -438,6 +438,7 @@ b0(%0: Ptr):
     builder.move_to_end(else_block);
     builder.build_jump(merge_block, {input});
     builder.section()->write(std::cerr);
+    builder.section()->set_ordering(BlockOrdering::Dominator);
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
@@ -484,6 +485,7 @@ b2:
     builder.move_to_end(else_block);
     builder.build_jump(merge_block, {input});
     builder.section()->write(std::cerr);
+    builder.section()->set_ordering(BlockOrdering::Dominator);
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
@@ -561,6 +563,7 @@ b3:
     builder.move_to_end(merge_block);
     data.output(builder.build_const(Type::Int64, 42));
     builder.build_exit();
+    builder.section()->set_ordering(BlockOrdering::Dominator);
 
     check_simplifycfg(R"(section {
 b0(%0: Ptr):

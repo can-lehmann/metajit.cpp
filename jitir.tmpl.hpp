@@ -4687,6 +4687,20 @@ namespace metajit {
           errors << "\n";
           return true;
         }
+
+        if (_ordering >= BlockOrdering::Natural) {
+          for (Block* succ : block->successors()) {
+            bool is_backedge = dt->dominates(succ, block);
+            if (!is_backedge && block->name() >= succ->name()) {
+              errors << "Block ";
+              block->write_arg(errors);
+              errors << " appears after its successor ";
+              succ->write_arg(errors);
+              errors << " but it's not a backedge (violates Natural/Topological ordering)\n";
+              return true;
+            }
+          }
+        }
       }
 
       for (Arg* arg : block->args()) {
