@@ -4132,15 +4132,6 @@ namespace metajit {
         while (true) {
           if (dynmatch(BranchInst, branch, block->terminator())) {
             Value* cond = branch->cond();
-            // if the true_block and false_block have only one incoming edge (from this block),
-            // we can replace the condition with a constant in the respective block
-            // (in theory we should use the dominator tree to check this, but that would be more expensive)
-            if (incoming[branch->true_block()->name()].size() == 1) {
-              replace_cond_with_const(cond, 1, branch->true_block());
-            }
-            if (incoming[branch->false_block()->name()].size() == 1) {
-              replace_cond_with_const(cond, 0, branch->false_block());
-            }
             // if the targets are both the same, we can replace with a jump
             if (branch->true_block() == branch->false_block()) {
               Block* target = branch->true_block();
@@ -4168,6 +4159,15 @@ namespace metajit {
               remove_from_incoming(block, other);
               changes = true;
               continue;
+            }
+            // if the true_block and false_block have only one incoming edge (from this block),
+            // we can replace the condition with a constant in the respective block
+            // (in theory we should use the dominator tree to check this, but that would be more expensive)
+            if (incoming[branch->true_block()->name()].size() == 1) {
+              replace_cond_with_const(cond, 1, branch->true_block());
+            }
+            if (incoming[branch->false_block()->name()].size() == 1) {
+              replace_cond_with_const(cond, 0, branch->false_block());
             }
           } else if (dynmatch(JumpInst, jump, block->terminator())) {
             Block* target = jump->block();
