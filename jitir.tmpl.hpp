@@ -4048,11 +4048,43 @@ namespace metajit {
     std::map<Value*, Value*> substs;
     Builder builder;
 
+    void _compute_incoming(std::vector<std::vector<Block*>>& result) {
+      for (Block* block : *_section) {
+        for (Block* succ : block->successors()) {
+          result[succ->name()].push_back(block);
+        }
+      }
+    }
+
+    #ifndef NDEBUG
+    void verify_incoming() {
+      std::vector<std::vector<Block*>> expected(incoming.size());
+      _compute_incoming(expected);
+      for (size_t i = 0; i < incoming.size(); i++) {
+        auto actual = incoming[i];
+        auto exp = expected[i];
+        std::sort(actual.begin(), actual.end());
+        std::sort(exp.begin(), exp.end());
+        if (actual != exp) {
+          std::cerr << "Incoming mismatch for block " << i << "\n";
+          std::cerr << "Actual: ";
+          for (Block* b : actual) std::cerr << b->name() << " ";
+          std::cerr << "\nExpected: ";
+          for (Block* b : exp) std::cerr << b->name() << " ";
+          std::cerr << "\n";
+          assert(false);
+        }
+      }
+    }
+    #endif
+
     void remove(Block* block) {
-      for (Block* succ : block->successors()) {
+      auto succs = block->successors();
+      for (Block* succ : succs) {
         remove_from_incoming(block, succ);
       }
       _section->remove(block);
+      incoming[block->name()].clear();
     }
 
     void remove_from_incoming(Block* from, Block* to) {
@@ -4084,11 +4116,7 @@ namespace metajit {
     SimplifyCFG(Section* section): Pass(section), _section(section), incoming(section->block_count()),
         builder(section) {
       assert(_section->ordering() >= BlockOrdering::Dominator);
-      for (Block* block : *_section) {
-        for (Block* succ : block->successors()) {
-          incoming[succ->name()].push_back(block);
-        }
-      }
+      _compute_incoming(incoming);
 
       for (Block* block : *_section) {
         // remove unreachable blocks
@@ -4149,10 +4177,12 @@ namespace metajit {
             if (dynmatch(JumpInst, target_jump, *target->begin())) {
               Block* final_target = target_jump->block();
               if (target->args().size() == 0 && final_target->args().size() == 0) {
-                jump->set_block(final_target);
-                incoming[final_target->name()].push_back(block);
-                remove_from_incoming(block, target);
-                continue;
+                if (final_target != target) {
+                  jump->set_block(final_target);
+                  incoming[final_target->name()].push_back(block);
+                  remove_from_incoming(block, target);
+                  continue;
+                }
               }
             }
             // if the target block only has one incoming edge, we can merge it with the current block
@@ -4163,13 +4193,18 @@ namespace metajit {
               for (Inst* inst : *target) {
                 inst->substitute_args(substs);
               }
+
+              auto target_successors = target->successors();
+
               block->remove(jump);
               Inst* first_inst = *target->begin();
               Inst* last_inst = target->terminator();
               target->remove(first_inst, last_inst);
               block->add(first_inst, last_inst);
-              for (Block* succ : block->successors()) {
+
+              for (Block* succ : target_successors) {
                 incoming[succ->name()].push_back(block);
+                remove_from_incoming(target, succ);
               }
               remove(target);
               continue;
@@ -4177,6 +4212,9 @@ namespace metajit {
           }
           break;
         }
+        #ifndef NDEBUG
+        verify_incoming();
+        #endif
       }
     }
   };

@@ -347,13 +347,10 @@ b0(%0: Ptr):
     builder.move_to_end(merge_block);
     data.output(merge_block->arg(0));
     builder.build_exit();
-    // we can't optimize this right now, due to the arguments, but we can remove the branch
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  Jump %1, block=b1
-b1(%3: Int64):
-  Store %0, %3, aliasing=0, offset=8
+  Store %0, %1, aliasing=0, offset=8
   Exit
 }
 )", builder.section());
