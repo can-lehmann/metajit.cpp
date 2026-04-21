@@ -4197,10 +4197,13 @@ namespace metajit {
               continue;
             }
             // do jump-threading: if the target block only has a single instruction,
-            // which is a jump, we can just jump to the final target
+            // which is a jump, we can just jump to the final target.
+            // we do that only if the final_target has more than one incoming
+            // link (in which case merging happens anyway). otherwise, the args
+            // of target can have uses in other blocks.
             if (dynmatch(JumpInst, target_jump, *target->begin())) {
               Block* final_target = target_jump->block();
-              if (final_target != target) {
+              if (final_target != target && incoming[final_target->name()].size() > 1) {
                 std::map<Value*, Value*> local_substs;
                 for (size_t i = 0; i < target->args().size(); i++) {
                   local_substs[target->args().at(i)] = jump->arg(i);
