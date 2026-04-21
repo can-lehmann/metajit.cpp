@@ -4041,12 +4041,15 @@ namespace metajit {
     }
   };
 
+  void order_blocks(Section* section);
+
   class SimplifyCFG: public Pass<SimplifyCFG> {
   private:
     Section* _section;
     std::vector<std::vector<Block*>> incoming;
     std::map<Value*, Value*> substs;
     Builder builder;
+    bool changes = false;
 
     void _compute_incoming(std::vector<std::vector<Block*>>& result) {
       for (Block* block : *_section) {
@@ -4085,6 +4088,7 @@ namespace metajit {
       }
       _section->remove(block);
       incoming[block->name()].clear();
+      changes = true;
     }
 
     void remove_from_incoming(Block* from, Block* to) {
@@ -4107,6 +4111,7 @@ namespace metajit {
               replacement = builder.build_const(Type::Bool, const_value);
             }
             inst->set_arg(it, replacement);
+            changes = true;
           }
         }
       }
@@ -4154,6 +4159,7 @@ namespace metajit {
               target_incoming.erase(it);
               // check that it's still there once
               assert (std::find(target_incoming.begin(), target_incoming.end(), block) != target_incoming.end());
+              changes = true;
               continue;
             }
             // if the condition is constant, we can just jump to the taken branch
@@ -4165,6 +4171,7 @@ namespace metajit {
               // remove from incoming of the other block
               Block* other = const_cond->value() != 0 ? branch->false_block() : branch->true_block();
               remove_from_incoming(block, other);
+              changes = true;
               continue;
             }
           } else if (dynmatch(JumpInst, jump, block->terminator())) {
@@ -4194,6 +4201,7 @@ namespace metajit {
                 remove_from_incoming(target, succ);
               }
               remove(target);
+              changes = true;
               continue;
             }
             // do jump-threading: if the target block only has a single instruction,
@@ -4221,6 +4229,7 @@ namespace metajit {
                 block->remove(jump);
                 incoming[final_target->name()].push_back(block);
                 remove_from_incoming(block, target);
+                changes = true;
                 continue;
               }
             }
@@ -4230,6 +4239,9 @@ namespace metajit {
         #ifndef NDEBUG
         verify_incoming();
         #endif
+      }
+      if (changes) {
+        order_blocks(_section);
       }
     }
   };
@@ -4592,6 +4604,68 @@ namespace metajit {
       write_dot(file);
     }
   };
+
+  class OrderBlocks: public Pass<OrderBlocks> {
+  private:
+    Section* _section;
+    DominatorTree _dt;
+    std::vector<Block*> _ordered;
+    std::unordered_set<Block*> _visited;
+
+    void dfs(Block* block) {
+      if (_visited.find(block) != _visited.end()) {
+        return;
+      }
+      _visited.insert(block);
+
+      // Visit successors in reverse order to maintain stable block numbering
+      // (this matches the original ordering and minimizes test changes)
+      std::vector<Block*> succs = block->successors();
+      for (auto it = succs.rbegin(); it != succs.rend(); ++it) {
+        Block* succ = *it;
+        // A backedge is where the successor dominates the source block
+        if (!_dt.dominates(succ, block)) {
+          dfs(succ);
+        }
+      }
+
+      _ordered.push_back(block);
+    }
+
+  public:
+    OrderBlocks(Section* section):
+        Pass(section),
+        _section(section),
+        _dt(section) {
+
+      // Compute Natural ordering: topological sort ignoring backedges
+      // A backedge is an edge (from -> to) where to dominates from
+      dfs(_section->entry());
+
+      // Reverse for topological order
+      std::reverse(_ordered.begin(), _ordered.end());
+
+      // Remove all blocks from section
+      std::vector<Block*> all_blocks;
+      for (Block* block : *_section) {
+        all_blocks.push_back(block);
+      }
+      for (Block* block : all_blocks) {
+        _section->remove(block);
+      }
+
+      // Add blocks back in natural order
+      for (Block* block : _ordered) {
+        _section->add(block);
+      }
+
+      _section->set_ordering(BlockOrdering::Natural);
+    }
+  };
+
+  void order_blocks(Section* section) {
+    OrderBlocks::run(section);
+  }
 
   bool Section::verify(std::ostream& errors) {
     autoname();
