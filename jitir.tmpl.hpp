@@ -914,6 +914,8 @@ namespace metajit {
       }
     }
 
+    void order_blocks();
+
     void write(PrettyStream& stream, InfoWriter* info_writer = nullptr) {
       autoname();
       
@@ -4041,8 +4043,6 @@ namespace metajit {
     }
   };
 
-  void order_blocks(Section* section);
-
   class SimplifyCFG: public Pass<SimplifyCFG> {
   private:
     Section* _section;
@@ -4128,11 +4128,6 @@ namespace metajit {
         if (block != _section->entry() && incoming[block->name()].empty()) {
           remove(block);
           continue;
-        }
-        if (substs.size()) {
-          for (Inst* inst : *block) {
-            inst->substitute_args(substs);
-          }
         }
         while (true) {
           if (dynmatch(BranchInst, branch, block->terminator())) {
@@ -4241,7 +4236,15 @@ namespace metajit {
         #endif
       }
       if (changes) {
-        order_blocks(_section);
+        if (substs.size()) {
+          for (Block* block : *_section) {
+            for (Inst* inst : *block) {
+              inst->substitute_args(substs);
+            }
+          }
+        }
+        _section->set_ordering(BlockOrdering::None);
+        _section->order_blocks();
       }
     }
   };
@@ -4663,8 +4666,8 @@ namespace metajit {
     }
   };
 
-  void order_blocks(Section* section) {
-    OrderBlocks::run(section);
+  void Section::order_blocks() {
+    OrderBlocks::run(this);
   }
 
   bool Section::verify(std::ostream& errors) {

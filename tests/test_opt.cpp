@@ -437,7 +437,6 @@ b0(%0: Ptr):
     builder.build_jump(merge_block, {builder.build_const(Type::Int64, 42)});
     builder.move_to_end(else_block);
     builder.build_jump(merge_block, {input});
-    builder.section()->write(std::cerr);
     builder.section()->set_ordering(BlockOrdering::Dominator);
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
@@ -474,8 +473,10 @@ b2:
     Value* cond2 = data.input(Type::Bool);
     builder.build_branch(cond2, then_block2, else_block2);
     builder.move_to_end(then_block2);
+    data.output(cond2);
     builder.build_jump(return_block);
     builder.move_to_end(else_block2);
+    data.output(cond2);
     builder.build_jump(return_block);
     builder.move_to_end(return_block);
     data.output(merge_block->arg(0));
@@ -484,7 +485,6 @@ b2:
     builder.build_jump(merge_block, {builder.build_const(Type::Int64, 42)});
     builder.move_to_end(else_block);
     builder.build_jump(merge_block, {input});
-    builder.section()->write(std::cerr);
     builder.section()->set_ordering(BlockOrdering::Dominator);
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
@@ -494,7 +494,16 @@ b0(%0: Ptr):
 b1:
   Jump block=b2
 b2:
-  Store %0, 42:Int64, aliasing=0, offset=16
+  %5 = Load %0, type=Bool, flags={}, aliasing=0, offset=16
+  Branch %5, true_block=b3, false_block=b4
+b3:
+  Store %0, 1:Bool, aliasing=0, offset=17
+  Jump block=b5
+b4:
+  Store %0, 0:Bool, aliasing=0, offset=18
+  Jump block=b5
+b5:
+  Store %0, 42:Int64, aliasing=0, offset=24
   Exit
 }
 )", builder.section());
