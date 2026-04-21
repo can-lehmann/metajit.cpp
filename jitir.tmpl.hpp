@@ -914,7 +914,7 @@ namespace metajit {
       }
     }
 
-    void order_blocks();
+    void order_blocks(BlockOrdering target_ordering = BlockOrdering::Natural);
 
     void write(PrettyStream& stream, InfoWriter* info_writer = nullptr) {
       autoname();
@@ -4244,7 +4244,7 @@ namespace metajit {
           }
         }
         _section->set_ordering(BlockOrdering::None);
-        _section->order_blocks();
+        _section->order_blocks(BlockOrdering::Natural);
       }
     }
   };
@@ -4614,41 +4614,70 @@ namespace metajit {
     DominatorTree _dt;
     std::vector<Block*> _ordered;
     std::unordered_set<Block*> _visited;
+    BlockOrdering _target_ordering;
 
-    void dfs(Block* block) {
+    // Dominator ordering: pre-order traversal of dominator tree
+    void traverse_dominator_tree(Block* block, std::vector<std::vector<Block*>>& dom_children) {
+      _ordered.push_back(block);
+      for (Block* child : dom_children[block->name()]) {
+        traverse_dominator_tree(child, dom_children);
+      }
+    }
+
+    void order_dominator() {
+      std::vector<std::vector<Block*>> dom_children(_section->block_count());
+      for (Block* block : *_section) {
+        Block* idom = _dt.idom(block);
+        if (idom) {
+          dom_children[idom->name()].push_back(block);
+        }
+      }
+
+      traverse_dominator_tree(_section->entry(), dom_children);
+    }
+
+    // Natural ordering: topological sort ignoring backedges
+    void dfs_natural(Block* block) {
       if (_visited.find(block) != _visited.end()) {
         return;
       }
       _visited.insert(block);
 
       // Visit successors in reverse order to maintain stable block numbering
-      // (this matches the original ordering and minimizes test changes)
       std::vector<Block*> succs = block->successors();
       for (auto it = succs.rbegin(); it != succs.rend(); ++it) {
         Block* succ = *it;
         // A backedge is where the successor dominates the source block
         if (!_dt.dominates(succ, block)) {
-          dfs(succ);
+          dfs_natural(succ);
         }
       }
 
       _ordered.push_back(block);
     }
 
-  public:
-    OrderBlocks(Section* section):
-        Pass(section),
-        _section(section),
-        _dt(section) {
-
-      // Compute Natural ordering: topological sort ignoring backedges
-      // A backedge is an edge (from -> to) where to dominates from
-      dfs(_section->entry());
-
+    void order_natural() {
+      dfs_natural(_section->entry());
       // Reverse for topological order
       std::reverse(_ordered.begin(), _ordered.end());
+    }
 
-      // Remove all blocks from section
+  public:
+    OrderBlocks(Section* section, BlockOrdering target_ordering = BlockOrdering::Natural):
+        Pass(section),
+        _section(section),
+        _dt(section),
+        _target_ordering(target_ordering) {
+
+      assert(target_ordering >= BlockOrdering::Dominator);
+
+      if (target_ordering == BlockOrdering::Dominator) {
+        order_dominator();
+      } else {
+        // Natural or Topological both use natural ordering
+        order_natural();
+      }
+
       std::vector<Block*> all_blocks;
       for (Block* block : *_section) {
         all_blocks.push_back(block);
@@ -4657,17 +4686,18 @@ namespace metajit {
         _section->remove(block);
       }
 
-      // Add blocks back in natural order
       for (Block* block : _ordered) {
         _section->add(block);
       }
 
-      _section->set_ordering(BlockOrdering::Natural);
+      _section->set_ordering(_target_ordering);
     }
   };
 
-  void Section::order_blocks() {
-    OrderBlocks::run(this);
+  void Section::order_blocks(BlockOrdering target_ordering) {
+    if (_ordering < target_ordering) {
+      OrderBlocks::run(this, target_ordering);
+    }
   }
 
   bool Section::verify(std::ostream& errors) {
