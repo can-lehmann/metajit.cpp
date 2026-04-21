@@ -355,6 +355,45 @@ b0(%0: Ptr):
 }
 )", builder.section());
   });
+
+  suite.diff_test("simplifycfg invalidates dominator order").run([](Builder& builder, TestData& data) {
+    Value* cond1 = data.input(Type::Bool);
+    Value* input = data.input(Type::Int64);
+    Block* branch_block = builder.build_block();
+    Block* merge_block = builder.build_block({Type::Int64});
+    Block* return_block = builder.build_block();
+    Block* then_block = builder.build_block();
+    Block* else_block = builder.build_block();
+
+    builder.build_branch(cond1, branch_block, then_block);
+
+    builder.move_to_end(branch_block);
+    Value* cond = builder.build_const(Type::Bool, 1);
+    builder.build_branch(cond, then_block, else_block);
+
+    builder.move_to_end(merge_block);
+    builder.build_jump(return_block);
+    builder.move_to_end(return_block);
+    data.output(merge_block->arg(0));
+    builder.build_exit();
+    builder.move_to_end(then_block);
+    builder.build_jump(merge_block, {builder.build_const(Type::Int64, 42)});
+    builder.move_to_end(else_block);
+    builder.build_jump(merge_block, {input});
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Jump block=b2
+b2:
+  Store %0, 42:Int64, aliasing=0, offset=16
+  Exit
+}
+)", builder.section());
+  });
+
   suite.diff_test("simplifycfg jump with args further substs").run([](Builder& builder, TestData& data) {
     Value* input = data.input(Type::Int64);
     Block* arg_block = builder.build_block({Type::Int64});
