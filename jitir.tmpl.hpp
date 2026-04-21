@@ -4177,7 +4177,11 @@ namespace metajit {
             // if the target block only has one incoming edge, we can merge it with the current block
             if (incoming[target->name()].size() == 1) {
               for (size_t i = 0; i < target->args().size(); i++) {
-                substs[target->args().at(i)] = jump->arg(i);
+                Value* arg = jump->arg(i);
+                if (substs.find(arg) != substs.end()) {
+                  arg = substs.at(arg);
+                }
+                substs[target->args().at(i)] = arg;
               }
               for (Inst* inst : *target) {
                 inst->substitute_args(substs);

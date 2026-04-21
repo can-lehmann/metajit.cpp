@@ -590,5 +590,74 @@ b3:
 )", builder.section());
   });
 
+  suite.diff_test("simplifycfg recursive substs").run([](Builder& builder, TestData& data) {
+    Value* input = data.input(Type::Int64);
+    Block* arg_block = builder.build_block({Type::Int64});
+    builder.build_jump(arg_block, {input});
+    builder.move_to_end(arg_block);
+    data.output(arg_block->arg(0));
+    // now branch and use the arg after the branch
+    Value* cond = data.input(Type::Bool);
+    Block* then_block = builder.build_block();
+    Block* else_block = builder.build_block();
+    Block* merge_block = builder.build_block();
+    builder.build_branch(cond, then_block, else_block);
+    builder.move_to_end(then_block);
+    data.output(arg_block->arg(0));
+    builder.build_jump(merge_block);
+    builder.move_to_end(else_block);
+    data.output(arg_block->arg(0));
+    builder.build_jump(merge_block);
+    builder.move_to_end(merge_block);
+
+    // do the same thing again
+    Block* arg_block1 = builder.build_block({Type::Int64});
+    builder.build_jump(arg_block1, {arg_block->arg(0)});
+    builder.move_to_end(arg_block1);
+    data.output(arg_block1->arg(0));
+    Value* cond1 = data.input(Type::Bool);
+    Block* then_block1 = builder.build_block();
+    Block* else_block1 = builder.build_block();
+    Block* merge_block1 = builder.build_block();
+    builder.build_branch(cond1, then_block1, else_block1);
+    builder.move_to_end(then_block1);
+    data.output(arg_block1->arg(0));
+    builder.build_jump(merge_block1);
+    builder.move_to_end(else_block1);
+    data.output(arg_block1->arg(0));
+    builder.build_jump(merge_block1);
+    builder.move_to_end(merge_block1);
+    data.output(arg_block1->arg(0));
+    builder.build_exit();
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  Store %0, %1, aliasing=0, offset=8
+  %3 = Load %0, type=Bool, flags={}, aliasing=0, offset=16
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  Store %0, %1, aliasing=0, offset=24
+  Jump block=b3
+b2:
+  Store %0, %1, aliasing=0, offset=32
+  Jump block=b3
+b3:
+  Store %0, %1, aliasing=0, offset=40
+  %10 = Load %0, type=Bool, flags={}, aliasing=0, offset=48
+  Branch %10, true_block=b4, false_block=b5
+b4:
+  Store %0, %1, aliasing=0, offset=56
+  Jump block=b6
+b5:
+  Store %0, %1, aliasing=0, offset=64
+  Jump block=b6
+b6:
+  Store %0, %1, aliasing=0, offset=72
+  Exit
+}
+)", builder.section());
+  });
+
   return suite.finish();
 }
