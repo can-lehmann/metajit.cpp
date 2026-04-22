@@ -280,6 +280,7 @@ namespace metajit {
         _section(section),
         _builder(section) {
       
+      section->set_ordering(BlockOrdering::None);
       std::vector<Type> entry_arg_types;
       for (llvm::Argument& arg : function->args()) {
         entry_arg_types.push_back(lower_type(arg.getType()));
@@ -303,6 +304,7 @@ namespace metajit {
           _values[&inst] = lower_inst(&inst);
         }
       }
+      section->order_blocks();
     }
   };
 }
