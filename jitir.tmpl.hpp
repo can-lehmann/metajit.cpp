@@ -439,10 +439,10 @@ namespace metajit {
     void substitute_args(NameMap<Value*>& substs);
 
     void substitute_args(const std::map<Value*, Value*>& substs) {
-      for (size_t it = 0; it < _args.size(); it++) {
-        Value* arg = _args.at(it);
-        if (arg && substs.find(arg) != substs.end()) {
-          set_arg(it, substs.at(arg));
+      for (size_t it = 0; it < arg_count(); it++) {
+        Value* argument = arg(it);
+        if (argument && substs.find(argument) != substs.end()) {
+          set_arg(it, substs.at(argument));
         }
       }
     }
@@ -2291,11 +2291,11 @@ namespace metajit {
   };
 
   void Inst::substitute_args(NameMap<Value*>& substs) {
-    for (size_t it = 0; it < _args.size(); it++) {
-      Value* arg = _args.at(it);
-      if (arg->is_inst()) {
-        if (substs[(Inst*) arg]) {
-          set_arg(it, substs[(Inst*) arg]);
+    for (size_t it = 0; it < arg_count(); it++) {
+      Value* argument = arg(it);
+      if (argument->is_inst()) {
+        if (substs[(Inst*) argument]) {
+          set_arg(it, substs[(Inst*) argument]);
         }
       }
     }
@@ -4699,7 +4699,7 @@ namespace metajit {
     std::vector<Block*> _ordered;
     std::unordered_set<Block*> _visited;
     BlockOrdering _target_ordering;
-    bool seen_loop = false;
+    bool _seen_loop = false;
 
     // Dominator ordering: pre-order traversal of dominator tree
     void traverse_dominator_tree(Block* block, std::vector<std::vector<Block*>>& dom_children) {
@@ -4736,7 +4736,7 @@ namespace metajit {
         if (!_dt.dominates(succ, block)) {
           dfs_natural(succ);
         } else {
-          seen_loop = true;
+          _seen_loop = true;
         }
       }
 
@@ -4777,7 +4777,10 @@ namespace metajit {
         _section->add(block);
       }
 
-      if (target_ordering == BlockOrdering::Natural && !seen_loop) {
+      if (target_ordering == BlockOrdering::Topological && _seen_loop) {
+        throw std::runtime_error("requested Topological order but section has loop");
+      }
+      if (target_ordering == BlockOrdering::Natural && !_seen_loop) {
         // a Natural block ordering where we don't see a loop is Topological
         _section->set_ordering(BlockOrdering::Topological);
       } else {
