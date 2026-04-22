@@ -591,10 +591,8 @@ b0(%0: Ptr):
   Branch %1, true_block=b1, false_block=b2
 b1:
   Store %0, 1:Int64, aliasing=0, offset=8
-  Jump block=b3
+  Jump block=b2
 b2:
-  Jump block=b3
-b3:
   Store %0, 42:Int64, aliasing=0, offset=24
   Exit
 }
@@ -665,6 +663,81 @@ b5:
   Jump block=b6
 b6:
   Store %0, %1, aliasing=0, offset=72
+  Exit
+}
+)", builder.section());
+  });
+
+  suite.diff_test("simplifycfg branch jump thread").run([](Builder& builder, TestData& data) {
+    Value* cond = data.input(Type::Bool);
+    Block* then_block = builder.build_block();
+    Block* else_block = builder.build_block();
+    Block* merge_block = builder.build_block();
+
+    // useless branch
+    builder.build_branch(cond, then_block, else_block);
+    builder.move_to_end(then_block);
+    builder.build_jump(merge_block);
+    builder.move_to_end(else_block);
+    builder.build_jump(merge_block);
+    builder.move_to_end(merge_block);
+    data.output(cond);
+    builder.build_exit();
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+}
+)", builder.section());
+  });
+
+  suite.diff_test("simplifycfg branch jump thread with args").run([](Builder& builder, TestData& data) {
+    Value* cond = data.input(Type::Bool);
+    Value* val = data.input(Type::Int64);
+    Block* then_block = builder.build_block();
+    Block* else_block = builder.build_block();
+    Block* merge_block = builder.build_block({Type::Int64});
+
+    builder.build_branch(cond, then_block, else_block);
+    builder.move_to_end(then_block);
+    builder.build_jump(merge_block, {val});
+    builder.move_to_end(else_block);
+    builder.build_jump(merge_block, {val});
+    builder.move_to_end(merge_block);
+    data.output(merge_block->arg(0));
+    builder.build_exit();
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
+  Store %0, %2, aliasing=0, offset=16
+  Exit
+}
+)", builder.section());
+  });
+
+  suite.diff_test("simplifycfg branch jump thread with const args").run([](Builder& builder, TestData& data) {
+    Value* cond = data.input(Type::Bool);
+    Block* then_block = builder.build_block();
+    Block* else_block = builder.build_block();
+    Block* merge_block = builder.build_block({Type::Int64});
+
+    builder.build_branch(cond, then_block, else_block);
+    builder.move_to_end(then_block);
+    builder.build_jump(merge_block, {builder.build_const(Type::Int64, 1)});
+    builder.move_to_end(else_block);
+    builder.build_jump(merge_block, {builder.build_const(Type::Int64, 1)});
+    builder.move_to_end(merge_block);
+    data.output(merge_block->arg(0));
+    builder.build_exit();
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Store %0, 1:Int64, aliasing=0, offset=8
   Exit
 }
 )", builder.section());

@@ -4100,6 +4100,32 @@ namespace metajit {
       }
     }
 
+    bool is_same_jump(JumpInst* jump1, JumpInst* jump2) {
+      if (jump1->block() != jump2->block()) {
+        return false;
+      }
+      assert (jump1->args().size() == jump2->args().size());
+      for (size_t it = 0; it < jump1->args().size(); it++) {
+        Value* arg1 = jump1->args().at(it);
+        Value* arg2 = jump2->args().at(it);
+        if (!arg1->equals(arg2)) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    std::optional<JumpInst*> get_jump_thread_target(Block* block) const {
+      assert (!block->empty());
+      if (dynmatch(JumpInst, jump, *block->begin())) {
+        if (jump->block() == block) {
+            return {};
+        }
+        return {jump};
+      }
+      return {};
+    }
+
     void replace_cond_with_const(Value* cond, uint64_t const_value, Block* target) {
       Value* replacement = nullptr;
       for (Inst* inst : *target) {
@@ -4115,6 +4141,32 @@ namespace metajit {
           }
         }
       }
+    }
+
+    bool thread_branch_target(Block* block, BranchInst* branch, bool is_true) {
+      Block* target = is_true ? branch->true_block() : branch->false_block();
+      if (target == block) {
+        return false;
+      }
+      assert (!target->empty());
+      auto jump_opt = get_jump_thread_target(target);
+      if (jump_opt.has_value()) {
+        JumpInst* jump = jump_opt.value();
+        Block* final_target = jump->block();
+        if (jump->arg_count() == 0 &&
+            target->args().size() == 0) {
+          if (is_true) {
+            branch->set_true_block(final_target);
+          } else {
+            branch->set_false_block(final_target);
+          }
+          incoming[final_target->name()].push_back(block);
+          remove_from_incoming(block, target);
+          changes = true;
+          return true;
+        }
+      }
+      return false;
     }
 
   public:
@@ -4160,6 +4212,31 @@ namespace metajit {
               changes = true;
               continue;
             }
+
+            // jump-thread the two branches, if they go to a jump with no args
+            if (thread_branch_target(block, branch, true) ||
+                thread_branch_target(block, branch, false)) {
+              continue;
+            }
+
+            // if the two branches go to blocks that have only identical jumps,
+            // the branch is unnecessary. replace it with the jump
+            auto t_jump_opt = get_jump_thread_target(branch->true_block());
+            auto f_jump_opt = get_jump_thread_target(branch->false_block());
+            if (t_jump_opt.has_value() && f_jump_opt.has_value() &&
+                    is_same_jump(t_jump_opt.value(), f_jump_opt.value())) {
+              JumpInst* t_jump = t_jump_opt.value();
+              JumpInst* f_jump = f_jump_opt.value();
+              builder.move_before(block, branch);
+              builder.build_jump(t_jump->block(), t_jump->args());
+              incoming[t_jump->block()->name()].push_back(block);
+              block->remove(branch);
+              remove_from_incoming(block, branch->true_block());
+              remove_from_incoming(block, branch->false_block());
+              changes = true;
+              continue;
+            }
+
             // if the true_block and false_block have only one incoming edge (from this block),
             // we can replace the condition with a constant in the respective block
             // (in theory we should use the dominator tree to check this, but that would be more expensive)
@@ -4206,11 +4283,14 @@ namespace metajit {
             // do jump-threading: if the target block only has a single instruction,
             // which is a jump, we can just jump to the final target.
             // we do that only if the final_target has more than one incoming
-            // link (in which case merging happens anyway). otherwise, the args
+            // link (otherwise block merging happens anyway). if we
+            // jump-threaded to a block with only one incoming link, the args
             // of target can have uses in other blocks.
-            if (dynmatch(JumpInst, target_jump, *target->begin())) {
+            auto jump_opt = get_jump_thread_target(target);
+            if (jump_opt.has_value()) {
+              JumpInst* target_jump = jump_opt.value();
               Block* final_target = target_jump->block();
-              if (final_target != target && incoming[final_target->name()].size() > 1) {
+              if (incoming[final_target->name()].size() > 1) {
                 std::map<Value*, Value*> local_substs;
                 for (size_t i = 0; i < target->args().size(); i++) {
                   local_substs[target->args().at(i)] = jump->arg(i);
