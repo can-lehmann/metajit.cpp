@@ -5385,5 +5385,190 @@ namespace metajit {
       SliceReentryClosures src(section, closures);
     };
   };
+
+  class Mem2Reg: public Pass<Mem2Reg> {
+  private:
+    struct BlockData {
+      std::set<AllocaInst*> live; // Live allocas at entry
+      std::map<AllocaInst*, Value*> values; // Values at entry for live allocas
+      std::map<AllocaInst*, Arg*> args;
+    };
+
+    Section* _section = nullptr;
+    std::set<AllocaInst*> _lowerable_allocas;
+    std::unordered_map<Block*, BlockData> _blocks;
+    std::map<LoadInst*, Value*> _loads;
+    Builder _builder;
+
+    void find_lowerable_allocas() {
+      for (Inst* inst : *_section->entry()) {
+        if (dynmatch(AllocaInst, alloca, inst)) {
+          _lowerable_allocas.insert(alloca);
+        }
+      }
+
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(StoreInst, store, inst)) {
+            if (dynmatch(AllocaInst, alloca, store->value())) {
+              _lowerable_allocas.erase(alloca);
+            } else if (dynmatch(AllocaInst, alloca, store->ptr())) {
+              if (store->offset() != 0) {
+                _lowerable_allocas.erase(alloca);
+              }
+            }
+          } else if (dynmatch(LoadInst, load, inst)) {
+            if (dynmatch(AllocaInst, alloca, load->ptr())) {
+              if (load->offset() != 0) {
+                _lowerable_allocas.erase(alloca);
+              }
+            }
+          } else {
+            for (Value* arg : inst->args()) {
+              if (dynmatch(AllocaInst, alloca, arg)) {
+                _lowerable_allocas.erase(alloca);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    void find_liveness() {
+      // TODO: Optimize with queue
+
+      bool changed = true;
+      while (changed) {
+        changed = false;
+
+        for (Block* block : _section->rev_range()) {
+          std::set<AllocaInst*> live;
+          for (Block* succ : block->successors()) {
+            live.insert(_blocks[succ].live.begin(), _blocks[succ].live.end());
+          }
+
+          for (Inst* inst : block->rev_range()) {
+            if (dynmatch(StoreInst, store, inst)) {
+              if (dynmatch(AllocaInst, alloca, store->ptr())) {
+                live.erase(alloca);
+              }
+            } else if (dynmatch(LoadInst, load, inst)) {
+              if (dynmatch(AllocaInst, alloca, load->ptr())) {
+                if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
+                  live.insert(alloca);
+                  _loads[load] = nullptr;
+                }
+              }
+            }
+          }
+
+          if (live != _blocks[block].live) {
+            _blocks[block].live = live;
+            changed = true;
+          }
+        }
+      }
+    }
+
+    void find_values() {
+      // TODO: Optimize with queue
+
+      bool changed = true;
+
+      while (changed) {
+        changed = false;
+        for (Block* block : *_section) {
+          std::map<AllocaInst*, Value*> values = _blocks[block].values;
+          for (Inst* inst : *block) {
+            if (dynmatch(StoreInst, store, inst)) {
+              if (dynmatch(AllocaInst, alloca, store->ptr())) {
+                if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
+                  Value* value = store->value();
+                  if (dynmatch(LoadInst, load, value)) {
+                    if (_loads.find(load) != _loads.end()) {
+                      value = _loads.at(load);
+                    }
+                  }
+                  values[alloca] = value;
+                }
+              }
+            } else if (dynmatch(LoadInst, load, inst)) {
+              if (dynmatch(AllocaInst, alloca, load->ptr())) {
+                if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
+                  Value* value = values.at(alloca);
+                  if (_loads[load] != value) {
+                    _loads[load] = value;
+                    changed = true;
+                  }
+                }
+              }
+            }
+          }
+
+          for (Block* block : block->successors()) {
+            for (AllocaInst* alloca : _blocks[block].live) {
+              if (values.find(alloca) != values.end() && values.at(alloca)) {
+                if (_blocks[block].values.find(alloca) == _blocks[block].values.end()) {
+                  _blocks[block].values[alloca] = values.at(alloca);
+                  changed = true;
+                } else if (_blocks[block].values.at(alloca) != values.at(alloca)) {
+                  if (_blocks[block].args.find(alloca) == _blocks[block].args.end()) {
+                    Arg* arg = _builder.alloc_arg(values.at(alloca)->type(), _blocks[block].args.size() + block->args().size());
+                    _blocks[block].args[alloca] = arg;
+                    _blocks[block].values[alloca] = arg;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    void apply() {
+      for (Block* block : *_section) {
+        for (auto it = block->begin(); it != block->end(); ) {
+          Inst* inst = *it;
+
+          for (size_t it = 0; it < inst->arg_count(); it++) {
+            if (dynmatch(LoadInst, load, inst->arg(it))) {
+              if (_loads.find(load) != _loads.end()) {
+                inst->set_arg(it, _loads.at(load));
+              }
+            }
+          }
+
+          if (dynmatch(LoadInst, load, inst)) {
+            if (_loads.find(load) != _loads.end()) {
+              it = it.erase();
+              continue;
+            }
+          } else if (dynmatch(StoreInst, store, inst)) {
+            if (dynmatch(AllocaInst, alloca, store->ptr())) {
+              if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
+                it = it.erase();
+                continue;
+              }
+            }
+          }
+
+          it++;
+        }
+
+        // TODO: Add and pass block args
+      }
+
+
+    }
+  public:
+    Mem2Reg(Section* section): Pass(section), _section(section), _builder(section) {
+      assert(section->ordering() >= BlockOrdering::Dominator);
+     
+      find_lowerable_allocas();
+      find_liveness();
+      find_values();
+      apply();
+    }
+  };
 }
 
