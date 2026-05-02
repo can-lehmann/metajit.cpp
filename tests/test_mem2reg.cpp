@@ -59,5 +59,127 @@ int main() {
     Mem2Reg::run(section);
   });
 
+  suite.opt_test("non_reconverging_branch").run([](Builder& builder, TestData& data) {
+    Block* true_block = builder.build_block();
+    Block* false_block = builder.build_block();
+
+    Value* alloca = builder.build_alloca(Type::Int64);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
+    
+    builder.build_branch(data.input(Type::Bool), true_block, false_block);
+
+    builder.move_to_end(true_block);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
+    data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+    builder.build_exit();
+
+    builder.move_to_end(false_block);
+    data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+  }, [&](Section* section){
+    Mem2Reg::run(section);
+  });
+
+  suite.opt_test("non_reconverging_branch_liveness").run([](Builder& builder, TestData& data) {
+    Block* true_block = builder.build_block();
+    Block* false_block = builder.build_block();
+    Block* cont_block = builder.build_block();
+
+    Value* alloca = builder.build_alloca(Type::Int64);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
+    
+    builder.build_branch(data.input(Type::Bool), true_block, false_block);
+
+    builder.move_to_end(true_block);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
+    data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+    builder.build_jump(cont_block);
+
+    builder.move_to_end(false_block);
+    data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+    builder.build_jump(cont_block);
+
+    builder.move_to_end(cont_block);
+  }, [&](Section* section){
+    Mem2Reg::run(section);
+  });
+
+  suite.opt_test("branch").run([](Builder& builder, TestData& data) {
+    Block* true_block = builder.build_block();
+    Block* false_block = builder.build_block();
+    Block* cont_block = builder.build_block();
+
+    Value* alloca = builder.build_alloca(Type::Int64);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
+    
+    builder.build_branch(data.input(Type::Bool), true_block, false_block);
+
+    builder.move_to_end(true_block);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
+    builder.build_jump(cont_block);
+
+    builder.move_to_end(false_block);
+    builder.build_jump(cont_block);
+
+    builder.move_to_end(cont_block);
+    data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+  }, [&](Section* section){
+    Mem2Reg::run(section);
+  });
+
+  suite.opt_test("nested_branch").run([](Builder& builder, TestData& data) {
+    Block* true_block = builder.build_block();
+    Block* false_block = builder.build_block();
+    Block* nested_true_block = builder.build_block();
+    Block* nested_false_block = builder.build_block();
+    Block* nested_cont_block = builder.build_block();
+    Block* cont_block = builder.build_block();
+
+    Value* alloca = builder.build_alloca(Type::Int64);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
+    
+    builder.build_branch(data.input(Type::Bool), true_block, false_block);
+
+    builder.move_to_end(true_block);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
+    builder.build_jump(cont_block);
+
+    builder.move_to_end(false_block);
+    builder.build_branch(data.input(Type::Bool), nested_true_block, nested_false_block);
+
+    builder.move_to_end(nested_true_block);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
+    builder.build_jump(nested_cont_block);
+
+    builder.move_to_end(nested_false_block);
+    builder.build_jump(nested_cont_block);
+
+    builder.move_to_end(nested_cont_block);
+    builder.build_jump(cont_block);
+
+    builder.move_to_end(cont_block);
+    data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+  }, [&](Section* section){
+    Mem2Reg::run(section);
+  });
+
+  suite.opt_test("branch_without_else").run([](Builder& builder, TestData& data) {
+    Block* true_block = builder.build_block();
+    Block* cont_block = builder.build_block();
+
+    Value* alloca = builder.build_alloca(Type::Int64);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
+    
+    builder.build_branch(data.input(Type::Bool), true_block, cont_block);
+
+    builder.move_to_end(true_block);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
+    builder.build_jump(cont_block);
+
+    builder.move_to_end(cont_block);
+    data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+  }, [&](Section* section){
+    Mem2Reg::run(section);
+  });
+
   return suite.finish();
 }

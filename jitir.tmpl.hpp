@@ -1084,6 +1084,15 @@ namespace metajit {
         Block* block = alloc_block(arg_name); \
         _section->insert_before(before, block); \
         return block; \
+      } \
+      Block* build_block_after(Block* after, arg_type arg_name) { \
+        Block* block = alloc_block(arg_name); \
+        if (after->next()) { \
+          _section->insert_before(after->next(), block); \
+        } else { \
+          _section->add(block); \
+        } \
+        return block; \
       }
     
     define_build_block(size_t, arg_count)
@@ -1096,6 +1105,7 @@ namespace metajit {
 
     Block* build_block() { return build_block(0); }
     Block* build_block_before(Block* before) { return build_block_before(before, 0); }
+    Block* build_block_after(Block* before) { return build_block_after(before, 0); }
 
     Const* build_const(Type type, uint64_t value) {
       return _section->context().build_const(type, value);
@@ -5390,7 +5400,8 @@ namespace metajit {
   private:
     struct BlockData {
       std::set<AllocaInst*> live; // Live allocas at entry
-      std::map<AllocaInst*, Value*> values; // Values at entry for live allocas
+      std::map<AllocaInst*, Value*> values_at_entry; // Values at entry for live allocas
+      std::map<AllocaInst*, Value*> values_at_exit; // Values at exit for live allocas
       std::map<AllocaInst*, Arg*> args;
     };
 
@@ -5478,7 +5489,7 @@ namespace metajit {
       while (changed) {
         changed = false;
         for (Block* block : *_section) {
-          std::map<AllocaInst*, Value*> values = _blocks[block].values;
+          std::map<AllocaInst*, Value*> values = _blocks[block].values_at_entry;
           for (Inst* inst : *block) {
             if (dynmatch(StoreInst, store, inst)) {
               if (dynmatch(AllocaInst, alloca, store->ptr())) {
@@ -5505,17 +5516,19 @@ namespace metajit {
             }
           }
 
+          _blocks[block].values_at_exit = values;
+
           for (Block* block : block->successors()) {
             for (AllocaInst* alloca : _blocks[block].live) {
               if (values.find(alloca) != values.end() && values.at(alloca)) {
-                if (_blocks[block].values.find(alloca) == _blocks[block].values.end()) {
-                  _blocks[block].values[alloca] = values.at(alloca);
+                if (_blocks[block].values_at_entry.find(alloca) == _blocks[block].values_at_entry.end()) {
+                  _blocks[block].values_at_entry[alloca] = values.at(alloca);
                   changed = true;
-                } else if (_blocks[block].values.at(alloca) != values.at(alloca)) {
+                } else if (_blocks[block].values_at_entry.at(alloca) != values.at(alloca)) {
                   if (_blocks[block].args.find(alloca) == _blocks[block].args.end()) {
                     Arg* arg = _builder.alloc_arg(values.at(alloca)->type(), _blocks[block].args.size() + block->args().size());
                     _blocks[block].args[alloca] = arg;
-                    _blocks[block].values[alloca] = arg;
+                    _blocks[block].values_at_entry[alloca] = arg;
                   }
                 }
               }
@@ -5554,16 +5567,60 @@ namespace metajit {
 
           it++;
         }
+      }
 
-        // TODO: Add and pass block args
+      for (Block* block : *_section) {
+        if (_blocks.find(block) == _blocks.end()) {
+          continue; // This is a newly inserted jump block
+        }
 
-        for (AllocaInst* alloca : _lowerable_allocas) {
-          // Only allocas in the entry block are lowerable
-          _section->entry()->remove(alloca);
+        BlockData& data = _blocks.at(block);
+        lwir::Span<Arg*> args = _builder.alloc_span<Arg*>(block->args().size() + data.args.size()).zeroed();
+        for (Arg* arg : block->args()) {
+          args[arg->index()] = arg;
+        }
+        for (auto& [alloca, arg] : data.args) {
+          assert(args[arg->index()] == nullptr);
+          args[arg->index()] = arg;
+        }
+        block->set_args(args);
+
+        if (dynmatch(JumpInst, jump, block->terminator())) {
+          BlockData& target_data = _blocks.at(jump->block());
+          lwir::Span<Value*> args = _builder.alloc_span<Value*>(jump->args().size() + target_data.args.size()).zeroed();
+          for (size_t i = 0; i < jump->args().size(); i++) {
+            args[i] = jump->arg(i);
+          }
+          for (auto& [alloca, arg] : target_data.args) {
+            assert(args[arg->index()] == nullptr);
+            args[arg->index()] = data.values_at_exit.at(alloca);
+          }
+          jump->set_args(args);
+        } else if (dynmatch(BranchInst, branch, block->terminator())) {
+          #define edge(name) { \
+            BlockData& edge_data = _blocks.at(branch->name##_block()); \
+            if (edge_data.args.size() != 0) { \
+              Block* jump_block = _builder.build_block_after(block); \
+              _builder.move_to_end(jump_block); \
+              JumpInst* jump = _builder.build_jump(edge_data.args.size(), branch->name##_block()); \
+              for (auto& [alloca, arg] : edge_data.args) { \
+                jump->set_arg(arg->index(), data.values_at_exit.at(alloca)); \
+              } \
+              branch->set_##name##_block(jump_block); \
+            } \
+          }
+          
+          edge(true)
+          edge(false)
+
+          #undef edge
         }
       }
 
-
+      for (AllocaInst* alloca : _lowerable_allocas) {
+        // Only allocas in the entry block are lowerable
+        _section->entry()->remove(alloca);
+      }
     }
   public:
     Mem2Reg(Section* section): Pass(section), _section(section), _builder(section) {
