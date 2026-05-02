@@ -224,12 +224,14 @@ class InstReadPlugin:
                     code += f"    CallConv {arg.name} = read_call_conv();\n"
                 elif arg.type == Type("LoadFlags"):
                     code += f"    LoadFlags {arg.name} = read_load_flags();\n"
-                elif arg.type == Type("AliasingGroup") or arg.type == Type("uint64_t"):
+                elif arg.type == Type("AliasingGroup") or \
+                     arg.type == Type("uint64_t") or \
+                     arg.type == Type("uint32_t") or \
+                     arg.type == Type("size_t"):
                     code += f"    uint64_t {arg.name} = read_uint64();\n"
                 elif arg.type == Type("const char*"):
                     code += f'    error("const char* argument not supported yet"); char * {arg.name};\n'
                 else:
-                    import pdb;pdb.set_trace()
                     assert False, f"Unknown argument type: {arg.type}"
             build_args = ", ".join(build_args)
             builder_call = f"_builder.{inst.format_builder_name(ir)}({build_args})\n"
@@ -267,7 +269,10 @@ class PrettyInstWritePlugin(InstWritePlugin):
             code += f"{stream} << Highlight::Type << {value} << Highlight::None;"
         elif arg.type == Type("LoadFlags"):
             code += f"{stream} << {value};"
-        elif arg.type == Type("AliasingGroup") or arg.type == Type("uint64_t"):
+        elif arg.type == Type("AliasingGroup") or \
+             arg.type == Type("uint64_t") or \
+             arg.type == Type("uint32_t") or \
+             arg.type == Type("size_t"):
             code += f"{stream} << Highlight::Constant << {value} << Highlight::None;"
         else:
             assert False
@@ -290,7 +295,10 @@ class JitirInstWriteJsonPlugin(InstWriteJsonPlugin):
             return f"{stream} << \"\\\"\" << {value} << \"\\\"\""
         elif arg.type == Type("LoadFlags"):
             return f"{value}.write_json({stream})"
-        elif arg.type == Type("AliasingGroup") or arg.type == Type("uint64_t"):
+        elif arg.type == Type("AliasingGroup") or \
+             arg.type == Type("uint64_t") or \
+             arg.type == Type("uint32_t") or \
+             arg.type == Type("size_t"):
             return f"{stream} << {value}"
         elif arg.type == Type("const char*"):
             return f"{stream} << \"\\\"\" << escape_json({value}) << \"\\\"\""
@@ -446,13 +454,15 @@ jitir = IR(
         ),
         Inst("Alloca",
             args = [
-                Arg("size", getter=Getter.Always)
+                Arg("size", getter=Getter.Always),
+                Arg("align", Type("uint32_t"), setter=True)
             ],
             type = "Type::Ptr",
             type_checks = [
-                "size->type() == Type::Int64"
+                "size->type() == Type::Int64",
+                "align >= 1"
             ],
-            doc = "Allocate untyped memory on the stack."
+            doc = "Allocate memory on the stack."
         ),
         Inst("AddPtr",
             args = [
@@ -556,6 +566,7 @@ lwir(
             type_substitutions = {
                 Type("size_t"): "uint64_t",
                 Type("uint64_t"): "uint64_t",
+                Type("uint32_t"): "uint32_t",
                 Type("Type"): "uint32_t",
                 Type("CallConv"): "uint32_t",
                 Type("LoadFlags"): "uint32_t",
@@ -575,6 +586,7 @@ lwir(
 llvm_type_substitutions = {
     Type("size_t"): "llvm::Type::getInt64Ty(context)",
     Type("uint64_t"): "llvm::Type::getInt64Ty(context)",
+    Type("uint32_t"): "llvm::Type::getInt32Ty(context)",
     Type("Type"): "llvm::Type::getInt32Ty(context)",
     Type("CallConv"): "llvm::Type::getInt32Ty(context)",
     Type("LoadFlags"): "llvm::Type::getInt32Ty(context)",
