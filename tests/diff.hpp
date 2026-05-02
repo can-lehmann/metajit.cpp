@@ -527,6 +527,74 @@ namespace metajit {
       }
     };
 
+    inline void check_opt_differential(Section* before,
+                                       Section* after,
+                                       TestData& data,
+                                       size_t sample_count = 1024) {
+      
+      before->autoname();
+      after->autoname();
+
+      uint8_t* before_data = new uint8_t[data.data_size()]();
+      uint8_t* after_data = new uint8_t[data.data_size()]();
+
+      for (size_t sample = 0; sample < sample_count; sample++) {
+        data.gen(before_data);
+        std::copy(before_data, before_data + data.data_size(), after_data);
+
+        Interpreter before_interp(before, {
+          Interpreter::Bits::constant(before_data)
+        });
+        Interpreter after_interp(after, {
+          Interpreter::Bits::constant(after_data)
+        });
+
+        Interpreter::Event before_event = before_interp.run();
+        Interpreter::Event after_event = after_interp.run();
+
+        if (before_event != Interpreter::Event::Exit) {
+          throw unittest::AssertionError(
+            "Before interpreter did not exit cleanly",
+            __LINE__,
+            __FILE__
+          );
+        }
+        if (after_event != Interpreter::Event::Exit) {
+          throw unittest::AssertionError(
+            "After interpreter did not exit cleanly",
+            __LINE__,
+            __FILE__
+          );
+        }
+
+        for (const TestData::Output& output : data.outputs()) {
+          bool is_equal = true;
+          for (size_t it = 0; it < type_size(output.type); it++) {
+            if (before_data[output.offset + it] != after_data[output.offset + it]) {
+              is_equal = false;
+              break;
+            }
+          }
+          if (!is_equal) {
+            std::ostringstream stream;
+            stream << "Inputs:\n";
+            data.write_inputs(stream, before_data);
+            stream << "Before Optimization Output:\n";
+            data.write_outputs(stream, before_data);
+            stream << "After Optimization Output:\n";
+            data.write_outputs(stream, after_data);
+            stream << "\n";
+            throw unittest::AssertionError(
+              "Output mismatch after optimization",
+              __LINE__,
+              __FILE__,
+              stream.str()
+            );
+          }
+        }
+      }
+    }
+
     class OptTest: public unittest::BaseTest<OptTest> {
     private:
       std::string _output_path;
@@ -556,6 +624,9 @@ namespace metajit {
 
           unittest_assert(!section->verify(std::cout));
 
+          Section* cloned_section = new Section(context, allocator);
+          Clone::run(section, cloned_section);
+
           optimize(section);
 
           {
@@ -564,6 +635,8 @@ namespace metajit {
           }
 
           unittest_assert(!section->verify(std::cout));
+
+          check_opt_differential(cloned_section, section, data);
 
           delete section;
         });
