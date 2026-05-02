@@ -526,5 +526,60 @@ namespace metajit {
         return SourceTest(name, _output_path, ll_file).suite(*this);
       }
     };
+
+    class OptTest: public unittest::BaseTest<OptTest> {
+    private:
+      std::string _output_path;
+    public:
+      OptTest(const std::string& name, const std::string& output_path):
+        unittest::BaseTest<OptTest>(name), _output_path(output_path) {}
+
+      void run(const std::function<void(Builder&, TestData&)>& body,
+               const std::function<void(Section*)>& optimize) && {
+        unittest::BaseTest<OptTest>::run([&]() {
+          Context context;
+          Allocator allocator;
+          Section* section = new Section(context, allocator);
+
+          Builder builder(section);
+          builder.move_to_end(builder.build_block({Type::Ptr}));
+
+          TestData data(builder);
+          body(builder, data);
+
+          builder.build_exit();
+
+          {
+            std::ofstream stream(_output_path + "/" + name() + ".before.jitir");
+            section->write(stream);
+          }
+
+          unittest_assert(!section->verify(std::cout));
+
+          optimize(section);
+
+          {
+            std::ofstream stream(_output_path + "/" + name() + ".after.jitir");
+            section->write(stream);
+          }
+
+          unittest_assert(!section->verify(std::cout));
+
+          delete section;
+        });
+      }
+    };
+
+    class OptTestSuite: public unittest::Suite {
+    private:
+      std::string _output_path;
+    public:
+      OptTestSuite(const std::string& output_path):
+        unittest::Suite(), _output_path(output_path) {}
+      
+      OptTest opt_test(const std::string& name) {
+        return OptTest(name, _output_path).suite(*this);
+      }
+    };
   }
 }

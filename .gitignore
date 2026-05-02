@@ -17,3 +17,4 @@ tests/test_tv
 tests/source/*.ll
 tests/test_source
 tests/test_reentry
+tests/test_mem2reg

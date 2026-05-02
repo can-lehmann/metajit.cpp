@@ -192,6 +192,7 @@ int main() {
     }
 
     delete section;
-    });
+  });
+  
   return suite.finish();
 }
