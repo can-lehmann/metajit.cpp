@@ -1296,13 +1296,15 @@ namespace metajit {
       }
     }
 
-    void unspill(RegFileState& reg_file, Reg vreg, Reg preg) {
+    void unspill(RegFileState& reg_file, Reg vreg, Reg preg, bool allow_source_free = true) {
       assert(vreg.is_virtual());
       VRegInfo& info = _vreg_info[vreg.id()];
       if (info.current_reg.is_physical()) {
-        // Ne need to unspill, just move from current reg
+        // No need to unspill, just move from current reg
         _builder.mov64(preg, info.current_reg);
-        reg_file.free(info.current_reg);
+        if (allow_source_free) {
+          reg_file.free(info.current_reg);
+        }
       } else {
         assert(info.stack_offset != ~size_t(0));
         _builder.mov64(
@@ -1321,7 +1323,8 @@ namespace metajit {
                            Reg preg,
                            Reg vreg,
                            bool is_def,
-                           bool allow_spill_to_reg = true) {
+                           bool allow_spill_to_reg = true,
+                           bool allow_source_free = true) {
       assert(preg.is_physical());
       spill(reg_file, preg, allow_spill_to_reg);
       if (vreg.is_virtual()) {
@@ -1330,7 +1333,7 @@ namespace metajit {
           info.current_reg = preg;
           reg_file.set(preg, vreg);
         } else {
-          unspill(reg_file, vreg, preg);
+          unspill(reg_file, vreg, preg, allow_source_free);
         }
         reg_file.touch(preg); 
       }
@@ -1521,7 +1524,7 @@ namespace metajit {
                 Reg current_vreg = reg_file[preg];
                 Reg target_vreg = target->regalloc()[it];
                 if (current_vreg != target_vreg) {
-                  spill_and_unspill(reg_file, preg, target_vreg, /*is_def=*/ false, /*allow_spill_to_reg=*/ false);
+                  spill_and_unspill(reg_file, preg, target_vreg, /*is_def=*/ false, /*allow_spill_to_reg=*/ false, /*allow_source_free=*/ false);
                 }
               }
               #ifndef NDEBUG
