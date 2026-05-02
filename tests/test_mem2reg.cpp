@@ -17,6 +17,14 @@
 using namespace metajit;
 using namespace metajit::test;
 
+void check_no_allocas(Section* section) {
+  for (Block* block : *section) {
+    for (Inst* inst : *block) {
+      assert(!dynamic_cast<AllocaInst*>(inst) && "Found an alloca that was not removed");
+    }
+  }
+}
+
 int main() {
   OptTestSuite suite("tests/output/test_mem2reg");
 
@@ -26,6 +34,7 @@ int main() {
     data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
   }, [&](Section* section) {
     Mem2Reg::run(section);
+    check_no_allocas(section);
   });
 
   suite.opt_test("linear_store_load2").run([](Builder& builder, TestData& data) {
@@ -36,6 +45,7 @@ int main() {
     data.output(builder.build_load(alloca_2, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
   }, [&](Section* section) {
     Mem2Reg::run(section);
+    check_no_allocas(section);
   });
 
   suite.opt_test("linear_add").run([](Builder& builder, TestData& data) {
@@ -57,6 +67,7 @@ int main() {
     data.output(builder.build_load(c_alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
   }, [&](Section* section){
     Mem2Reg::run(section);
+    check_no_allocas(section);
   });
 
   suite.opt_test("non_reconverging_branch").run([](Builder& builder, TestData& data) {
@@ -77,6 +88,7 @@ int main() {
     data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
   }, [&](Section* section){
     Mem2Reg::run(section);
+    check_no_allocas(section);
   });
 
   suite.opt_test("non_reconverging_branch_liveness").run([](Builder& builder, TestData& data) {
@@ -101,6 +113,7 @@ int main() {
     builder.move_to_end(cont_block);
   }, [&](Section* section){
     Mem2Reg::run(section);
+    check_no_allocas(section);
   });
 
   suite.opt_test("branch").run([](Builder& builder, TestData& data) {
@@ -124,6 +137,7 @@ int main() {
     data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
   }, [&](Section* section){
     Mem2Reg::run(section);
+    check_no_allocas(section);
   });
 
   suite.opt_test("nested_branch").run([](Builder& builder, TestData& data) {
@@ -160,6 +174,7 @@ int main() {
     data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
   }, [&](Section* section){
     Mem2Reg::run(section);
+    check_no_allocas(section);
   });
 
   suite.opt_test("branch_without_else").run([](Builder& builder, TestData& data) {
@@ -177,6 +192,53 @@ int main() {
 
     builder.move_to_end(cont_block);
     data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+  }, [&](Section* section){
+    Mem2Reg::run(section);
+    check_no_allocas(section);
+  });
+
+  suite.opt_test("loop_fib").run([](Builder& builder, TestData& data) {
+    Value* n = data.input(RandomRange(Type::Int64, 1, 30));
+    Value* i = builder.build_alloca(Type::Int64);
+    Value* a = builder.build_alloca(Type::Int64);
+    Value* b = builder.build_alloca(Type::Int64);
+
+    Block* loop_block = builder.build_block();
+    Block* exit_block = builder.build_block();
+
+    builder.build_store(i, builder.build_const(Type::Int64, 0), AliasingGroup(0), 0);
+    builder.build_store(a, builder.build_const(Type::Int64, 0), AliasingGroup(0), 0);
+    builder.build_store(b, builder.build_const(Type::Int64, 1), AliasingGroup(0), 0);
+    builder.build_jump(loop_block);
+
+    builder.move_to_end(loop_block);
+    builder.build_store(i, builder.build_add(
+      builder.build_load(i, Type::Int64, LoadFlags::None, AliasingGroup(0), 0),
+      builder.build_const(Type::Int64, 1)
+    ), AliasingGroup(0), 0);
+
+    Value* a_value = builder.build_load(a, Type::Int64, LoadFlags::None, AliasingGroup(0), 0);
+    Value* b_value = builder.build_load(b, Type::Int64, LoadFlags::None, AliasingGroup(0), 0);
+    builder.build_store(a, b_value, AliasingGroup(0), 0);
+    builder.build_store(b, builder.build_add(a_value, b_value), AliasingGroup(0), 0);
+
+    builder.build_branch(builder.build_eq(
+      builder.build_load(i, Type::Int64, LoadFlags::None, AliasingGroup(0), 0),
+      n
+    ), exit_block, loop_block);
+
+    builder.move_to_end(exit_block);
+    data.output(builder.build_load(a, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+  }, [&](Section* section){
+    Mem2Reg::run(section);
+    check_no_allocas(section);
+  });
+
+  suite.opt_test("no_lowering_escape").run([](Builder& builder, TestData& data) {
+    Value* alloca = builder.build_alloca(Type::Int64);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
+    data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+    data.keep(alloca); // Escape prevents lowering to register
   }, [&](Section* section){
     Mem2Reg::run(section);
   });

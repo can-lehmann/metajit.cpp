@@ -5529,6 +5529,7 @@ namespace metajit {
                     Arg* arg = _builder.alloc_arg(values.at(alloca)->type(), _blocks[block].args.size() + block->args().size());
                     _blocks[block].args[alloca] = arg;
                     _blocks[block].values_at_entry[alloca] = arg;
+                    changed = true;
                   }
                 }
               }

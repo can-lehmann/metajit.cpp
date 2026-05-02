@@ -176,6 +176,17 @@ namespace metajit {
           offset
         );
       }
+
+      void keep(Value* value) {
+        // Keep the value alive by storing it to the data buffer, but don't check equivalence
+        size_t offset = alloc(value->type());
+        _builder->build_store(
+          _data,
+          value,
+          AliasingGroup(0),
+          offset
+        );
+      }
     
     private:
       void write_value_of_type(std::ostream& stream, Type type, uint8_t* data) {
