@@ -5556,6 +5556,11 @@ namespace metajit {
         }
 
         // TODO: Add and pass block args
+
+        for (AllocaInst* alloca : _lowerable_allocas) {
+          // Only allocas in the entry block are lowerable
+          _section->entry()->remove(alloca);
+        }
       }
 
 
