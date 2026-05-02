@@ -287,6 +287,11 @@ struct std::hash<metajit::Type> {
   }
 };
 
+std::ostream& operator<<(std::ostream& stream, lwir::Span<const char> span) {
+  stream << std::string(span.data(), span.size());
+  return stream;
+}
+
 template <class T>
 metajit::PrettyStream& operator<<(metajit::PrettyStream& stream, const T& value) {
   stream.ostream() << value;
@@ -362,29 +367,114 @@ namespace metajit {
     }
 
     size_t hash() const override {
-      return std::hash<uint64_t>()(_value) ^ std::hash<Type>()(type());
+      return std::hash<uint64_t>()(_value) ^ std::hash<Type>()(type()) ^ std::hash<size_t>()(1);
+    }
+  };
+
+  class Poison final: public Value {
+  public:
+    Poison(Type type): Value(type) {
+      assert(type != Type::Void);
+    }
+
+    void write_arg(PrettyStream& stream) const override {
+      stream << Highlight::Constant << "poison:" << type() << Highlight::None;
+    }
+
+    void write_arg_json(std::ostream& stream) const override {
+      stream << "{";
+      stream << "\"kind\": \"Poison\", ";
+      stream << "\"type\": \"" << type() << "\"";
+      stream << "}";
+    }
+
+    bool equals(const Value* other) const override {
+      if (typeid(*this) != typeid(*other)) {
+        return false;
+      }
+
+      const Poison* poison_other = (const Poison*) other;
+      return type() == poison_other->type();
+    }
+
+    size_t hash() const override {
+      return std::hash<Type>()(type()) ^ std::hash<size_t>()(2);
+    }
+  };
+
+  // Resolved at link time, e.g. for external functions or global variables
+  class Symbol final: public Value {
+  private:
+    lwir::Span<const char> _symbol;
+  public:
+    Symbol(Type type, const lwir::Span<const char>& symbol): Value(type), _symbol(symbol) {
+      assert(type != Type::Void);
+    }
+
+    const lwir::Span<const char>& symbol() const { return _symbol; }
+
+    void write_arg(PrettyStream& stream) const override {
+      stream << Highlight::Constant << "@" << _symbol << ":" << type() << Highlight::None;
+    }
+
+    void write_arg_json(std::ostream& stream) const override {
+      stream << "{";
+      stream << "\"kind\": \"Symbol\", ";
+      stream << "\"type\": \"" << type() << "\", ";
+      stream << "\"symbol\": \"" << escape_json(std::string(_symbol.data(), _symbol.size())) << "\"";
+      stream << "}";
+    }
+
+    bool equals(const Value* other) const override {
+      if (typeid(*this) != typeid(*other)) {
+        return false;
+      }
+
+      const Symbol* symbol_other = (const Symbol*) other;
+      return type() == symbol_other->type() &&
+             _symbol.size() == symbol_other->_symbol.size() &&
+             std::memcmp(_symbol.data(), symbol_other->_symbol.data(), _symbol.size()) == 0;
+    }
+
+    size_t hash() const override {
+      size_t result = std::hash<Type>()(type()) ^ std::hash<size_t>()(3);
+      for (char chr : _symbol) {
+        result = result * 31 + std::hash<char>()(chr);
+      }
+      return result;
     }
   };
 
   class Context {
   private:
-    Allocator _const_allocator;
+    Allocator _allocator;
   public:
     Context() {}
 
-    Allocator& const_allocator() { return _const_allocator; }
+    Allocator& allocator() { return _allocator; }
 
     Const* build_const(Type type, uint64_t value) {
-      Const* constant = (Const*) _const_allocator.alloc(sizeof(Const), alignof(Const));
-      new (constant) Const(type, value & type_mask(type));
-      return constant;
+      return new (_allocator.alloc<Const>()) Const(type, value & type_mask(type));
+    }
+
+    Poison* build_poison(Type type) {
+      return new (_allocator.alloc<Poison>()) Poison(type);
     }
 
     const char* alloc_string(const std::string& string) {
-      char* data = (char*) _const_allocator.alloc(string.size() + 1, alignof(char));
+      char* data = (char*) _allocator.alloc(string.size() + 1, alignof(char));
       std::copy(string.data(), string.data() + string.size(), data);
       data[string.size()] = '\0';
       return data;
+    }
+
+    lwir::Span<const char> alloc_string_span(const std::string& string) {
+      const char* data = alloc_string(string);
+      return lwir::Span<const char>(data, string.size());
+    }
+
+    Symbol* build_symbol(Type type, const std::string& symbol) {
+      return new (_allocator.alloc<Symbol>()) Symbol(type, alloc_string_span(symbol));
     }
   };
 
