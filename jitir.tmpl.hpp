@@ -1159,6 +1159,10 @@ namespace metajit {
       return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv);
     }
 
+    AllocaInst* build_alloca(Type type) {
+      return build_alloca(build_const(Type::Int64, type_size(type)), type_size(type));
+    }
+
     // Folding
 
   private:
