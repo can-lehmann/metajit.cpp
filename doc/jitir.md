@@ -159,17 +159,19 @@ Type Checks:
 
 ### Alloca
 
-Allocate untyped memory on the stack.
+Allocate memory on the stack.
 
 Arguments
 
 - **size**: `Value*`
+- **align**: `uint32_t`
 
 Return Type: `Type::Ptr`
 
 Type Checks:
 
 - `size->type() == Type::Int64`
+- `align >= 1`
 
 ### AddPtr
 

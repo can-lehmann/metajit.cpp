@@ -7,7 +7,7 @@ TEST_HEADER_FILES := $(wildcard tests/*.hpp)
 run: main
 	./main
 
-test: tests/test_knownbits tests/test_insts tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_reentry tests/test_source
+test: tests/test_knownbits tests/test_insts tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_reentry tests/test_mem2reg tests/test_source
 	./tests/test_knownbits
 	./tests/test_insts
 	./tests/test_clone
@@ -15,6 +15,7 @@ test: tests/test_knownbits tests/test_insts tests/test_clone tests/test_cfg test
 	./tests/test_fuzzer
 	./tests/test_opt
 	./tests/test_reentry
+	./tests/test_mem2reg
 	./tests/test_source
 
 fuzz: tests/fuzzer
@@ -47,6 +48,8 @@ tests/test_reader: tests/test_reader.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 tests/test_reentry: tests/test_reentry.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
+tests/test_mem2reg: tests/test_mem2reg.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${CFLAGS} -o $@ $<
 
 TEST_SOURCE_LL_FILES := \
 	$(patsubst tests/source/%.c,tests/source/%.o0.ll,$(wildcard tests/source/*.c)) \
@@ -102,3 +105,4 @@ clean:
 	mkdir -p tests/output/test_opt
 	mkdir -p tests/output/test_source
 	mkdir -p tests/output/test_reader
+	mkdir -p tests/output/test_mem2reg

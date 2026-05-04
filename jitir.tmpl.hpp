@@ -26,6 +26,7 @@
 #include <optional>
 #include <cstring>
 #include <fstream>
+#include <algorithm>
 
 #include "../lwir.cpp/lwir_utils.hpp"
 
@@ -286,6 +287,11 @@ struct std::hash<metajit::Type> {
   }
 };
 
+std::ostream& operator<<(std::ostream& stream, lwir::Span<const char> span) {
+  stream << std::string(span.data(), span.size());
+  return stream;
+}
+
 template <class T>
 metajit::PrettyStream& operator<<(metajit::PrettyStream& stream, const T& value) {
   stream.ostream() << value;
@@ -361,29 +367,114 @@ namespace metajit {
     }
 
     size_t hash() const override {
-      return std::hash<uint64_t>()(_value) ^ std::hash<Type>()(type());
+      return std::hash<uint64_t>()(_value) ^ std::hash<Type>()(type()) ^ std::hash<size_t>()(1);
+    }
+  };
+
+  class Poison final: public Value {
+  public:
+    Poison(Type type): Value(type) {
+      assert(type != Type::Void);
+    }
+
+    void write_arg(PrettyStream& stream) const override {
+      stream << Highlight::Constant << "poison:" << type() << Highlight::None;
+    }
+
+    void write_arg_json(std::ostream& stream) const override {
+      stream << "{";
+      stream << "\"kind\": \"Poison\", ";
+      stream << "\"type\": \"" << type() << "\"";
+      stream << "}";
+    }
+
+    bool equals(const Value* other) const override {
+      if (typeid(*this) != typeid(*other)) {
+        return false;
+      }
+
+      const Poison* poison_other = (const Poison*) other;
+      return type() == poison_other->type();
+    }
+
+    size_t hash() const override {
+      return std::hash<Type>()(type()) ^ std::hash<size_t>()(2);
+    }
+  };
+
+  // Resolved at link time, e.g. for external functions or global variables
+  class Symbol final: public Value {
+  private:
+    lwir::Span<const char> _symbol;
+  public:
+    Symbol(Type type, const lwir::Span<const char>& symbol): Value(type), _symbol(symbol) {
+      assert(type != Type::Void);
+    }
+
+    const lwir::Span<const char>& symbol() const { return _symbol; }
+
+    void write_arg(PrettyStream& stream) const override {
+      stream << Highlight::Constant << "@" << _symbol << ":" << type() << Highlight::None;
+    }
+
+    void write_arg_json(std::ostream& stream) const override {
+      stream << "{";
+      stream << "\"kind\": \"Symbol\", ";
+      stream << "\"type\": \"" << type() << "\", ";
+      stream << "\"symbol\": \"" << escape_json(std::string(_symbol.data(), _symbol.size())) << "\"";
+      stream << "}";
+    }
+
+    bool equals(const Value* other) const override {
+      if (typeid(*this) != typeid(*other)) {
+        return false;
+      }
+
+      const Symbol* symbol_other = (const Symbol*) other;
+      return type() == symbol_other->type() &&
+             _symbol.size() == symbol_other->_symbol.size() &&
+             std::memcmp(_symbol.data(), symbol_other->_symbol.data(), _symbol.size()) == 0;
+    }
+
+    size_t hash() const override {
+      size_t result = std::hash<Type>()(type()) ^ std::hash<size_t>()(3);
+      for (char chr : _symbol) {
+        result = result * 31 + std::hash<char>()(chr);
+      }
+      return result;
     }
   };
 
   class Context {
   private:
-    Allocator _const_allocator;
+    Allocator _allocator;
   public:
     Context() {}
 
-    Allocator& const_allocator() { return _const_allocator; }
+    Allocator& allocator() { return _allocator; }
 
     Const* build_const(Type type, uint64_t value) {
-      Const* constant = (Const*) _const_allocator.alloc(sizeof(Const), alignof(Const));
-      new (constant) Const(type, value & type_mask(type));
-      return constant;
+      return new (_allocator.alloc<Const>()) Const(type, value & type_mask(type));
+    }
+
+    Poison* build_poison(Type type) {
+      return new (_allocator.alloc<Poison>()) Poison(type);
     }
 
     const char* alloc_string(const std::string& string) {
-      char* data = (char*) _const_allocator.alloc(string.size() + 1, alignof(char));
+      char* data = (char*) _allocator.alloc(string.size() + 1, alignof(char));
       std::copy(string.data(), string.data() + string.size(), data);
       data[string.size()] = '\0';
       return data;
+    }
+
+    lwir::Span<const char> alloc_string_span(const std::string& string) {
+      const char* data = alloc_string(string);
+      return lwir::Span<const char>(data, string.size());
+    }
+
+    Symbol* build_symbol(Type type, const std::string& symbol) {
+      return new (_allocator.alloc<Symbol>()) Symbol(type, alloc_string_span(symbol));
     }
   };
 
@@ -438,10 +529,10 @@ namespace metajit {
     void substitute_args(NameMap<Value*>& substs);
 
     void substitute_args(const std::map<Value*, Value*>& substs) {
-      for (size_t it = 0; it < _args.size(); it++) {
-        Value* arg = _args.at(it);
-        if (arg && substs.find(arg) != substs.end()) {
-          set_arg(it, substs.at(arg));
+      for (size_t it = 0; it < arg_count(); it++) {
+        Value* argument = arg(it);
+        if (argument && substs.find(argument) != substs.end()) {
+          set_arg(it, substs.at(argument));
         }
       }
     }
@@ -913,6 +1004,8 @@ namespace metajit {
       }
     }
 
+    void order_blocks(BlockOrdering target_ordering = BlockOrdering::Natural);
+
     void write(PrettyStream& stream, InfoWriter* info_writer = nullptr) {
       autoname();
       
@@ -946,94 +1039,7 @@ namespace metajit {
       stream << "}";
     }
 
-    bool verify(std::ostream& errors) {
-      autoname();
-
-      std::set<Value*> defined;
-      for (Block* block : *this) {
-        for (Arg* arg : block->args()) {
-          defined.insert(arg);
-        }
-
-        for (Inst* inst : *block) {
-          for (Value* arg : inst->args()) {
-            if (arg == nullptr) {
-              errors << "Instruction ";
-              inst->write_arg(errors);
-              errors << " has null argument\n";
-              return true;
-            }
-
-            if (arg->is_inst() &&
-                defined.find(arg) == defined.end()) {
-              errors << "Instruction ";
-              inst->write_arg(errors);
-              errors << " uses undefined value ";
-              arg->write_arg(errors);
-              errors << "\n";
-              return true;
-            }
-          }
-
-          defined.insert(inst);
-        }
-
-        if (!block->terminator()) {
-          errors << "Block ";
-          block->write_arg(errors);
-          errors << " has no terminator\n";
-          return true;
-        }
-
-        if (dynmatch(JumpInst, jump, block->terminator())) {
-          if (jump->args().size() != jump->block()->args().size()) {
-            errors << "Block ";
-            block->write_arg(errors);
-            errors << " jumps to block ";
-            jump->block()->write_arg(errors);
-            errors << " which requires ";
-            errors << jump->block()->args().size();
-            errors << " arguments, but ";
-            errors << jump->args().size();
-            errors << " were provided\n";
-            return true;
-          }
-
-          for (Arg* arg : jump->block()->args()) {
-            if (arg->type() != jump->arg(arg->index())->type()) {
-              errors << "Block ";
-              block->write_arg(errors);
-              errors << " jumps to block ";
-              jump->block()->write_arg(errors);
-              errors << " with formal argument ";
-              arg->write_arg(errors);
-              errors << " of type ";
-              errors << arg->type();
-              errors << ", but provided argument ";
-              jump->arg(arg->index())->write_arg(errors);
-              errors << " has type ";
-              errors << jump->arg(arg->index())->type();
-              errors << "\n";
-              return true;
-            }
-          }
-        } else {
-          for (Block* succ : block->successors()) {
-            if (succ->args().size() != 0) {
-              errors << "Block ";
-              block->write_arg(errors);
-              errors << " jumps to block ";
-              succ->write_arg(errors);
-              errors << " which requires ";
-              errors << succ->args().size();
-              errors << " arguments, but none were provided\n";
-              return true;
-            }
-          }
-        }
-      }
-      return false;
-    }
+    bool verify(std::ostream& errors);
   };
 
   class Builder {
@@ -1168,6 +1174,15 @@ namespace metajit {
         Block* block = alloc_block(arg_name); \
         _section->insert_before(before, block); \
         return block; \
+      } \
+      Block* build_block_after(Block* after, arg_type arg_name) { \
+        Block* block = alloc_block(arg_name); \
+        if (after->next()) { \
+          _section->insert_before(after->next(), block); \
+        } else { \
+          _section->add(block); \
+        } \
+        return block; \
       }
     
     define_build_block(size_t, arg_count)
@@ -1180,6 +1195,7 @@ namespace metajit {
 
     Block* build_block() { return build_block(0); }
     Block* build_block_before(Block* before) { return build_block_before(before, 0); }
+    Block* build_block_after(Block* before) { return build_block_after(before, 0); }
 
     Const* build_const(Type type, uint64_t value) {
       return _section->context().build_const(type, value);
@@ -1241,6 +1257,10 @@ namespace metajit {
 
     CallInst* build_call(Value* callee, Type type, const std::vector<Value*>& args, CallConv call_conv = CallConv::Default) {
       return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv);
+    }
+
+    AllocaInst* build_alloca(Type type) {
+      return build_alloca(build_const(Type::Int64, type_size(type)), type_size(type));
     }
 
     // Folding
@@ -2375,11 +2395,11 @@ namespace metajit {
   };
 
   void Inst::substitute_args(NameMap<Value*>& substs) {
-    for (size_t it = 0; it < _args.size(); it++) {
-      Value* arg = _args.at(it);
-      if (arg->is_inst()) {
-        if (substs[(Inst*) arg]) {
-          set_arg(it, substs[(Inst*) arg]);
+    for (size_t it = 0; it < arg_count(); it++) {
+      Value* argument = arg(it);
+      if (argument->is_inst()) {
+        if (substs[(Inst*) argument]) {
+          set_arg(it, substs[(Inst*) argument]);
         }
       }
     }
@@ -4127,6 +4147,297 @@ namespace metajit {
     }
   };
 
+  class SimplifyCFG: public Pass<SimplifyCFG> {
+  private:
+    Section* _section;
+    std::vector<std::vector<Block*>> incoming;
+    std::map<Value*, Value*> substs;
+    Builder builder;
+    bool changes = false;
+
+    void _compute_incoming(std::vector<std::vector<Block*>>& result) {
+      for (Block* block : *_section) {
+        for (Block* succ : block->successors()) {
+          result[succ->name()].push_back(block);
+        }
+      }
+    }
+
+    #ifndef NDEBUG
+    void verify_incoming() {
+      std::vector<std::vector<Block*>> expected(incoming.size());
+      _compute_incoming(expected);
+      for (size_t i = 0; i < incoming.size(); i++) {
+        auto actual = incoming[i];
+        auto exp = expected[i];
+        std::sort(actual.begin(), actual.end());
+        std::sort(exp.begin(), exp.end());
+        if (actual != exp) {
+          std::cerr << "Incoming mismatch for block " << i << "\n";
+          std::cerr << "Actual: ";
+          for (Block* b : actual) std::cerr << b->name() << " ";
+          std::cerr << "\nExpected: ";
+          for (Block* b : exp) std::cerr << b->name() << " ";
+          std::cerr << "\n";
+          assert(false);
+        }
+      }
+    }
+    #endif
+
+    void remove(Block* block) {
+      auto succs = block->successors();
+      for (Block* succ : succs) {
+        remove_from_incoming(block, succ);
+      }
+      _section->remove(block);
+      incoming[block->name()].clear();
+      changes = true;
+    }
+
+    void remove_from_incoming(Block* from, Block* to) {
+      auto& to_incoming = incoming[to->name()];
+      to_incoming.erase(std::remove(to_incoming.begin(), to_incoming.end(), from), to_incoming.end());
+      // if to has no more incoming edges and is not the entry, we can remove it
+      if (to != _section->entry() && to_incoming.empty()) {
+        remove(to);
+      }
+    }
+
+    bool is_same_jump(JumpInst* jump1, JumpInst* jump2) {
+      if (jump1->block() != jump2->block()) {
+        return false;
+      }
+      assert (jump1->args().size() == jump2->args().size());
+      for (size_t it = 0; it < jump1->args().size(); it++) {
+        Value* arg1 = jump1->args().at(it);
+        Value* arg2 = jump2->args().at(it);
+        if (!arg1->equals(arg2)) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    std::optional<JumpInst*> get_jump_thread_target(Block* block) const {
+      assert (!block->empty());
+      if (dynmatch(JumpInst, jump, *block->begin())) {
+        if (jump->block() == block) {
+            return {};
+        }
+        return {jump};
+      }
+      return {};
+    }
+
+    void replace_cond_with_const(Value* cond, uint64_t const_value, Block* target) {
+      Value* replacement = nullptr;
+      for (Inst* inst : *target) {
+        auto _args = inst->args();
+        for (size_t it = 0; it < _args.size(); it++) {
+          Value* arg = _args.at(it);
+          if (arg == cond) {
+            if (!replacement) {
+              replacement = builder.build_const(Type::Bool, const_value);
+            }
+            inst->set_arg(it, replacement);
+            changes = true;
+          }
+        }
+      }
+    }
+
+    bool thread_branch_target(Block* block, BranchInst* branch, bool is_true) {
+      Block* target = is_true ? branch->true_block() : branch->false_block();
+      if (target == block) {
+        return false;
+      }
+      assert (!target->empty());
+      auto jump_opt = get_jump_thread_target(target);
+      if (jump_opt.has_value()) {
+        JumpInst* jump = jump_opt.value();
+        Block* final_target = jump->block();
+        if (jump->arg_count() == 0 &&
+            target->args().size() == 0) {
+          if (is_true) {
+            branch->set_true_block(final_target);
+          } else {
+            branch->set_false_block(final_target);
+          }
+          incoming[final_target->name()].push_back(block);
+          remove_from_incoming(block, target);
+          changes = true;
+          return true;
+        }
+      }
+      return false;
+    }
+
+  public:
+    SimplifyCFG(Section* section): Pass(section), _section(section), incoming(section->block_count()),
+        builder(section) {
+      assert(_section->ordering() >= BlockOrdering::Dominator);
+      _compute_incoming(incoming);
+
+      for (Block* block : *_section) {
+        // remove unreachable blocks
+        if (block != _section->entry() && incoming[block->name()].empty()) {
+          remove(block);
+          continue;
+        }
+        while (true) {
+          if (dynmatch(BranchInst, branch, block->terminator())) {
+            Value* cond = branch->cond();
+            // if the targets are both the same, we can replace with a jump
+            if (branch->true_block() == branch->false_block()) {
+              Block* target = branch->true_block();
+              builder.move_before(block, block->terminator());
+              builder.build_jump(target);
+              block->remove(block->terminator());
+              // incoming is a bit tricky. it contains block twice. we remove it once
+              auto& target_incoming = incoming[target->name()];
+              auto it = std::find(target_incoming.begin(), target_incoming.end(), block);
+              assert (it != target_incoming.end());
+              target_incoming.erase(it);
+              // check that it's still there once
+              assert (std::find(target_incoming.begin(), target_incoming.end(), block) != target_incoming.end());
+              changes = true;
+              continue;
+            }
+            // if the condition is constant, we can just jump to the taken branch
+            if (dynmatch(Const, const_cond, cond)) {
+              Block* target = const_cond->value() != 0 ? branch->true_block() : branch->false_block();
+              builder.move_before(block, block->terminator());
+              builder.build_jump(target);
+              block->remove(block->terminator());
+              // remove from incoming of the other block
+              Block* other = const_cond->value() != 0 ? branch->false_block() : branch->true_block();
+              remove_from_incoming(block, other);
+              changes = true;
+              continue;
+            }
+
+            // jump-thread the two branches, if they go to a jump with no args
+            if (thread_branch_target(block, branch, true) ||
+                thread_branch_target(block, branch, false)) {
+              continue;
+            }
+
+            // if the two branches go to blocks that have only identical jumps,
+            // the branch is unnecessary. replace it with the jump
+            auto t_jump_opt = get_jump_thread_target(branch->true_block());
+            auto f_jump_opt = get_jump_thread_target(branch->false_block());
+            if (t_jump_opt.has_value() && f_jump_opt.has_value() &&
+                    is_same_jump(t_jump_opt.value(), f_jump_opt.value())) {
+              JumpInst* t_jump = t_jump_opt.value();
+              JumpInst* f_jump = f_jump_opt.value();
+              builder.move_before(block, branch);
+              builder.build_jump(t_jump->block(), t_jump->args());
+              incoming[t_jump->block()->name()].push_back(block);
+              block->remove(branch);
+              remove_from_incoming(block, branch->true_block());
+              remove_from_incoming(block, branch->false_block());
+              changes = true;
+              continue;
+            }
+
+            // if the true_block and false_block have only one incoming edge (from this block),
+            // we can replace the condition with a constant in the respective block
+            // (in theory we should use the dominator tree to check this, but that would be more expensive)
+            if (incoming[branch->true_block()->name()].size() == 1) {
+              replace_cond_with_const(cond, 1, branch->true_block());
+            }
+            if (incoming[branch->false_block()->name()].size() == 1) {
+              replace_cond_with_const(cond, 0, branch->false_block());
+            }
+          } else if (dynmatch(JumpInst, jump, block->terminator())) {
+            Block* target = jump->block();
+            if (target == block) {
+              break;
+            }
+            // if the target block only has one incoming edge, we can merge it with the current block
+            if (incoming[target->name()].size() == 1) {
+              for (size_t i = 0; i < target->args().size(); i++) {
+                Value* arg = jump->arg(i);
+                if (substs.find(arg) != substs.end()) {
+                  arg = substs.at(arg);
+                }
+                substs[target->args().at(i)] = arg;
+              }
+              for (Inst* inst : *target) {
+                inst->substitute_args(substs);
+              }
+
+              auto target_successors = target->successors();
+
+              block->remove(jump);
+              Inst* first_inst = *target->begin();
+              Inst* last_inst = target->terminator();
+              target->remove(first_inst, last_inst);
+              block->add(first_inst, last_inst);
+
+              for (Block* succ : target_successors) {
+                incoming[succ->name()].push_back(block);
+                remove_from_incoming(target, succ);
+              }
+              remove(target);
+              changes = true;
+              continue;
+            }
+            // do jump-threading: if the target block only has a single instruction,
+            // which is a jump, we can just jump to the final target.
+            // we do that only if the final_target has more than one incoming
+            // link (otherwise block merging happens anyway). if we
+            // jump-threaded to a block with only one incoming link, the args
+            // of target can have uses in other blocks.
+            auto jump_opt = get_jump_thread_target(target);
+            if (jump_opt.has_value()) {
+              JumpInst* target_jump = jump_opt.value();
+              Block* final_target = target_jump->block();
+              if (incoming[final_target->name()].size() > 1) {
+                std::map<Value*, Value*> local_substs;
+                for (size_t i = 0; i < target->args().size(); i++) {
+                  local_substs[target->args().at(i)] = jump->arg(i);
+                }
+                std::vector<Value*> new_args;
+                for (Value* final_arg : target_jump->args()) {
+                  Value* resolved = final_arg;
+                  if (local_substs.find(final_arg) != local_substs.end()) {
+                    resolved = local_substs.at(final_arg);
+                  }
+                  new_args.push_back(resolved);
+                }
+                builder.move_before(block, jump);
+                builder.build_jump(final_target, new_args);
+                block->remove(jump);
+                incoming[final_target->name()].push_back(block);
+                remove_from_incoming(block, target);
+                changes = true;
+                continue;
+              }
+            }
+          }
+          break;
+        }
+        #ifndef NDEBUG
+        verify_incoming();
+        #endif
+      }
+      if (changes) {
+        if (substs.size()) {
+          for (Block* block : *_section) {
+            for (Inst* inst : *block) {
+              inst->substitute_args(substs);
+            }
+          }
+        }
+        _section->set_ordering(BlockOrdering::None);
+        _section->order_blocks(BlockOrdering::Natural);
+      }
+    }
+  };
+
+
   class BindingTimeGroups {
   public:
     static constexpr size_t ALWAYS = 0;
@@ -4484,6 +4795,236 @@ namespace metajit {
       write_dot(file);
     }
   };
+
+  class OrderBlocks: public Pass<OrderBlocks> {
+  private:
+    Section* _section;
+    DominatorTree _dt;
+    std::vector<Block*> _ordered;
+    std::unordered_set<Block*> _visited;
+    BlockOrdering _target_ordering;
+    bool _seen_loop = false;
+
+    // Dominator ordering: pre-order traversal of dominator tree
+    void traverse_dominator_tree(Block* block, std::vector<std::vector<Block*>>& dom_children) {
+      _ordered.push_back(block);
+      for (Block* child : dom_children[block->name()]) {
+        traverse_dominator_tree(child, dom_children);
+      }
+    }
+
+    void order_dominator() {
+      std::vector<std::vector<Block*>> dom_children(_section->block_count());
+      for (Block* block : *_section) {
+        Block* idom = _dt.idom(block);
+        if (idom) {
+          dom_children[idom->name()].push_back(block);
+        }
+      }
+
+      traverse_dominator_tree(_section->entry(), dom_children);
+    }
+
+    // Natural ordering: topological sort ignoring backedges
+    void dfs_natural(Block* block) {
+      if (_visited.find(block) != _visited.end()) {
+        return;
+      }
+      _visited.insert(block);
+
+      // visit successors in reverse order to maintain stable block numbering
+      std::vector<Block*> succs = block->successors();
+      for (auto it = succs.rbegin(); it != succs.rend(); ++it) {
+        Block* succ = *it;
+        // a backedge is where the successor dominates the source block
+        if (!_dt.dominates(succ, block)) {
+          dfs_natural(succ);
+        } else {
+          _seen_loop = true;
+        }
+      }
+
+      _ordered.push_back(block);
+    }
+
+    void order_natural() {
+      dfs_natural(_section->entry());
+      // reverse for topological order
+      std::reverse(_ordered.begin(), _ordered.end());
+    }
+
+  public:
+    OrderBlocks(Section* section, BlockOrdering target_ordering = BlockOrdering::Natural):
+        Pass(section),
+        _section(section),
+        _dt(section),
+        _target_ordering(target_ordering) {
+
+      assert(target_ordering >= BlockOrdering::Dominator);
+
+      if (target_ordering == BlockOrdering::Dominator) {
+        order_dominator();
+      } else {
+        // Natural or Topological both use natural ordering
+        order_natural();
+      }
+
+      std::vector<Block*> all_blocks;
+      for (Block* block : *_section) {
+        all_blocks.push_back(block);
+      }
+      for (Block* block : all_blocks) {
+        _section->remove(block);
+      }
+
+      for (Block* block : _ordered) {
+        _section->add(block);
+      }
+
+      if (target_ordering == BlockOrdering::Topological && _seen_loop) {
+        throw std::runtime_error("requested Topological order but section has loop");
+      }
+      if (target_ordering == BlockOrdering::Natural && !_seen_loop) {
+        // a Natural block ordering where we don't see a loop is Topological
+        _section->set_ordering(BlockOrdering::Topological);
+      } else {
+        _section->set_ordering(_target_ordering);
+      }
+    }
+  };
+
+  void Section::order_blocks(BlockOrdering target_ordering) {
+    if (_ordering < target_ordering) {
+      OrderBlocks::run(this, target_ordering);
+    }
+  }
+
+  bool Section::verify(std::ostream& errors) {
+    autoname();
+
+    std::optional<DominatorTree> dt;
+    if (_ordering >= BlockOrdering::Dominator) {
+      dt.emplace(this);
+    }
+
+    std::set<Value*> defined;
+    for (Block* block : *this) {
+      if (dt) {
+        Block* idom = dt->idom(block);
+        if (idom && idom != block && idom->name() >= block->name()) {
+          errors << "Block ";
+          block->write_arg(errors);
+          errors << " appears before its immediate dominator ";
+          idom->write_arg(errors);
+          errors << "\n";
+          return true;
+        }
+
+        if (_ordering >= BlockOrdering::Natural) {
+          for (Block* succ : block->successors()) {
+            bool is_backedge = dt->dominates(succ, block);
+            if (!is_backedge && block->name() >= succ->name()) {
+              errors << "Block ";
+              block->write_arg(errors);
+              errors << " appears after its successor ";
+              succ->write_arg(errors);
+              errors << " but it's not a backedge (violates Natural/Topological ordering)\n";
+              return true;
+            } else if (is_backedge && _ordering >= BlockOrdering::Topological) {
+              errors << "Backedge exists from ";
+              block->write_arg(errors);
+              errors << " to ";
+              succ->write_arg(errors);
+              errors << " but the ordering claims to be Topological\n";
+              return true;
+            }
+          }
+        }
+      }
+
+      for (Arg* arg : block->args()) {
+        defined.insert(arg);
+      }
+
+      for (Inst* inst : *block) {
+        for (Value* arg : inst->args()) {
+          if (arg == nullptr) {
+            errors << "Instruction ";
+            inst->write_arg(errors);
+            errors << " has null argument\n";
+            return true;
+          }
+
+          if (arg->is_named() &&
+              defined.find(arg) == defined.end()) {
+            errors << "Instruction ";
+            inst->write_arg(errors);
+            errors << " uses undefined value ";
+            arg->write_arg(errors);
+            errors << "\n";
+            return true;
+          }
+        }
+
+        defined.insert(inst);
+      }
+
+      if (!block->terminator()) {
+        errors << "Block ";
+        block->write_arg(errors);
+        errors << " has no terminator\n";
+        return true;
+      }
+
+      if (dynmatch(JumpInst, jump, block->terminator())) {
+        if (jump->args().size() != jump->block()->args().size()) {
+          errors << "Block ";
+          block->write_arg(errors);
+          errors << " jumps to block ";
+          jump->block()->write_arg(errors);
+          errors << " which requires ";
+          errors << jump->block()->args().size();
+          errors << " arguments, but ";
+          errors << jump->args().size();
+          errors << " were provided\n";
+          return true;
+        }
+
+        for (Arg* arg : jump->block()->args()) {
+          if (arg->type() != jump->arg(arg->index())->type()) {
+            errors << "Block ";
+            block->write_arg(errors);
+            errors << " jumps to block ";
+            jump->block()->write_arg(errors);
+            errors << " with formal argument ";
+            arg->write_arg(errors);
+            errors << " of type ";
+            errors << arg->type();
+            errors << ", but provided argument ";
+            jump->arg(arg->index())->write_arg(errors);
+            errors << " has type ";
+            errors << jump->arg(arg->index())->type();
+            errors << "\n";
+            return true;
+          }
+        }
+      } else {
+        for (Block* succ : block->successors()) {
+          if (succ->args().size() != 0) {
+            errors << "Block ";
+            block->write_arg(errors);
+            errors << " jumps to block ";
+            succ->write_arg(errors);
+            errors << " which requires ";
+            errors << succ->args().size();
+            errors << " arguments, but none were provided\n";
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
 
   // Verifies that all guards are emitted before any externally visible memory stores
   class VerifySimpleReentry: public Pass<VerifySimpleReentry> {
@@ -4943,6 +5484,244 @@ namespace metajit {
     static void run(Section* section, ReentryClosures& closures) {
       SliceReentryClosures src(section, closures);
     };
+  };
+
+  class Mem2Reg: public Pass<Mem2Reg> {
+  private:
+    struct BlockData {
+      std::set<AllocaInst*> live; // Live allocas at entry
+      std::map<AllocaInst*, Value*> values_at_entry; // Values at entry for live allocas
+      std::map<AllocaInst*, Value*> values_at_exit; // Values at exit for live allocas
+      std::map<AllocaInst*, Arg*> args;
+    };
+
+    Section* _section = nullptr;
+    std::set<AllocaInst*> _lowerable_allocas;
+    std::unordered_map<Block*, BlockData> _blocks;
+    std::map<LoadInst*, Value*> _loads;
+    Builder _builder;
+
+    void find_lowerable_allocas() {
+      for (Inst* inst : *_section->entry()) {
+        if (dynmatch(AllocaInst, alloca, inst)) {
+          _lowerable_allocas.insert(alloca);
+        }
+      }
+
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(StoreInst, store, inst)) {
+            if (dynmatch(AllocaInst, alloca, store->value())) {
+              _lowerable_allocas.erase(alloca);
+            } else if (dynmatch(AllocaInst, alloca, store->ptr())) {
+              if (store->offset() != 0) {
+                _lowerable_allocas.erase(alloca);
+              }
+            }
+          } else if (dynmatch(LoadInst, load, inst)) {
+            if (dynmatch(AllocaInst, alloca, load->ptr())) {
+              if (load->offset() != 0) {
+                _lowerable_allocas.erase(alloca);
+              }
+            }
+          } else {
+            for (Value* arg : inst->args()) {
+              if (dynmatch(AllocaInst, alloca, arg)) {
+                _lowerable_allocas.erase(alloca);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    void find_liveness() {
+      // TODO: Optimize with queue
+
+      bool changed = true;
+      while (changed) {
+        changed = false;
+
+        for (Block* block : _section->rev_range()) {
+          std::set<AllocaInst*> live;
+          for (Block* succ : block->successors()) {
+            live.insert(_blocks[succ].live.begin(), _blocks[succ].live.end());
+          }
+
+          for (Inst* inst : block->rev_range()) {
+            if (dynmatch(StoreInst, store, inst)) {
+              if (dynmatch(AllocaInst, alloca, store->ptr())) {
+                live.erase(alloca);
+              }
+            } else if (dynmatch(LoadInst, load, inst)) {
+              if (dynmatch(AllocaInst, alloca, load->ptr())) {
+                if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
+                  live.insert(alloca);
+                  _loads[load] = nullptr;
+                }
+              }
+            }
+          }
+
+          if (live != _blocks[block].live) {
+            _blocks[block].live = live;
+            changed = true;
+          }
+        }
+      }
+    }
+
+    void find_values() {
+      // TODO: Optimize with queue
+
+      bool changed = true;
+
+      while (changed) {
+        changed = false;
+        for (Block* block : *_section) {
+          std::map<AllocaInst*, Value*> values = _blocks[block].values_at_entry;
+          for (Inst* inst : *block) {
+            if (dynmatch(StoreInst, store, inst)) {
+              if (dynmatch(AllocaInst, alloca, store->ptr())) {
+                if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
+                  Value* value = store->value();
+                  if (dynmatch(LoadInst, load, value)) {
+                    if (_loads.find(load) != _loads.end()) {
+                      value = _loads.at(load);
+                    }
+                  }
+                  values[alloca] = value;
+                }
+              }
+            } else if (dynmatch(LoadInst, load, inst)) {
+              if (dynmatch(AllocaInst, alloca, load->ptr())) {
+                if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
+                  Value* value = values.at(alloca);
+                  if (_loads[load] != value) {
+                    _loads[load] = value;
+                    changed = true;
+                  }
+                }
+              }
+            }
+          }
+
+          _blocks[block].values_at_exit = values;
+
+          for (Block* block : block->successors()) {
+            for (AllocaInst* alloca : _blocks[block].live) {
+              if (values.find(alloca) != values.end() && values.at(alloca)) {
+                if (_blocks[block].values_at_entry.find(alloca) == _blocks[block].values_at_entry.end()) {
+                  _blocks[block].values_at_entry[alloca] = values.at(alloca);
+                  changed = true;
+                } else if (_blocks[block].values_at_entry.at(alloca) != values.at(alloca)) {
+                  if (_blocks[block].args.find(alloca) == _blocks[block].args.end()) {
+                    Arg* arg = _builder.alloc_arg(values.at(alloca)->type(), _blocks[block].args.size() + block->args().size());
+                    _blocks[block].args[alloca] = arg;
+                    _blocks[block].values_at_entry[alloca] = arg;
+                    changed = true;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    void apply() {
+      for (Block* block : *_section) {
+        for (auto it = block->begin(); it != block->end(); ) {
+          Inst* inst = *it;
+
+          for (size_t it = 0; it < inst->arg_count(); it++) {
+            if (dynmatch(LoadInst, load, inst->arg(it))) {
+              if (_loads.find(load) != _loads.end()) {
+                inst->set_arg(it, _loads.at(load));
+              }
+            }
+          }
+
+          if (dynmatch(LoadInst, load, inst)) {
+            if (_loads.find(load) != _loads.end()) {
+              it = it.erase();
+              continue;
+            }
+          } else if (dynmatch(StoreInst, store, inst)) {
+            if (dynmatch(AllocaInst, alloca, store->ptr())) {
+              if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
+                it = it.erase();
+                continue;
+              }
+            }
+          }
+
+          it++;
+        }
+      }
+
+      for (Block* block : *_section) {
+        if (_blocks.find(block) == _blocks.end()) {
+          continue; // This is a newly inserted jump block
+        }
+
+        BlockData& data = _blocks.at(block);
+        lwir::Span<Arg*> args = _builder.alloc_span<Arg*>(block->args().size() + data.args.size()).zeroed();
+        for (Arg* arg : block->args()) {
+          args[arg->index()] = arg;
+        }
+        for (auto& [alloca, arg] : data.args) {
+          assert(args[arg->index()] == nullptr);
+          args[arg->index()] = arg;
+        }
+        block->set_args(args);
+
+        if (dynmatch(JumpInst, jump, block->terminator())) {
+          BlockData& target_data = _blocks.at(jump->block());
+          lwir::Span<Value*> args = _builder.alloc_span<Value*>(jump->args().size() + target_data.args.size()).zeroed();
+          for (size_t i = 0; i < jump->args().size(); i++) {
+            args[i] = jump->arg(i);
+          }
+          for (auto& [alloca, arg] : target_data.args) {
+            assert(args[arg->index()] == nullptr);
+            args[arg->index()] = data.values_at_exit.at(alloca);
+          }
+          jump->set_args(args);
+        } else if (dynmatch(BranchInst, branch, block->terminator())) {
+          #define edge(name) { \
+            BlockData& edge_data = _blocks.at(branch->name##_block()); \
+            if (edge_data.args.size() != 0) { \
+              Block* jump_block = _builder.build_block_after(block); \
+              _builder.move_to_end(jump_block); \
+              JumpInst* jump = _builder.build_jump(edge_data.args.size(), branch->name##_block()); \
+              for (auto& [alloca, arg] : edge_data.args) { \
+                jump->set_arg(arg->index(), data.values_at_exit.at(alloca)); \
+              } \
+              branch->set_##name##_block(jump_block); \
+            } \
+          }
+          
+          edge(true)
+          edge(false)
+
+          #undef edge
+        }
+      }
+
+      for (AllocaInst* alloca : _lowerable_allocas) {
+        // Only allocas in the entry block are lowerable
+        _section->entry()->remove(alloca);
+      }
+    }
+  public:
+    Mem2Reg(Section* section): Pass(section), _section(section), _builder(section) {
+      assert(section->ordering() >= BlockOrdering::Dominator);
+     
+      find_lowerable_allocas();
+      find_liveness();
+      find_values();
+      apply();
+    }
   };
 }
 

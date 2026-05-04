@@ -176,6 +176,17 @@ namespace metajit {
           offset
         );
       }
+
+      void keep(Value* value) {
+        // Keep the value alive by storing it to the data buffer, but don't check equivalence
+        size_t offset = alloc(value->type());
+        _builder->build_store(
+          _data,
+          value,
+          AliasingGroup(0),
+          offset
+        );
+      }
     
     private:
       void write_value_of_type(std::ostream& stream, Type type, uint8_t* data) {
@@ -524,6 +535,134 @@ namespace metajit {
       SourceTest source_test(const std::string& ll_file) {
         std::string name = std::filesystem::path(ll_file).stem().string();
         return SourceTest(name, _output_path, ll_file).suite(*this);
+      }
+    };
+
+    inline void check_opt_differential(Section* before,
+                                       Section* after,
+                                       TestData& data,
+                                       size_t sample_count = 1024) {
+      
+      before->autoname();
+      after->autoname();
+
+      uint8_t* before_data = new uint8_t[data.data_size()]();
+      uint8_t* after_data = new uint8_t[data.data_size()]();
+
+      for (size_t sample = 0; sample < sample_count; sample++) {
+        data.gen(before_data);
+        std::copy(before_data, before_data + data.data_size(), after_data);
+
+        Interpreter before_interp(before, {
+          Interpreter::Bits::constant(before_data)
+        });
+        Interpreter after_interp(after, {
+          Interpreter::Bits::constant(after_data)
+        });
+
+        Interpreter::Event before_event = before_interp.run();
+        Interpreter::Event after_event = after_interp.run();
+
+        if (before_event != Interpreter::Event::Exit) {
+          throw unittest::AssertionError(
+            "Before interpreter did not exit cleanly",
+            __LINE__,
+            __FILE__
+          );
+        }
+        if (after_event != Interpreter::Event::Exit) {
+          throw unittest::AssertionError(
+            "After interpreter did not exit cleanly",
+            __LINE__,
+            __FILE__
+          );
+        }
+
+        for (const TestData::Output& output : data.outputs()) {
+          bool is_equal = true;
+          for (size_t it = 0; it < type_size(output.type); it++) {
+            if (before_data[output.offset + it] != after_data[output.offset + it]) {
+              is_equal = false;
+              break;
+            }
+          }
+          if (!is_equal) {
+            std::ostringstream stream;
+            stream << "Inputs:\n";
+            data.write_inputs(stream, before_data);
+            stream << "Before Optimization Output:\n";
+            data.write_outputs(stream, before_data);
+            stream << "After Optimization Output:\n";
+            data.write_outputs(stream, after_data);
+            stream << "\n";
+            throw unittest::AssertionError(
+              "Output mismatch after optimization",
+              __LINE__,
+              __FILE__,
+              stream.str()
+            );
+          }
+        }
+      }
+    }
+
+    class OptTest: public unittest::BaseTest<OptTest> {
+    private:
+      std::string _output_path;
+    public:
+      OptTest(const std::string& name, const std::string& output_path):
+        unittest::BaseTest<OptTest>(name), _output_path(output_path) {}
+
+      void run(const std::function<void(Builder&, TestData&)>& body,
+               const std::function<void(Section*)>& optimize) && {
+        unittest::BaseTest<OptTest>::run([&]() {
+          Context context;
+          Allocator allocator;
+          Section* section = new Section(context, allocator);
+
+          Builder builder(section);
+          builder.move_to_end(builder.build_block({Type::Ptr}));
+
+          TestData data(builder);
+          body(builder, data);
+
+          builder.build_exit();
+
+          {
+            std::ofstream stream(_output_path + "/" + name() + ".before.jitir");
+            section->write(stream);
+          }
+
+          unittest_assert(!section->verify(std::cout));
+
+          Section* cloned_section = new Section(context, allocator);
+          Clone::run(section, cloned_section);
+
+          optimize(section);
+
+          {
+            std::ofstream stream(_output_path + "/" + name() + ".after.jitir");
+            section->write(stream);
+          }
+
+          unittest_assert(!section->verify(std::cout));
+
+          check_opt_differential(cloned_section, section, data);
+
+          delete section;
+        });
+      }
+    };
+
+    class OptTestSuite: public unittest::Suite {
+    private:
+      std::string _output_path;
+    public:
+      OptTestSuite(const std::string& output_path):
+        unittest::Suite(), _output_path(output_path) {}
+      
+      OptTest opt_test(const std::string& name) {
+        return OptTest(name, _output_path).suite(*this);
       }
     };
   }
