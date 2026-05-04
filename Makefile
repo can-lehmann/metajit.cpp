@@ -3,6 +3,7 @@ Z3_FLAGS := -I/usr/include/z3 -lz3
 CFLAGS := ${LLVM_FLAGS} -g
 HEADER_FILES := jitir.hpp jitir_llvmapi.hpp $(wildcard *.hpp)
 TEST_HEADER_FILES := $(wildcard tests/*.hpp)
+TEST_CFLAGS := ${CFLAGS} -DMETAJIT_DEBUG
 
 run: main
 	./main
@@ -25,31 +26,31 @@ main: main.cpp jitir.hpp jitir_llvmapi.hpp llvmgen.hpp x86gen.hpp
 	clang++ ${CFLAGS} -o $@ $<
 
 tests/test_knownbits: tests/test_knownbits.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
-	clang++ ${CFLAGS} -o $@ $<
+	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_insts: tests/test_insts.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
-	clang++ ${CFLAGS} -o $@ $<
+	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_clone: tests/test_clone.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
-	clang++ ${CFLAGS} -o $@ $<
+	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_fuzzer: tests/test_fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
-	clang++ ${CFLAGS} -o $@ $<
+	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_cfg: tests/test_cfg.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
-	clang++ ${CFLAGS} -o $@ $<
+	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_opt: tests/test_opt.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
-	clang++ ${CFLAGS} -o $@ $<
+	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_reader: tests/test_reader.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
-	clang++ ${CFLAGS} -g -o $@ $<
+	clang++ ${TEST_CFLAGS} -g -o $@ $<
 
 tests/test_reentry: tests/test_reentry.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
-	clang++ ${CFLAGS} -o $@ $<
+	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_mem2reg: tests/test_mem2reg.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
-	clang++ ${CFLAGS} -o $@ $<
+	clang++ ${TEST_CFLAGS} -o $@ $<
 
 TEST_SOURCE_LL_FILES := \
 	$(patsubst tests/source/%.c,tests/source/%.o0.ll,$(wildcard tests/source/*.c)) \
@@ -58,7 +59,7 @@ TEST_SOURCE_LL_FILES := \
 	$(patsubst tests/source/%.cpp,tests/source/%.o1.ll,$(wildcard tests/source/*.cpp))
 
 tests/test_source: tests/test_source.cpp ${TEST_SOURCE_LL_FILES} ${HEADER_FILES} ${TEST_HEADER_FILES}
-	clang++ ${CFLAGS} -o $@ $<
+	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/source/%.o1.ll: tests/source/%.c
 	clang -emit-llvm -S -O1 -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -o $@ $<

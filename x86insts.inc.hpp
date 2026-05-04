@@ -165,6 +165,8 @@ jmp_x86_inst(JB, jb, {}, true, { byte(0x0f); byte(0x82); imm_n(4); })
 unop_x86_inst(Call, call, { use(rm); }, true, { reg = Reg::phys(2); rex_w(); byte(0xff); modrm(); })
 op0_x86_inst(Ret, ret, {}, true, { byte(0xc3); })
 
+x86_inst(Comment, comment, {}, false, { })
+
 #undef x86_inst
 #undef binop_x86_inst
 #undef rev_binop_x86_inst

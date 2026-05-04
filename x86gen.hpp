@@ -137,7 +137,7 @@ namespace metajit {
     };
 
     using RM = std::variant<std::monostate, Reg, Mem>;
-    using Imm = std::variant<std::monostate, uint64_t, X86Block*>;
+    using Imm = std::variant<std::monostate, uint64_t, X86Block*, const char*>;
   private:
     Kind _kind;
     Reg _reg;
@@ -279,6 +279,11 @@ namespace metajit {
   };
 
   void X86Inst::write(std::ostream& stream) const {
+    if (_kind == Kind::Comment) {
+      stream << "; " << std::get<const char*>(_imm);
+      return;
+    }
+
     switch (_kind) {
       #define x86_inst(name, lowercase, ...) \
         case Kind::name: stream << #lowercase; break;
@@ -301,6 +306,8 @@ namespace metajit {
       stream << " imm=" << std::get<uint64_t>(_imm);
     } else if (std::holds_alternative<X86Block*>(_imm)) {
       stream << " imm=b" << std::get<X86Block*>(_imm)->name();
+    } else if (std::holds_alternative<const char*>(_imm)) {
+      stream << " imm=\"" << std::get<const char*>(_imm) << "\"";
     }
   }
 
@@ -380,6 +387,13 @@ namespace metajit {
     X86Inst* lea64(Reg dst, X86Inst::Mem src) {
       return &build(X86Inst::Kind::Lea64).set_reg(dst).set_rm(src);
     }
+
+    X86Inst* comment(const std::string& text) {
+      char* imm = (char*) _allocator.alloc(text.size() + 1, alignof(char));
+      std::copy(text.c_str(), text.c_str() + text.size(), imm);
+      imm[text.size()] = '\0';
+      return &build(X86Inst::Kind::Comment).set_imm(imm);
+    }
   };
 
   class CallConvInfo {
@@ -436,13 +450,6 @@ namespace metajit {
 
   class X86CodeGen: public Pass<X86CodeGen> {
   private:
-    Section* _section;
-    Allocator& _allocator;
-    std::vector<X86Block*> _blocks;
-    X86InstBuilder _builder;
-
-    NameMap<void*> _memory_deps;
-
     struct Interval {
       size_t min = 0;
       size_t max = 0;
@@ -477,6 +484,13 @@ namespace metajit {
       Reg current_reg;
       size_t stack_offset = ~size_t(0);
     };
+
+    Section* _section;
+    Allocator& _allocator;
+    std::vector<X86Block*> _blocks;
+    X86InstBuilder _builder;
+
+    NameMap<void*> _memory_deps;
 
     NameMap<Reg> _vregs;
     std::vector<VRegInfo> _vreg_info;
@@ -1034,10 +1048,25 @@ namespace metajit {
         // isel
         _builder.set_block(x86block);
         for (Inst* inst : block->rev_range()) {
-          _builder.move_before(_builder.block(), _builder.block()->first());
           if (inst->has_side_effect() ||
               inst->is_terminator() ||
               !_vregs.at(inst).is_invalid()) {
+            
+            _builder.move_before(_builder.block(), _builder.block()->first());
+            
+            #ifdef METAJIT_DEBUG
+            {
+              std::ostringstream stream;
+              if (inst->type() != Type::Void) {
+                inst->write_arg(stream);
+                stream << " (" << _vregs.at(inst) << ")";
+                stream << " = ";
+              }
+              inst->write(stream);
+              _builder.comment(stream.str());
+            }
+            #endif
+
             isel(inst);
           }
         }
@@ -1516,6 +1545,13 @@ namespace metajit {
                 // Backedge
                 assert(target->loop());
               }
+              #ifdef METAJIT_DEBUG
+              {
+                std::ostringstream stream;
+                stream << "Restoring register state for block " << target->name();
+                _builder.comment(stream.str());
+              }
+              #endif
               for (size_t it = 0; it < reg_file.size(); it++) {
                 Reg preg = Reg::phys(it);
                 Reg current_vreg = reg_file[preg];
@@ -1648,6 +1684,7 @@ namespace metajit {
         _allocator(allocator),
         _builder(allocator, nullptr) {
       
+      assert(_section->ordering() >= BlockOrdering::Natural);
       run(input_pregs);
     }
 
