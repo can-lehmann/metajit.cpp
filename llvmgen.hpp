@@ -40,7 +40,6 @@
 namespace metajit {
   class LLVMCodeGen: public Pass<LLVMCodeGen> {
   private:
-    bool _generating_extension = false;
     bool _comments = false; // Emit comments as references back to original IR
 
     Section* _section;
@@ -48,22 +47,11 @@ namespace metajit {
     llvm::Module* _module = nullptr;
     llvm::Function* _function = nullptr;
     llvm::IRBuilder<> _builder;
-    LLVM_API _llvm_api; // Used for generating extension
 
     std::map<Block*, llvm::BasicBlock*> _blocks;
     std::map<Block*, llvm::BasicBlock*> _end_blocks;
 
-    // Used for generating extension
-    Uses _uses;
-    BindingTimeGroups _binding_time_groups;
-    TraceCapabilities _trace_capabilities;
-
     NameMap<llvm::Value*> _values;
-    // Used for generating extension
-    NameMap<llvm::Value*> _built;
-    NameMap<llvm::Value*> _is_const;
-    NameMap<llvm::Value*> _is_used;
-    llvm::Value* _jitir_builder = nullptr;
 
     void emit_branch(llvm::Value* cond,
                      const std::function<void()>& emit_then,
@@ -308,561 +296,21 @@ namespace metajit {
       }
     }
 
-    llvm::Value* is_const(Value* value) {
-      if (dynmatch(Const, constant, value)) {
-        return llvm::ConstantInt::getTrue(_context);
-      } else if (value->is_named()) {
-        return _builder.CreateLoad(
-          llvm::Type::getInt1Ty(_context),
-          _is_const.at((NamedValue*) value)
-        );
-      } else {
-        assert(false && "Unknown value");
-        return nullptr;
-      }
-    }
-
-    llvm::Value* emit_const_prop(Inst* inst) {
-      if (dynamic_cast<FreezeInst*>(inst)) {
-        return llvm::ConstantInt::getTrue(_context);
-      } else if (dynamic_cast<AssumeConstInst*>(inst)) {
-        return llvm::ConstantInt::getTrue(_context);
-      } else if (dynmatch(LoadInst, load, inst)) {
-        if (load->flags().has(LoadFlags::Pure)) {
-          return is_const(load->arg(0));
-        } else {
-          return llvm::ConstantInt::getFalse(_context);
-        }
-      } else if (dynmatch(SelectInst, select, inst)) {
-        llvm::Value* cond_const = is_const(select->arg(0));
-        llvm::Value* true_const = is_const(select->arg(1));
-        llvm::Value* false_const = is_const(select->arg(2));
-        llvm::Value* cond = emit_arg(select->arg(0));
-        return _builder.CreateOr(
-          _builder.CreateAnd(
-            cond_const,
-            _builder.CreateSelect(cond, true_const, false_const) // Short-circuit
-          ),
-          _builder.CreateAnd(
-            _builder.CreateAnd(
-              true_const,
-              false_const
-            ),
-            _builder.CreateICmpEQ(
-              emit_arg(select->arg(1)),
-              emit_arg(select->arg(2))
-            )
-          )
-        );
-      } else if (dynmatch(AndInst, and_inst, inst)) {
-        llvm::Value* a_const = is_const(and_inst->arg(0));
-        llvm::Value* b_const = is_const(and_inst->arg(1));
-        llvm::Value* a = emit_arg(and_inst->arg(0));
-        llvm::Value* b = emit_arg(and_inst->arg(1));
-
-        llvm::APInt zero = llvm::APInt::getZero(a->getType()->getIntegerBitWidth());
-
-        llvm::Value* res = _builder.CreateAnd(a_const, b_const);
-        // Short-circuit
-        res = _builder.CreateOr(res, _builder.CreateAnd(a_const,
-          _builder.CreateICmpEQ(a, llvm::ConstantInt::get(a->getType(), zero))
-        ));
-        res = _builder.CreateOr(res, _builder.CreateAnd(b_const,
-          _builder.CreateICmpEQ(b, llvm::ConstantInt::get(b->getType(), zero))
-        ));
-
-        return res;
-      } else if (dynmatch(OrInst, or_inst, inst)) {
-        llvm::Value* a_const = is_const(or_inst->arg(0));
-        llvm::Value* b_const = is_const(or_inst->arg(1));
-        llvm::Value* a = emit_arg(or_inst->arg(0));
-        llvm::Value* b = emit_arg(or_inst->arg(1));
-
-        llvm::APInt ones = llvm::APInt::getMaxValue(a->getType()->getIntegerBitWidth());
-
-        llvm::Value* res = _builder.CreateAnd(a_const, b_const);
-        // Short-circuit
-        res = _builder.CreateOr(res, _builder.CreateAnd(a_const,
-          _builder.CreateICmpEQ(a, llvm::ConstantInt::get(a->getType(), ones))
-        ));
-        res = _builder.CreateOr(res, _builder.CreateAnd(b_const,
-          _builder.CreateICmpEQ(b, llvm::ConstantInt::get(b->getType(), ones))
-        ));
-
-        return res;
-      } else {
-        if (inst->has_side_effect() ||
-            inst->is_terminator() ||
-            dynamic_cast<CommentInst*>(inst)) {
-          return llvm::ConstantInt::getFalse(_context);
-        }
-
-        llvm::Value* all_const = llvm::ConstantInt::getTrue(_context);
-        for (Value* arg : inst->args()) {
-          all_const = _builder.CreateAnd(all_const, is_const(arg));
-        }
-        return all_const;
-      }
-    }
-
-    llvm::Value* is_used(Inst* inst) {
-      return _builder.CreateLoad(
-        llvm::Type::getInt1Ty(_context),
-        _is_used.at(inst)
-      );
-    }
-
-    llvm::Value* emit_used(Inst* inst) {
-      if (inst->has_side_effect() || inst->is_terminator()) {
-        return llvm::ConstantInt::getTrue(_context);
-      } else {
-        llvm::Value* used = llvm::ConstantInt::getFalse(_context);
-        for (Uses::Use use : _uses.at(inst)) {
-          llvm::Value* use_used = is_used(use.inst);
-          
-          if (is_int_or_bool(use.inst->type()) &&
-              // Freeze is always constant, but needs this instruction to perform the check
-              !dynamic_cast<FreezeInst*>(use.inst)) {
-            use_used = _builder.CreateAnd(
-              use_used,
-              _builder.CreateNot(is_const(use.inst))
-            );
-          }
-
-          if (dynmatch(SelectInst, select, use.inst)) {
-            if (use.index > 0) {
-              llvm::Value* branch_used = emit_arg(select->arg(0));
-              if (branch_used) {
-                if (use.index == 2) {
-                  branch_used = _builder.CreateNot(branch_used);
-                }
-                use_used = _builder.CreateAnd(
-                  use_used,
-                  _builder.CreateSelect(
-                    is_const(select->arg(0)),
-                    branch_used,
-                    llvm::ConstantInt::getTrue(_context)
-                  )
-                );
-              }
-            }
-          }
-
-          used = _builder.CreateOr(used, use_used);
-        }
-        return used;
-      }
-    }
-
-    llvm::Value* emit_built_arg(Value* value) {
-      if (dynmatch(Const, constant, value)) {
-        llvm::Value* addr = llvm::ConstantInt::get(
-          llvm::IntegerType::get(_context, sizeof(void*) * 8),
-          (uint64_t)(void*) constant,
-          false
-        );
-
-        return _builder.CreateIntToPtr(
-          addr,
-          llvm::PointerType::get(_context, 0)
-        );
-      } else if (value->is_named()) {
-        return _builder.CreateLoad(
-          llvm::PointerType::get(_context, 0),
-          _built.at((NamedValue*) value)
-        );
-      } else {
-        assert(false && "Unknown value");
-        return nullptr;
-      }
-    }
-
-    void emit_update_load_const(LoadInst* load) {
-      llvm::Value* is_const_load = _builder.CreateCall(_llvm_api.is_const_inst, {emit_built_arg(load)});
-      is_const_load = _builder.CreateTrunc(is_const_load, llvm::Type::getInt1Ty(_context));
-      if (load->flags().has(LoadFlags::Pure)) {
-        is_const_load = _builder.CreateOr(
-          is_const_load,
-          is_const(load->arg(0))
-        );
-      }
-      _builder.CreateStore(is_const_load, _is_const.at(load));
-    }
-
-    
-
-    void emit_build_inst(Inst* inst) {
-      if (_comments &&
-          !dynamic_cast<CommentInst*>(inst)) {
-        std::ostringstream comment_stream;
-        inst->write_arg(comment_stream);
-        comment_stream << " = ";
-        inst->write(comment_stream);
-        _builder.CreateCall(_llvm_api.build_comment, {
-          _jitir_builder,
-          _builder.CreateGlobalString(comment_stream.str())
-        });
-      }
-
-      emit_branch(
-        is_used(inst),
-        [&](){
-          if (dynmatch(FreezeInst, freeze, inst)) {
-            emit_branch(
-              is_const(freeze->arg(0)),
-              [&](){
-                _builder.CreateStore(
-                  emit_built_arg(freeze->arg(0)),
-                  _built.at(inst)
-                );
-              },
-              [&](){
-                llvm::Value* built_const = _builder.CreateCall(
-                  _llvm_api.build_const_fast,
-                  {
-                    _jitir_builder,
-                    llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
-                    _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
-                  }
-                );
-
-                _builder.CreateCall(_llvm_api.build_guard, {
-                  _jitir_builder,
-                  _builder.CreateCall(
-                    _llvm_api.build_eq,
-                    {
-                      _jitir_builder,
-                      emit_built_arg(freeze->arg(0)),
-                      built_const
-                    }
-                  ),
-                  llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), 1)
-                });
-
-                _builder.CreateStore(
-                  built_const,
-                  _built.at(inst)
-                );
-              },
-              "freeze_"
-            );
-            return;
-          } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
-            if (is_int_or_bool(assume_const->type())) {
-              llvm::Value* built_const = _builder.CreateCall(
-                _llvm_api.build_const_fast,
-                {
-                  _jitir_builder,
-                  llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
-                  _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
-                }
-              );
-
-              _builder.CreateStore(
-                built_const,
-                _built.at(inst)
-              );
-            } else {
-              _builder.CreateStore(
-                emit_built_arg(assume_const->arg(0)),
-                _built.at(inst)
-              );
-            }
-            return;
-          }
-
-          std::vector<llvm::Value*> args;
-          for (Value* arg : inst->args()) {
-            args.push_back(emit_built_arg(arg));
-          }
-
-          if (is_int_or_bool(inst->type())) {
-            auto trace_const = [&](){
-              if (_trace_capabilities.can_trace_const(inst)) {
-                llvm::Value* built = _builder.CreateCall(
-                  _llvm_api.build_const_fast,
-                  {
-                    _jitir_builder,
-                    llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
-                    _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
-                  }
-                );
-                _builder.CreateStore(built, _built.at(inst));
-              }
-            };
-            if (_trace_capabilities.can_trace_const(inst) && !_trace_capabilities.can_trace_inst(inst)) {
-              // This only happens for always const values, so we do not need to check is_const(inst)
-              trace_const();
-            } else {
-              emit_branch(
-                is_const(inst),
-                trace_const,
-                [&](){
-                  if (_trace_capabilities.can_trace_inst(inst)) {
-                    llvm::Value* built = build_build_inst(_builder, _llvm_api, inst, _jitir_builder, args);
-                    _builder.CreateStore(built, _built.at(inst));
-
-                    if (dynmatch(LoadInst, load, inst)) {
-                      emit_update_load_const(load);
-                    }
-                  }
-                },
-                "const_"
-              );
-            }
-          } else {
-            if (_trace_capabilities.any(inst)) {
-              llvm::Value* built = build_build_inst(_builder, _llvm_api, inst, _jitir_builder, args);
-              _builder.CreateStore(built, _built.at(inst));
-
-              if (dynmatch(LoadInst, load, inst)) {
-                emit_update_load_const(load);
-              }
-            }
-          }
-        },
-        [&](){},
-        "used_"
-      );
-    }
-
-    void emit_generating_extension(Block* block) {
-      ActionQueue queue;
-
-      std::unordered_map<Value*, ActionGroup*> emit_groups;
-      std::unordered_map<Value*, ActionGroup*> const_groups;
-      std::unordered_map<Value*, ActionGroup*> used_groups;
-      ActionGroup* last_emit_group = nullptr;
-      ActionGroup* last_build_group = nullptr;
-
-      constexpr const size_t PRIO_MAX = 100;
-      constexpr const size_t PRIO_OVERAPPROX_USED = 50;
-
-      for (Inst* inst : *block) {
-        if (inst->is_terminator()) {
-          continue;
-        }
-
-        std::ostringstream name_stream;
-        inst->write(name_stream);
-        std::string name = name_stream.str();
-
-        ActionGroup* emit_group = queue.add(name);
-        ActionGroup* const_group = queue.add(name);
-        ActionGroup* used_group = queue.add(name);
-        ActionGroup* build_group = queue.add(name);
-
-        std::vector<ActionGroup*> emit_deps;
-        for (Value* arg : inst->args()) {
-          if (emit_groups.find(arg) != emit_groups.end()) {
-            emit_deps.push_back(emit_groups.at(arg));
-          }
-        }
-        if (inst->has_side_effect() || dynamic_cast<LoadInst*>(inst)) {
-          emit_deps.push_back(last_emit_group);
-        }
-
-        emit_group->add("emit", PRIO_MAX, emit_deps, {}, [inst, this](){
-          _values[inst] = emit_inst(inst);  
-        });
-
-        std::vector<ActionGroup*> const_deps;
-        if (!dynamic_cast<FreezeInst*>(inst) &&
-            !dynamic_cast<AssumeConstInst*>(inst)) {
-          const_deps.push_back(emit_group);
-          for (Value* arg : inst->args()) {
-            if (const_groups.find(arg) != const_groups.end()) {
-              const_deps.push_back(const_groups.at(arg));
-            }
-          }
-        }
-
-        const_group->add("const", PRIO_MAX, const_deps, {}, [inst, this](){
-          _builder.CreateStore(emit_const_prop(inst), _is_const.at(inst));
-        });
-
-        std::vector<ActionGroup*> build_deps = {const_group, used_group, last_build_group};
-        if (dynamic_cast<FreezeInst*>(inst)) {
-          build_deps.push_back(emit_group);
-          if (const_groups.find(inst->arg(0)) != const_groups.end()) {
-            build_deps.push_back(const_groups.at(inst->arg(0)));
-          }
-        }
-        build_group->add("build", PRIO_MAX, build_deps, {}, [inst, this](){
-          emit_build_inst(inst);
-        });
-
-        emit_groups[inst] = emit_group;
-        
-        if (inst->has_side_effect() || dynamic_cast<LoadInst*>(inst)) {
-          last_emit_group = emit_group;
-        }
-
-        if (dynmatch(LoadInst, load, inst)) {
-          const_groups[inst] = build_group;
-        } else {
-          const_groups[inst] = const_group;
-        }
-
-        used_groups[inst] = used_group;
-
-        last_build_group = build_group;
-      }
-
-      std::unordered_map<Inst*, bool> always_used;
-      for (Inst* inst : block->rev_range()) {
-        if (inst->is_terminator()) {
-          continue;
-        }
-
-        always_used[inst] = false;
-        if (inst->has_side_effect() || dynamic_cast<CommentInst*>(inst)) {
-          always_used[inst] = true;
-        } else {
-          for (Uses::Use use : _uses.at(inst)) {
-            if (always_used.find(use.inst) == always_used.end()) {
-              always_used[inst] = true; // Used outside of current block or in terminator
-            }
-          }
-        }
-      }
-            
-      for (Inst* inst : *block) {
-        if (inst->is_terminator()) {
-          continue;
-        }
-
-        ActionGroup* used_group = used_groups[inst];
-
-        if (always_used.at(inst)) {
-          used_group->add("always used", PRIO_MAX, {}, {}, [inst, this](){
-            _builder.CreateStore(
-              llvm::ConstantInt::getTrue(_context),
-              _is_used.at(inst)
-            );
-          });
-        } else {
-          std::vector<ActionGroup*> used_deps;
-
-          for (Uses::Use use : _uses.at(inst)) {
-            if (used_groups.find(use.inst) != used_groups.end()) {
-              used_deps.push_back(used_groups.at(use.inst));
-            }
-
-            if (const_groups.find(use.inst) != const_groups.end()) {
-              used_deps.push_back(const_groups.at(use.inst));
-            }
-
-            if (dynmatch(SelectInst, select, use.inst)) {
-              if (use.index > 0 && emit_groups.find(select->cond()) != emit_groups.end()) {
-                used_deps.push_back(emit_groups.at(select->cond()));
-                used_deps.push_back(const_groups.at(select->cond()));
-              }
-            }
-          }
-
-          size_t prio = PRIO_MAX;
-          if (dynmatch(LoadInst, load, inst)) {
-            prio++;
-          }
-          used_group->add("used", prio, {}, used_deps, [inst, this](){
-            _builder.CreateStore(
-              emit_used(inst),
-              _is_used.at(inst)
-            );
-          });
-        }
-      }
-
-      _builder.SetInsertPoint(_blocks.at(block));
-      queue.run();
-
-      if (block->name() == 0) {
-        queue.save_dot("action_queue.dot");
-      }
-
-      Inst* inst = block->terminator();
-      assert(inst);
-      if (dynmatch(BranchInst, branch, inst)) {
-        _builder.CreateCall(_llvm_api.build_guard, {
-          _jitir_builder,
-          emit_built_arg(branch->arg(0)),
-          _builder.CreateZExt(
-            emit_arg(branch->arg(0)),
-            llvm::Type::getInt32Ty(_context)
-          )
-        });
-      } else if (dynmatch(JumpInst, jump, inst)) {
-        for (Arg* arg : jump->block()->args()) {
-          _builder.CreateStore(is_const(jump->arg(arg->index())), _is_const.at(arg));
-          _builder.CreateStore(emit_built_arg(jump->arg(arg->index())), _built.at(arg));
-        }
-      }
-      _values[inst] = emit_terminator(inst, block);
-    }
-
-    void emit_generating_extension_allocs(NamedValue* value) {
-      _is_const[value] = _builder.CreateAlloca(
-        llvm::Type::getInt1Ty(_context),
-        nullptr,
-        "is_const"
-      );
-
-      // False is always a valid overapproximation
-      _builder.CreateStore(
-        llvm::ConstantInt::getFalse(_context),
-        _is_const.at(value)
-      );
-
-      _is_used[value] = _builder.CreateAlloca(
-        llvm::Type::getInt1Ty(_context),
-        nullptr,
-        "is_used"
-      );
-
-      // True is always a valid overapproximation 
-      _builder.CreateStore(
-        llvm::ConstantInt::getTrue(_context),
-        _is_used.at(value)
-      );
-
-      _built[value] = _builder.CreateAlloca(
-        llvm::PointerType::get(_context, 0),
-        nullptr,
-        "built"
-      );
-
-      _builder.CreateStore(
-        llvm::ConstantPointerNull::get(llvm::PointerType::get(_context, 0)),
-        _built.at(value)
-      );
-    }
-
   public:
     LLVMCodeGen(Section* section,
                 llvm::Module* module,
-                const std::string& name,
-                bool generating_extension = false):
+                const std::string& name):
         Pass(section),
-        _generating_extension(generating_extension),
         _section(section),
         _context(module->getContext()),
         _module(module),
-        _builder(module->getContext()),
-        _llvm_api(module),
-        _uses(section),
-        _binding_time_groups(section),
-        _trace_capabilities(section, _binding_time_groups) {
-      
+        _builder(module->getContext()) {
+            
       assert(_section->ordering() >= BlockOrdering::Dominator);
 
       std::vector<llvm::Type*> args;
       for (Arg* arg : _section->entry()->args()) {
         args.push_back(emit_type(arg->type()));
-      }
-
-      if (_generating_extension) {
-        args.push_back(llvm::PointerType::get(_context, 0));
       }
 
       _function = llvm::Function::Create(
@@ -874,9 +322,6 @@ namespace metajit {
 
       section->autoname();
       _values.init(section);
-      _is_const.init(section);
-      _is_used.init(section);
-      _built.init(section);
 
       llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(_context, "entry", _function);
       for (Block* block : *_section) {
@@ -885,37 +330,6 @@ namespace metajit {
       }
 
       _builder.SetInsertPoint(entry_block);
-
-      if (_generating_extension) {
-        _jitir_builder = _function->getArg(_section->entry()->args().size());
-
-        for (Block* block : *section) {
-          for (Arg* arg : block->args()) {
-            emit_generating_extension_allocs(arg);
-          }
-
-          for (Inst* inst : *block) {
-            emit_generating_extension_allocs(inst);
-          }
-        }
-
-        for (Arg* arg : _section->entry()->args()) {
-          _builder.CreateStore(
-            _builder.CreateCall(
-              _llvm_api.entry_arg,
-              {
-                _jitir_builder,
-                llvm::ConstantInt::get(
-                  llvm::Type::getInt64Ty(_context),
-                  arg->index()
-                )
-              }
-            ),
-            _built.at(arg)
-          );
-        }
-      }
-
       _builder.CreateBr(_blocks.at(section->entry()));
 
       for (Block* block : *_section) {
@@ -934,19 +348,14 @@ namespace metajit {
       }
 
       for (Block* block : *_section) {
-        if (_generating_extension) {
-          emit_generating_extension(block);
-        } else {
-          _builder.SetInsertPoint(_blocks.at(block));
-          for (Inst* inst : *block) {
-            if (inst->is_terminator()) {
-              _values[inst] = emit_terminator(inst, block);
-            } else {
-              _values[inst] = emit_inst(inst);
-            }
+        _builder.SetInsertPoint(_blocks.at(block));
+        for (Inst* inst : *block) {
+          if (inst->is_terminator()) {
+            _values[inst] = emit_terminator(inst, block);
+          } else {
+            _values[inst] = emit_inst(inst);
           }
         }
-        
         _end_blocks[block] = _builder.GetInsertBlock();
       }
     }
