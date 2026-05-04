@@ -69,7 +69,15 @@ namespace metajit {
     bool is_physical() const { return _kind == Kind::Physical; }
 
     bool operator==(const Reg& other) const {
-      return _id == other._id;
+      if (_kind == other._kind) {
+        switch (_kind) {
+          case Kind::Invalid: return true;
+          case Kind::Virtual:
+          case Kind::Physical:
+            return _id == other._id;
+        }
+      }
+      return false;
     }
 
     bool operator!=(const Reg& other) const {
@@ -1278,6 +1286,7 @@ namespace metajit {
           if (it != 0) {
             stream << ", ";
           }
+          stream << Reg::phys(it) << "=";
           if (regs[it].is_invalid()) {
             stream << "<free>";
           } else if (is_disabled(Reg::phys(it))) {
@@ -1329,7 +1338,7 @@ namespace metajit {
       assert(vreg.is_virtual());
       VRegInfo& info = _vreg_info[vreg.id()];
       if (info.current_reg.is_physical()) {
-        // Ne need to unspill, just move from current reg
+        // No need to unspill, just move from current reg
         _builder.mov64(preg, info.current_reg);
         reg_file.free(info.current_reg);
       } else {
@@ -1548,7 +1557,8 @@ namespace metajit {
               #ifdef METAJIT_DEBUG
               {
                 std::ostringstream stream;
-                stream << "Restoring register state for block " << target->name();
+                stream << "Restoring register state for block " << target->name() << " from ";
+                reg_file.write(stream);
                 _builder.comment(stream.str());
               }
               #endif
@@ -1560,9 +1570,24 @@ namespace metajit {
                   spill_and_unspill(reg_file, preg, target_vreg, /*is_def=*/ false, /*allow_spill_to_reg=*/ false);
                 }
               }
+              #ifdef METAJIT_DEBUG
+              {
+                std::ostringstream stream;
+                stream << "After restoring register state for block " << target->name() << ": ";
+                reg_file.write(stream);
+                _builder.comment(stream.str());
+              }
+              {
+                std::ostringstream stream;
+                stream << "Expected register state: ";
+                reg_file.write_state(stream, target->regalloc());
+                _builder.comment(stream.str());
+              }
+              #endif
               #ifndef NDEBUG
               for (size_t it = 0; it < reg_file.size(); it++) {
-                assert(reg_file[Reg::phys(it)] == target->regalloc()[it]);
+                // Register file state must refine the target block's regalloc state
+                assert(target->regalloc()[it].is_invalid() || reg_file[Reg::phys(it)] == target->regalloc()[it]);
               }
               #endif
             } else {
@@ -1580,6 +1605,18 @@ namespace metajit {
           }
         }
       }
+
+      #ifdef METAJIT_DEBUG
+      for (X86Block* block : _blocks) {
+        if (block->regalloc()) {
+          _builder.move_to_begin(block);
+          std::ostringstream stream;
+          stream << "Register File: ";
+          reg_file.write_state(stream, block->regalloc());
+          _builder.comment(stream.str());
+        }
+      }
+      #endif
     }
 
     void peephole() {

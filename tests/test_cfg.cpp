@@ -154,6 +154,48 @@ int main() {
     data.output(loop_header->arg(2));
   });
 
+  suite.diff_test("multi_arg_merge_failure").run([](Builder& builder, TestData& data) {
+    // Fill registers to force specific assignments
+    Block* header = builder.build_block({
+      Type::Int64, Type::Int64, Type::Int64, Type::Int64,
+      Type::Int64, Type::Int64, Type::Int64, Type::Int64,
+      Type::Int64, Type::Int64, Type::Int64
+    });
+    Block* loop_body = builder.build_block();
+    Block* exit = builder.build_block();
+
+    std::vector<Value*> initial_args;
+    for (size_t j = 0; j < 10; ++j) initial_args.push_back(data.input(Type::Int64));
+    initial_args.push_back(builder.build_const(Type::Int64, 0)); // i
+
+    builder.build_jump(header, initial_args);
+
+    builder.move_to_end(header);
+    Value* x = header->arg(0);
+    Value* i = header->arg(10);
+
+    Value* s = x;
+    for (size_t j = 0; j < 10; ++j) {
+      s = builder.build_add(s, header->arg(j));
+    }
+
+    Value* cond = builder.build_lt_s(i, builder.build_const(Type::Int64, 3));
+    builder.build_branch(cond, loop_body, exit);
+
+    builder.move_to_end(loop_body);
+    std::vector<Value*> back_args;
+    // Pass x to both slot 0 and slot 1
+    back_args.push_back(x);
+    back_args.push_back(x);
+    for (size_t j = 2; j < 10; ++j) back_args.push_back(header->arg(j));
+    back_args.push_back(builder.build_add(i, builder.build_const(Type::Int64, 1)));
+
+    builder.build_jump(header, back_args);
+
+    builder.move_to_end(exit);
+    data.output(s);
+  });
+
   suite.test("dominator_order_verify").run([]() {
     Context context;
     Allocator allocator;
