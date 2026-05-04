@@ -152,9 +152,9 @@ int main() {
     builder.move_to_end(loop_end);
     data.output(loop_header->arg(1));
     data.output(loop_header->arg(2));
-    });
+  });
 
-    suite.diff_test("multi_arg_merge_failure").run([](Builder& builder, TestData& data) {
+  suite.diff_test("multi_arg_merge_failure").run([](Builder& builder, TestData& data) {
     // Fill registers to force specific assignments
     Block* header = builder.build_block({
       Type::Int64, Type::Int64, Type::Int64, Type::Int64,
@@ -165,7 +165,7 @@ int main() {
     Block* exit = builder.build_block();
 
     std::vector<Value*> initial_args;
-    for (int j = 0; j < 10; ++j) initial_args.push_back(data.input(Type::Int64));
+    for (size_t j = 0; j < 10; ++j) initial_args.push_back(data.input(Type::Int64));
     initial_args.push_back(builder.build_const(Type::Int64, 0)); // i
 
     builder.build_jump(header, initial_args);
@@ -175,7 +175,7 @@ int main() {
     Value* i = header->arg(10);
 
     Value* s = x;
-    for (int j = 0; j < 10; ++j) {
+    for (size_t j = 0; j < 10; ++j) {
       s = builder.build_add(s, header->arg(j));
     }
 
@@ -187,7 +187,7 @@ int main() {
     // Pass x to both slot 0 and slot 1
     back_args.push_back(x);
     back_args.push_back(x);
-    for (int j = 2; j < 10; ++j) back_args.push_back(header->arg(j));
+    for (size_t j = 2; j < 10; ++j) back_args.push_back(header->arg(j));
     back_args.push_back(builder.build_add(i, builder.build_const(Type::Int64, 1)));
 
     builder.build_jump(header, back_args);
