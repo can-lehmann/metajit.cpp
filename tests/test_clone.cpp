@@ -44,7 +44,7 @@ namespace metajit {
           Clone::run(section, cloned_section);
 
           allocator.zero_all();
-          context.const_allocator().zero_all();
+          context.allocator().zero_all();
 
           std::ostringstream cloned_stream;
           cloned_section->write(cloned_stream);
