@@ -5299,6 +5299,7 @@ namespace metajit {
         return _builder.build_const(constant->type(), constant->value());
       } else {
         assert(false);
+        return nullptr;
       }
     }
 
