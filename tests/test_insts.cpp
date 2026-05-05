@@ -210,6 +210,19 @@ void test_call_default_void_store(uint32_t* out, uint32_t a, uint32_t b) {
   *out = a + b + 1;
 }
 
+void test_assume_const(DiffTestSuite& suite) {
+  #define assume_const_type(type) \
+    suite.diff_test("assume_const_" #type).run([](Builder& builder, TestData& data) { \
+      data.output(builder.build_assume_const(data.input(Type::type))); \
+    });
+
+  assume_const_type(Bool)
+  assume_const_type(Int8)
+  assume_const_type(Int16)
+  assume_const_type(Int32)
+  assume_const_type(Int64)
+}
+
 void test_alloca(DiffTestSuite& suite) {
   suite.diff_test("alloca_store_load_Int32").run([](Builder& builder, TestData& data) {
     Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 4), 4);
@@ -401,6 +414,7 @@ int main() {
   test_div_mod(suite);
   test_select(suite);
   test_resize(suite);
+  test_assume_const(suite);
   test_alloca(suite);
   test_call(suite);
 

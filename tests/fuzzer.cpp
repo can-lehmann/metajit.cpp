@@ -45,13 +45,13 @@ namespace metajit {
       }
 
       Value* gen_int(RandomRange random_range) {
-        switch (rand() % 12) {
+        switch (rand() % 13) {
           #define binop(name) \
             return _builder->build_##name( \
               gen(RandomRange(random_range.type())), \
               gen(RandomRange(random_range.type())) \
             ); \
-          
+
           #define shift(name) \
             return _builder->build_##name( \
               gen(RandomRange(random_range.type())), \
@@ -75,26 +75,30 @@ namespace metajit {
           case 7: shift(shl)
           case 8: shift(shr_u)
           case 9: shift(shr_s)
-          case 10: 
+          case 10:
             return _builder->build_resize_u(
               gen(RandomRange(gen_int_or_bool_type())),
               random_range.type()
             );
-          case 11: 
+          case 11:
             return _builder->build_resize_s(
               gen(RandomRange(gen_int_or_bool_type())),
               random_range.type()
             );
+          case 12:
+            return _builder->build_assume_const(
+              gen(random_range)
+            );
           default:
             assert(false && "Unreachable");
-          
+
           #undef binop
           #undef shift
         }
       }
 
       Value* gen_bool(RandomRange random_range) {
-        switch (rand() % 7) {
+        switch (rand() % 8) {
           #define cmp(name) { \
             Type type = gen_int_type(); \
             return _builder->build_##name( \
@@ -109,7 +113,7 @@ namespace metajit {
               gen(RandomRange(Type::Bool)) \
             ); \
 
-          case 0: cmp(eq) 
+          case 0: cmp(eq)
           case 1: cmp(lt_u)
           case 2: cmp(lt_s)
           case 3: binop(and)
@@ -121,6 +125,10 @@ namespace metajit {
               gen(random_range),
               gen(random_range)
             );
+          case 7:
+            return _builder->build_assume_const(
+              gen(random_range)
+            );
           default:
             assert(false && "Unreachable");
 
@@ -130,7 +138,7 @@ namespace metajit {
       }
 
       Value* gen_ptr(RandomRange random_range) {
-        switch (rand() % 3) {
+        switch (rand() % 4) {
           case 0: return _data->input(random_range);
           case 1:
             return _builder->build_add_ptr(
@@ -141,6 +149,10 @@ namespace metajit {
             return _builder->build_select(
               gen(RandomRange(Type::Bool)),
               gen(random_range),
+              gen(random_range)
+            );
+          case 3:
+            return _builder->build_assume_const(
               gen(random_range)
             );
           default:
