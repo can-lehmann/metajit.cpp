@@ -671,6 +671,8 @@ namespace metajit {
     void isel(Inst* inst) {
       if (dynmatch(FreezeInst, freeze, inst)) {
         _builder.mov64(vreg(inst), vreg(freeze->arg(0)));
+      } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
+        _builder.mov64(vreg(inst), vreg(assume_const->arg(0)));
       } else if (dynmatch(SelectInst, select, inst)) {
         _builder.mov64(vreg(inst), vreg(select->arg(2)));
         build_cmov(vreg(inst), select->cond(), vreg(select->arg(1)));
