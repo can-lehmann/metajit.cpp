@@ -340,8 +340,8 @@ namespace metajit {
         llvm::Value* cond_const = is_const(select->arg(0));
         llvm::Value* true_const = is_const(select->arg(1));
         llvm::Value* false_const = is_const(select->arg(2));
-        llvm::Value* cond = emit_arg(select->arg(0));
-        return _builder.CreateFreeze(_builder.CreateOr(
+        llvm::Value* cond = _builder.CreateFreeze(emit_arg(select->arg(0)));
+        return _builder.CreateOr(
           _builder.CreateAnd(
             cond_const,
             _builder.CreateSelect(cond, true_const, false_const) // Short-circuit
@@ -356,12 +356,12 @@ namespace metajit {
               emit_arg(select->arg(2))
             )
           )
-        ));
+        );
       } else if (dynmatch(AndInst, and_inst, inst)) {
         llvm::Value* a_const = is_const(and_inst->arg(0));
         llvm::Value* b_const = is_const(and_inst->arg(1));
-        llvm::Value* a = emit_arg(and_inst->arg(0));
-        llvm::Value* b = emit_arg(and_inst->arg(1));
+        llvm::Value* a = _builder.CreateFreeze(emit_arg(and_inst->arg(0)));
+        llvm::Value* b = _builder.CreateFreeze(emit_arg(and_inst->arg(1)));
 
         llvm::APInt zero = llvm::APInt::getZero(a->getType()->getIntegerBitWidth());
 
@@ -374,12 +374,12 @@ namespace metajit {
           _builder.CreateICmpEQ(b, llvm::ConstantInt::get(b->getType(), zero))
         ));
 
-        return _builder.CreateFreeze(res);
+        return res;
       } else if (dynmatch(OrInst, or_inst, inst)) {
         llvm::Value* a_const = is_const(or_inst->arg(0));
         llvm::Value* b_const = is_const(or_inst->arg(1));
-        llvm::Value* a = emit_arg(or_inst->arg(0));
-        llvm::Value* b = emit_arg(or_inst->arg(1));
+        llvm::Value* a = _builder.CreateFreeze(emit_arg(or_inst->arg(0)));
+        llvm::Value* b = _builder.CreateFreeze(emit_arg(or_inst->arg(1)));
 
         llvm::APInt ones = llvm::APInt::getMaxValue(a->getType()->getIntegerBitWidth());
 
@@ -392,7 +392,7 @@ namespace metajit {
           _builder.CreateICmpEQ(b, llvm::ConstantInt::get(b->getType(), ones))
         ));
 
-        return _builder.CreateFreeze(res);
+        return res;
       } else {
         if (inst->has_side_effect() ||
             inst->is_terminator() ||
