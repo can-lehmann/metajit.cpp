@@ -727,6 +727,15 @@ namespace metajit {
 
       if (!output_path.empty()) {
         std::error_code error_code;
+        llvm::raw_fd_ostream stream(output_path + "_genext_unopt.ll", error_code, llvm::sys::fs::OF_None);
+        genext_module->print(stream, nullptr);
+      }
+
+      // Optimize the generating extension at O3 to trigger potential bugs
+      LLVMCodeGen::optimize_llvm(*genext_module, llvm::OptimizationLevel::O3);
+
+      if (!output_path.empty()) {
+        std::error_code error_code;
         llvm::raw_fd_ostream stream(output_path + "_genext.ll", error_code, llvm::sys::fs::OF_None);
         genext_module->print(stream, nullptr);
       }
