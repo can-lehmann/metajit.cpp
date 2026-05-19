@@ -465,7 +465,9 @@ namespace metajit {
           TestData data(builder);
           body(builder, data);
 
-          builder.build_exit();
+          if (!builder.block()->terminator()) {
+            builder.build_exit();
+          }
 
           unittest_assert(!section->verify(std::cout));
 
@@ -676,7 +678,9 @@ namespace metajit {
           TestData data(builder);
           body(builder, data);
 
-          builder.build_exit();
+          if (!builder.block()->terminator()) {
+            builder.build_exit();
+          }
 
           {
             std::ofstream stream(_output_path + "/" + name() + ".before.jitir");
@@ -908,7 +912,9 @@ namespace metajit {
           TraceTestData data(builder);
           body(builder, data);
 
-          builder.build_exit();
+          if (!builder.block()->terminator()) {
+            builder.build_exit();
+          }
 
           unittest_assert(!section->verify(std::cout));
 
