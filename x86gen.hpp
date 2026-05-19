@@ -84,6 +84,13 @@ namespace metajit {
       return !(*this == other);
     }
 
+    bool operator<(const Reg& other) const {
+      if (_kind != other._kind) {
+        return _kind < other._kind;
+      }
+      return _id < other._id;
+    }
+
     void write(std::ostream& stream) const {
       switch (_kind) {
         case Kind::Invalid:
@@ -227,6 +234,16 @@ namespace metajit {
           case Kind::name: usedef; break;
         #include "x86insts.inc.hpp"
       }
+    }
+
+    template <class UseFn>
+    void visit_uses(const UseFn& use_fn) const {
+      visit_use_then_def(use_fn, [](Reg) {});
+    }
+
+    template <class DefFn>
+    void visit_defs(const DefFn& def_fn) const {
+      visit_use_then_def([](Reg) {}, def_fn);
     }
 
     void write(std::ostream& stream) const;
@@ -457,6 +474,10 @@ namespace metajit {
   };
 
   class X86CodeGen: public Pass<X86CodeGen> {
+  public:
+    enum class Mode {
+      JIT, AOT
+    };
   private:
     struct Interval {
       size_t min = 0;
@@ -495,6 +516,8 @@ namespace metajit {
 
     Section* _section;
     Allocator& _allocator;
+    Mode _mode;
+
     std::vector<X86Block*> _blocks;
     X86InstBuilder _builder;
 
@@ -1619,6 +1642,170 @@ namespace metajit {
       #endif
     }
 
+    void graph_coloring_regalloc() {
+      // Not performance critical, since it is not used for JIT, so we can afford to be a bit naive here
+
+      std::vector<std::set<X86Block*>> incoming(_blocks.size());
+
+      for (X86Block* block : _blocks) {
+        for (X86Inst* inst : *block) {
+          if (std::holds_alternative<X86Block*>(inst->imm())) {
+            X86Block* target = std::get<X86Block*>(inst->imm());
+            incoming[target->name()].insert(block);
+          }
+        }
+      }
+
+      std::vector<std::set<Reg>> liveness_at_exit(_blocks.size());
+      std::vector<std::set<Reg>> conflicts(_vreg_info.size());
+
+      bool changed = true;
+      while (changed) {
+        changed = false;
+
+        for (X86Block* block : _blocks) {
+          std::set<Reg> live = liveness_at_exit.at(block->name());
+          for (X86Inst* inst : block->rev_range()) {
+            inst->visit_defs([&](Reg reg) {
+              live.erase(reg);
+            });
+            inst->visit_uses([&](Reg reg) {
+              live.insert(reg);
+            });
+
+            for (Reg reg : live) {
+              for (Reg other : live) {
+                if (reg != other) {
+                  conflicts.at(reg.id()).insert(other);
+                }
+              }
+            }
+          }
+
+          for (X86Block* pred : incoming.at(block->name())) {
+            std::set<Reg>& pred_live = liveness_at_exit.at(pred->name());
+            for (Reg reg : live) {
+              if (pred_live.find(reg) == pred_live.end()) {
+                pred_live.insert(reg);
+                changed = true;
+              }
+            }
+          }
+        }
+      }
+
+      #ifdef METAJIT_REGALLOC_DOT
+      {
+        std::ofstream stream("regalloc.dot");
+        stream << "graph {" << std::endl;
+        for (size_t it = 0; it < _vreg_info.size(); it++) {
+          stream << "  v" << it << ";" << std::endl;
+        }
+        for (size_t it = 0; it < conflicts.size(); it++) {
+          for (Reg conflict : conflicts.at(it)) {
+            if (it < conflict.id()) {
+              stream << "  v" << it << " -- v" << conflict.id() << ";" << std::endl;
+            }
+          }
+        }
+        stream << "}" << std::endl;
+      }
+      #endif
+
+    
+      std::vector<Reg> order;
+      std::vector<bool> closed(_vreg_info.size(), false);
+      std::vector<std::variant<Reg, size_t>> assigned(_vreg_info.size(), Reg());
+
+      std::vector<size_t> degrees(_vreg_info.size(), 0);
+      std::set<std::pair<size_t, Reg>> queue;
+      for (size_t it = 0; it < _vreg_info.size(); it++) {
+        if (_vreg_info.at(it).fixed.is_physical()) {
+          assigned.at(it) = _vreg_info.at(it).fixed;
+          closed.at(it) = true;
+        } else {
+          degrees[it] = conflicts.at(it).size();
+          queue.insert({degrees[it], Reg::virt(it)});
+        }
+      }
+
+      while (!queue.empty()) {
+        auto it = queue.begin();
+        Reg reg = it->second;
+        assert(!closed.at(reg.id()));
+        assert(degrees.at(reg.id()) == it->first);
+        queue.erase(it);
+        
+        order.push_back(reg);
+        closed.at(reg.id()) = true;
+        for (Reg conflict : conflicts.at(reg.id())) {
+          if (!closed.at(conflict.id())) {
+            queue.erase({degrees[conflict.id()], conflict});
+            degrees[conflict.id()]--;
+            queue.insert({degrees[conflict.id()], conflict});
+          }
+        }
+      }
+
+      for (size_t it = order.size(); it-- > 0; ) {
+        Reg reg = order.at(it);
+        assert(reg.is_virtual());
+
+        uint16_t free_mask = 0xffff;
+        free_mask &= ~(1 << Reg::X86_RSP().id());
+        free_mask &= ~(1 << Reg::X86_RBP().id());
+        for (Reg conflict : conflicts.at(reg.id())) {
+          if (std::holds_alternative<Reg>(assigned.at(conflict.id()))) {
+            Reg assigned_reg = std::get<Reg>(assigned.at(conflict.id()));
+            if (assigned_reg.is_physical()) {
+              free_mask &= ~(1 << assigned_reg.id());
+            }
+          }
+        }
+
+        if (free_mask == 0) {
+          // Spill
+          assigned.at(reg.id()) = _stack_offset_alloc.alloc();
+        } else {
+          assigned.at(reg.id()) = Reg::phys(__builtin_ctz(free_mask));
+        }
+      }
+
+      for (X86Block* block : _blocks) {
+        for (auto it = block->begin(); it != block->end(); ) {
+          X86Inst* inst = *it;
+
+          if (inst->kind() == X86Inst::Kind::PseudoUse ||
+              inst->kind() == X86Inst::Kind::PseudoDef) {
+            it = it.erase(); // Not needed after regalloc
+          } else {
+            inst->visit_regs([&](Reg& reg) {
+              if (reg.is_virtual()) {
+                std::variant<Reg, size_t> assign = assigned.at(reg.id());
+                if (std::holds_alternative<Reg>(assign)) {
+                  reg = std::get<Reg>(assign);
+                } else {
+                  assert(false); // TODO
+                }
+              }
+            });
+
+            if (inst->kind() == X86Inst::Kind::Mov64 &&
+                std::holds_alternative<Reg>(inst->rm())) {
+              Reg src = std::get<Reg>(inst->rm());
+              Reg dst = inst->reg();
+              if (src == dst) {
+                it = it.erase();
+                continue;
+              }
+            }
+
+            it++;
+          }
+        }
+      }
+    }
+
     void peephole() {
       for (X86Block* block : _blocks) {
         for (auto it = block->begin(); it != block->end(); ) {
@@ -1697,15 +1884,20 @@ namespace metajit {
       isel();
       autoname_insts();
 
-      regalloc();
+      if (_mode == Mode::JIT) {
+        regalloc();
+      } else {
+        graph_coloring_regalloc();
+      }
 
       insert_stack_frame();
       peephole();
     }
   public:
-    X86CodeGen(Section* section, const std::vector<Reg>& input_pregs):
+    X86CodeGen(Section* section, const std::vector<Reg>& input_pregs, Mode mode = Mode::JIT):
         Pass(section),
         _section(section),
+        _mode(mode),
         _allocator(section->allocator()),
         _builder(section->allocator(), nullptr) {
 
@@ -1715,10 +1907,12 @@ namespace metajit {
 
     X86CodeGen(Section* section,
                Allocator& allocator,
-               const std::vector<Reg>& input_pregs):
+               const std::vector<Reg>& input_pregs,
+               Mode mode = Mode::JIT):
         Pass(section),
         _section(section),
         _allocator(allocator),
+        _mode(mode),
         _builder(allocator, nullptr) {
       
       assert(_section->ordering() >= BlockOrdering::Natural);

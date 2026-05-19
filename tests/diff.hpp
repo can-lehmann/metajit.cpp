@@ -244,7 +244,8 @@ namespace metajit {
                                            TestData& data,
                                            size_t sample_count = 1024,
                                            bool optimize_section_for_interpreter = false,
-                                           bool verify_interpreter = true) {
+                                           bool verify_interpreter = true,
+                                           bool verify_aot = true) {
       
       
       section->autoname();
@@ -293,18 +294,34 @@ namespace metajit {
       }
       
       X86Func x86_func = (X86Func) x86cg.deploy();
+
+      X86Func aot_func = nullptr;
+      if (verify_aot) {
+        X86CodeGen aot_x86cg(section, { Reg::phys(12) }, X86CodeGen::Mode::AOT);
+        
+        if (!output_path.empty()) {
+          std::ofstream stream(output_path + "_aot_x86.asm");
+          aot_x86cg.write(stream);
+          aot_x86cg.save(output_path + "_aot_x86.bin");
+        }
+
+        aot_func = (X86Func) aot_x86cg.deploy();
+      }
+
       Section* folded_section = nullptr;
       if (optimize_section_for_interpreter) {
         folded_section = copy_and_fold(section);
       }
       uint8_t* llvm_data = new uint8_t[data.data_size()]();
       uint8_t* x86_data = new uint8_t[data.data_size()]();
+      uint8_t* aot_data = new uint8_t[data.data_size()]();
       uint8_t* interp_data = new uint8_t[data.data_size()]();
       uint8_t* interp_data2 = new uint8_t[data.data_size()]();
 
       for (size_t sample = 0; sample < sample_count; sample++) {
         data.gen(llvm_data);
         std::copy(llvm_data, llvm_data + data.data_size(), x86_data);
+        std::copy(llvm_data, llvm_data + data.data_size(), aot_data);
         std::copy(llvm_data, llvm_data + data.data_size(), interp_data);
         std::copy(llvm_data, llvm_data + data.data_size(), interp_data2);
 
@@ -324,6 +341,10 @@ namespace metajit {
               __FILE__
             );
           }
+        }
+
+        if (verify_aot) {
+          aot_func(aot_data);
         }
 
         if (optimize_section_for_interpreter) {
@@ -346,6 +367,7 @@ namespace metajit {
           for (size_t it = 0; it < type_size(output.type); it++) {
             if (llvm_data[output.offset + it] != x86_data[output.offset + it] ||
                 (verify_interpreter && llvm_data[output.offset + it] != interp_data[output.offset + it]) ||
+                (verify_aot && llvm_data[output.offset + it] != aot_data[output.offset + it]) ||
                 (optimize_section_for_interpreter && llvm_data[output.offset + it] != interp_data2[output.offset + it])) {
               is_equal = false;
               break;
@@ -362,6 +384,10 @@ namespace metajit {
             if (verify_interpreter) {
               stream << "Interpreter Output:\n";
               data.write_outputs(stream, interp_data);
+            }
+            if (verify_aot) {
+              stream << "AOT x86 Output:\n";
+              data.write_outputs(stream, aot_data);
             }
             if (optimize_section_for_interpreter) {
               stream << "Folded Interpreter Output:\n";
@@ -394,6 +420,7 @@ namespace metajit {
     private:
       std::string _output_path;
       bool _verify_interpreter = true;
+      bool _verify_aot = true;
     public:
       DiffTest(const std::string& name, const std::string& output_path):
         unittest::BaseTest<DiffTest>(name), _output_path(output_path) {}
