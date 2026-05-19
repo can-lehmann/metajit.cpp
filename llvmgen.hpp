@@ -773,44 +773,51 @@ namespace metajit {
         is_used(inst),
         [&](){
           if (dynmatch(FreezeInst, freeze, inst)) {
-            emit_branch(
-              is_const(freeze->arg(0)),
-              [&](){
-                _builder.CreateStore(
-                  emit_built_arg(freeze->arg(0)),
-                  _built.at(inst)
-                );
-              },
-              [&](){
-                llvm::Value* built_const = _builder.CreateCall(
-                  _llvm_api.build_const_fast,
-                  {
-                    _jitir_builder,
-                    llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
-                    _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
-                  }
-                );
-
-                _builder.CreateCall(_llvm_api.build_guard, {
-                  _jitir_builder,
-                  _builder.CreateCall(
-                    _llvm_api.build_eq,
+            if (is_int_or_bool(freeze->type())) {
+              emit_branch(
+                is_const(freeze->arg(0)),
+                [&](){
+                  _builder.CreateStore(
+                    emit_built_arg(freeze->arg(0)),
+                    _built.at(inst)
+                  );
+                },
+                [&](){
+                  llvm::Value* built_const = _builder.CreateCall(
+                    _llvm_api.build_const_fast,
                     {
                       _jitir_builder,
-                      emit_built_arg(freeze->arg(0)),
-                      built_const
+                      llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
+                      _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
                     }
-                  ),
-                  llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), 1)
-                });
+                  );
 
-                _builder.CreateStore(
-                  built_const,
-                  _built.at(inst)
-                );
-              },
-              "freeze_"
-            );
+                  _builder.CreateCall(_llvm_api.build_guard, {
+                    _jitir_builder,
+                    _builder.CreateCall(
+                      _llvm_api.build_eq,
+                      {
+                        _jitir_builder,
+                        emit_built_arg(freeze->arg(0)),
+                        built_const
+                      }
+                    ),
+                    llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), 1)
+                  });
+
+                  _builder.CreateStore(
+                    built_const,
+                    _built.at(inst)
+                  );
+                },
+                "freeze_"
+              );
+            } else {
+              _builder.CreateStore(
+                emit_built_arg(freeze->arg(0)),
+                _built.at(inst)
+              );
+            }
             return;
           } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
             if (is_int_or_bool(assume_const->type())) {
