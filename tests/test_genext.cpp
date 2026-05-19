@@ -56,5 +56,14 @@ int main() {
     data.output(final_select);
   });
 
+  suite.gen_ext_test("bug_freeze_ptr").run([](Builder& builder, TraceTestData& data) {
+    // This test should trigger the bug where Freeze on a pointer type
+    // generates invalid LLVM IR (zext ptr instead of ptrtoint)
+    Value* ptr = data.static_input(RandomRange(Type::Ptr));  // frozen pointer
+    Value* offset = data.input(RandomRange(Type::Int64));    // dynamic offset
+    Value* result = builder.build_add_ptr(ptr, offset);
+    data.output(result);
+  });
+
   return suite.finish();
 }

@@ -20,6 +20,7 @@
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Support/SourceMgr.h"
 
@@ -271,6 +272,10 @@ namespace metajit {
       }
       
       llvm::ExitOnError ExitOnErr;
+
+      if (llvm::verifyModule(*module, &llvm::errs())) {
+        throw std::runtime_error("Generated LLVM IR module verification failed");
+      }
 
       std::unique_ptr<llvm::orc::LLJIT> jit = ExitOnErr(llvm::orc::LLJITBuilder().create());
       ExitOnErr(metajit::map_symbols(*jit));
@@ -746,6 +751,10 @@ namespace metajit {
       llvm::ExitOnError ExitOnErr;
       std::unique_ptr<llvm::orc::LLJIT> jit = ExitOnErr(llvm::orc::LLJITBuilder().create());
       ExitOnErr(metajit::map_symbols(*jit));
+
+      if (llvm::verifyModule(*genext_module, &llvm::errs())) {
+        throw std::runtime_error("Generated LLVM IR module verification failed");
+      }
 
       ExitOnErr(jit->addIRModule(llvm::orc::ThreadSafeModule(
         std::move(genext_module),
