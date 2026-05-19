@@ -45,7 +45,7 @@ int main() {
     data.output(result);
   });
 
-  suite.gen_ext_test("bug_section").samples(4, 16).run([](Builder& builder, TraceTestData& data) {
+  suite.gen_ext_test("bug_poison").samples(4, 16).run([](Builder& builder, TraceTestData& data) {
     Value* cond = data.static_input(RandomRange(Type::Bool));
     Value* cond_resized = builder.build_resize_u(cond, Type::Int32);
     Value* shl1 = builder.build_shl(builder.build_const(Type::Int32, 0), cond_resized);
