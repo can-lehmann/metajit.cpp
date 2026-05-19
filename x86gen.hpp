@@ -691,7 +691,7 @@ namespace metajit {
       _builder.cmovnz64(res, then);
     }
 
-    void isel(Inst* inst) {
+    void isel(Inst* inst, Block* block) {
       if (dynmatch(FreezeInst, freeze, inst)) {
         _builder.mov64(vreg(inst), vreg(freeze->arg(0)));
       } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
@@ -1026,20 +1026,41 @@ namespace metajit {
       } else if (dynmatch(BranchInst, branch, inst)) {
         if (branch->arg(0)->is_inst()) {
           Inst* pred_inst = (Inst*) branch->arg(0);
+
+          bool is_negated = false;
+          Block* true_block = branch->true_block();
+          Block* false_block = branch->false_block();
+          if (true_block->name() == block->name() + 1) {
+            std::swap(true_block, false_block);
+            is_negated = true;
+          }
+
           if (dynamic_cast<EqInst*>(pred_inst) ||
               dynamic_cast<LtSInst*>(pred_inst) ||
               dynamic_cast<LtUInst*>(pred_inst)) {
             build_cmp(pred_inst->arg(0), pred_inst->arg(1));
             if (dynamic_cast<EqInst*>(pred_inst)) {
-              _builder.je(_blocks[branch->true_block()->name()]);
+              if (is_negated) {
+                _builder.jne(_blocks[true_block->name()]);
+              } else {
+                _builder.je(_blocks[true_block->name()]);
+              }
             } else if (dynamic_cast<LtSInst*>(pred_inst)) {
-              _builder.jl(_blocks[branch->true_block()->name()]);
+              if (is_negated) {
+                _builder.jge(_blocks[true_block->name()]);
+              } else {
+                _builder.jl(_blocks[true_block->name()]);
+              }
             } else if (dynamic_cast<LtUInst*>(pred_inst)) {
-              _builder.jb(_blocks[branch->true_block()->name()]);
+              if (is_negated) {
+                _builder.jae(_blocks[true_block->name()]);
+              } else {
+                _builder.jb(_blocks[true_block->name()]);
+              }
             } else {
               assert(false);
             }
-            _builder.jmp(_blocks[branch->false_block()->name()]);
+            _builder.jmp(_blocks[false_block->name()]);
             return;
           }
         }
@@ -1100,7 +1121,7 @@ namespace metajit {
             }
             #endif
 
-            isel(inst);
+            isel(inst, block);
           }
         }
 

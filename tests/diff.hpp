@@ -457,7 +457,8 @@ namespace metajit {
             data,
             1024,
             false,
-            _verify_interpreter
+            _verify_interpreter,
+            _verify_aot
           );
 
           delete section;
