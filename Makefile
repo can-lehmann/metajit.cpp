@@ -79,6 +79,9 @@ tests/fuzzer: tests/fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 tests/test_tv: tests/test_tv.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ -g ${CFLAGS} ${Z3_FLAGS} -o $@ $<
 
+tests/test_genext: tests/test_genext.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${TEST_CFLAGS} -o $@ $<
+
 jitir.hpp: jitir.py jitir.tmpl.hpp
 	PYTHONPATH="../lwir.cpp" python3 $<
 
