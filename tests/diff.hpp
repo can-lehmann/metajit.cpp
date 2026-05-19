@@ -430,6 +430,11 @@ namespace metajit {
         return std::move(*this);
       }
 
+      DiffTest&& aot(bool verify_aot) && {
+        _verify_aot = verify_aot;
+        return std::move(*this);
+      }
+
       void run(const std::function<void(Builder&, TestData&)>& body) && {
         unittest::BaseTest<DiffTest>::run([&]() {
           Context context;

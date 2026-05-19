@@ -1648,12 +1648,23 @@ namespace metajit {
       // Not performance critical, since it is not used for JIT, so we can afford to be a bit naive here
 
       std::vector<std::set<X86Block*>> incoming(_blocks.size());
+      std::map<Reg, std::set<Reg>> merge;
 
       for (X86Block* block : _blocks) {
         for (X86Inst* inst : *block) {
           if (std::holds_alternative<X86Block*>(inst->imm())) {
             X86Block* target = std::get<X86Block*>(inst->imm());
             incoming[target->name()].insert(block);
+          }
+
+          if (inst->kind() == X86Inst::Kind::Mov64 &&
+              std::holds_alternative<Reg>(inst->rm())) {
+            Reg src = std::get<Reg>(inst->rm());
+            Reg dst = inst->reg();
+            if (src.is_virtual() && dst.is_virtual()) {
+              merge[src].insert(dst);
+              merge[dst].insert(src);
+            }
           }
         }
       }
@@ -1769,7 +1780,54 @@ namespace metajit {
           // Spill
           assigned.at(reg.id()) = _stack_offset_alloc.alloc();
         } else {
-          assigned.at(reg.id()) = Reg::phys(__builtin_ctz(free_mask));
+          bool merged = false;
+          if (merge.find(reg) != merge.end()) {
+            std::set<Reg> open = merge.at(reg);
+            std::set<Reg> closure_conflicts = conflicts.at(reg.id());
+            std::set<Reg> closed;
+
+            while (!open.empty()) {
+              Reg merge_reg = *open.begin();
+              open.erase(open.begin());
+              closed.insert(merge_reg);
+
+              if (closure_conflicts.find(merge_reg) != closure_conflicts.end()) {
+                continue; // Can't merge with this register
+              }
+
+              closure_conflicts.insert(conflicts.at(merge_reg.id()).begin(), conflicts.at(merge_reg.id()).end());
+
+              if (std::holds_alternative<Reg>(assigned.at(merge_reg.id())) &&
+                  std::get<Reg>(assigned.at(merge_reg.id())).is_physical()) {
+                Reg assigned_merge_reg = std::get<Reg>(assigned.at(merge_reg.id()));
+                if ((free_mask & (1 << assigned_merge_reg.id())) != 0) {
+                  assigned.at(reg.id()) = assigned_merge_reg;
+                  merged = true;
+                  break;
+                }
+              } 
+              
+              uint16_t merge_free_mask = free_mask;
+              for (Reg conflict : conflicts.at(merge_reg.id())) {
+                if (std::holds_alternative<Reg>(assigned.at(conflict.id()))) {
+                  Reg assigned_conflict = std::get<Reg>(assigned.at(conflict.id()));
+                  if (assigned_conflict.is_physical()) {
+                    merge_free_mask &= ~(1 << assigned_conflict.id());
+                  }
+                }
+              }
+
+              if (merge_free_mask == 0) {
+                continue; // No free registers for this merge candidate
+              }
+
+              free_mask = merge_free_mask;
+            }
+          }
+
+          if (!merged) {
+            assigned.at(reg.id()) = Reg::phys(__builtin_ctz(free_mask));
+          }
         }
       }
 
