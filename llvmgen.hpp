@@ -1218,7 +1218,7 @@ namespace metajit {
             }
           }
         }
-        
+
         _end_blocks[block] = _builder.GetInsertBlock();
       }
     }

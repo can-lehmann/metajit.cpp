@@ -4946,7 +4946,17 @@ namespace metajit {
         defined.insert(arg);
       }
 
+      bool seen_terminator = false;
       for (Inst* inst : *block) {
+        if (seen_terminator) {
+          errors << "Block ";
+          block->write_arg(errors);
+          errors << " has instruction after terminator: ";
+          inst->write_arg(errors);
+          errors << "\n";
+          return true;
+        }
+
         for (Value* arg : inst->args()) {
           if (arg == nullptr) {
             errors << "Instruction ";
@@ -4964,6 +4974,10 @@ namespace metajit {
             errors << "\n";
             return true;
           }
+        }
+
+        if (inst->is_terminator()) {
+          seen_terminator = true;
         }
 
         defined.insert(inst);
