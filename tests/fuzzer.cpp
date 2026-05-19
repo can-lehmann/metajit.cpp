@@ -275,7 +275,15 @@ namespace metajit {
         bool result = true;
 
         try {
-          check_codegen_differential("", section, *_data, 2048, true);
+          check_codegen_differential(
+            "",
+            section,
+            *_data,
+            2048,
+            true,
+            /*verify_interpreter=*/ true,
+            /*verify_aot=*/ false
+          );
         } catch (unittest::AssertionError& err) {
           section->write(std::cout);
           std::cerr << "Test failed: " << err.message() << std::endl;
