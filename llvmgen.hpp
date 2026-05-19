@@ -322,6 +322,10 @@ namespace metajit {
     }
 
     llvm::Value* emit_const_prop(Inst* inst) {
+      // all the cases that use the instruction args and call emit_arg need to
+      // emit an LLVM Freeze instruction to deal with the possibility of the
+      // argument being a poison value. the result of this method must not be
+      // poison.
       if (dynamic_cast<FreezeInst*>(inst)) {
         return llvm::ConstantInt::getTrue(_context);
       } else if (dynamic_cast<AssumeConstInst*>(inst)) {
@@ -337,7 +341,7 @@ namespace metajit {
         llvm::Value* true_const = is_const(select->arg(1));
         llvm::Value* false_const = is_const(select->arg(2));
         llvm::Value* cond = emit_arg(select->arg(0));
-        return _builder.CreateOr(
+        return _builder.CreateFreeze(_builder.CreateOr(
           _builder.CreateAnd(
             cond_const,
             _builder.CreateSelect(cond, true_const, false_const) // Short-circuit
@@ -352,7 +356,7 @@ namespace metajit {
               emit_arg(select->arg(2))
             )
           )
-        );
+        ));
       } else if (dynmatch(AndInst, and_inst, inst)) {
         llvm::Value* a_const = is_const(and_inst->arg(0));
         llvm::Value* b_const = is_const(and_inst->arg(1));
@@ -370,7 +374,7 @@ namespace metajit {
           _builder.CreateICmpEQ(b, llvm::ConstantInt::get(b->getType(), zero))
         ));
 
-        return res;
+        return _builder.CreateFreeze(res);
       } else if (dynmatch(OrInst, or_inst, inst)) {
         llvm::Value* a_const = is_const(or_inst->arg(0));
         llvm::Value* b_const = is_const(or_inst->arg(1));
@@ -388,7 +392,7 @@ namespace metajit {
           _builder.CreateICmpEQ(b, llvm::ConstantInt::get(b->getType(), ones))
         ));
 
-        return res;
+        return _builder.CreateFreeze(res);
       } else {
         if (inst->has_side_effect() ||
             inst->is_terminator() ||
