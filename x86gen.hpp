@@ -478,6 +478,13 @@ namespace metajit {
     enum class Mode {
       JIT, AOT
     };
+
+    struct Stats {
+      Timer total;
+      Timer isel;
+      Timer regalloc;
+      Timer peephole;
+    };
   private:
     struct Interval {
       size_t min = 0;
@@ -525,6 +532,10 @@ namespace metajit {
 
     NameMap<Reg> _vregs;
     std::vector<VRegInfo> _vreg_info;
+
+    #ifdef METAJIT_STATS
+    Stats _stats;
+    #endif
     
     void memory_deps() {
       for (Block* block : *_section) {
@@ -1946,6 +1957,16 @@ namespace metajit {
     }
 
     void run(const std::vector<Reg>& input_pregs) {
+      #ifdef METAJIT_STATS
+      _stats.total.start();
+      #define with_timer(name, code) \
+        _stats.name.start(); \
+        code; \
+        _stats.name.stop();
+      #else
+      #define with_timer(name, code) code
+      #endif
+
       _memory_deps.init(_section);
       _vregs.init(_section);
 
@@ -1962,17 +1983,22 @@ namespace metajit {
       }
 
       memory_deps();
-      isel();
+      with_timer(isel, isel());
       autoname_insts();
 
       if (_mode == Mode::JIT) {
-        regalloc();
+        with_timer(regalloc, regalloc());
       } else {
-        graph_coloring_regalloc();
+        with_timer(regalloc, graph_coloring_regalloc());
       }
 
       insert_stack_frame();
-      peephole();
+      with_timer(peephole, peephole());
+
+      #ifdef METAJIT_STATS
+      _stats.total.stop();
+      #endif
+      #undef with_timer
     }
   public:
     X86CodeGen(Section* section, const std::vector<Reg>& input_pregs, Mode mode = Mode::JIT):
@@ -2226,5 +2252,11 @@ namespace metajit {
       }
       return count;
     }
+
+    #ifdef METAJIT_STATS
+    Stats stats() const { return _stats; }
+    #else
+    Stats stats() const { return Stats(); }
+    #endif
   };
 }
