@@ -79,6 +79,9 @@ tests/fuzzer: tests/fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 tests/test_tv: tests/test_tv.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ -g ${CFLAGS} ${Z3_FLAGS} -o $@ $<
 
+tests/test_genext: tests/test_genext.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${TEST_CFLAGS} -o $@ $<
+
 jitir.hpp: jitir.py jitir.tmpl.hpp
 	PYTHONPATH="../lwir.cpp" python3 $<
 
@@ -95,6 +98,7 @@ clean:
 	-rm tests/test_source
 	-rm tests/test_reader
 	-rm tests/test_reentry
+	-rm tests/test_genext
 	-rm tests/fuzzer
 	-rm jitir.hpp
 	-rm jitir_llvmapi.hpp

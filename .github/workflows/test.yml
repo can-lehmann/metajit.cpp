@@ -46,3 +46,7 @@ jobs:
         run: |
           make tests/fuzzer
           tests/fuzzer --number-of-runs=100
+      - name: Fuzz generating extensions
+        working-directory: metajit.cpp
+        run: |
+          tests/fuzzer --test-genext --number-of-runs=50

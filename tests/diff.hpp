@@ -20,6 +20,7 @@
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Support/SourceMgr.h"
 
@@ -105,7 +106,7 @@ namespace metajit {
         Type type = Type::Void;
         Value* value = nullptr;
       };
-    private:
+    protected:
       Builder* _builder = nullptr;
       Arg* _data = nullptr;
       size_t _data_size = 0;
@@ -273,6 +274,10 @@ namespace metajit {
       
       llvm::ExitOnError ExitOnErr;
 
+      if (llvm::verifyModule(*module, &llvm::errs())) {
+        throw std::runtime_error("Generated LLVM IR module verification failed");
+      }
+
       std::unique_ptr<llvm::orc::LLJIT> jit = ExitOnErr(llvm::orc::LLJITBuilder().create());
       ExitOnErr(metajit::map_symbols(*jit));
 
@@ -416,6 +421,51 @@ namespace metajit {
       }
     }
 
+    class TraceTestData : public TestData {
+    private:
+      std::vector<size_t> _static_input_offsets;
+      std::vector<RandomRange> _static_input_ranges;
+      std::vector<Value*> _frozen_values;
+    public:
+      TraceTestData() {}
+      TraceTestData(Builder& builder): TestData(builder) {}
+
+      const std::vector<size_t>& static_input_offsets() const { return _static_input_offsets; }
+      const std::vector<RandomRange>& static_input_ranges() const { return _static_input_ranges; }
+
+      Value* static_input(RandomRange random_range) {
+        size_t offset = alloc_input(random_range);
+        _static_input_offsets.push_back(offset);
+        _static_input_ranges.push_back(random_range);
+
+        Value* input_val = _builder->build_load(
+          _data,
+          random_range.type(),
+          LoadFlags::None,
+          AliasingGroup(0),
+          offset
+        );
+
+        // Update the inputs map with the actual value
+        _inputs[offset].value = input_val;
+
+        Value* frozen = _builder->build_freeze(input_val);
+        _frozen_values.push_back(frozen);
+        return frozen;
+      }
+
+      void gen_static(uint8_t* data) {
+        // Generate random values for static inputs only
+        for (size_t idx = 0; idx < _static_input_offsets.size(); idx++) {
+          size_t offset = _static_input_offsets[idx];
+          uint64_t value = _static_input_ranges[idx].gen();
+          for (size_t it = 0; it < type_size(_static_input_ranges[idx].type()); it++) {
+            data[offset + it] = (uint8_t)((value >> (it * 8)) & 0xFF);
+          }
+        }
+      }
+    };
+
     class DiffTest: public unittest::BaseTest<DiffTest> {
     private:
       std::string _output_path;
@@ -447,7 +497,9 @@ namespace metajit {
           TestData data(builder);
           body(builder, data);
 
-          builder.build_exit();
+          if (!builder.block()->terminator()) {
+            builder.build_exit();
+          }
 
           unittest_assert(!section->verify(std::cout));
 
@@ -659,7 +711,9 @@ namespace metajit {
           TestData data(builder);
           body(builder, data);
 
-          builder.build_exit();
+          if (!builder.block()->terminator()) {
+            builder.build_exit();
+          }
 
           {
             std::ofstream stream(_output_path + "/" + name() + ".before.jitir");
@@ -693,9 +747,232 @@ namespace metajit {
     public:
       OptTestSuite(const std::string& output_path):
         unittest::Suite(), _output_path(output_path) {}
-      
+
       OptTest opt_test(const std::string& name) {
         return OptTest(name, _output_path).suite(*this);
+      }
+    };
+
+    inline void check_trace_differential(std::string output_path,
+                                         Section* section,
+                                         TraceTestData& data,
+                                         size_t static_sample_count = 16,
+                                         size_t dynamic_sample_count = 64) {
+      section->autoname();
+
+      if (!output_path.empty()) {
+        std::ofstream stream(output_path + ".original.jitir");
+        section->write(stream);
+      }
+
+      // Generate the generating extension
+      llvm::LLVMContext llvm_context;
+      std::unique_ptr<llvm::Module> genext_module = std::make_unique<llvm::Module>("genext_module", llvm_context);
+      LLVMCodeGen::run(section, genext_module.get(), "genext_func", true);
+
+      if (!output_path.empty()) {
+        std::error_code error_code;
+        llvm::raw_fd_ostream stream(output_path + "_genext_unopt.ll", error_code, llvm::sys::fs::OF_None);
+        genext_module->print(stream, nullptr);
+      }
+
+      // Optimize the generating extension at O3 to trigger potential bugs
+      LLVMCodeGen::optimize_llvm(*genext_module, llvm::OptimizationLevel::O3);
+
+      if (!output_path.empty()) {
+        std::error_code error_code;
+        llvm::raw_fd_ostream stream(output_path + "_genext.ll", error_code, llvm::sys::fs::OF_None);
+        genext_module->print(stream, nullptr);
+      }
+
+      llvm::ExitOnError ExitOnErr;
+      std::unique_ptr<llvm::orc::LLJIT> jit = ExitOnErr(llvm::orc::LLJITBuilder().create());
+      ExitOnErr(metajit::map_symbols(*jit));
+
+      if (llvm::verifyModule(*genext_module, &llvm::errs())) {
+        throw std::runtime_error("Generated LLVM IR module verification failed");
+      }
+
+      ExitOnErr(jit->addIRModule(llvm::orc::ThreadSafeModule(
+        std::move(genext_module),
+        std::make_unique<llvm::LLVMContext>()
+      )));
+
+      using GenExtFunc = void(*)(uint8_t*, void*);
+      GenExtFunc genext_func = ExitOnErr(jit->lookup("genext_func")).toPtr<GenExtFunc>();
+
+      uint8_t* static_data = new uint8_t[data.data_size()]();
+
+      for (size_t static_sample = 0; static_sample < static_sample_count; static_sample++) {
+        // Pick random values for static inputs
+        data.gen_static(static_data);
+
+        // Execute generating extension to produce trace
+        Context trace_context;
+        Allocator trace_allocator;
+        Section* trace_section = new Section(trace_context, trace_allocator);
+        TraceBuilder trace_builder(trace_section);
+        std::vector<Type> args = {Type::Ptr};
+        trace_builder.move_to_end(trace_builder.build_block(args));
+
+        genext_func(static_data, &trace_builder);
+
+        trace_builder.build_exit();
+
+        if (!output_path.empty()) {
+          std::ofstream stream(output_path + ".trace" + std::to_string(static_sample) + ".jitir");
+          trace_section->write(stream);
+        }
+
+        if (trace_section->verify(std::cout)) {
+          std::ostringstream stream;
+          stream << "Trace verification failed for static sample " << static_sample << "\n";
+          trace_section->write(stream);
+          throw unittest::AssertionError(
+            "Generated trace verification failed",
+            __LINE__,
+            __FILE__,
+            stream.str()
+          );
+        }
+
+        // Now test the trace with random dynamic inputs
+        uint8_t* original_data = new uint8_t[data.data_size()]();
+        uint8_t* trace_data = new uint8_t[data.data_size()]();
+
+        for (size_t dynamic_sample = 0; dynamic_sample < dynamic_sample_count; dynamic_sample++) {
+          // Generate random values for all inputs (including static ones)
+          data.gen(original_data);
+          // Copy static input values to original_data
+          for (size_t idx = 0; idx < data.static_input_offsets().size(); idx++) {
+            size_t offset = data.static_input_offsets()[idx];
+            Type type = data.static_input_ranges()[idx].type();
+            for (size_t it = 0; it < type_size(type); it++) {
+              original_data[offset + it] = static_data[offset + it];
+            }
+          }
+          std::copy(original_data, original_data + data.data_size(), trace_data);
+
+          // Run original section
+          Interpreter original_interp(section, {
+            Interpreter::Bits::constant(original_data)
+          });
+          Interpreter::Event original_event = original_interp.run();
+
+          // Run traced section
+          Interpreter trace_interp(trace_section, {
+            Interpreter::Bits::constant(trace_data)
+          });
+          Interpreter::Event trace_event = trace_interp.run();
+
+          if (original_event != Interpreter::Event::Exit) {
+            throw unittest::AssertionError(
+              "Original interpreter did not exit cleanly",
+              __LINE__,
+              __FILE__
+            );
+          }
+
+          if (trace_event != Interpreter::Event::Exit) {
+            throw unittest::AssertionError(
+              "Trace interpreter did not exit cleanly",
+              __LINE__,
+              __FILE__
+            );
+          }
+
+          // Compare outputs
+          for (const TestData::Output& output : data.outputs()) {
+            bool is_equal = true;
+            for (size_t it = 0; it < type_size(output.type); it++) {
+              if (original_data[output.offset + it] != trace_data[output.offset + it]) {
+                is_equal = false;
+                break;
+              }
+            }
+            if (!is_equal) {
+              std::ostringstream stream;
+              stream << "Static sample: " << static_sample << ", Dynamic sample: " << dynamic_sample << "\n";
+              stream << "Inputs:\n";
+              data.write_inputs(stream, original_data);
+              stream << "Original Output:\n";
+              data.write_outputs(stream, original_data);
+              stream << "Trace Output:\n";
+              data.write_outputs(stream, trace_data);
+              stream << "\n";
+              throw unittest::AssertionError(
+                "Output mismatch between original and trace",
+                __LINE__,
+                __FILE__,
+                stream.str()
+              );
+            }
+          }
+        }
+
+        delete[] original_data;
+        delete[] trace_data;
+        delete trace_section;
+      }
+
+      delete[] static_data;
+    }
+
+    class GenExtTest: public unittest::BaseTest<GenExtTest> {
+    private:
+      std::string _output_path;
+      size_t _static_sample_count = 16;
+      size_t _dynamic_sample_count = 64;
+    public:
+      GenExtTest(const std::string& name, const std::string& output_path):
+        unittest::BaseTest<GenExtTest>(name), _output_path(output_path) {}
+
+      GenExtTest&& samples(size_t static_samples, size_t dynamic_samples) && {
+        _static_sample_count = static_samples;
+        _dynamic_sample_count = dynamic_samples;
+        return std::move(*this);
+      }
+
+      void run(const std::function<void(Builder&, TraceTestData&)>& body) && {
+        unittest::BaseTest<GenExtTest>::run([&]() {
+          Context context;
+          Allocator allocator;
+          Section* section = new Section(context, allocator);
+
+          Builder builder(section);
+          builder.move_to_end(builder.build_block({Type::Ptr}));
+
+          TraceTestData data(builder);
+          body(builder, data);
+
+          if (!builder.block()->terminator()) {
+            builder.build_exit();
+          }
+
+          unittest_assert(!section->verify(std::cout));
+
+          check_trace_differential(
+            _output_path + "/" + name(),
+            section,
+            data,
+            _static_sample_count,
+            _dynamic_sample_count
+          );
+
+          delete section;
+        });
+      }
+    };
+
+    class GenExtTestSuite: public unittest::Suite {
+    private:
+      std::string _output_path;
+    public:
+      GenExtTestSuite(const std::string& output_path):
+        unittest::Suite(), _output_path(output_path) {}
+
+      GenExtTest gen_ext_test(const std::string& name) {
+        return GenExtTest(name, _output_path).suite(*this);
       }
     };
   }

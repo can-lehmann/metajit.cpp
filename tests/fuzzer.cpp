@@ -18,10 +18,11 @@
 
 namespace metajit {
   namespace test {
+    template<typename DataType = TestData>
     class Fuzzer {
     private:
       Builder* _builder = nullptr;
-      TestData* _data = nullptr;
+      DataType* _data = nullptr;
       std::vector<Value*> _all_values;
       size_t _depth = 0;
 
@@ -86,9 +87,14 @@ namespace metajit {
               random_range.type()
             );
           case 12:
-            return _builder->build_assume_const(
-              gen(random_range)
-            );
+            // AssumeConst is can lead to misoptimization in genext testing
+            if constexpr (std::is_same_v<DataType, TraceTestData>) {
+              return gen(random_range);
+            } else {
+              return _builder->build_assume_const(
+                gen(random_range)
+              );
+            }
           default:
             assert(false && "Unreachable");
 
@@ -126,9 +132,13 @@ namespace metajit {
               gen(random_range)
             );
           case 7:
-            return _builder->build_assume_const(
-              gen(random_range)
-            );
+            if constexpr (std::is_same_v<DataType, TraceTestData>) {
+              return gen(random_range);
+            } else {
+              return _builder->build_assume_const(
+                gen(random_range)
+              );
+            }
           default:
             assert(false && "Unreachable");
 
@@ -137,9 +147,18 @@ namespace metajit {
         }
       }
 
+      Value* gen_input(RandomRange random_range) {
+        if constexpr (std::is_same_v<DataType, TraceTestData>) {
+          if (rand() % 3 == 0) {  // 33% chance of static input for genext testing
+            return _data->static_input(random_range);
+          }
+        }
+        return _data->input(random_range);
+      }
+
       Value* gen_ptr(RandomRange random_range) {
         switch (rand() % 4) {
-          case 0: return _data->input(random_range);
+          case 0: return gen_input(random_range);
           case 1:
             return _builder->build_add_ptr(
               gen(RandomRange(Type::Ptr)),
@@ -152,9 +171,13 @@ namespace metajit {
               gen(random_range)
             );
           case 3:
-            return _builder->build_assume_const(
-              gen(random_range)
-            );
+            if constexpr (std::is_same_v<DataType, TraceTestData>) {
+              return gen_input(random_range);
+            } else {
+              return _builder->build_assume_const(
+                gen(random_range)
+              );
+            }
           default:
             assert(false && "Unreachable");
         }
@@ -176,7 +199,7 @@ namespace metajit {
         _depth++;
         if (_depth >= _max_depth) {
           _depth--;
-          return _data->input(random_range);
+          return gen_input(random_range);
         }
 
         Value* result = nullptr;
@@ -194,7 +217,7 @@ namespace metajit {
         if (!result) {
           switch (rand() % 9) {
             case 0: result = random_range.gen_const(*_builder); break;
-            case 1: result = _data->input(random_range); break;
+            case 1: result = gen_input(random_range); break;
             default:
               switch (random_range.type()) {
                 case Type::Bool:
@@ -255,7 +278,7 @@ namespace metajit {
           Type::Ptr
         }));
 
-        _data = new TestData(*_builder);
+        _data = new DataType(*_builder);
         _depth = 0;
         _data->output(gen(RandomRange(gen_type())));
         if (_all_values.size()) {
@@ -275,15 +298,19 @@ namespace metajit {
         bool result = true;
 
         try {
-          check_codegen_differential(
-            "",
-            section,
-            *_data,
-            2048,
-            true,
-            /*verify_interpreter=*/ true,
-            /*verify_aot=*/ false
-          );
+          if constexpr (std::is_same_v<DataType, TraceTestData>) {
+            check_trace_differential("", section, *_data, 4, 256);
+          } else {
+            check_codegen_differential(
+              "",
+              section,
+              *_data,
+              2048,
+              true,
+              /*verify_interpreter=*/ true,
+              /*verify_aot=*/ false
+            );
+          }
         } catch (unittest::AssertionError& err) {
           section->write(std::cout);
           std::cerr << "Test failed: " << err.message() << std::endl;
@@ -308,6 +335,35 @@ cl::OptionCategory category("Options");
 
 cl::opt<int> seed("seed", cl::desc("seed for the rng, to reproduce crashes"), cl::cat(category));
 cl::opt<int> number_of_runs("number-of-runs", cl::desc("How many random programs to test (default is run forever)"), cl::cat(category));
+cl::opt<bool> test_genext("test-genext", cl::desc("Test generating extensions (meta-tracing)"), cl::cat(category));
+
+template<typename FuzzerType>
+int run_fuzzer_loop(FuzzerType& fuzzer, int seed_val, int runs) {
+  using namespace metajit;
+
+  if (!seed_val) {
+    srand(time(NULL));
+  } else {
+    srand(seed_val);
+    fuzzer.run_once();
+    return 0;
+  }
+
+  if (!runs) {
+    runs = -1;
+  }
+
+  for (int i = 0; i != runs; i++) {
+    int curr_seed = rand();
+    srand(curr_seed);
+    std::cout << "seed: " << curr_seed << "\n";
+    if (!fuzzer.run_once() && runs > 0) {
+      return -1;
+    }
+  }
+
+  return 0;
+}
 
 int main(int argc, char** argv) {
   using namespace metajit;
@@ -316,28 +372,12 @@ int main(int argc, char** argv) {
   cl::ParseCommandLineOptions(argc, argv, "fuzzer");
 
   metajit::LLVMCodeGen::initilize_llvm_jit();
-  Fuzzer fuzzer;
 
-  if (!seed) {
-    srand(time(NULL));
+  if (test_genext) {
+    Fuzzer<TraceTestData> fuzzer;
+    return run_fuzzer_loop(fuzzer, seed.getValue(), number_of_runs.getValue());
   } else {
-    srand(seed);
-    fuzzer.run_once();
-    return 0;
+    Fuzzer<TestData> fuzzer;
+    return run_fuzzer_loop(fuzzer, seed.getValue(), number_of_runs.getValue());
   }
-
-  if (!number_of_runs) {
-      number_of_runs = -1;
-  }
-
-  for (int i = 0; i != number_of_runs; i++) {
-    int curr_seed = rand();
-    srand(curr_seed);
-    std::cout << "seed: " << curr_seed << "\n";
-    if (!fuzzer.run_once() && number_of_runs > 0) {
-      return -1;
-    }
-  }
-
-  return 0;
 }

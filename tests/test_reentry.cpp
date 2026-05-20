@@ -35,7 +35,9 @@ namespace metajit {
           Builder builder(section);
           builder.move_to_end(builder.build_block({ /* result */ Type::Ptr }));
           std::vector<TestCase> test_cases = build(builder);
-          builder.build_exit();
+          if (!builder.block()->terminator()) {
+            builder.build_exit();
+          }
           section->set_ordering(BlockOrdering::Topological);
 
           assert(!section->verify(std::cerr));
