@@ -301,7 +301,15 @@ namespace metajit {
           if constexpr (std::is_same_v<DataType, TraceTestData>) {
             check_trace_differential("", section, *_data, 4, 256);
           } else {
-            check_codegen_differential("", section, *_data, 2048, true);
+            check_codegen_differential(
+              "",
+              section,
+              *_data,
+              2048,
+              true,
+              /*verify_interpreter=*/ true,
+              /*verify_aot=*/ false
+            );
           }
         } catch (unittest::AssertionError& err) {
           section->write(std::cout);

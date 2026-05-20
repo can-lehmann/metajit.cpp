@@ -27,6 +27,7 @@
 #include <cstring>
 #include <fstream>
 #include <algorithm>
+#include <chrono>
 
 #include "../lwir.cpp/lwir_utils.hpp"
 
@@ -132,6 +133,35 @@ namespace metajit {
   };
 
   using Allocator = ArenaAllocator;
+
+  class Timer {
+  private:
+    using Clock = std::chrono::high_resolution_clock;
+    
+    Clock::time_point _start;
+    Clock::duration _time = Clock::duration::zero();
+    bool _is_running = false;
+  public:
+    Timer() {}  
+
+    void start() {
+      assert(!_is_running && "Timer already running");
+      _start = Clock::now();
+      _is_running = true;
+    }
+
+    void stop() {
+      Clock::time_point end = Clock::now();
+      _time = end - _start;
+      assert(_is_running && "Timer not running");
+      _is_running = false;
+    }
+
+    bool is_running() const { return _is_running; }
+    Clock::duration time() const { return _time; }
+
+    size_t as_us() const { return std::chrono::duration_cast<std::chrono::microseconds>(_time).count(); }
+  };
 
   inline std::string escape_json(const std::string& string) {
     // TODO: Check that this actually covers all cases
