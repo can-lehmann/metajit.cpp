@@ -459,17 +459,39 @@ int run_fuzzer_loop(FuzzerType& fuzzer, int seed_val, int runs) {
     return 0;
   }
 
+  bool limited = runs > 0;
   if (!runs) {
     runs = -1;
   }
+
+  int passed = 0;
+  std::vector<int> failed_seeds;
 
   for (int i = 0; i != runs; i++) {
     int curr_seed = rand();
     srand(curr_seed);
     std::cout << "seed: " << curr_seed << "\n";
-    if (!fuzzer.run_once() && runs > 0) {
-      return -1;
+    if (fuzzer.run_once()) {
+      passed++;
+    } else {
+      failed_seeds.push_back(curr_seed);
+      if (!limited) {
+        return -1;
+      }
     }
+  }
+
+  if (limited) {
+    int failed = (int) failed_seeds.size();
+    std::cout << passed << " passed, " << failed << " failed";
+    if (failed) {
+      std::cout << ", seeds:";
+      for (int s : failed_seeds) {
+        std::cout << " " << s;
+      }
+    }
+    std::cout << "\n";
+    return failed ? -1 : 0;
   }
 
   return 0;
