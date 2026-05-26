@@ -349,21 +349,41 @@ namespace metajit {
         return block_data.memory_state.value();
       }
 
+      // Returns the OR of is_poison() for all value arguments of inst.
+      z3::expr input_poison(Inst* inst) {
+        z3::expr result = _context.bool_val(false);
+        for (size_t it = 0; it < inst->arg_count(); it++) {
+          result = result || emit(inst->arg(it)).is_poison();
+        }
+        return result;
+      }
+
       ValueState emit_inst(Inst* inst, Block* block) {
         if (dynamic_cast<FreezeInst*>(inst) || dynamic_cast<AssumeConstInst*>(inst)) {
           return emit(inst->arg(0));
         } else if (dynmatch(SelectInst, select, inst)) {
-          z3::expr cond = emit(select->arg(0)).value().bit2bool(0);
+          ValueState cond_state = emit(select->arg(0));
           ValueState true_val = emit(select->arg(1));
           ValueState false_val = emit(select->arg(2));
-          false_val.merge(true_val, cond);
-          return false_val;
+          z3::expr cond = cond_state.value().bit2bool(0);
+          // Value: pick based on condition
+          ValueState result(select->type(), z3::ite(cond, true_val.value(), false_val.value()));
+          // Poison: condition is poison, OR the selected branch is poison
+          result.set_poison(cond_state.is_poison() ||
+                            z3::ite(cond, true_val.is_poison(), false_val.is_poison()));
+          return result;
         } else if (dynmatch(ResizeUInst, resize_u, inst)) {
-          return resize(emit(resize_u->arg(0)), resize_u->type(), false);
+          ValueState result = resize(emit(resize_u->arg(0)), resize_u->type(), false);
+          result.set_poison(input_poison(inst));
+          return result;
         } else if (dynmatch(ResizeSInst, resize_s, inst)) {
-          return resize(emit(resize_s->arg(0)), resize_s->type(), true);
+          ValueState result = resize(emit(resize_s->arg(0)), resize_s->type(), true);
+          result.set_poison(input_poison(inst));
+          return result;
         } else if (dynmatch(ResizeXInst, resize_x, inst)) {
-          return resize(emit(resize_x->arg(0)), resize_x->type(), false);
+          ValueState result = resize(emit(resize_x->arg(0)), resize_x->type(), false);
+          result.set_poison(input_poison(inst));
+          return result;
         } else if (dynmatch(LoadInst, load, inst)) {
           ValueState pointer = emit(load->arg(0)).add_ptr(load->offset());
           return memory_state(block).load(pointer, load->type());
@@ -373,34 +393,60 @@ namespace metajit {
         } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
           ValueState pointer = emit(add_ptr->arg(0));
           ValueState offset = emit(add_ptr->arg(1));
-          return pointer.add_ptr(offset);
+          ValueState result = pointer.add_ptr(offset);
+          result.set_poison(input_poison(inst));
+          return result;
         }
 
         #define binop(InstType, expression) \
           else if (dynamic_cast<InstType*>(inst)) { \
             z3::expr a = emit(inst->arg(0)).value(); \
             z3::expr b = emit(inst->arg(1)).value(); \
-            return ValueState(inst->type(), expression); \
+            ValueState result(inst->type(), expression); \
+            result.set_poison(input_poison(inst)); \
+            return result; \
           }
-        
+
+        #define binop_divmod(InstType, expression) \
+          else if (dynamic_cast<InstType*>(inst)) { \
+            z3::expr a = emit(inst->arg(0)).value(); \
+            z3::expr b = emit(inst->arg(1)).value(); \
+            ValueState result(inst->type(), expression); \
+            result.set_poison(input_poison(inst) || \
+                              b == _context.bv_val(0, type_width(inst->type()))); \
+            return result; \
+          }
+
+        #define binop_shift(InstType, expression) \
+          else if (dynamic_cast<InstType*>(inst)) { \
+            z3::expr a = emit(inst->arg(0)).value(); \
+            z3::expr b = emit(inst->arg(1)).value(); \
+            ValueState result(inst->type(), expression); \
+            result.set_poison(input_poison(inst) || \
+                              z3::uge(b, _context.bv_val(type_width(inst->type()), type_width(inst->type())))); \
+            return result; \
+          }
+
         binop(AddInst, a + b)
         binop(SubInst, a - b)
         binop(MulInst, a * b)
-        binop(DivSInst, z3::sdiv(a, b))
-        binop(DivUInst, z3::udiv(a, b))
-        binop(ModSInst, z3::srem(a, b))
-        binop(ModUInst, z3::urem(a, b))
+        binop_divmod(DivSInst, a / b)
+        binop_divmod(DivUInst, z3::udiv(a, b))
+        binop_divmod(ModSInst, z3::srem(a, b))
+        binop_divmod(ModUInst, z3::urem(a, b))
         binop(AndInst, a & b)
         binop(OrInst, a | b)
         binop(XorInst, a ^ b)
-        binop(ShlInst, z3::shl(a, b))
-        binop(ShrUInst, z3::lshr(a, b))
-        binop(ShrSInst, z3::ashr(a, b))
+        binop_shift(ShlInst, z3::shl(a, b))
+        binop_shift(ShrUInst, z3::lshr(a, b))
+        binop_shift(ShrSInst, z3::ashr(a, b))
         binop(EqInst, bool2bit(a == b))
         binop(LtUInst, bool2bit(z3::ult(a, b)))
         binop(LtSInst, bool2bit(z3::slt(a, b)))
 
         #undef binop
+        #undef binop_divmod
+        #undef binop_shift
 
         else if (dynmatch(BranchInst, branch, inst)) {
           z3::expr cond = emit(branch->arg(0)).value().bit2bool(0);
