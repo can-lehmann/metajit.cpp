@@ -25,7 +25,7 @@ namespace metajit {
       void run(std::vector<Type> entry_args,
                std::function<Value*(Builder&)> build,
                std::function<z3::expr(z3::context&, std::vector<tv::ValueState>)> expected) {
-        
+
         unittest::BaseTest<TVTest>::run([&]() {
           Context context;
           Allocator allocator;
@@ -37,7 +37,7 @@ namespace metajit {
           builder.build_exit();
 
           section->autoname();
-          
+
           z3::context z3_context;
 
           std::vector<std::optional<size_t>> regions;
@@ -73,7 +73,7 @@ namespace metajit {
           z3::expr expected_result = expected(z3_context, z3_entry_args);
 
           solver.add((tv_result != expected_result).simplify());
-          
+
           z3::check_result check_result = solver.check();
           if (check_result == z3::sat) {
             z3::model model = solver.get_model();
@@ -85,7 +85,7 @@ namespace metajit {
             }
 
             stream << "\n";
-            
+
             stream << "TV: " << model.eval(tv_result, true) << "\n";
             stream << "Expected: " << model.eval(expected_result, true) << "\n";
 
@@ -98,6 +98,87 @@ namespace metajit {
           } else if (check_result != z3::unsat) {
             throw unittest::AssertionError("Failed to prove", __LINE__, __FILE__);
           }
+        });
+      }
+
+      // Like run(), but checks the full ValueState (both value and is_poison).
+      // The expected lambda returns a tv::ValueState with both fields set.
+      void run_valuestate(std::vector<Type> entry_args,
+               std::function<Value*(Builder&)> build,
+               std::function<tv::ValueState(z3::context&, std::vector<tv::ValueState>)> expected) {
+
+        unittest::BaseTest<TVTest>::run([&]() {
+          Context context;
+          Allocator allocator;
+          Section* section = new Section(context, allocator);
+
+          Builder builder(section);
+          builder.move_to_end(builder.build_block(entry_args));
+          Value* result = build(builder);
+          builder.build_exit();
+
+          section->autoname();
+
+          z3::context z3_context;
+
+          std::vector<std::optional<size_t>> regions;
+          for (Type type : entry_args) {
+            regions.emplace_back();
+          }
+          tv::MemoryState memory_state(z3_context, regions);
+
+          std::vector<tv::ValueState> z3_entry_args;
+          size_t region_id = 0;
+
+          for (size_t it = 0; it < entry_args.size(); it++) {
+            tv::ValueState arg_state(
+              entry_args[it],
+              z3_context.bv_const(
+                ("arg" + std::to_string(it)).c_str(),
+                type_width(entry_args[it])
+              )
+            );
+            if (entry_args[it] == Type::Ptr) {
+              arg_state.set_provenance(z3_context.bv_val(
+                region_id++, memory_state.provenance_width()
+              ));
+            }
+            z3_entry_args.push_back(arg_state);
+          }
+
+          tv::Z3CodeGen codegen(section, z3_context, z3_entry_args, memory_state);
+          tv::ValueState tv_result = codegen.emit(result);
+          tv::ValueState expected_result = expected(z3_context, z3_entry_args);
+
+          auto check = [&](const char* field, z3::expr tv_expr, z3::expr expected_expr) {
+            z3::solver solver(z3_context);
+            solver.add((tv_expr != expected_expr).simplify());
+            z3::check_result check_result = solver.check();
+            if (check_result == z3::sat) {
+              z3::model model = solver.get_model();
+              std::ostringstream stream;
+              stream << "Arguments:\n";
+              for (Arg* arg : section->entry()->args()) {
+                tv::ValueState state = codegen.emit(arg).eval(model);
+                stream << arg->name() << " = " << state.value() << "\n";
+              }
+              stream << "\n";
+              stream << "Field: " << field << "\n";
+              stream << "TV: " << model.eval(tv_expr, true) << "\n";
+              stream << "Expected: " << model.eval(expected_expr, true) << "\n";
+              throw unittest::AssertionError(
+                "Counterexample found",
+                __LINE__,
+                __FILE__,
+                stream.str()
+              );
+            } else if (check_result != z3::unsat) {
+              throw unittest::AssertionError("Failed to prove", __LINE__, __FILE__);
+            }
+          };
+
+          check("value", tv_result.value(), expected_result.value());
+          check("is_poison", tv_result.is_poison(), expected_result.is_poison());
         });
       }
     };
@@ -204,6 +285,24 @@ int main() {
     return builder.build_load(builder.entry_arg(1), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
   }, [](z3::context& context, std::vector<tv::ValueState> args) {
     return z3::ite(z3::slt(args[0].value(), context.bv_val(0, 32)), -args[0].value(), args[0].value());
+  });
+
+  // Non-poison values have is_poison == false
+  suite.tv_test("add_not_poison").run_valuestate({Type::Int32, Type::Int32}, [](Builder& builder) {
+    return builder.build_add(builder.entry_arg(0), builder.entry_arg(1));
+  }, [](z3::context& context, std::vector<tv::ValueState> args) {
+    tv::ValueState result(Type::Int32, args[0].value() + args[1].value());
+    // is_poison defaults to false
+    return result;
+  });
+
+  // Poison literal has is_poison == true and can be any concrete value
+  suite.tv_test("poison_literal").run_valuestate({}, [](Builder& builder) {
+    return builder.section()->context().build_poison(Type::Int32);
+  }, [](z3::context& context, std::vector<tv::ValueState> args) {
+    tv::ValueState result(Type::Int32, context.bv_val(0, 32));
+    result.set_poison(context.bool_val(true));
+    return result;
   });
 
   return suite.finish();

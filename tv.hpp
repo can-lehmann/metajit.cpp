@@ -37,19 +37,25 @@ namespace metajit {
     private:
       Type _type;
       z3::expr _value;
+      z3::expr _is_poison;
       std::optional<z3::expr> _provenance;
     public:
-      ValueState(Type type, z3::expr value): _type(type), _value(value) {}
+      ValueState(Type type, z3::expr value):
+        _type(type), _value(value), _is_poison(value.ctx().bool_val(false)) {}
       ValueState(Type type, z3::expr value, z3::expr provenance):
-        _type(type), _value(value), _provenance(provenance) {}
+        _type(type), _value(value), _is_poison(value.ctx().bool_val(false)),
+        _provenance(provenance) {}
 
       static ValueState invalid(z3::context& context) {
         return ValueState(Type::Bool, z3::expr(context));
       }
-      
+
       Type type() const { return _type; }
 
       z3::expr value() const { return _value; }
+
+      z3::expr is_poison() const { return _is_poison; }
+      void set_poison(z3::expr is_poison) { _is_poison = is_poison; }
 
       bool has_provenance() const { return _provenance.has_value(); }
       z3::expr provenance() const { return _provenance.value(); }
@@ -68,6 +74,7 @@ namespace metajit {
       void merge(const ValueState& other, z3::expr enable) {
         assert(_type == other._type);
         _value = z3::ite(enable, other._value, _value);
+        _is_poison = z3::ite(enable, other._is_poison, _is_poison);
         if (has_provenance() || other.has_provenance()) {
           size_t provenance_width;
           if (has_provenance()) {
@@ -104,6 +111,7 @@ namespace metajit {
       ValueState eval(z3::model& model) {
         ValueState result = *this;
         result._value = model.eval(_value, true);
+        result._is_poison = model.eval(_is_poison, true);
         if (has_provenance()) {
           result._provenance = model.eval(provenance(), true);
         }
@@ -276,6 +284,13 @@ namespace metajit {
             constant->type(),
             _context.bv_val(constant->value(), type_width(constant->type()))
           );
+        } else if (dynmatch(Poison, poison, value)) {
+          ValueState result(
+            poison->type(),
+            _context.bv_val(0, type_width(poison->type()))
+          );
+          result.set_poison(_context.bool_val(true));
+          return result;
         } else if (value->is_named()) {
           return _values.at((NamedValue*) value);
         } else {
