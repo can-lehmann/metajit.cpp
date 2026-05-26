@@ -260,12 +260,14 @@ namespace metajit {
 
       struct BlockData {
         z3::expr active;
+        z3::expr ub;
         std::vector<ValueState> args;
         std::optional<MemoryState> memory_state;
 
         BlockData(z3::context& context, Block* block):
-            active(context.bool_val(false)) {
-          
+            active(context.bool_val(false)),
+            ub(context.bool_val(false)) {
+
           if (block) {
             for (Arg* arg : block->args()) {
               args.push_back(ValueState(arg->type(), context.bv_val(0, type_width(arg->type()))));
@@ -385,11 +387,24 @@ namespace metajit {
           result.set_poison(input_poison(inst));
           return result;
         } else if (dynmatch(LoadInst, load, inst)) {
-          ValueState pointer = emit(load->arg(0)).add_ptr(load->offset());
-          return memory_state(block).load(pointer, load->type());
+          ValueState ptr_state = emit(load->arg(0));
+          _blocks.at(block).ub = _blocks.at(block).ub ||
+            (_blocks.at(block).active && ptr_state.is_poison());
+          if (ptr_state.has_provenance()) {
+            ValueState pointer = ptr_state.add_ptr(load->offset());
+            return memory_state(block).load(pointer, load->type());
+          }
+          return ValueState(load->type(), _context.bv_val(0, type_width(load->type())));
         } else if (dynmatch(StoreInst, store, inst)) {
-          ValueState pointer = emit(store->arg(0)).add_ptr(store->offset());
-          memory_state(block).store(pointer, emit(store->arg(1)));
+          ValueState ptr_state = emit(store->arg(0));
+          ValueState val_state = emit(store->arg(1));
+          _blocks.at(block).ub = _blocks.at(block).ub ||
+            (_blocks.at(block).active &&
+             (ptr_state.is_poison() || val_state.is_poison()));
+          if (ptr_state.has_provenance()) {
+            ValueState pointer = ptr_state.add_ptr(store->offset());
+            memory_state(block).store(pointer, val_state);
+          }
         } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
           ValueState pointer = emit(add_ptr->arg(0));
           ValueState offset = emit(add_ptr->arg(1));
@@ -449,7 +464,10 @@ namespace metajit {
         #undef binop_shift
 
         else if (dynmatch(BranchInst, branch, inst)) {
-          z3::expr cond = emit(branch->arg(0)).value().bit2bool(0);
+          ValueState cond_state = emit(branch->arg(0));
+          z3::expr cond = cond_state.value().bit2bool(0);
+          _blocks.at(block).ub = _blocks.at(block).ub ||
+            (_blocks.at(block).active && cond_state.is_poison());
           enter(branch->true_block(), block, cond, {});
           enter(branch->false_block(), block, !cond, {});
         } else if (dynmatch(JumpInst, jump, inst)) {
@@ -477,6 +495,16 @@ namespace metajit {
         }
       }
     public:
+      // Returns a Z3 boolean that is true iff any reachable path through the
+      // section hits undefined behavior (branching/storing/loading on poison).
+      z3::expr has_ub() const {
+        z3::expr result = _context.bool_val(false);
+        for (const auto& [block, data] : _blocks) {
+          result = result || data.ub;
+        }
+        return result;
+      }
+
       Z3CodeGen(Section* section,
                 z3::context& context,
                 std::vector<ValueState> entry_args,
