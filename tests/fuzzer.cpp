@@ -435,8 +435,17 @@ cl::OptionCategory category("Options");
 
 cl::opt<int> seed("seed", cl::desc("seed for the rng, to reproduce crashes"), cl::cat(category));
 cl::opt<int> number_of_runs("number-of-runs", cl::desc("How many random programs to test (default is run forever)"), cl::cat(category));
-cl::opt<bool> test_genext("test-genext", cl::desc("Test generating extensions (meta-tracing)"), cl::cat(category));
-cl::opt<bool> test_tv("test-tv", cl::desc("Test optimization correctness using translation validation"), cl::cat(category));
+
+enum class FuzzerMode { Regular, Trace, TV };
+cl::opt<FuzzerMode> mode("mode",
+  cl::desc("Fuzzer mode"),
+  cl::values(
+    clEnumValN(FuzzerMode::Regular, "regular", "Test codegen correctness (default)"),
+    clEnumValN(FuzzerMode::Trace,   "trace",   "Test generating extensions (meta-tracing)"),
+    clEnumValN(FuzzerMode::TV,      "tv",      "Test optimization correctness using translation validation")
+  ),
+  cl::init(FuzzerMode::Regular),
+  cl::cat(category));
 
 template<typename FuzzerType>
 int run_fuzzer_loop(FuzzerType& fuzzer, int seed_val, int runs) {
@@ -474,14 +483,18 @@ int main(int argc, char** argv) {
 
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
-  if (test_genext) {
-    Fuzzer<TraceTestData> fuzzer;
-    return run_fuzzer_loop(fuzzer, seed.getValue(), number_of_runs.getValue());
-  } else if (test_tv) {
-    Fuzzer<tv::TVTestData> fuzzer;
-    return run_fuzzer_loop(fuzzer, seed.getValue(), number_of_runs.getValue());
-  } else {
-    Fuzzer<TestData> fuzzer;
-    return run_fuzzer_loop(fuzzer, seed.getValue(), number_of_runs.getValue());
+  switch (mode) {
+    case FuzzerMode::Trace: {
+      Fuzzer<TraceTestData> fuzzer;
+      return run_fuzzer_loop(fuzzer, seed.getValue(), number_of_runs.getValue());
+    }
+    case FuzzerMode::TV: {
+      Fuzzer<tv::TVTestData> fuzzer;
+      return run_fuzzer_loop(fuzzer, seed.getValue(), number_of_runs.getValue());
+    }
+    case FuzzerMode::Regular: {
+      Fuzzer<TestData> fuzzer;
+      return run_fuzzer_loop(fuzzer, seed.getValue(), number_of_runs.getValue());
+    }
   }
 }
