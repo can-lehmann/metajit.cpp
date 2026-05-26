@@ -14,6 +14,7 @@
 
 #include <iostream>
 #include "../jitir.hpp"
+#include "../tv.hpp"
 #include "diff.hpp"
 
 namespace metajit {
@@ -24,6 +25,7 @@ namespace metajit {
       Builder* _builder = nullptr;
       DataType* _data = nullptr;
       std::vector<Value*> _all_values;
+      std::vector<Value*> _tv_inputs; // pre-allocated inputs for TVTestData
       size_t _depth = 0;
 
       size_t _max_depth = 16;
@@ -153,10 +155,32 @@ namespace metajit {
             return _data->static_input(random_range);
           }
         }
-        return _data->input(random_range);
+        if constexpr (std::is_same_v<DataType, tv::TVTestData>) {
+          // Pick a random pre-allocated input of the right type
+          for (size_t i = rand() % _tv_inputs.size(); i < _tv_inputs.size(); i++) {
+            if (_tv_inputs[i]->type() == random_range.type()) {
+              return _tv_inputs[i];
+            }
+          }
+          // Wrap around from the beginning
+          for (Value* input : _tv_inputs) {
+            if (input->type() == random_range.type()) {
+              return input;
+            }
+          }
+          // Fallback: no input of this type, return a constant
+          return random_range.gen_const(*_builder);
+        } else {
+          return _data->input(random_range);
+        }
       }
 
       Value* gen_ptr(RandomRange random_range) {
+        if constexpr (std::is_same_v<DataType, tv::TVTestData>) {
+          // For TVTestData, the only valid pointer is the output buffer,
+          // which we don't expose for computation. Just return a constant.
+          return random_range.gen_const(*_builder);
+        }
         switch (rand() % 4) {
           case 0: return gen_input(random_range);
           case 1:
@@ -269,22 +293,101 @@ namespace metajit {
       }
 
       bool run_once() {
+        if constexpr (std::is_same_v<DataType, tv::TVTestData>) {
+          return run_once_tv();
+        } else {
+          Context context;
+          Allocator allocator;
+          Section* section = new Section(context, allocator);
+
+          _builder = new Builder(section);
+          _builder->move_to_end(_builder->build_block({
+            Type::Ptr
+          }));
+
+          _data = new DataType(*_builder);
+          _depth = 0;
+          _data->output(gen(RandomRange(gen_type())));
+          if (_all_values.size()) {
+            for (int i = 0; i < 5; i++) {
+              // output five random other values
+              _data->output(_all_values[rand() % _all_values.size()]);
+            }
+          }
+          assert(_depth == 0);
+
+          _builder->build_exit();
+
+          if (section->verify(std::cout)) {
+            exit(1);
+          }
+
+          bool result = true;
+
+          try {
+            if constexpr (std::is_same_v<DataType, TraceTestData>) {
+              check_trace_differential("", section, *_data, 4, 256);
+            } else {
+              check_codegen_differential(
+                "",
+                section,
+                *_data,
+                2048,
+                true,
+                /*verify_interpreter=*/ true,
+                /*verify_aot=*/ false
+              );
+            }
+          } catch (unittest::AssertionError& err) {
+            section->write(std::cout);
+            std::cerr << "Test failed: " << err.message() << std::endl;
+            result = false;
+          }
+
+          delete _data;
+          _data = nullptr;
+          delete _builder;
+          _builder = nullptr;
+          _all_values.clear();
+          delete section;
+          return result;
+        }
+      }
+
+      bool run_once_tv() {
+        // Pre-decide input types: 4 inputs of varied non-pointer types
+        std::vector<Type> input_types = {
+          gen_int_or_bool_type(), gen_int_or_bool_type(),
+          gen_int_or_bool_type(), gen_int_or_bool_type()
+        };
+
         Context context;
         Allocator allocator;
         Section* section = new Section(context, allocator);
 
         _builder = new Builder(section);
-        _builder->move_to_end(_builder->build_block({
-          Type::Ptr
-        }));
+        _data = new tv::TVTestData(*_builder, input_types);
 
-        _data = new DataType(*_builder);
+        // Populate _tv_inputs from the entry args
+        _tv_inputs.clear();
+        for (size_t i = 0; i < input_types.size(); i++) {
+          _tv_inputs.push_back(_data->input(i));
+        }
+
         _depth = 0;
-        _data->output(gen(RandomRange(gen_type())));
-        if (_all_values.size()) {
+        // Generate outputs using non-pointer types
+        Type out_type = gen_int_or_bool_type();
+        _data->output(gen(RandomRange(out_type)));
+        // Collect non-pointer values for additional outputs
+        std::vector<Value*> non_ptr_values;
+        for (Value* v : _all_values) {
+          if (v->type() != Type::Ptr) {
+            non_ptr_values.push_back(v);
+          }
+        }
+        if (non_ptr_values.size()) {
           for (int i = 0; i < 5; i++) {
-            // output five random other values
-            _data->output(_all_values[rand() % _all_values.size()]);
+            _data->output(non_ptr_values[rand() % non_ptr_values.size()]);
           }
         }
         assert(_depth == 0);
@@ -295,25 +398,20 @@ namespace metajit {
           exit(1);
         }
 
-        bool result = true;
+        // Clone and optimize
+        Section* optimized = new Section(context, allocator);
+        Clone::run(section, optimized);
+        Simplify::run(optimized, 10);
+        DeadCodeElim::run(optimized);
 
+        bool result = true;
         try {
-          if constexpr (std::is_same_v<DataType, TraceTestData>) {
-            check_trace_differential("", section, *_data, 4, 256);
-          } else {
-            check_codegen_differential(
-              "",
-              section,
-              *_data,
-              2048,
-              true,
-              /*verify_interpreter=*/ true,
-              /*verify_aot=*/ false
-            );
-          }
-        } catch (unittest::AssertionError& err) {
+          tv::check_tv_refinement(section, optimized, *_data);
+        } catch (std::runtime_error& err) {
           section->write(std::cout);
-          std::cerr << "Test failed: " << err.message() << std::endl;
+          std::cerr << "Optimized:\n";
+          optimized->write(std::cout);
+          std::cerr << "TV check failed: " << err.what() << std::endl;
           result = false;
         }
 
@@ -322,7 +420,9 @@ namespace metajit {
         delete _builder;
         _builder = nullptr;
         _all_values.clear();
+        _tv_inputs.clear();
         delete section;
+        delete optimized;
         return result;
       }
     };
@@ -336,6 +436,7 @@ cl::OptionCategory category("Options");
 cl::opt<int> seed("seed", cl::desc("seed for the rng, to reproduce crashes"), cl::cat(category));
 cl::opt<int> number_of_runs("number-of-runs", cl::desc("How many random programs to test (default is run forever)"), cl::cat(category));
 cl::opt<bool> test_genext("test-genext", cl::desc("Test generating extensions (meta-tracing)"), cl::cat(category));
+cl::opt<bool> test_tv("test-tv", cl::desc("Test optimization correctness using translation validation"), cl::cat(category));
 
 template<typename FuzzerType>
 int run_fuzzer_loop(FuzzerType& fuzzer, int seed_val, int runs) {
@@ -375,6 +476,9 @@ int main(int argc, char** argv) {
 
   if (test_genext) {
     Fuzzer<TraceTestData> fuzzer;
+    return run_fuzzer_loop(fuzzer, seed.getValue(), number_of_runs.getValue());
+  } else if (test_tv) {
+    Fuzzer<tv::TVTestData> fuzzer;
     return run_fuzzer_loop(fuzzer, seed.getValue(), number_of_runs.getValue());
   } else {
     Fuzzer<TestData> fuzzer;

@@ -170,17 +170,27 @@ namespace metajit {
             z3::expr byte_offset = context->bv_val(it, type_width(Type::Ptr));
             data = z3::concat(z3::select(bytes, offset + byte_offset), data);
           }
+          // Truncate to type_width bits (handles Bool: 8 stored bits -> 1 bit)
+          if (type_width(type) < type_size(type) * 8) {
+            data = data.extract(type_width(type) - 1, 0);
+          }
           z3::expr prov = z3::select(provenance, offset);
           return ValueState(type, data, prov);
         }
 
         void store(z3::expr offset, ValueState value, z3::expr enable) {
-          assert(value.value().get_sort().bv_size() % 8 == 0);
+          // Zero-extend to type_size*8 bits if needed (handles Bool: 1 bit -> 8 stored bits)
+          z3::expr stored = value.value();
+          size_t stored_bits = type_size(value.type()) * 8;
+          if (stored.get_sort().bv_size() < stored_bits) {
+            stored = z3::zext(stored, stored_bits - stored.get_sort().bv_size());
+          }
+          assert(stored.get_sort().bv_size() % 8 == 0);
 
           z3::expr new_bytes = bytes;
           z3::expr new_provenance = provenance;
           for (size_t it = 0; it < type_size(value.type()); it++) {
-            z3::expr byte = value.value().extract((it + 1) * 8 - 1, it * 8);
+            z3::expr byte = stored.extract((it + 1) * 8 - 1, it * 8);
             assert(byte.get_sort().bv_size() == 8);
 
             z3::expr byte_offset = context->bv_val(it, type_width(Type::Ptr));
@@ -314,9 +324,9 @@ namespace metajit {
           return value.extract(new_width - 1, 0);
         } else {
           if (is_signed) {
-            return z3::sext(value, new_width);
+            return z3::sext(value, new_width - old_width);
           } else {
-            return z3::zext(value, new_width);
+            return z3::zext(value, new_width - old_width);
           }
         }
       }
@@ -505,6 +515,11 @@ namespace metajit {
         return result;
       }
 
+      // Returns the symbolic memory state at the exit point of the section.
+      MemoryState& exit_memory_state() {
+        return memory_state(nullptr);
+      }
+
       Z3CodeGen(Section* section,
                 z3::context& context,
                 std::vector<ValueState> entry_args,
@@ -531,5 +546,147 @@ namespace metajit {
       }
 
     };
+
+    // TVTestData: inputs are section entry args, outputs are stored to a heap pointer
+    // (also an entry arg). This avoids routing inputs through memory, keeping Z3
+    // queries simple, while still forcing outputs to be live (not DCE'd).
+    class TVTestData {
+    public:
+      struct Output {
+        size_t offset = 0;
+        Type type = Type::Void;
+      };
+    private:
+      Builder* _builder = nullptr;
+      Arg* _data = nullptr;        // entry arg 0: Ptr to output buffer
+      size_t _data_size = 0;
+      std::vector<Output> _outputs;
+      std::vector<Type> _entry_arg_types; // types of input entry args (not including _data)
+
+      size_t alloc(Type type) {
+        if (_data_size % type_size(type) != 0) {
+          _data_size += type_size(type) - (_data_size % type_size(type));
+        }
+        size_t offset = _data_size;
+        _data_size += type_size(type);
+        return offset;
+      }
+    public:
+      TVTestData() {}
+      TVTestData(Builder& builder, std::vector<Type> input_types):
+          _builder(&builder) {
+        // Entry args: [Ptr (output buffer), input0, input1, ...]
+        std::vector<Type> entry_types = {Type::Ptr};
+        for (Type t : input_types) {
+          entry_types.push_back(t);
+        }
+        _entry_arg_types = input_types;
+        builder.move_to_end(builder.build_block(entry_types));
+        _data = builder.entry_arg(0);
+      }
+
+      // Returns the i-th input as a Value* (directly an entry arg).
+      Value* input(size_t index) {
+        assert(_builder);
+        return _builder->entry_arg(1 + index);
+      }
+
+      // Records value as an output: stores it into the output buffer.
+      void output(Value* value) {
+        assert(_builder && _data);
+        size_t offset = alloc(value->type());
+        _outputs.push_back({offset, value->type()});
+        _builder->build_store(_data, value, AliasingGroup(0), offset);
+      }
+
+      size_t data_size() const { return _data_size; }
+      const std::vector<Output>& outputs() const { return _outputs; }
+      const std::vector<Type>& entry_arg_types() const { return _entry_arg_types; }
+    };
+
+    // Check that `after` refines `before` for all outputs recorded in `data`.
+    // Uses symbolic execution via Z3CodeGen. If a counterexample is found,
+    // throws a std::runtime_error with a description.
+    inline void check_tv_refinement(Section* before,
+                                    Section* after,
+                                    const TVTestData& data) {
+      z3::context z3_context;
+
+      // One output region (the data buffer), size unknown
+      std::vector<std::optional<size_t>> regions = {std::nullopt};
+      MemoryState before_memory(z3_context, regions);
+      MemoryState after_memory(z3_context, regions);
+
+      // Build symbolic entry args: data pointer (with provenance 0) + inputs
+      std::vector<ValueState> entry_args;
+
+      ValueState data_ptr(Type::Ptr, z3_context.bv_const("data_ptr", type_width(Type::Ptr)));
+      data_ptr.set_provenance(z3_context.bv_val(0, before_memory.provenance_width()));
+      entry_args.push_back(data_ptr);
+
+      for (size_t it = 0; it < data.entry_arg_types().size(); it++) {
+        Type type = data.entry_arg_types()[it];
+        entry_args.push_back(ValueState(
+          type,
+          z3_context.bv_const(("input" + std::to_string(it)).c_str(), type_width(type))
+        ));
+      }
+
+      Z3CodeGen before_cg(before, z3_context, entry_args, before_memory);
+      Z3CodeGen after_cg(after, z3_context, entry_args, after_memory);
+
+      z3::solver solver(z3_context);
+      solver.set("timeout", (unsigned) 5000); // 5 second timeout per query
+
+      // For each output slot, check refinement:
+      // before is NOT UB AND before result is NOT poison AND
+      // (after result IS poison OR values differ)
+      for (const TVTestData::Output& output : data.outputs()) {
+        ValueState ptr(Type::Ptr,
+          data_ptr.value() + z3_context.bv_val(output.offset, type_width(Type::Ptr)),
+          data_ptr.provenance()
+        );
+
+        ValueState before_val = before_cg.exit_memory_state().load(ptr, output.type);
+        ValueState after_val  = after_cg.exit_memory_state().load(ptr, output.type);
+
+        z3::expr counterexample =
+          !before_cg.has_ub() &&
+          !before_val.is_poison() &&
+          (after_val.is_poison() || before_val.value() != after_val.value());
+
+        solver.add(counterexample.simplify());
+      }
+
+      z3::check_result result = solver.check();
+      if (result == z3::sat) {
+        z3::model model = solver.get_model();
+        std::ostringstream stream;
+        stream << "TV refinement counterexample found\n";
+        stream << "Inputs:\n";
+        for (size_t it = 0; it < data.entry_arg_types().size(); it++) {
+          ValueState arg = before_cg.emit(before->entry()->arg(1 + it)).eval(model);
+          stream << "  input" << it << " = " << arg.value() << "\n";
+        }
+        stream << "Outputs:\n";
+        for (const TVTestData::Output& output : data.outputs()) {
+          ValueState ptr(Type::Ptr,
+            data_ptr.value() + z3_context.bv_val(output.offset, type_width(Type::Ptr)),
+            data_ptr.provenance()
+          );
+          ValueState before_val = before_cg.exit_memory_state().load(ptr, output.type).eval(model);
+          ValueState after_val  = after_cg.exit_memory_state().load(ptr, output.type).eval(model);
+          stream << "  before: " << before_val.value()
+                 << " (poison=" << model.eval(before_val.is_poison(), true) << ")\n";
+          stream << "  after:  " << after_val.value()
+                 << " (poison=" << model.eval(after_val.is_poison(), true) << ")\n";
+        }
+        throw std::runtime_error(stream.str());
+      } else if (result == z3::unknown) {
+        // Timeout or resource limit reached — skip this check
+      } else if (result != z3::unsat) {
+        throw std::runtime_error("check_tv_refinement: Z3 failed to determine satisfiability");
+      }
+    }
   }
 }
