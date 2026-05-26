@@ -49,7 +49,7 @@ jobs:
       - name: Fuzz a bit
         working-directory: metajit.cpp
         run: |
-          make tests/fuzzer
+          make tests/fuzzer Z3_FLAGS="-I../z3build/include -L../z3build/bin -lz3 -Wl,-rpath,$(pwd)/../z3build/bin"
           tests/fuzzer --number-of-runs=100
       - name: Fuzz generating extensions
         working-directory: metajit.cpp
@@ -58,5 +58,4 @@ jobs:
       - name: Fuzz translation validation
         working-directory: metajit.cpp
         run: |
-          make tests/fuzzer Z3_FLAGS="-I../z3build/include -L../z3build/bin -lz3 -Wl,-rpath,$(pwd)/../z3build/bin"
           tests/fuzzer --mode=tv --number-of-runs=50
