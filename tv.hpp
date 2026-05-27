@@ -515,7 +515,17 @@ namespace metajit {
         return result;
       }
 
-      // Returns the symbolic memory state at the exit point of the section.
+      z3::expr block_ub(Block* block) const {
+        return _blocks.at(block).ub;
+      }
+
+      template <class Fn>
+      void for_each_block_ub(Fn fn) const {
+        for (const auto& [block, data] : _blocks) {
+          fn(block, data.ub);
+        }
+      }
+
       MemoryState& exit_memory_state() {
         return memory_state(nullptr);
       }
@@ -603,6 +613,72 @@ namespace metajit {
       const std::vector<Output>& outputs() const { return _outputs; }
       const std::vector<Type>& entry_arg_types() const { return _entry_arg_types; }
     };
+
+    // Check that a section with a single Ptr entry arg never exhibits UB
+    // (branching/storing/loading on a poison value) for any possible memory
+    // contents.  Throws std::runtime_error if UB is reachable, or if Z3 times
+    // out (unknown result).
+    inline void check_no_ub(Section* section,
+                            const std::string& name = "",
+                            unsigned timeout_ms = 5000) {
+      assert(section->entry()->args().size() == 1 &&
+             section->entry()->arg(0)->type() == Type::Ptr &&
+             "check_no_ub: section must have a single Ptr entry arg");
+
+      z3::context z3_context;
+
+      // One memory region (the state buffer) of unknown size.
+      std::vector<std::optional<size_t>> regions = {std::nullopt};
+      MemoryState memory(z3_context, regions);
+
+      // Symbolic state pointer with provenance 0 (points into region 0).
+      ValueState state_ptr(Type::Ptr,
+        z3_context.bv_const("state_ptr", type_width(Type::Ptr)));
+      state_ptr.set_provenance(z3_context.bv_val(0, memory.provenance_width()));
+
+      Z3CodeGen cg(section, z3_context, {state_ptr}, memory);
+
+      z3::solver solver(z3_context);
+      solver.set("timeout", timeout_ms);
+
+      std::ostringstream stream;
+      bool any_ub = false;
+      bool any_timeout = false;
+
+      cg.for_each_block_ub([&](Block* block, z3::expr ub) {
+        solver.reset();
+        solver.add(ub.simplify());
+        z3::check_result result = solver.check();
+        if (result == z3::sat) {
+          z3::model model = solver.get_model();
+          if (!any_ub) {
+            stream << "UB check failed";
+            if (!name.empty()) stream << " for '" << name << "'";
+            stream << ":\n";
+          }
+          any_ub = true;
+          if (block) {
+            stream << "  block b" << block->name() << " can exhibit UB";
+          } else {
+            stream << "  exit block can exhibit UB";
+          }
+          stream << " (state_ptr = " << model.eval(state_ptr.value(), true) << ")\n";
+        } else if (result == z3::unknown) {
+          any_timeout = true;
+          stream << "UB check timed out";
+          if (!name.empty()) stream << " for '" << name << "'";
+          if (block) {
+            stream << " in block b" << block->name();
+          }
+          stream << "\n";
+        }
+      });
+
+      if (any_ub || any_timeout) {
+        throw std::runtime_error(stream.str());
+      }
+      // all blocks unsat: no UB reachable
+    }
 
     // Check that `after` refines `before` for all outputs recorded in `data`.
     // Uses symbolic execution via Z3CodeGen. If a counterexample is found,
