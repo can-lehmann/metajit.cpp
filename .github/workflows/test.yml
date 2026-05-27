@@ -36,6 +36,11 @@ jobs:
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 200
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 200
           sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-20 200
+      - name: Set up Z3
+        run: |
+          wget https://github.com/Z3Prover/z3/releases/download/z3-4.16.0/z3-4.16.0-x64-glibc-2.39.zip
+          unzip z3-4.16.0-x64-glibc-2.39.zip
+          mv z3-4.16.0-x64-glibc-2.39 z3build
       - name: Build and run tests
         working-directory: metajit.cpp
         run: |
@@ -44,9 +49,13 @@ jobs:
       - name: Fuzz a bit
         working-directory: metajit.cpp
         run: |
-          make tests/fuzzer
+          make tests/fuzzer Z3_FLAGS="-I../z3build/include -L../z3build/bin -lz3 -Wl,-rpath,$(pwd)/../z3build/bin"
           tests/fuzzer --number-of-runs=100
       - name: Fuzz generating extensions
         working-directory: metajit.cpp
         run: |
-          tests/fuzzer --test-genext --number-of-runs=50
+          tests/fuzzer --mode=trace --number-of-runs=50
+      - name: Fuzz translation validation
+        working-directory: metajit.cpp
+        run: |
+          tests/fuzzer --mode=tv --number-of-runs=50

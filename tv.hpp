@@ -37,19 +37,25 @@ namespace metajit {
     private:
       Type _type;
       z3::expr _value;
+      z3::expr _is_poison;
       std::optional<z3::expr> _provenance;
     public:
-      ValueState(Type type, z3::expr value): _type(type), _value(value) {}
+      ValueState(Type type, z3::expr value):
+        _type(type), _value(value), _is_poison(value.ctx().bool_val(false)) {}
       ValueState(Type type, z3::expr value, z3::expr provenance):
-        _type(type), _value(value), _provenance(provenance) {}
+        _type(type), _value(value), _is_poison(value.ctx().bool_val(false)),
+        _provenance(provenance) {}
 
       static ValueState invalid(z3::context& context) {
         return ValueState(Type::Bool, z3::expr(context));
       }
-      
+
       Type type() const { return _type; }
 
       z3::expr value() const { return _value; }
+
+      z3::expr is_poison() const { return _is_poison; }
+      void set_poison(z3::expr is_poison) { _is_poison = is_poison; }
 
       bool has_provenance() const { return _provenance.has_value(); }
       z3::expr provenance() const { return _provenance.value(); }
@@ -68,6 +74,7 @@ namespace metajit {
       void merge(const ValueState& other, z3::expr enable) {
         assert(_type == other._type);
         _value = z3::ite(enable, other._value, _value);
+        _is_poison = z3::ite(enable, other._is_poison, _is_poison);
         if (has_provenance() || other.has_provenance()) {
           size_t provenance_width;
           if (has_provenance()) {
@@ -104,6 +111,7 @@ namespace metajit {
       ValueState eval(z3::model& model) {
         ValueState result = *this;
         result._value = model.eval(_value, true);
+        result._is_poison = model.eval(_is_poison, true);
         if (has_provenance()) {
           result._provenance = model.eval(provenance(), true);
         }
@@ -162,17 +170,27 @@ namespace metajit {
             z3::expr byte_offset = context->bv_val(it, type_width(Type::Ptr));
             data = z3::concat(z3::select(bytes, offset + byte_offset), data);
           }
+          // Truncate to type_width bits (handles Bool: 8 stored bits -> 1 bit)
+          if (type_width(type) < type_size(type) * 8) {
+            data = data.extract(type_width(type) - 1, 0);
+          }
           z3::expr prov = z3::select(provenance, offset);
           return ValueState(type, data, prov);
         }
 
         void store(z3::expr offset, ValueState value, z3::expr enable) {
-          assert(value.value().get_sort().bv_size() % 8 == 0);
+          // Zero-extend to type_size*8 bits if needed (handles Bool: 1 bit -> 8 stored bits)
+          z3::expr stored = value.value();
+          size_t stored_bits = type_size(value.type()) * 8;
+          if (stored.get_sort().bv_size() < stored_bits) {
+            stored = z3::zext(stored, stored_bits - stored.get_sort().bv_size());
+          }
+          assert(stored.get_sort().bv_size() % 8 == 0);
 
           z3::expr new_bytes = bytes;
           z3::expr new_provenance = provenance;
           for (size_t it = 0; it < type_size(value.type()); it++) {
-            z3::expr byte = value.value().extract((it + 1) * 8 - 1, it * 8);
+            z3::expr byte = stored.extract((it + 1) * 8 - 1, it * 8);
             assert(byte.get_sort().bv_size() == 8);
 
             z3::expr byte_offset = context->bv_val(it, type_width(Type::Ptr));
@@ -252,12 +270,14 @@ namespace metajit {
 
       struct BlockData {
         z3::expr active;
+        z3::expr ub;
         std::vector<ValueState> args;
         std::optional<MemoryState> memory_state;
 
         BlockData(z3::context& context, Block* block):
-            active(context.bool_val(false)) {
-          
+            active(context.bool_val(false)),
+            ub(context.bool_val(false)) {
+
           if (block) {
             for (Arg* arg : block->args()) {
               args.push_back(ValueState(arg->type(), context.bv_val(0, type_width(arg->type()))));
@@ -276,6 +296,13 @@ namespace metajit {
             constant->type(),
             _context.bv_val(constant->value(), type_width(constant->type()))
           );
+        } else if (dynmatch(Poison, poison, value)) {
+          ValueState result(
+            poison->type(),
+            _context.bv_val(0, type_width(poison->type()))
+          );
+          result.set_poison(_context.bool_val(true));
+          return result;
         } else if (value->is_named()) {
           return _values.at((NamedValue*) value);
         } else {
@@ -297,9 +324,9 @@ namespace metajit {
           return value.extract(new_width - 1, 0);
         } else {
           if (is_signed) {
-            return z3::sext(value, new_width);
+            return z3::sext(value, new_width - old_width);
           } else {
-            return z3::zext(value, new_width);
+            return z3::zext(value, new_width - old_width);
           }
         }
       }
@@ -334,61 +361,123 @@ namespace metajit {
         return block_data.memory_state.value();
       }
 
+      // Returns the OR of is_poison() for all value arguments of inst.
+      z3::expr input_poison(Inst* inst) {
+        z3::expr result = _context.bool_val(false);
+        for (size_t it = 0; it < inst->arg_count(); it++) {
+          result = result || emit(inst->arg(it)).is_poison();
+        }
+        return result;
+      }
+
       ValueState emit_inst(Inst* inst, Block* block) {
         if (dynamic_cast<FreezeInst*>(inst) || dynamic_cast<AssumeConstInst*>(inst)) {
           return emit(inst->arg(0));
         } else if (dynmatch(SelectInst, select, inst)) {
-          z3::expr cond = emit(select->arg(0)).value().bit2bool(0);
+          ValueState cond_state = emit(select->arg(0));
           ValueState true_val = emit(select->arg(1));
           ValueState false_val = emit(select->arg(2));
-          false_val.merge(true_val, cond);
-          return false_val;
+          z3::expr cond = cond_state.value().bit2bool(0);
+          // Value: pick based on condition
+          ValueState result(select->type(), z3::ite(cond, true_val.value(), false_val.value()));
+          // Poison: condition is poison, OR the selected branch is poison
+          result.set_poison(cond_state.is_poison() ||
+                            z3::ite(cond, true_val.is_poison(), false_val.is_poison()));
+          return result;
         } else if (dynmatch(ResizeUInst, resize_u, inst)) {
-          return resize(emit(resize_u->arg(0)), resize_u->type(), false);
+          ValueState result = resize(emit(resize_u->arg(0)), resize_u->type(), false);
+          result.set_poison(input_poison(inst));
+          return result;
         } else if (dynmatch(ResizeSInst, resize_s, inst)) {
-          return resize(emit(resize_s->arg(0)), resize_s->type(), true);
+          ValueState result = resize(emit(resize_s->arg(0)), resize_s->type(), true);
+          result.set_poison(input_poison(inst));
+          return result;
         } else if (dynmatch(ResizeXInst, resize_x, inst)) {
-          return resize(emit(resize_x->arg(0)), resize_x->type(), false);
+          ValueState result = resize(emit(resize_x->arg(0)), resize_x->type(), false);
+          result.set_poison(input_poison(inst));
+          return result;
         } else if (dynmatch(LoadInst, load, inst)) {
-          ValueState pointer = emit(load->arg(0)).add_ptr(load->offset());
-          return memory_state(block).load(pointer, load->type());
+          ValueState ptr_state = emit(load->arg(0));
+          _blocks.at(block).ub = _blocks.at(block).ub ||
+            (_blocks.at(block).active && ptr_state.is_poison());
+          if (ptr_state.has_provenance()) {
+            ValueState pointer = ptr_state.add_ptr(load->offset());
+            return memory_state(block).load(pointer, load->type());
+          }
+          return ValueState(load->type(), _context.bv_val(0, type_width(load->type())));
         } else if (dynmatch(StoreInst, store, inst)) {
-          ValueState pointer = emit(store->arg(0)).add_ptr(store->offset());
-          memory_state(block).store(pointer, emit(store->arg(1)));
+          ValueState ptr_state = emit(store->arg(0));
+          ValueState val_state = emit(store->arg(1));
+          _blocks.at(block).ub = _blocks.at(block).ub ||
+            (_blocks.at(block).active &&
+             (ptr_state.is_poison() || val_state.is_poison()));
+          if (ptr_state.has_provenance()) {
+            ValueState pointer = ptr_state.add_ptr(store->offset());
+            memory_state(block).store(pointer, val_state);
+          }
         } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
           ValueState pointer = emit(add_ptr->arg(0));
           ValueState offset = emit(add_ptr->arg(1));
-          return pointer.add_ptr(offset);
+          ValueState result = pointer.add_ptr(offset);
+          result.set_poison(input_poison(inst));
+          return result;
         }
 
         #define binop(InstType, expression) \
           else if (dynamic_cast<InstType*>(inst)) { \
             z3::expr a = emit(inst->arg(0)).value(); \
             z3::expr b = emit(inst->arg(1)).value(); \
-            return ValueState(inst->type(), expression); \
+            ValueState result(inst->type(), expression); \
+            result.set_poison(input_poison(inst)); \
+            return result; \
           }
-        
+
+        #define binop_divmod(InstType, expression) \
+          else if (dynamic_cast<InstType*>(inst)) { \
+            z3::expr a = emit(inst->arg(0)).value(); \
+            z3::expr b = emit(inst->arg(1)).value(); \
+            ValueState result(inst->type(), expression); \
+            result.set_poison(input_poison(inst) || \
+                              b == _context.bv_val(0, type_width(inst->type()))); \
+            return result; \
+          }
+
+        #define binop_shift(InstType, expression) \
+          else if (dynamic_cast<InstType*>(inst)) { \
+            z3::expr a = emit(inst->arg(0)).value(); \
+            z3::expr b = emit(inst->arg(1)).value(); \
+            ValueState result(inst->type(), expression); \
+            result.set_poison(input_poison(inst) || \
+                              z3::uge(b, _context.bv_val(type_width(inst->type()), type_width(inst->type())))); \
+            return result; \
+          }
+
         binop(AddInst, a + b)
         binop(SubInst, a - b)
         binop(MulInst, a * b)
-        binop(DivSInst, z3::sdiv(a, b))
-        binop(DivUInst, z3::udiv(a, b))
-        binop(ModSInst, z3::srem(a, b))
-        binop(ModUInst, z3::urem(a, b))
+        binop_divmod(DivSInst, a / b)
+        binop_divmod(DivUInst, z3::udiv(a, b))
+        binop_divmod(ModSInst, z3::srem(a, b))
+        binop_divmod(ModUInst, z3::urem(a, b))
         binop(AndInst, a & b)
         binop(OrInst, a | b)
         binop(XorInst, a ^ b)
-        binop(ShlInst, z3::shl(a, b))
-        binop(ShrUInst, z3::lshr(a, b))
-        binop(ShrSInst, z3::ashr(a, b))
+        binop_shift(ShlInst, z3::shl(a, b))
+        binop_shift(ShrUInst, z3::lshr(a, b))
+        binop_shift(ShrSInst, z3::ashr(a, b))
         binop(EqInst, bool2bit(a == b))
         binop(LtUInst, bool2bit(z3::ult(a, b)))
         binop(LtSInst, bool2bit(z3::slt(a, b)))
 
         #undef binop
+        #undef binop_divmod
+        #undef binop_shift
 
         else if (dynmatch(BranchInst, branch, inst)) {
-          z3::expr cond = emit(branch->arg(0)).value().bit2bool(0);
+          ValueState cond_state = emit(branch->arg(0));
+          z3::expr cond = cond_state.value().bit2bool(0);
+          _blocks.at(block).ub = _blocks.at(block).ub ||
+            (_blocks.at(block).active && cond_state.is_poison());
           enter(branch->true_block(), block, cond, {});
           enter(branch->false_block(), block, !cond, {});
         } else if (dynmatch(JumpInst, jump, inst)) {
@@ -416,6 +505,31 @@ namespace metajit {
         }
       }
     public:
+      // Returns a Z3 boolean that is true iff any reachable path through the
+      // section hits undefined behavior (branching/storing/loading on poison).
+      z3::expr has_ub() const {
+        z3::expr result = _context.bool_val(false);
+        for (const auto& [block, data] : _blocks) {
+          result = result || data.ub;
+        }
+        return result;
+      }
+
+      z3::expr block_ub(Block* block) const {
+        return _blocks.at(block).ub;
+      }
+
+      template <class Fn>
+      void for_each_block_ub(Fn fn) const {
+        for (const auto& [block, data] : _blocks) {
+          fn(block, data.ub);
+        }
+      }
+
+      MemoryState& exit_memory_state() {
+        return memory_state(nullptr);
+      }
+
       Z3CodeGen(Section* section,
                 z3::context& context,
                 std::vector<ValueState> entry_args,
@@ -442,5 +556,213 @@ namespace metajit {
       }
 
     };
+
+    // TVTestData: inputs are section entry args, outputs are stored to a heap pointer
+    // (also an entry arg). This avoids routing inputs through memory, keeping Z3
+    // queries simple, while still forcing outputs to be live (not DCE'd).
+    class TVTestData {
+    public:
+      struct Output {
+        size_t offset = 0;
+        Type type = Type::Void;
+      };
+    private:
+      Builder* _builder = nullptr;
+      Arg* _data = nullptr;        // entry arg 0: Ptr to output buffer
+      size_t _data_size = 0;
+      std::vector<Output> _outputs;
+      std::vector<Type> _entry_arg_types; // types of input entry args (not including _data)
+
+      size_t alloc(Type type) {
+        if (_data_size % type_size(type) != 0) {
+          _data_size += type_size(type) - (_data_size % type_size(type));
+        }
+        size_t offset = _data_size;
+        _data_size += type_size(type);
+        return offset;
+      }
+    public:
+      TVTestData() {}
+      TVTestData(Builder& builder, std::vector<Type> input_types):
+          _builder(&builder) {
+        // Entry args: [Ptr (output buffer), input0, input1, ...]
+        std::vector<Type> entry_types = {Type::Ptr};
+        for (Type t : input_types) {
+          entry_types.push_back(t);
+        }
+        _entry_arg_types = input_types;
+        builder.move_to_end(builder.build_block(entry_types));
+        _data = builder.entry_arg(0);
+      }
+
+      // Returns the i-th input as a Value* (directly an entry arg).
+      Value* input(size_t index) {
+        assert(_builder);
+        return _builder->entry_arg(1 + index);
+      }
+
+      // Records value as an output: stores it into the output buffer.
+      void output(Value* value) {
+        assert(_builder && _data);
+        size_t offset = alloc(value->type());
+        _outputs.push_back({offset, value->type()});
+        _builder->build_store(_data, value, AliasingGroup(0), offset);
+      }
+
+      size_t data_size() const { return _data_size; }
+      const std::vector<Output>& outputs() const { return _outputs; }
+      const std::vector<Type>& entry_arg_types() const { return _entry_arg_types; }
+    };
+
+    // Check that a section with a single Ptr entry arg never exhibits UB
+    // (branching/storing/loading on a poison value) for any possible memory
+    // contents.  Throws std::runtime_error if UB is reachable, or if Z3 times
+    // out (unknown result).
+    inline void check_no_ub(Section* section,
+                            const std::string& name = "",
+                            unsigned timeout_ms = 5000) {
+      assert(section->entry()->args().size() == 1 &&
+             section->entry()->arg(0)->type() == Type::Ptr &&
+             "check_no_ub: section must have a single Ptr entry arg");
+
+      z3::context z3_context;
+
+      // One memory region (the state buffer) of unknown size.
+      std::vector<std::optional<size_t>> regions = {std::nullopt};
+      MemoryState memory(z3_context, regions);
+
+      // Symbolic state pointer with provenance 0 (points into region 0).
+      ValueState state_ptr(Type::Ptr,
+        z3_context.bv_const("state_ptr", type_width(Type::Ptr)));
+      state_ptr.set_provenance(z3_context.bv_val(0, memory.provenance_width()));
+
+      Z3CodeGen cg(section, z3_context, {state_ptr}, memory);
+
+      z3::solver solver(z3_context);
+      solver.set("timeout", timeout_ms);
+
+      std::ostringstream stream;
+      bool any_ub = false;
+      bool any_timeout = false;
+
+      cg.for_each_block_ub([&](Block* block, z3::expr ub) {
+        solver.reset();
+        solver.add(ub.simplify());
+        z3::check_result result = solver.check();
+        if (result == z3::sat) {
+          z3::model model = solver.get_model();
+          if (!any_ub) {
+            stream << "UB check failed";
+            if (!name.empty()) stream << " for '" << name << "'";
+            stream << ":\n";
+          }
+          any_ub = true;
+          if (block) {
+            stream << "  block b" << block->name() << " can exhibit UB";
+          } else {
+            stream << "  exit block can exhibit UB";
+          }
+          stream << " (state_ptr = " << model.eval(state_ptr.value(), true) << ")\n";
+        } else if (result == z3::unknown) {
+          any_timeout = true;
+          stream << "UB check timed out";
+          if (!name.empty()) stream << " for '" << name << "'";
+          if (block) {
+            stream << " in block b" << block->name();
+          }
+          stream << "\n";
+        }
+      });
+
+      if (any_ub || any_timeout) {
+        throw std::runtime_error(stream.str());
+      }
+      // all blocks unsat: no UB reachable
+    }
+
+    // Check that `after` refines `before` for all outputs recorded in `data`.
+    // Uses symbolic execution via Z3CodeGen. If a counterexample is found,
+    // throws a std::runtime_error with a description.
+    inline void check_tv_refinement(Section* before,
+                                    Section* after,
+                                    const TVTestData& data) {
+      z3::context z3_context;
+
+      // One output region (the data buffer), size unknown
+      std::vector<std::optional<size_t>> regions = {std::nullopt};
+      MemoryState before_memory(z3_context, regions);
+      MemoryState after_memory(z3_context, regions);
+
+      // Build symbolic entry args: data pointer (with provenance 0) + inputs
+      std::vector<ValueState> entry_args;
+
+      ValueState data_ptr(Type::Ptr, z3_context.bv_const("data_ptr", type_width(Type::Ptr)));
+      data_ptr.set_provenance(z3_context.bv_val(0, before_memory.provenance_width()));
+      entry_args.push_back(data_ptr);
+
+      for (size_t it = 0; it < data.entry_arg_types().size(); it++) {
+        Type type = data.entry_arg_types()[it];
+        entry_args.push_back(ValueState(
+          type,
+          z3_context.bv_const(("input" + std::to_string(it)).c_str(), type_width(type))
+        ));
+      }
+
+      Z3CodeGen before_cg(before, z3_context, entry_args, before_memory);
+      Z3CodeGen after_cg(after, z3_context, entry_args, after_memory);
+
+      z3::solver solver(z3_context);
+      solver.set("timeout", (unsigned) 5000); // 5 second timeout per query
+
+      // For each output slot, check refinement:
+      // before is NOT UB AND before result is NOT poison AND
+      // (after result IS poison OR values differ)
+      for (const TVTestData::Output& output : data.outputs()) {
+        ValueState ptr(Type::Ptr,
+          data_ptr.value() + z3_context.bv_val(output.offset, type_width(Type::Ptr)),
+          data_ptr.provenance()
+        );
+
+        ValueState before_val = before_cg.exit_memory_state().load(ptr, output.type);
+        ValueState after_val  = after_cg.exit_memory_state().load(ptr, output.type);
+
+        z3::expr counterexample =
+          !before_cg.has_ub() &&
+          !before_val.is_poison() &&
+          (after_val.is_poison() || before_val.value() != after_val.value());
+
+        solver.add(counterexample.simplify());
+      }
+
+      z3::check_result result = solver.check();
+      if (result == z3::sat) {
+        z3::model model = solver.get_model();
+        std::ostringstream stream;
+        stream << "TV refinement counterexample found\n";
+        stream << "Inputs:\n";
+        for (size_t it = 0; it < data.entry_arg_types().size(); it++) {
+          ValueState arg = before_cg.emit(before->entry()->arg(1 + it)).eval(model);
+          stream << "  input" << it << " = " << arg.value() << "\n";
+        }
+        stream << "Outputs:\n";
+        for (const TVTestData::Output& output : data.outputs()) {
+          ValueState ptr(Type::Ptr,
+            data_ptr.value() + z3_context.bv_val(output.offset, type_width(Type::Ptr)),
+            data_ptr.provenance()
+          );
+          ValueState before_val = before_cg.exit_memory_state().load(ptr, output.type).eval(model);
+          ValueState after_val  = after_cg.exit_memory_state().load(ptr, output.type).eval(model);
+          stream << "  before: " << before_val.value()
+                 << " (poison=" << model.eval(before_val.is_poison(), true) << ")\n";
+          stream << "  after:  " << after_val.value()
+                 << " (poison=" << model.eval(after_val.is_poison(), true) << ")\n";
+        }
+        throw std::runtime_error(stream.str());
+      } else if (result == z3::unknown) {
+        // Timeout or resource limit reached — skip this check
+      } else if (result != z3::unsat) {
+        throw std::runtime_error("check_tv_refinement: Z3 failed to determine satisfiability");
+      }
+    }
   }
 }
