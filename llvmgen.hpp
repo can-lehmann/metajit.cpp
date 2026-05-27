@@ -352,8 +352,8 @@ namespace metajit {
               false_const
             ),
             _builder.CreateICmpEQ(
-              emit_arg(select->arg(1)),
-              emit_arg(select->arg(2))
+              _builder.CreateFreeze(emit_arg(select->arg(1))),
+              _builder.CreateFreeze(emit_arg(select->arg(2)))
             )
           )
         );
@@ -434,7 +434,7 @@ namespace metajit {
 
           if (dynmatch(SelectInst, select, use.inst)) {
             if (use.index > 0) {
-              llvm::Value* branch_used = emit_arg(select->arg(0));
+              llvm::Value* branch_used = _builder.CreateFreeze(emit_arg(select->arg(0)));
               if (branch_used) {
                 if (use.index == 2) {
                   branch_used = _builder.CreateNot(branch_used);
