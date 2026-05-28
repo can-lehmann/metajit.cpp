@@ -3296,7 +3296,7 @@ namespace metajit {
       }
 
       static Bits eval(Inst* inst, NameMap<Bits>& values) {
-        if (dynamic_cast<FreezeInst*>(inst) ||
+        if (dynamic_cast<PromoteInst*>(inst) ||
             dynamic_cast<AssumeConstInst*>(inst)) {
           return at(values, inst->arg(0));
         } else if (dynmatch(SelectInst, select, inst)) {
@@ -4500,7 +4500,7 @@ namespace metajit {
         }
 
         for (Inst* inst : *block) {
-          if (dynmatch(FreezeInst, freeze, inst)) {
+          if (dynmatch(PromoteInst, promote, inst)) {
             _groups[inst] = ALWAYS;
           } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
             _groups[inst] = ALWAYS;
@@ -4631,7 +4631,7 @@ namespace metajit {
         }
       }
 
-      if (dynamic_cast<FreezeInst*>(by) ||
+      if (dynamic_cast<PromoteInst*>(by) ||
           (dynamic_cast<AssumeConstInst*>(by) && !is_int_or_bool(value->type()))) {
         _can_trace_inst[value] = true;
         _can_trace_const[value] = true;
@@ -4650,7 +4650,7 @@ namespace metajit {
         for (Inst* inst : block->rev_range()) {
           if (inst->has_side_effect() ||
               inst->is_terminator() ||
-              dynamic_cast<FreezeInst*>(inst) ||
+              dynamic_cast<PromoteInst*>(inst) ||
               dynamic_cast<AssumeConstInst*>(inst) ||
               dynamic_cast<CommentInst*>(inst)) {
             _can_trace_inst[inst] = true;
@@ -5101,11 +5101,11 @@ namespace metajit {
               stream << " may produce a guard after memory write";
               throw SimpleReentryViolation(stream.str());
             }
-          } else if (dynmatch(FreezeInst, freeze, inst)) {
-            if (memory_written && !binding_time_groups.is_static(freeze->arg(0))) {
+          } else if (dynmatch(PromoteInst, promote, inst)) {
+            if (memory_written && !binding_time_groups.is_static(promote->arg(0))) {
               std::ostringstream stream;
-              stream << "Freeze instruction ";
-              freeze->arg(0)->write_arg(stream);
+              stream << "Promote instruction ";
+              promote->arg(0)->write_arg(stream);
               stream << " may produce a guard after memory write";
               throw SimpleReentryViolation(stream.str());
             }
@@ -5123,8 +5123,8 @@ namespace metajit {
 
   inline Value* unwrap_binding(Value* value) {
     while (true) {
-      if (dynmatch(FreezeInst, freeze, value)) {
-        value = freeze->arg(0);
+      if (dynmatch(PromoteInst, promote, value)) {
+        value = promote->arg(0);
       } else if (dynmatch(AssumeConstInst, assume_const, value)) {
         value = assume_const->arg(0);
       } else {
@@ -5172,9 +5172,9 @@ namespace metajit {
               _closures.emplace(*branch->true_block()->begin(), Closure());
               _closures.emplace(*branch->false_block()->begin(), Closure());
             }
-          } else if (dynmatch(FreezeInst, freeze, inst)) {
-            if (!_binding_time_groups.is_static(freeze->arg(0))) {
-              _closures.emplace(freeze, Closure());
+          } else if (dynmatch(PromoteInst, promote, inst)) {
+            if (!_binding_time_groups.is_static(promote->arg(0))) {
+              _closures.emplace(promote, Closure());
             }
           }
         }

@@ -449,7 +449,7 @@ namespace metajit {
         // Update the inputs map with the actual value
         _inputs[offset].value = input_val;
 
-        Value* frozen = _builder->build_freeze(input_val);
+        Value* frozen = _builder->build_promote(input_val);
         _frozen_values.push_back(frozen);
         return frozen;
       }

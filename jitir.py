@@ -366,7 +366,7 @@ def cmp(name, type_checks):
 
 jitir = IR(
     insts = [
-        Inst("Freeze",
+        Inst("Promote",
             args = [Arg("a")],
             type = "a->type()",
             type_checks = [],
