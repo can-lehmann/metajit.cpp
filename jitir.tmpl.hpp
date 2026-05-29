@@ -4474,6 +4474,16 @@ namespace metajit {
                 block->remove(jump);
                 incoming[final_target->name()].push_back(block);
                 remove_from_incoming(block, target);
+                // target's incoming count dropped by 1; if it now has exactly one
+                // predecessor, that predecessor becomes eligible for block merging
+                if (!removed[target->name()] && incoming[target->name()].size() == 1) {
+                  Block* remaining_pred = incoming[target->name()][0];
+                  if (!scheduled[remaining_pred->name()]) {
+                    todo.push(remaining_pred);
+                    scheduled[remaining_pred->name()] = true;
+                  }
+                }
+                schedule_predecessors(block);
                 changes = true;
                 continue;
               }

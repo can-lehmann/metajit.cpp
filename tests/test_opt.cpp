@@ -772,6 +772,37 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
+  suite.diff_test("simplifycfg jump thread enables block merge").run([](Builder& builder, TestData& data) {
+    // entry branches to thread_me or direct; both jump to target({val}).
+    // thread_me is a pure passthrough (single jump), so entry gets threaded
+    // through it to target directly. After threading, thread_me loses its only
+    // predecessor and is removed, leaving target with a single incoming edge
+    // from direct. My fix schedules direct so it can be merged into target.
+    Value* cond = data.input(Type::Bool);
+    Value* val = data.input(Type::Int64);
+    Block* thread_me = builder.build_block();
+    Block* direct = builder.build_block();
+    Block* target = builder.build_block({Type::Int64});
+
+    builder.build_branch(cond, thread_me, direct);
+    builder.move_to_end(thread_me);
+    builder.build_jump(target, {val});
+    builder.move_to_end(direct);
+    builder.build_jump(target, {val});
+    builder.move_to_end(target);
+    data.output(target->arg(0));
+    builder.build_exit();
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
+  Store %0, %2, aliasing=0, offset=16
+  Exit
+}
+)", builder.section());
+  });
+
   suite.test("block order loop").run([]() {
     Context context;
     Allocator allocator;
