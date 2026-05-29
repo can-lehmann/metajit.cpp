@@ -145,8 +145,8 @@ namespace metajit {
     }
 
     llvm::Value* emit_inst(Inst* inst) {
-      if (dynmatch(FreezeInst, freeze, inst)) {
-        return emit_arg(freeze->arg(0));
+      if (dynmatch(PromoteInst, promote, inst)) {
+        return emit_arg(promote->arg(0));
       } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
         return emit_arg(assume_const->arg(0));
       } else if (dynmatch(SelectInst, select, inst)) {
@@ -326,7 +326,7 @@ namespace metajit {
       // emit an LLVM Freeze instruction to deal with the possibility of the
       // argument being a poison value. the result of this method must not be
       // poison.
-      if (dynamic_cast<FreezeInst*>(inst)) {
+      if (dynamic_cast<PromoteInst*>(inst)) {
         return llvm::ConstantInt::getTrue(_context);
       } else if (dynamic_cast<AssumeConstInst*>(inst)) {
         return llvm::ConstantInt::getTrue(_context);
@@ -424,8 +424,8 @@ namespace metajit {
           llvm::Value* use_used = is_used(use.inst);
           
           if (is_int_or_bool(use.inst->type()) &&
-              // Freeze is always constant, but needs this instruction to perform the check
-              !dynamic_cast<FreezeInst*>(use.inst)) {
+              // Promote is always constant, but needs this instruction to perform the check
+              !dynamic_cast<PromoteInst*>(use.inst)) {
             use_used = _builder.CreateAnd(
               use_used,
               _builder.CreateNot(is_const(use.inst))
@@ -772,13 +772,13 @@ namespace metajit {
       emit_branch(
         is_used(inst),
         [&](){
-          if (dynmatch(FreezeInst, freeze, inst)) {
-            if (is_int_or_bool(freeze->type())) {
+          if (dynmatch(PromoteInst, promote, inst)) {
+            if (is_int_or_bool(promote->type())) {
               emit_branch(
-                is_const(freeze->arg(0)),
+                is_const(promote->arg(0)),
                 [&](){
                   _builder.CreateStore(
-                    emit_built_arg(freeze->arg(0)),
+                    emit_built_arg(promote->arg(0)),
                     _built.at(inst)
                   );
                 },
@@ -798,7 +798,7 @@ namespace metajit {
                       _llvm_api.build_eq,
                       {
                         _jitir_builder,
-                        emit_built_arg(freeze->arg(0)),
+                        emit_built_arg(promote->arg(0)),
                         built_const
                       }
                     ),
@@ -814,7 +814,7 @@ namespace metajit {
               );
             } else {
               _builder.CreateStore(
-                emit_built_arg(freeze->arg(0)),
+                emit_built_arg(promote->arg(0)),
                 _built.at(inst)
               );
             }
@@ -939,7 +939,7 @@ namespace metajit {
         });
 
         std::vector<ActionGroup*> const_deps;
-        if (!dynamic_cast<FreezeInst*>(inst) &&
+        if (!dynamic_cast<PromoteInst*>(inst) &&
             !dynamic_cast<AssumeConstInst*>(inst)) {
           const_deps.push_back(emit_group);
           for (Value* arg : inst->args()) {
@@ -954,7 +954,7 @@ namespace metajit {
         });
 
         std::vector<ActionGroup*> build_deps = {const_group, used_group, last_build_group};
-        if (dynamic_cast<FreezeInst*>(inst)) {
+        if (dynamic_cast<PromoteInst*>(inst)) {
           build_deps.push_back(emit_group);
           if (const_groups.find(inst->arg(0)) != const_groups.end()) {
             build_deps.push_back(const_groups.at(inst->arg(0)));

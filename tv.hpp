@@ -371,7 +371,7 @@ namespace metajit {
       }
 
       ValueState emit_inst(Inst* inst, Block* block) {
-        if (dynamic_cast<FreezeInst*>(inst) || dynamic_cast<AssumeConstInst*>(inst)) {
+        if (dynamic_cast<PromoteInst*>(inst) || dynamic_cast<AssumeConstInst*>(inst)) {
           return emit(inst->arg(0));
         } else if (dynmatch(SelectInst, select, inst)) {
           ValueState cond_state = emit(select->arg(0));
