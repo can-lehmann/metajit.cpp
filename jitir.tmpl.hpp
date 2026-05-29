@@ -3560,83 +3560,6 @@ namespace metajit {
         }
         return Bits::constant(type, value);
       }
-
-      static Bits at(const NameMap<Bits>& values, Value* value) {
-        if (dynmatch(Const, constant, value)) {
-          return Bits(
-            constant->type(),
-            type_mask(constant->type()),
-            constant->value()
-          );
-        } else if (value->is_named()) {
-          NamedValue* named_value = (NamedValue*) value;
-          if (named_value->name() > values.size()) {
-            return Bits(value->type(), 0, 0);
-          }
-          return values.at(named_value);
-        } else if (dynmatch(Poison, poison, value)) {
-          return Bits::poison(poison->type());
-        } else {
-          assert(false); // Unreachable
-          return Bits();
-        }
-      }
-
-      static Bits eval(Inst* inst, NameMap<Bits>& values) {
-        if (dynamic_cast<FreezeInst*>(inst) ||
-            dynamic_cast<PromoteInst*>(inst) ||
-            dynamic_cast<AssumeConstInst*>(inst)) {
-          return at(values, inst->arg(0));
-        } else if (dynmatch(SelectInst, select, inst)) {
-          Bits cond = at(values, select->cond());
-          Bits a = at(values, select->arg(1));
-          Bits b = at(values, select->arg(2));
-          return cond.select(a, b);
-        } else if (dynmatch(ResizeUInst, resize_u, inst)) {
-          Bits a = at(values, resize_u->arg(0));
-          return a.resize_u(resize_u->type());
-        } else if (dynmatch(ResizeSInst, resize_u, inst)) {
-          Bits a = at(values, resize_u->arg(0));
-          return a.resize_s(resize_u->type());
-        } else if (dynmatch(ResizeXInst, resize_x, inst)) {
-          Bits a = at(values, resize_x->arg(0));
-          return a.resize_x(resize_x->type());
-        }
-
-        #define binop(name, expr) \
-          else if (dynmatch(name, binop, inst)) { \
-            Bits a = at(values, binop->arg(0)); \
-            Bits b = at(values, binop->arg(1)); \
-            return expr; \
-          }
-        
-        binop(AddPtrInst, a + b)
-        binop(AddInst, a + b)
-        binop(SubInst, a - b)
-        binop(MulInst, a * b)
-        binop(DivSInst, a.div_s(b))
-        binop(DivUInst, a.div_u(b))
-        binop(ModSInst, a.mod_s(b))
-        binop(ModUInst, a.mod_u(b))
-
-        binop(AndInst, a & b)
-        binop(OrInst, a | b)
-        binop(XorInst, a ^ b)
-        
-        binop(ShlInst, a.shl(b))
-        binop(ShrUInst, a.shr_u(b))
-        binop(ShrSInst, a.shr_s(b))
-
-        binop(EqInst, a.eq(b))
-        binop(LtSInst, a.lt_s(b))
-        binop(LtUInst, a.lt_u(b))
-
-        #undef binop
-
-        else {
-          return Bits(inst->type(), 0, 0);
-        }
-      }
     };
   private:
     Section* _section;
@@ -3724,10 +3647,6 @@ namespace metajit {
         uint8_t* allocation = new uint8_t[size];
         _alloca_storage.push_back(allocation);
         _values[alloca_inst] = Bits::constant(Type::Ptr, (uint64_t) (uintptr_t) allocation);
-      } else if (dynmatch(ResizeXInst, resize_x, _inst)) {
-        // We don't want to introduce any unknown bits, so we just zero-extend
-        Bits arg = at(resize_x->arg(0));
-        _values[resize_x] = arg.resize_u(resize_x->type());
       } else if (dynmatch(JumpInst, jump, _inst)) {
         std::vector<Bits> args;
         for (Value* arg : jump->args()) {
@@ -3746,9 +3665,67 @@ namespace metajit {
         return Event::EnterBlock;
       } else if (dynmatch(ExitInst, exit, _inst)) {
         return Event::Exit;
-      } else {
-        _values[_inst] = Bits::eval(_inst, _values);
+      } else if (dynamic_cast<PromoteInst*>(_inst) ||
+                 dynamic_cast<AssumeConstInst*>(_inst)) {
+        _values[_inst] = at(_inst->arg(0));
+      } else if (dynmatch(SelectInst, select, _inst)) {
+        Bits cond = at(select->cond());
+        Bits a = at(select->arg(1));
+        Bits b = at(select->arg(2));
+        _values[_inst] = cond.select(a, b);
+      } else if (dynmatch(ResizeUInst, resize_u, _inst)) {
+        Bits a = at(resize_u->arg(0));
+        _values[_inst] = a.resize_u(resize_u->type());
+      } else if (dynmatch(ResizeSInst, resize_u, _inst)) {
+        Bits a = at(resize_u->arg(0));
+        _values[_inst] = a.resize_s(resize_u->type());
+      } else if (dynmatch(ResizeXInst, resize_x, _inst)) {
+        Bits a = at(resize_x->arg(0));
+        _values[_inst] = a.resize_x(resize_x->type());
+      } else if (dynmatch(FreezeInst, freeze, _inst)) {
+        Bits a = at(freeze->arg(0));
+        // Poison is refined to a non-poison value, we choose zero in this case
+        if (a.is_poison) {
+          _values[_inst] = Bits::constant(a.type, 0);
+        } else {
+          _values[_inst] = a;
+        }
       }
+
+      #define binop(name, expr) \
+        else if (dynamic_cast<name*>(_inst)) { \
+          Bits a = at(_inst->arg(0)); \
+          Bits b = at(_inst->arg(1)); \
+          _values[_inst] = expr; \
+        }
+      
+      binop(AddPtrInst, a + b)
+      binop(AddInst, a + b)
+      binop(SubInst, a - b)
+      binop(MulInst, a * b)
+      binop(DivSInst, a.div_s(b))
+      binop(DivUInst, a.div_u(b))
+      binop(ModSInst, a.mod_s(b))
+      binop(ModUInst, a.mod_u(b))
+
+      binop(AndInst, a & b)
+      binop(OrInst, a | b)
+      binop(XorInst, a ^ b)
+      
+      binop(ShlInst, a.shl(b))
+      binop(ShrUInst, a.shr_u(b))
+      binop(ShrSInst, a.shr_s(b))
+
+      binop(EqInst, a.eq(b))
+      binop(LtSInst, a.lt_s(b))
+      binop(LtUInst, a.lt_u(b))
+
+      #undef binop
+    
+      else {
+        assert(false);
+      }
+
       _inst = _inst->next();
       return Event::None;
     }
@@ -3764,7 +3741,18 @@ namespace metajit {
     }
 
     Bits at(Value* value) const {
-      return Bits::at(_values, value);
+      if (dynmatch(Const, constant, value)) {
+        return Bits::constant(constant->type(), constant->value());
+      } else if (value->is_named()) {
+        NamedValue* named_value = (NamedValue*) value;
+        assert(named_value->name() < _values.size());
+        return _values.at(named_value);
+      } else if (dynmatch(Poison, poison, value)) {
+        return Bits::poison(poison->type());
+      } else {
+        assert(false); // Unreachable
+        return Bits();
+      }
     }
   };
 
