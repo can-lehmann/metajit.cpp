@@ -3525,17 +3525,6 @@ namespace metajit {
         }
       }
 
-      void write(std::ostream& stream) const {
-        if (is_poison) {
-          stream << "poison";
-        } else {
-          size_t bits = type == Type::Bool ? 1 : type_size(type) * 8;
-          for (size_t it = bits; it-- > 0; ) {
-            stream << (at(it).value() ? '1' : '0');
-          }
-        }
-      }
-
       void store(uint8_t* ptr) {
         assert(!is_poison);
         switch (type_size(type)) {
@@ -3559,6 +3548,25 @@ namespace metajit {
             assert(false); // Unreachable
         }
         return Bits::constant(type, value);
+      }
+
+      void write(std::ostream& stream) const {
+        if (is_poison) {
+          stream << "poison";
+        } else {
+          size_t bits = type == Type::Bool ? 1 : type_size(type) * 8;
+          for (size_t it = bits; it-- > 0; ) {
+            stream << (at(it).value() ? '1' : '0');
+          }
+        }
+      }
+
+      bool operator==(const Bits& other) const {
+        return type == other.type && is_poison == other.is_poison && value == other.value;
+      }
+
+      bool operator!=(const Bits& other) const {
+        return !(*this == other);
       }
     };
   private:
