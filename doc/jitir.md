@@ -13,7 +13,7 @@
 
 ## Instructions
 
-### Freeze
+### Promote
 
 Bind a value at tracing time. Insert a guard to check that the value is the same at runtime.
 

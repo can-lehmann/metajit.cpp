@@ -104,7 +104,7 @@ namespace metajit {
     Value* lower_intrinsic(llvm::StringRef name, std::vector<llvm::Value*> args, Type return_type) {
       if (name.starts_with("__metajit_freeze")) {
         assert(args.size() == 1);
-        return _builder.build_freeze(lower_operand(args[0]));
+        return _builder.build_promote(lower_operand(args[0]));
       } else if (name.starts_with("__metajit_assume_const")) {
         assert(args.size() == 1);
         return _builder.build_assume_const(lower_operand(args[0]));
