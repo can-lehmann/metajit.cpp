@@ -17,10 +17,10 @@
 using namespace metajit;
 using namespace metajit::test;
 
-int main() {
+int main(int argc, char** argv) {
   LLVMCodeGen::initilize_llvm_jit();
 
-  SourceTestSuite suite("tests/output/test_source");
+  SourceTestSuite suite("tests/output/test_source", argc, argv);
 
   suite.source_test("tests/source/fib.o0.ll")
     .inputs({ RandomRange(Type::Int32, 0, 40) })

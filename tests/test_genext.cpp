@@ -17,10 +17,10 @@
 using namespace metajit;
 using namespace metajit::test;
 
-int main() {
+int main(int argc, char** argv) {
   LLVMCodeGen::initilize_llvm_jit();
 
-  GenExtTestSuite suite("tests/output/test_genext");
+  GenExtTestSuite suite("tests/output/test_genext", argc, argv);
 
   suite.gen_ext_test("add_promoted").run([](Builder& builder, TraceTestData& data) {
     Value* x = data.static_input(RandomRange(Type::Int32));  // promoted/frozen

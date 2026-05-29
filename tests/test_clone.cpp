@@ -57,7 +57,7 @@ namespace metajit {
     class CloneTestSuite: public unittest::Suite {
     private:
     public:
-      CloneTestSuite(): unittest::Suite() {}
+      CloneTestSuite(int argc = 0, char** argv = nullptr): unittest::Suite(argc, argv) {}
 
       CloneTest clone_test(const std::string& name) {
         return CloneTest(name).suite(*this);
@@ -67,8 +67,8 @@ namespace metajit {
 }
 
 
-int main() {
-  CloneTestSuite suite;
+int main(int argc, char** argv) {
+  CloneTestSuite suite(argc, argv);
 
   #define binop(name) \
     suite.clone_test(#name).run([](Builder& builder) { \

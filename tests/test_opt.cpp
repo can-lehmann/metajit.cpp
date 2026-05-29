@@ -52,10 +52,10 @@ void check_block_order(const std::string& expected, Section* section, BlockOrder
   unittest_assert(ss.str() == expected);
 }
 
-int main() {
+int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
-  DiffTestSuite suite("tests/output/test_opt");
+  DiffTestSuite suite("tests/output/test_opt", argc, argv);
 
   suite.diff_test("resize_resize_to_mask").run([](Builder& builder, TestData& data) {
 

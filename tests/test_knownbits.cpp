@@ -210,8 +210,8 @@ void test_usedbits_shr(unittest::Suite& suite) {
   });
 }
 
-int main() {
-  unittest::Suite suite;
+int main(int argc, char** argv) {
+  unittest::Suite suite(argc, argv);
 
   test_add_example(suite);
   test_sub_example(suite);

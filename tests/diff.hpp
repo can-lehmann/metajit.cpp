@@ -522,8 +522,8 @@ namespace metajit {
     private:
       std::string _output_path;
     public:
-      DiffTestSuite(const std::string& output_path):
-        unittest::Suite(), _output_path(output_path) {}
+      DiffTestSuite(const std::string& output_path, int argc = 0, char** argv = nullptr):
+        unittest::Suite(argc, argv), _output_path(output_path) {}
 
       DiffTest diff_test(const std::string& name) {
         return DiffTest(name, _output_path).suite(*this);
@@ -614,8 +614,8 @@ namespace metajit {
     private:
       std::string _output_path;
     public:
-      SourceTestSuite(const std::string& output_path):
-        unittest::Suite(), _output_path(output_path) {}
+      SourceTestSuite(const std::string& output_path, int argc = 0, char** argv = nullptr):
+        unittest::Suite(argc, argv), _output_path(output_path) {}
 
       SourceTest source_test(const std::string& ll_file) {
         std::string name = std::filesystem::path(ll_file).stem().string();
@@ -745,8 +745,8 @@ namespace metajit {
     private:
       std::string _output_path;
     public:
-      OptTestSuite(const std::string& output_path):
-        unittest::Suite(), _output_path(output_path) {}
+      OptTestSuite(const std::string& output_path, int argc = 0, char** argv = nullptr):
+        unittest::Suite(argc, argv), _output_path(output_path) {}
 
       OptTest opt_test(const std::string& name) {
         return OptTest(name, _output_path).suite(*this);
@@ -968,8 +968,8 @@ namespace metajit {
     private:
       std::string _output_path;
     public:
-      GenExtTestSuite(const std::string& output_path):
-        unittest::Suite(), _output_path(output_path) {}
+      GenExtTestSuite(const std::string& output_path, int argc = 0, char** argv = nullptr):
+        unittest::Suite(argc, argv), _output_path(output_path) {}
 
       GenExtTest gen_ext_test(const std::string& name) {
         return GenExtTest(name, _output_path).suite(*this);
