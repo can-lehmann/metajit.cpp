@@ -25,8 +25,8 @@ void check_no_allocas(Section* section) {
   }
 }
 
-int main() {
-  OptTestSuite suite("tests/output/test_mem2reg");
+int main(int argc, char** argv) {
+  OptTestSuite suite("tests/output/test_mem2reg", argc, argv);
 
   suite.opt_test("linear_store_load").run([](Builder& builder, TestData& data) {
     Value* alloca = builder.build_alloca(Type::Int64);

@@ -160,7 +160,7 @@ namespace metajit {
     class TVTestSuite: public unittest::Suite {
     private:
     public:
-      TVTestSuite(): unittest::Suite() {}
+      TVTestSuite(int argc = 0, char** argv = nullptr): unittest::Suite(argc, argv) {}
 
       TVTest tv_test(const std::string& name) {
         return TVTest(name).suite(*this);
@@ -172,8 +172,8 @@ namespace metajit {
 using namespace metajit;
 using namespace metajit::test;
 
-int main() {
-  TVTestSuite suite;
+int main(int argc, char** argv) {
+  TVTestSuite suite(argc, argv);
 
   suite.tv_test("add").run({Type::Int32, Type::Int32}, [](Builder& builder) {
     return builder.build_add(builder.entry_arg(0), builder.entry_arg(1));

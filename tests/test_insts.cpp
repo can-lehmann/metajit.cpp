@@ -404,10 +404,10 @@ void test_call(DiffTestSuite& suite) {
   });
 }
 
-int main() {
+int main(int argc, char** argv) {
   LLVMCodeGen::initilize_llvm_jit();
 
-  DiffTestSuite suite("tests/output/test_insts");
+  DiffTestSuite suite("tests/output/test_insts", argc, argv);
 
   test_binop(suite);
   test_shift(suite);

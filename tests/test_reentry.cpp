@@ -104,7 +104,7 @@ namespace metajit {
     class ReentryTestSuite: public unittest::Suite {
     private:
     public:
-      ReentryTestSuite(): unittest::Suite() {}
+      ReentryTestSuite(int argc = 0, char** argv = nullptr): unittest::Suite(argc, argv) {}
 
       ReentryTest reentry_test(const std::string& name) {
         return ReentryTest(name).suite(*this);
@@ -116,8 +116,8 @@ namespace metajit {
 using namespace metajit;
 using namespace metajit::test;
 
-int main() {
-  ReentryTestSuite suite;
+int main(int argc, char** argv) {
+  ReentryTestSuite suite(argc, argv);
 
   using Bits = Interpreter::Bits;
   using TestCase = ReentryTest::TestCase;
