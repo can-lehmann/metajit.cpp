@@ -3384,7 +3384,191 @@ namespace metajit {
 
   class Interpreter {
   public:
-    using Bits = KnownBits::Bits;
+    struct Bits {
+      Type type = Type::Void;
+      bool is_poison = false;
+      uint64_t value = 0;
+      
+      Bits() {}
+      Bits(Type _type, bool _is_poison, uint64_t _value):
+        type(_type),
+        is_poison(_is_poison),
+        value(_value & type_mask(_type)) {}
+
+      static Bits constant(Type type, uint64_t value) {
+        return Bits(type, false, value);
+      }
+
+      static Bits constant(bool value) {
+        return Bits::constant(Type::Bool, value ? 1 : 0);
+      }
+
+      static Bits constant(void* ptr) {
+        return Bits::constant(Type::Ptr, (uint64_t)(uintptr_t) ptr);
+      }
+
+      static Bits poison(Type type) {
+        return Bits(type, true, 0);
+      }
+
+      std::optional<bool> at(size_t bit) const {
+        if (is_poison) {
+          return {};
+        }
+        return (value & (uint64_t(1) << bit)) != 0;
+      }
+
+      #define switch_type(op) \
+        switch (type) { \
+          case Type::Int8: res = (int8_t(a) op int8_t(b)); break; \
+          case Type::Int16: res = (int16_t(a) op int16_t(b)); break; \
+          case Type::Int32: res = (int32_t(a) op int32_t(b)); break; \
+          case Type::Int64: res = (int64_t(a) op int64_t(b)); break; \
+          default: assert(false && "Unsupported type"); \
+        }
+
+      static Bits div_u(Type type, uint64_t a, uint64_t b) {
+        return Bits::constant(type, a / b);
+      }
+
+      static Bits div_s(Type type, uint64_t a, uint64_t b) {
+        uint64_t res = 0;
+        switch_type(/)
+        return Bits::constant(type, res);
+      }
+
+      static Bits mod_u(Type type, uint64_t a, uint64_t b) {
+        return Bits::constant(type, a % b);
+      }
+
+      static Bits mod_s(Type type, uint64_t a, uint64_t b) {
+        uint64_t res = 0;
+        switch_type(%)
+        return Bits::constant(type, res);
+      }
+
+      static Bits lt_s(Type type, uint64_t a, uint64_t b) {
+        bool res = false;
+        switch_type(<)
+        return Bits::constant(res);
+      }
+
+      static Bits shr_s(Type type, uint64_t a, uint64_t b) {
+        uint64_t res = 0;
+        switch_type(>>)
+        return Bits::constant(type, res);
+      }
+
+      #undef switch_type
+
+      #define propagating_binop(name, expr) \
+        Bits name(const Bits& other) const { \
+          if (is_poison || other.is_poison) { \
+            return Bits::poison((expr).type); \
+          } \
+          return expr; \
+        }
+      
+      propagating_binop(operator+, Bits::constant(type, value + other.value))
+      propagating_binop(operator-, Bits::constant(type, value - other.value))
+      propagating_binop(operator*, Bits::constant(type, value * other.value))
+
+      propagating_binop(div_u, div_u(type, value, other.value))
+      propagating_binop(div_s, div_s(type, value, other.value))
+      propagating_binop(mod_u, mod_u(type, value, other.value))
+      propagating_binop(mod_s, mod_s(type, value, other.value))
+
+      propagating_binop(operator&, Bits::constant(type, value & other.value))
+      propagating_binop(operator|, Bits::constant(type, value | other.value))
+      propagating_binop(operator^, Bits::constant(type, value ^ other.value))
+
+      propagating_binop(eq, Bits::constant(Type::Bool, value == other.value))      
+      propagating_binop(lt_u, Bits::constant(Type::Bool, value < other.value))
+      propagating_binop(lt_s, lt_s(type, value, other.value))
+
+      propagating_binop(shl, Bits::constant(type, value << other.value))
+      propagating_binop(shr_s, shr_s(type, value, other.value))
+      propagating_binop(shr_u, Bits::constant(type, value >> other.value))
+
+      #undef propagating_binop
+
+      Bits resize_u(Type to) const {
+        if (is_poison) {
+          return Bits::poison(to);
+        }
+        return Bits::constant(to, value);
+      }
+
+      Bits resize_s(Type to) const {
+        if (is_poison) {
+          return Bits::poison(to);
+        }
+        Bits result = Bits::constant(to, value);
+        if (at(type_width(type) - 1).value()) {
+          result.value |= type_mask(to) & ~type_mask(type);
+        }
+        return result;
+      }
+
+      Bits resize_x(Type to) const {
+        return resize_u(to);
+      }
+
+      Bits select(const Bits& a, const Bits& b) const {
+        if (is_poison) {
+          return Bits::poison(a.type);
+        }
+        if (value) {
+          return a;
+        } else {
+          return b;
+        }
+      }
+
+      void store(uint8_t* ptr) {
+        assert(!is_poison);
+        switch (type_size(type)) {
+          case 1: *ptr = (uint8_t) value; break;
+          case 2: *(uint16_t*) ptr = (uint16_t) value; break;
+          case 4: *(uint32_t*) ptr = (uint32_t) value; break;
+          case 8: *(uint64_t*) ptr = (uint64_t) value; break;
+          default:
+            assert(false); // Unreachable
+        }
+      }
+
+      static Bits load(uint8_t* ptr, Type type) {
+        uint64_t value = 0;
+        switch (type_size(type)) {
+          case 1: value = *ptr; break;
+          case 2: value = *(uint16_t*) ptr; break;
+          case 4: value = *(uint32_t*) ptr; break;
+          case 8: value = *(uint64_t*) ptr; break;
+          default:
+            assert(false); // Unreachable
+        }
+        return Bits::constant(type, value);
+      }
+
+      void write(std::ostream& stream) const {
+        if (is_poison) {
+          stream << "poison";
+        } else {
+          size_t bits = type == Type::Bool ? 1 : type_size(type) * 8;
+          for (size_t it = bits; it-- > 0; ) {
+            stream << (at(it).value() ? '1' : '0');
+          }
+        }
+      }
+
+      bool operator==(const Bits& other) const {
+        return type == other.type && is_poison == other.is_poison && value == other.value;
+      }
+
+      bool operator!=(const Bits& other) const {
+        return !(*this == other);
+      }
+    };
   private:
     Section* _section;
     NameMap<Bits> _values;
@@ -3451,19 +3635,19 @@ namespace metajit {
     Event step() {
       if (dynmatch(LoadInst, load, _inst)) {
         Bits ptr_bits = at(load->ptr());
-        assert(ptr_bits.is_const());
+        assert(!ptr_bits.is_poison);
         uint8_t* ptr = (uint8_t*) ptr_bits.value + load->offset();
         _values[load] = Bits::load(ptr, load->type());
       } else if (dynmatch(StoreInst, store, _inst)) {
         Bits ptr_bits = at(store->ptr());
         Bits value_bits = at(store->value());
-        assert(ptr_bits.is_const());
+        assert(!ptr_bits.is_poison);
         uint8_t* ptr = (uint8_t*) ptr_bits.value + store->offset();
         value_bits.store(ptr);
         _values[store] = Bits();
       } else if (dynmatch(AllocaInst, alloca_inst, _inst)) {
         Bits size_bits = at(alloca_inst->size());
-        assert(size_bits.is_const());
+        assert(!size_bits.is_poison);
 
         size_t size = size_bits.value;
         assert(size > 0 && "Alloca size must be non-zero");
@@ -3471,10 +3655,6 @@ namespace metajit {
         uint8_t* allocation = new uint8_t[size];
         _alloca_storage.push_back(allocation);
         _values[alloca_inst] = Bits::constant(Type::Ptr, (uint64_t) (uintptr_t) allocation);
-      } else if (dynmatch(ResizeXInst, resize_x, _inst)) {
-        // We don't want to introduce any unknown bits, so we just zero-extend
-        Bits arg = at(resize_x->arg(0));
-        _values[resize_x] = arg.resize_u(resize_x->type());
       } else if (dynmatch(JumpInst, jump, _inst)) {
         std::vector<Bits> args;
         for (Value* arg : jump->args()) {
@@ -3484,7 +3664,7 @@ namespace metajit {
         return Event::EnterBlock;
       } else if (dynmatch(BranchInst, branch, _inst)) {
         Bits cond = at(branch->cond());
-        assert(cond.is_const());
+        assert(!cond.is_poison);
         if (cond.value != 0) {
           enter(branch->true_block(), {});
         } else {
@@ -3493,10 +3673,67 @@ namespace metajit {
         return Event::EnterBlock;
       } else if (dynmatch(ExitInst, exit, _inst)) {
         return Event::Exit;
-      } else {
-        _values[_inst] = KnownBits::Bits::eval(_inst, _values);
+      } else if (dynamic_cast<PromoteInst*>(_inst) ||
+                 dynamic_cast<AssumeConstInst*>(_inst)) {
+        _values[_inst] = at(_inst->arg(0));
+      } else if (dynmatch(SelectInst, select, _inst)) {
+        Bits cond = at(select->cond());
+        Bits a = at(select->arg(1));
+        Bits b = at(select->arg(2));
+        _values[_inst] = cond.select(a, b);
+      } else if (dynmatch(ResizeUInst, resize_u, _inst)) {
+        Bits a = at(resize_u->arg(0));
+        _values[_inst] = a.resize_u(resize_u->type());
+      } else if (dynmatch(ResizeSInst, resize_u, _inst)) {
+        Bits a = at(resize_u->arg(0));
+        _values[_inst] = a.resize_s(resize_u->type());
+      } else if (dynmatch(ResizeXInst, resize_x, _inst)) {
+        Bits a = at(resize_x->arg(0));
+        _values[_inst] = a.resize_x(resize_x->type());
+      } else if (dynmatch(FreezeInst, freeze, _inst)) {
+        Bits a = at(freeze->arg(0));
+        // Poison is refined to a non-poison value, we choose zero in this case
+        if (a.is_poison) {
+          _values[_inst] = Bits::constant(a.type, 0);
+        } else {
+          _values[_inst] = a;
+        }
       }
-      assert(_values[_inst].is_const() || _inst->type() != Type::Void);
+
+      #define binop(name, expr) \
+        else if (dynamic_cast<name*>(_inst)) { \
+          Bits a = at(_inst->arg(0)); \
+          Bits b = at(_inst->arg(1)); \
+          _values[_inst] = expr; \
+        }
+      
+      binop(AddPtrInst, a + b)
+      binop(AddInst, a + b)
+      binop(SubInst, a - b)
+      binop(MulInst, a * b)
+      binop(DivSInst, a.div_s(b))
+      binop(DivUInst, a.div_u(b))
+      binop(ModSInst, a.mod_s(b))
+      binop(ModUInst, a.mod_u(b))
+
+      binop(AndInst, a & b)
+      binop(OrInst, a | b)
+      binop(XorInst, a ^ b)
+      
+      binop(ShlInst, a.shl(b))
+      binop(ShrUInst, a.shr_u(b))
+      binop(ShrSInst, a.shr_s(b))
+
+      binop(EqInst, a.eq(b))
+      binop(LtSInst, a.lt_s(b))
+      binop(LtUInst, a.lt_u(b))
+
+      #undef binop
+    
+      else {
+        assert(false);
+      }
+
       _inst = _inst->next();
       return Event::None;
     }
@@ -3507,13 +3744,23 @@ namespace metajit {
       _inst = *block->begin();
       for (Arg* arg : block->args()) {
         assert(args[arg->index()].type == arg->type());
-        assert(args[arg->index()].is_const());
         _values[arg] = args[arg->index()];
       }
     }
 
     Bits at(Value* value) const {
-      return KnownBits::Bits::at(_values, value);
+      if (dynmatch(Const, constant, value)) {
+        return Bits::constant(constant->type(), constant->value());
+      } else if (value->is_named()) {
+        NamedValue* named_value = (NamedValue*) value;
+        assert(named_value->name() < _values.size());
+        return _values.at(named_value);
+      } else if (dynmatch(Poison, poison, value)) {
+        return Bits::poison(poison->type());
+      } else {
+        assert(false); // Unreachable
+        return Bits();
+      }
     }
   };
 
