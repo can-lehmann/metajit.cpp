@@ -453,10 +453,6 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
-  Branch %1, true_block=b1, false_block=b2
-b1:
-  Jump block=b2
-b2:
   Store %0, 42:Int64, aliasing=0, offset=16
   Exit
 }
@@ -484,6 +480,7 @@ b2:
     Value* cond2 = data.input(Type::Bool);
     builder.build_branch(cond2, then_block2, else_block2);
     builder.move_to_end(then_block2);
+    data.output(data.input(Type::Bool));
     data.output(cond2);
     builder.build_jump(return_block);
     builder.move_to_end(else_block2);
@@ -501,19 +498,17 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
-  Branch %1, true_block=b1, false_block=b2
+  %3 = Load %0, type=Bool, flags={}, aliasing=0, offset=16
+  Branch %3, true_block=b1, false_block=b2
 b1:
-  Jump block=b2
+  %5 = Load %0, type=Bool, flags={}, aliasing=0, offset=17
+  Store %0, %5, aliasing=0, offset=18
+  Store %0, 1:Bool, aliasing=0, offset=19
+  Jump block=b3
 b2:
-  %5 = Load %0, type=Bool, flags={}, aliasing=0, offset=16
-  Branch %5, true_block=b3, false_block=b4
+  Store %0, 0:Bool, aliasing=0, offset=20
+  Jump block=b3
 b3:
-  Store %0, 1:Bool, aliasing=0, offset=17
-  Jump block=b5
-b4:
-  Store %0, 0:Bool, aliasing=0, offset=18
-  Jump block=b5
-b5:
   Store %0, 42:Int64, aliasing=0, offset=24
   Exit
 }
@@ -738,6 +733,71 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   Store %0, 1:Int64, aliasing=0, offset=8
+  Exit
+}
+)", builder.section());
+  });
+
+  suite.diff_test("simplifycfg branch jump thread with args repeat").run([](Builder& builder, TestData& data) {
+    Value* cond = data.input(Type::Bool);
+    Value* cond2 = data.input(Type::Bool);
+    Value* val = data.input(Type::Int64);
+    Block* then_block = builder.build_block();
+    Block* else_block = builder.build_block();
+    Block* then_block2 = builder.build_block();
+    Block* else_block2 = builder.build_block();
+    Block* merge_block = builder.build_block({Type::Int64});
+
+    builder.build_branch(cond, then_block, else_block);
+    builder.move_to_end(then_block);
+    builder.build_jump(merge_block, {val});
+    builder.move_to_end(else_block);
+    builder.build_branch(cond2, then_block2, else_block2);
+    builder.move_to_end(then_block2);
+    builder.build_jump(merge_block, {val});
+    builder.move_to_end(else_block2);
+    builder.build_jump(merge_block, {val});
+    builder.move_to_end(merge_block);
+    data.output(merge_block->arg(0));
+    builder.build_exit();
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  %3 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
+  Store %0, %3, aliasing=0, offset=16
+  Exit
+}
+)", builder.section());
+  });
+
+  suite.diff_test("simplifycfg jump thread enables block merge").run([](Builder& builder, TestData& data) {
+    // entry branches to thread_me or direct. both jump to target({val}).
+    // thread_me is a pure passthrough (single jump), so entry gets threaded
+    // through it to target directly. After threading, thread_me loses its only
+    // predecessor and is removed, leaving target with a single incoming edge
+    // from direct. This requires rescheduling.
+    Value* cond = data.input(Type::Bool);
+    Value* val = data.input(Type::Int64);
+    Block* thread_me = builder.build_block();
+    Block* direct = builder.build_block();
+    Block* target = builder.build_block({Type::Int64});
+
+    builder.build_branch(cond, thread_me, direct);
+    builder.move_to_end(thread_me);
+    builder.build_jump(target, {val});
+    builder.move_to_end(direct);
+    builder.build_jump(target, {val});
+    builder.move_to_end(target);
+    data.output(target->arg(0));
+    builder.build_exit();
+
+    check_simplifycfg(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
+  Store %0, %2, aliasing=0, offset=16
   Exit
 }
 )", builder.section());

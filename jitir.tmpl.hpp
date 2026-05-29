@@ -24,6 +24,7 @@
 #include <unordered_set>
 #include <set>
 #include <map>
+#include <queue>
 #include <optional>
 #include <cstring>
 #include <fstream>
@@ -4183,6 +4184,9 @@ namespace metajit {
     Section* _section;
     std::vector<std::vector<Block*>> incoming;
     std::map<Value*, Value*> substs;
+    std::vector<bool> removed;
+    std::vector<bool> scheduled;
+    std::queue<Block*> todo;
     Builder builder;
     bool changes = false;
 
@@ -4217,6 +4221,8 @@ namespace metajit {
     #endif
 
     void remove(Block* block) {
+      assert (!removed[block->name()]);
+      removed[block->name()] = true;
       auto succs = block->successors();
       for (Block* succ : succs) {
         remove_from_incoming(block, succ);
@@ -4304,6 +4310,15 @@ namespace metajit {
       return false;
     }
 
+    void schedule_predecessors(Block* block) {
+      for (Block* pred : incoming[block->name()]) {
+        if (!scheduled[pred->name()]) {
+          todo.push(pred);
+          scheduled[pred->name()] = true;
+        }
+      }
+    }
+
   public:
     SimplifyCFG(Section* section): Pass(section), _section(section), incoming(section->block_count()),
         builder(section) {
@@ -4311,6 +4326,18 @@ namespace metajit {
       _compute_incoming(incoming);
 
       for (Block* block : *_section) {
+        todo.push(block);
+        removed.push_back(false);
+        scheduled.push_back(true);
+      }
+
+      while (todo.size() > 0) {
+        Block* block = todo.front();
+        todo.pop();
+        scheduled[block->name()] = false;
+        if (removed.at(block->name())) {
+          continue;
+        }
         // remove unreachable blocks
         if (block != _section->entry() && incoming[block->name()].empty()) {
           remove(block);
@@ -4333,6 +4360,7 @@ namespace metajit {
               // check that it's still there once
               assert (std::find(target_incoming.begin(), target_incoming.end(), block) != target_incoming.end());
               changes = true;
+              schedule_predecessors(block);
               continue;
             }
             // if the condition is constant, we can just jump to the taken branch
@@ -4345,6 +4373,7 @@ namespace metajit {
               Block* other = const_cond->value() != 0 ? branch->false_block() : branch->true_block();
               remove_from_incoming(block, other);
               changes = true;
+              schedule_predecessors(block);
               continue;
             }
 
@@ -4369,6 +4398,7 @@ namespace metajit {
               remove_from_incoming(block, branch->true_block());
               remove_from_incoming(block, branch->false_block());
               changes = true;
+              schedule_predecessors(block);
               continue;
             }
 
@@ -4413,6 +4443,7 @@ namespace metajit {
               }
               remove(target);
               changes = true;
+              schedule_predecessors(block);
               continue;
             }
             // do jump-threading: if the target block only has a single instruction,
@@ -4443,6 +4474,16 @@ namespace metajit {
                 block->remove(jump);
                 incoming[final_target->name()].push_back(block);
                 remove_from_incoming(block, target);
+                // target's incoming count dropped by 1; if it now has exactly one
+                // predecessor, that predecessor becomes eligible for block merging
+                if (!removed[target->name()] && incoming[target->name()].size() == 1) {
+                  Block* remaining_pred = incoming[target->name()][0];
+                  if (!scheduled[remaining_pred->name()]) {
+                    todo.push(remaining_pred);
+                    scheduled[remaining_pred->name()] = true;
+                  }
+                }
+                schedule_predecessors(block);
                 changes = true;
                 continue;
               }
