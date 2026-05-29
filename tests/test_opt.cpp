@@ -773,11 +773,11 @@ b0(%0: Ptr):
   });
 
   suite.diff_test("simplifycfg jump thread enables block merge").run([](Builder& builder, TestData& data) {
-    // entry branches to thread_me or direct; both jump to target({val}).
+    // entry branches to thread_me or direct. both jump to target({val}).
     // thread_me is a pure passthrough (single jump), so entry gets threaded
     // through it to target directly. After threading, thread_me loses its only
     // predecessor and is removed, leaving target with a single incoming edge
-    // from direct. My fix schedules direct so it can be merged into target.
+    // from direct. This requires rescheduling.
     Value* cond = data.input(Type::Bool);
     Value* val = data.input(Type::Int64);
     Block* thread_me = builder.build_block();
