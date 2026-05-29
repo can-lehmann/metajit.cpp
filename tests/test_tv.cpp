@@ -457,5 +457,28 @@ int main(int argc, char** argv) {
     return args[1].value() == context.bv_val(0, 32);
   });
 
+  // freeze strips poison: shl with out-of-range shift is poison, freeze makes it non-poison
+  suite.tv_test("freeze_strips_poison").run_valuestate({Type::Int32, Type::Int32}, [](Builder& builder) {
+    Value* shifted = builder.build_shl(builder.entry_arg(0), builder.entry_arg(1));
+    return builder.build_freeze(shifted);
+  }, [](z3::context& context, std::vector<tv::ValueState> args) {
+    z3::expr is_poison = z3::uge(args[1].value(), context.bv_val(32, 32));
+    z3::expr arbitrary = context.bv_const("freeze_0", 32);
+    tv::ValueState result(Type::Int32,
+      z3::ite(is_poison, arbitrary, z3::shl(args[0].value(), args[1].value())));
+    // is_poison is false (freeze always produces a defined value)
+    return result;
+  });
+
+  // freeze of a non-poison value is identity
+  suite.tv_test("freeze_nonpoison_identity").run_valuestate({Type::Int32, Type::Int32}, [](Builder& builder) {
+    Value* sum = builder.build_add(builder.entry_arg(0), builder.entry_arg(1));
+    return builder.build_freeze(sum);
+  }, [](z3::context& context, std::vector<tv::ValueState> args) {
+    tv::ValueState result(Type::Int32, args[0].value() + args[1].value());
+    // is_poison is false; value is unchanged since add is never poison
+    return result;
+  });
+
   return suite.finish();
 }

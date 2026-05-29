@@ -288,6 +288,7 @@ namespace metajit {
 
       std::unordered_map<Block*, BlockData> _blocks;
       std::unordered_map<NamedValue*, ValueState> _values;
+      size_t _freeze_counter = 0;
 
     public:
       ValueState emit(Value* value) {
@@ -371,7 +372,12 @@ namespace metajit {
       }
 
       ValueState emit_inst(Inst* inst, Block* block) {
-        if (dynamic_cast<PromoteInst*>(inst) || dynamic_cast<AssumeConstInst*>(inst)) {
+        if (dynmatch(FreezeInst, freeze, inst)) {
+          ValueState input = emit(freeze->arg(0));
+          std::string name = "freeze_" + std::to_string(_freeze_counter++);
+          z3::expr arbitrary = _context.bv_const(name.c_str(), type_width(freeze->type()));
+          return ValueState(freeze->type(), z3::ite(input.is_poison(), arbitrary, input.value()));
+        } else if (dynamic_cast<PromoteInst*>(inst) || dynamic_cast<AssumeConstInst*>(inst)) {
           return emit(inst->arg(0));
         } else if (dynmatch(SelectInst, select, inst)) {
           ValueState cond_state = emit(select->arg(0));

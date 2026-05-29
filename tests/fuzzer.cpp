@@ -48,7 +48,7 @@ namespace metajit {
       }
 
       Value* gen_int(RandomRange random_range) {
-        switch (rand() % 13) {
+        switch (rand() % 14) {
           #define binop(name) \
             return _builder->build_##name( \
               gen(RandomRange(random_range.type())), \
@@ -97,6 +97,8 @@ namespace metajit {
                 gen(random_range)
               );
             }
+          case 13:
+            return _builder->build_freeze(gen(random_range));
           default:
             assert(false && "Unreachable");
 
@@ -106,7 +108,7 @@ namespace metajit {
       }
 
       Value* gen_bool(RandomRange random_range) {
-        switch (rand() % 8) {
+        switch (rand() % 9) {
           #define cmp(name) { \
             Type type = gen_int_type(); \
             return _builder->build_##name( \
@@ -141,6 +143,8 @@ namespace metajit {
                 gen(random_range)
               );
             }
+          case 8:
+            return _builder->build_freeze(gen(random_range));
           default:
             assert(false && "Unreachable");
 

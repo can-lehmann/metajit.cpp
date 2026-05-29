@@ -145,7 +145,9 @@ namespace metajit {
     }
 
     llvm::Value* emit_inst(Inst* inst) {
-      if (dynmatch(PromoteInst, promote, inst)) {
+      if (dynmatch(FreezeInst, freeze, inst)) {
+        return _builder.CreateFreeze(emit_arg(freeze->arg(0)));
+      } else if (dynmatch(PromoteInst, promote, inst)) {
         return emit_arg(promote->arg(0));
       } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
         return emit_arg(assume_const->arg(0));

@@ -210,6 +210,27 @@ void test_call_default_void_store(uint32_t* out, uint32_t a, uint32_t b) {
   *out = a + b + 1;
 }
 
+void test_freeze(DiffTestSuite& suite) {
+  #define freeze_type(type) \
+    suite.diff_test("freeze_" #type).run([](Builder& builder, TestData& data) { \
+      data.output(builder.build_freeze(data.input(Type::type))); \
+    });
+
+  freeze_type(Bool)
+  freeze_type(Int8)
+  freeze_type(Int16)
+  freeze_type(Int32)
+  freeze_type(Int64)
+
+  // freeze(poison) - freeze(poison) == 0: freeze returns a fixed value, not a fresh one each use
+  suite.diff_test("freeze_poison_shl_Int32").run([](Builder& builder, TestData& data) {
+    Value* val = data.input(Type::Int32);
+    Value* shift = data.input(RandomRange(Type::Int32, 32, type_mask(Type::Int32)));
+    Value* frozen = builder.build_freeze(builder.build_shl(val, shift));
+    data.output(builder.build_sub(frozen, frozen));
+  });
+}
+
 void test_assume_const(DiffTestSuite& suite) {
   #define assume_const_type(type) \
     suite.diff_test("assume_const_" #type).run([](Builder& builder, TestData& data) { \
@@ -414,6 +435,7 @@ int main(int argc, char** argv) {
   test_div_mod(suite);
   test_select(suite);
   test_resize(suite);
+  test_freeze(suite);
   test_assume_const(suite);
   test_alloca(suite);
   test_call(suite);

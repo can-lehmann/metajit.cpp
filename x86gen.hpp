@@ -703,7 +703,9 @@ namespace metajit {
     }
 
     void isel(Inst* inst, Block* block) {
-      if (dynmatch(PromoteInst, promote, inst)) {
+      if (dynmatch(FreezeInst, freeze, inst)) {
+        _builder.mov64(vreg(inst), vreg(freeze->arg(0)));
+      } else if (dynmatch(PromoteInst, promote, inst)) {
         _builder.mov64(vreg(inst), vreg(promote->arg(0)));
       } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
         _builder.mov64(vreg(inst), vreg(assume_const->arg(0)));

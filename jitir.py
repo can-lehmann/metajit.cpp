@@ -366,6 +366,12 @@ def cmp(name, type_checks):
 
 jitir = IR(
     insts = [
+        Inst("Freeze",
+            args = [Arg("a")],
+            type = "a->type()",
+            type_checks = [],
+            doc = "If a is poison, produce an arbitrary but fixed value. Otherwise, return a unchanged."
+        ),
         Inst("Promote",
             args = [Arg("a")],
             type = "a->type()",

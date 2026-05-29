@@ -3297,7 +3297,8 @@ namespace metajit {
       }
 
       static Bits eval(Inst* inst, NameMap<Bits>& values) {
-        if (dynamic_cast<PromoteInst*>(inst) ||
+        if (dynamic_cast<FreezeInst*>(inst) ||
+            dynamic_cast<PromoteInst*>(inst) ||
             dynamic_cast<AssumeConstInst*>(inst)) {
           return at(values, inst->arg(0));
         } else if (dynmatch(SelectInst, select, inst)) {
