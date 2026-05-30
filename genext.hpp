@@ -313,7 +313,7 @@ namespace metajit {
     }
 
     Value* emit_const_prop(Inst* inst) {
-      if (dynamic_cast<FreezeInst*>(inst)) {
+      if (dynamic_cast<PromoteInst*>(inst)) {
         return _builder.build_const(Type::Bool, 1);
       } else if (dynamic_cast<AssumeConstInst*>(inst)) {
         return _builder.build_const(Type::Bool, 1);
@@ -327,7 +327,7 @@ namespace metajit {
         Value* cond_const = is_const(select->arg(0));
         Value* true_const = is_const(select->arg(1));
         Value* false_const = is_const(select->arg(2));
-        Value* cond = emit_arg(select->arg(0));
+        Value* cond = _builder.build_freeze(emit_arg(select->arg(0)));
         return _builder.fold_or(
           _builder.fold_and(
             cond_const,
@@ -339,16 +339,16 @@ namespace metajit {
               false_const
             ),
             _builder.fold_eq(
-              emit_arg(select->arg(1)),
-              emit_arg(select->arg(2))
+              _builder.build_freeze(emit_arg(select->arg(1))),
+              _builder.build_freeze(emit_arg(select->arg(2)))
             )
           )
         );
       } else if (dynmatch(AndInst, and_inst, inst)) {
         Value* a_const = is_const(and_inst->arg(0));
         Value* b_const = is_const(and_inst->arg(1));
-        Value* a = emit_arg(and_inst->arg(0));
-        Value* b = emit_arg(and_inst->arg(1));
+        Value* a = _builder.build_freeze(emit_arg(and_inst->arg(0)));
+        Value* b = _builder.build_freeze(emit_arg(and_inst->arg(1)));
 
         Value* res = _builder.fold_and(a_const, b_const);
         // Short-circuit
@@ -363,8 +363,8 @@ namespace metajit {
       } else if (dynmatch(OrInst, or_inst, inst)) {
         Value* a_const = is_const(or_inst->arg(0));
         Value* b_const = is_const(or_inst->arg(1));
-        Value* a = emit_arg(or_inst->arg(0));
-        Value* b = emit_arg(or_inst->arg(1));
+        Value* a = _builder.build_freeze(emit_arg(or_inst->arg(0)));
+        Value* b = _builder.build_freeze(emit_arg(or_inst->arg(1)));
 
         Value* res = _builder.fold_and(a_const, b_const);
         // Short-circuit
@@ -410,8 +410,8 @@ namespace metajit {
           Value* use_used = is_used(use.inst);
           
           if (is_int_or_bool(use.inst->type()) &&
-              // Freeze is always constant, but needs this instruction to perform the check
-              !dynamic_cast<FreezeInst*>(use.inst)) {
+              // Promote is always constant, but needs this instruction to perform the check
+              !dynamic_cast<PromoteInst*>(use.inst)) {
             use_used = _builder.fold_and(
               use_used,
               _builder.fold_not(is_const(use.inst))
@@ -420,7 +420,7 @@ namespace metajit {
 
           if (dynmatch(SelectInst, select, use.inst)) {
             if (use.index > 0) {
-              Value* branch_used = emit_arg(select->arg(0));
+              Value* branch_used = _builder.build_freeze(emit_arg(select->arg(0)));
               if (branch_used) {
                 if (use.index == 2) {
                   branch_used = _builder.fold_not(branch_used);
@@ -492,45 +492,52 @@ namespace metajit {
       emit_branch(
         is_used(inst),
         [&](){
-          if (dynmatch(FreezeInst, freeze, inst)) {
-            emit_branch(
-              is_const(freeze->arg(0)),
-              [&](){
-                _builder.CreateStore(
-                  emit_built_arg(freeze->arg(0)),
-                  _built.at(inst)
-                );
-              },
-              [&](){
-                llvm::Value* built_const = _builder.CreateCall(
-                  _llvm_api.build_const_fast,
-                  {
-                    _jitir_builder,
-                    llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
-                    _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
-                  }
-                );
-
-                _builder.CreateCall(_llvm_api.build_guard, {
-                  _jitir_builder,
-                  _builder.CreateCall(
-                    _llvm_api.build_eq,
+          if (dynmatch(PromoteInst, promote, inst)) {
+            if (is_int_or_bool(promote->type())) {
+              emit_branch(
+                is_const(promote->arg(0)),
+                [&](){
+                  _builder.CreateStore(
+                    emit_built_arg(promote->arg(0)),
+                    _built.at(inst)
+                  );
+                },
+                [&](){
+                  llvm::Value* built_const = _builder.CreateCall(
+                    _llvm_api.build_const_fast,
                     {
                       _jitir_builder,
-                      emit_built_arg(freeze->arg(0)),
-                      built_const
+                      llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
+                      _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
                     }
-                  ),
-                  llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), 1)
-                });
+                  );
 
-                _builder.CreateStore(
-                  built_const,
-                  _built.at(inst)
-                );
-              },
-              "freeze_"
-            );
+                  _builder.CreateCall(_llvm_api.build_guard, {
+                    _jitir_builder,
+                    _builder.CreateCall(
+                      _llvm_api.build_eq,
+                      {
+                        _jitir_builder,
+                        emit_built_arg(promote->arg(0)),
+                        built_const
+                      }
+                    ),
+                    llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), 1)
+                  });
+
+                  _builder.CreateStore(
+                    built_const,
+                    _built.at(inst)
+                  );
+                },
+                "freeze_"
+              );
+            } else {
+              _builder.CreateStore(
+                emit_built_arg(promote->arg(0)),
+                _built.at(inst)
+              );
+            }
             return;
           } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
             if (is_int_or_bool(assume_const->type())) {
@@ -652,7 +659,7 @@ namespace metajit {
         });
 
         std::vector<ActionGroup*> const_deps;
-        if (!dynamic_cast<FreezeInst*>(inst) &&
+        if (!dynamic_cast<PromoteInst*>(inst) &&
             !dynamic_cast<AssumeConstInst*>(inst)) {
           const_deps.push_back(emit_group);
           for (Value* arg : inst->args()) {
@@ -667,7 +674,7 @@ namespace metajit {
         });
 
         std::vector<ActionGroup*> build_deps = {const_group, used_group, last_build_group};
-        if (dynamic_cast<FreezeInst*>(inst)) {
+        if (dynamic_cast<PromoteInst*>(inst)) {
           build_deps.push_back(emit_group);
           if (const_groups.find(inst->arg(0)) != const_groups.end()) {
             build_deps.push_back(const_groups.at(inst->arg(0)));
