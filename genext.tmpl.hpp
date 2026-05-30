@@ -25,6 +25,8 @@ namespace metajit {
   // We need to ensure that it is always possible to select an action from
   // each group such that an acyclic execution order exists.
 
+  /* ${genext_symbols} */
+
   struct ActionGroup;
 
   struct Action {
@@ -279,10 +281,13 @@ namespace metajit {
     }
   };
 
+  /* ${build_build_inst} */
+
   class CreateGenExt: public Pass<CreateGenExt> {
   private:
     Section* _section;
     Section* _genext_section;
+    bool _comments = false;
 
     Builder _builder;
 
@@ -293,7 +298,153 @@ namespace metajit {
     NameMap<Value*> _is_const;
     NameMap<Value*> _is_used;
     NameMap<Value*> _built;
+    NameMap<Value*> _values;
+    std::map<Block*, Block*> _blocks;
     Value* _jitir_builder = nullptr;
+
+    GenExtSymbols _syms;
+
+    Value* emit_arg(Value* value) {
+      if (dynmatch(Const, constant, value)) {
+        return _builder.build_const(constant->type(), constant->value());
+      } else if (value->is_named()) {
+        return _values.at((NamedValue*) value);
+      } else {
+        assert(false && "Unknown value");
+        return nullptr;
+      }
+    }
+
+    void emit_branch(Value* cond,
+                     const std::function<void()>& emit_then,
+                     const std::function<void()>& emit_else,
+                     const std::string& name = "") {
+      Block* then_block = _builder.build_block_after(_builder.block());
+      Block* else_block = _builder.build_block_after(then_block);
+      Block* cont_block = _builder.build_block_after(else_block);
+
+      _builder.build_branch(cond, then_block, else_block);
+
+      _builder.move_to_end(then_block);
+      emit_then();
+      _builder.build_jump(cont_block);
+
+      _builder.move_to_end(else_block);
+      emit_else();
+      _builder.build_jump(cont_block);
+
+      _builder.move_to_end(cont_block);
+    }
+
+    Value* emit_inst(Inst* inst) {
+      if (dynmatch(FreezeInst, freeze, inst)) {
+        return _builder.build_freeze(emit_arg(freeze->arg(0)));
+      } else if (dynmatch(PromoteInst, promote, inst)) {
+        return emit_arg(promote->arg(0));
+      } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
+        return emit_arg(assume_const->arg(0));
+      } else if (dynmatch(SelectInst, select, inst)) {
+        return _builder.build_select(
+          emit_arg(select->arg(0)),
+          emit_arg(select->arg(1)),
+          emit_arg(select->arg(2))
+        );
+      } else if (dynmatch(ResizeUInst, resize_u, inst)) {
+        return _builder.build_resize_u(emit_arg(resize_u->arg(0)), resize_u->type());
+      } else if (dynmatch(ResizeSInst, resize_s, inst)) {
+        return _builder.build_resize_s(emit_arg(resize_s->arg(0)), resize_s->type());
+      } else if (dynmatch(ResizeXInst, resize_x, inst)) {
+        return _builder.build_resize_x(emit_arg(resize_x->arg(0)), resize_x->type());
+      } else if (dynmatch(FloatToIntSInst, float_to_int_s, inst)) {
+        return _builder.build_float_to_int_s(emit_arg(float_to_int_s->arg(0)), float_to_int_s->type());
+      } else if (dynmatch(IntToFloatSInst, int_to_float_s, inst)) {
+        return _builder.build_int_to_float_s(emit_arg(int_to_float_s->arg(0)), int_to_float_s->type());
+      } else if (dynmatch(LoadInst, load, inst)) {
+        return _builder.build_load(
+          emit_arg(load->arg(0)),
+          load->type(),
+          load->flags(),
+          load->aliasing(),
+          load->offset()
+        );
+      } else if (dynmatch(StoreInst, store, inst)) {
+        return _builder.build_store(
+          emit_arg(store->arg(0)),
+          emit_arg(store->arg(1)),
+          store->aliasing(),
+          store->offset()
+        );
+      } else if (dynmatch(AllocaInst, alloca_inst, inst)) {
+        return _builder.build_alloca(emit_arg(alloca_inst->size()), alloca_inst->align());
+      } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
+        return _builder.build_add_ptr(emit_arg(add_ptr->arg(0)), emit_arg(add_ptr->arg(1)));
+      } else if (dynmatch(CallInst, call, inst)) {
+        std::vector<Value*> args;
+        for (size_t it = 1; it < call->arg_count(); it++) {
+          args.push_back(emit_arg(call->arg(it)));
+        }
+        return _builder.build_call(emit_arg(call->callee()), call->type(), args, call->call_conv());
+      } else if (dynmatch(EqInst, eq, inst)) {
+        return _builder.build_eq(emit_arg(eq->arg(0)), emit_arg(eq->arg(1)));
+      } else if (dynmatch(CommentInst, comment, inst)) {
+        return nullptr;
+      }
+
+      #define binop(Name, method) \
+        else if (dynmatch(Name##Inst, name, inst)) { \
+          return _builder.method(emit_arg(name->arg(0)), emit_arg(name->arg(1))); \
+        }
+
+      binop(Add, build_add)
+      binop(Sub, build_sub)
+      binop(Mul, build_mul)
+      binop(DivS, build_div_s)
+      binop(DivU, build_div_u)
+      binop(ModS, build_mod_s)
+      binop(ModU, build_mod_u)
+      binop(And, build_and)
+      binop(Or, build_or)
+      binop(Xor, build_xor)
+      binop(Shl, build_shl)
+      binop(ShrU, build_shr_u)
+      binop(ShrS, build_shr_s)
+      binop(AddF, build_add_f)
+      binop(SubF, build_sub_f)
+      binop(MulF, build_mul_f)
+      binop(DivF, build_div_f)
+      binop(LtU, build_lt_u)
+      binop(LtS, build_lt_s)
+      binop(LtFO, build_lt_f_o)
+      binop(LtFU, build_lt_f_u)
+
+      #undef binop
+
+      inst->write(std::cerr);
+      std::cerr << std::endl;
+      assert(false && "Unknown instruction");
+      return nullptr;
+    }
+
+    Value* emit_terminator(Inst* inst, Block* block) {
+      if (dynmatch(BranchInst, branch, inst)) {
+        return _builder.build_branch(
+          emit_arg(branch->cond()),
+          _blocks.at(branch->true_block()),
+          _blocks.at(branch->false_block())
+        );
+      } else if (dynmatch(JumpInst, jump, inst)) {
+        std::vector<Value*> args;
+        for (size_t i = 0; i < jump->arg_count(); i++) {
+          args.push_back(emit_arg(jump->arg(i)));
+        }
+        return _builder.build_jump(_blocks.at(jump->block()), args);
+      } else if (dynmatch(ExitInst, exit, inst)) {
+        return _builder.build_exit();
+      } else {
+        assert(false && "Unknown terminator");
+        return nullptr;
+      }
+    }
 
     Value* is_const(Value* value) {
       if (dynmatch(Const, constant, value)) {
@@ -467,15 +618,13 @@ namespace metajit {
     }
 
     void emit_update_load_const(LoadInst* load) {
-      llvm::Value* is_const_load = _builder.CreateCall(_llvm_api.is_const_inst, {emit_built_arg(load)});
-      is_const_load = _builder.CreateTrunc(is_const_load, llvm::Type::getInt1Ty(_context));
+      Value* is_const_load = _builder.build_call(
+        _syms.is_const_inst, Type::Bool, {emit_built_arg(load)}
+      );
       if (load->flags().has(LoadFlags::Pure)) {
-        is_const_load = _builder.CreateOr(
-          is_const_load,
-          is_const(load->arg(0))
-        );
+        is_const_load = _builder.fold_or(is_const_load, is_const(load->arg(0)));
       }
-      _builder.CreateStore(is_const_load, _is_const.at(load));
+      _builder.build_store(_is_const.at(load), is_const_load, AliasingGroup(0), 0);
     }
 
     
@@ -487,9 +636,9 @@ namespace metajit {
         inst->write_arg(comment_stream);
         comment_stream << " = ";
         inst->write(comment_stream);
-        _builder.CreateCall(_llvm_api.build_comment, {
+        _builder.build_call(_syms.build_comment, Type::Ptr, {
           _jitir_builder,
-          _builder.CreateGlobalString(comment_stream.str())
+          _genext_section->context().build_symbol(Type::Ptr, comment_stream.str())
         });
       }
 
@@ -501,73 +650,78 @@ namespace metajit {
               emit_branch(
                 is_const(promote->arg(0)),
                 [&](){
-                  _builder.CreateStore(
+                  _builder.build_store(
+                    _built.at(inst),
                     emit_built_arg(promote->arg(0)),
-                    _built.at(inst)
+                    AliasingGroup(0), 0
                   );
                 },
                 [&](){
-                  llvm::Value* built_const = _builder.CreateCall(
-                    _llvm_api.build_const_fast,
+                  Value* built_const = _builder.build_call(
+                    _syms.build_const_fast, Type::Ptr,
                     {
                       _jitir_builder,
-                      llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
-                      _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
+                      _builder.build_const(Type::Int32, (uint64_t)inst->type()),
+                      _builder.build_resize_u(emit_arg(inst), Type::Int64)
                     }
                   );
 
-                  _builder.CreateCall(_llvm_api.build_guard, {
+                  _builder.build_call(_syms.build_guard, Type::Void, {
                     _jitir_builder,
-                    _builder.CreateCall(
-                      _llvm_api.build_eq,
+                    _builder.build_call(
+                      _syms.build_eq, Type::Ptr,
                       {
                         _jitir_builder,
                         emit_built_arg(promote->arg(0)),
                         built_const
                       }
                     ),
-                    llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), 1)
+                    _builder.build_const(Type::Int32, 1)
                   });
 
-                  _builder.CreateStore(
+                  _builder.build_store(
+                    _built.at(inst),
                     built_const,
-                    _built.at(inst)
+                    AliasingGroup(0), 0
                   );
                 },
                 "freeze_"
               );
             } else {
-              _builder.CreateStore(
+              _builder.build_store(
+                _built.at(inst),
                 emit_built_arg(promote->arg(0)),
-                _built.at(inst)
+                AliasingGroup(0), 0
               );
             }
             return;
           } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
             if (is_int_or_bool(assume_const->type())) {
-              llvm::Value* built_const = _builder.CreateCall(
-                _llvm_api.build_const_fast,
+              Value* built_const = _builder.build_call(
+                _syms.build_const_fast, Type::Ptr,
                 {
                   _jitir_builder,
-                  llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
-                  _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
+                  _builder.build_const(Type::Int32, (uint64_t)inst->type()),
+                  _builder.build_resize_u(emit_arg(inst), Type::Int64)
                 }
               );
 
-              _builder.CreateStore(
+              _builder.build_store(
+                _built.at(inst),
                 built_const,
-                _built.at(inst)
+                AliasingGroup(0), 0
               );
             } else {
-              _builder.CreateStore(
+              _builder.build_store(
+                _built.at(inst),
                 emit_built_arg(assume_const->arg(0)),
-                _built.at(inst)
+                AliasingGroup(0), 0
               );
             }
             return;
           }
 
-          std::vector<llvm::Value*> args;
+          std::vector<Value*> args;
           for (Value* arg : inst->args()) {
             args.push_back(emit_built_arg(arg));
           }
@@ -575,15 +729,15 @@ namespace metajit {
           if (is_int_or_bool(inst->type())) {
             auto trace_const = [&](){
               if (_trace_capabilities.can_trace_const(inst)) {
-                llvm::Value* built = _builder.CreateCall(
-                  _llvm_api.build_const_fast,
+                Value* built = _builder.build_call(
+                  _syms.build_const_fast, Type::Ptr,
                   {
                     _jitir_builder,
-                    llvm::ConstantInt::get(llvm::Type::getInt32Ty(_context), (uint64_t)inst->type()),
-                    _builder.CreateZExt(emit_arg(inst), llvm::Type::getInt64Ty(_context))
+                    _builder.build_const(Type::Int32, (uint64_t)inst->type()),
+                    _builder.build_resize_u(emit_arg(inst), Type::Int64)
                   }
                 );
-                _builder.CreateStore(built, _built.at(inst));
+                _builder.build_store(_built.at(inst), built, AliasingGroup(0), 0);
               }
             };
             if (_trace_capabilities.can_trace_const(inst) && !_trace_capabilities.can_trace_inst(inst)) {
@@ -595,8 +749,8 @@ namespace metajit {
                 trace_const,
                 [&](){
                   if (_trace_capabilities.can_trace_inst(inst)) {
-                    llvm::Value* built = build_build_inst(_builder, _llvm_api, inst, _jitir_builder, args);
-                    _builder.CreateStore(built, _built.at(inst));
+                    Value* built = build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
+                    _builder.build_store(_built.at(inst), built, AliasingGroup(0), 0);
 
                     if (dynmatch(LoadInst, load, inst)) {
                       emit_update_load_const(load);
@@ -608,8 +762,8 @@ namespace metajit {
             }
           } else {
             if (_trace_capabilities.any(inst)) {
-              llvm::Value* built = build_build_inst(_builder, _llvm_api, inst, _jitir_builder, args);
-              _builder.CreateStore(built, _built.at(inst));
+              Value* built = build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
+              _builder.build_store(_built.at(inst), built, AliasingGroup(0), 0);
 
               if (dynmatch(LoadInst, load, inst)) {
                 emit_update_load_const(load);
@@ -674,7 +828,7 @@ namespace metajit {
         }
 
         const_group->add("const", PRIO_MAX, const_deps, {}, [inst, this](){
-          _builder.CreateStore(emit_const_prop(inst), _is_const.at(inst));
+          _builder.build_store(_is_const.at(inst), emit_const_prop(inst), AliasingGroup(0), 0);
         });
 
         std::vector<ActionGroup*> build_deps = {const_group, used_group, last_build_group};
@@ -732,10 +886,7 @@ namespace metajit {
 
         if (always_used.at(inst)) {
           used_group->add("always used", PRIO_MAX, {}, {}, [inst, this](){
-            _builder.CreateStore(
-              llvm::ConstantInt::getTrue(_context),
-              _is_used.at(inst)
-            );
+            _builder.build_store(_is_used.at(inst), _builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
           });
         } else {
           std::vector<ActionGroup*> used_deps;
@@ -762,15 +913,12 @@ namespace metajit {
             prio++;
           }
           used_group->add("used", prio, {}, used_deps, [inst, this](){
-            _builder.CreateStore(
-              emit_used(inst),
-              _is_used.at(inst)
-            );
+            _builder.build_store(_is_used.at(inst), emit_used(inst), AliasingGroup(0), 0);
           });
         }
       }
 
-      _builder.SetInsertPoint(_blocks.at(block));
+      _builder.move_to_end(_blocks.at(block));
       queue.run();
 
       if (block->name() == 0) {
@@ -780,64 +928,42 @@ namespace metajit {
       Inst* inst = block->terminator();
       assert(inst);
       if (dynmatch(BranchInst, branch, inst)) {
-        _builder.CreateCall(_llvm_api.build_guard, {
+        _builder.build_call(_syms.build_guard, Type::Void, {
           _jitir_builder,
           emit_built_arg(branch->arg(0)),
-          _builder.CreateZExt(
-            emit_arg(branch->arg(0)),
-            llvm::Type::getInt32Ty(_context)
-          )
+          _builder.build_resize_u(emit_arg(branch->arg(0)), Type::Int32)
         });
       } else if (dynmatch(JumpInst, jump, inst)) {
         for (Arg* arg : jump->block()->args()) {
-          _builder.CreateStore(is_const(jump->arg(arg->index())), _is_const.at(arg));
-          _builder.CreateStore(emit_built_arg(jump->arg(arg->index())), _built.at(arg));
+          _builder.build_store(_is_const.at(arg), is_const(jump->arg(arg->index())), AliasingGroup(0), 0);
+          _builder.build_store(_built.at(arg), emit_built_arg(jump->arg(arg->index())), AliasingGroup(0), 0);
         }
       }
       _values[inst] = emit_terminator(inst, block);
     }
 
     void emit_generating_extension_allocs(NamedValue* value) {
-      _is_const[value] = _builder.CreateAlloca(
-        llvm::Type::getInt1Ty(_context),
-        nullptr,
-        "is_const"
-      );
+      _is_const[value] = _builder.build_alloca(Type::Bool);
 
       // False is always a valid overapproximation
-      _builder.CreateStore(
-        llvm::ConstantInt::getFalse(_context),
-        _is_const.at(value)
-      );
+      _builder.build_store(_is_const.at(value), _builder.build_const(Type::Bool, 0), AliasingGroup(0), 0);
 
-      _is_used[value] = _builder.CreateAlloca(
-        llvm::Type::getInt1Ty(_context),
-        nullptr,
-        "is_used"
-      );
+      _is_used[value] = _builder.build_alloca(Type::Bool);
 
-      // True is always a valid overapproximation 
-      _builder.CreateStore(
-        llvm::ConstantInt::getTrue(_context),
-        _is_used.at(value)
-      );
+      // True is always a valid overapproximation
+      _builder.build_store(_is_used.at(value), _builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
 
-      _built[value] = _builder.CreateAlloca(
-        llvm::PointerType::get(_context, 0),
-        nullptr,
-        "built"
-      );
+      _built[value] = _builder.build_alloca(Type::Ptr);
 
-      _builder.CreateStore(
-        llvm::ConstantPointerNull::get(llvm::PointerType::get(_context, 0)),
-        _built.at(value)
-      );
+      _builder.build_store(_built.at(value), _builder.build_const(Type::Ptr, 0), AliasingGroup(0), 0);
     }
 
     void emit_entry() {
-      _jitir_builder = _function->getArg(_section->entry()->args().size());
+      _jitir_builder = _genext_section->entry()->arg(
+        _section->entry()->args().size()
+      );
 
-      for (Block* block : *section) {
+      for (Block* block : *_section) {
         for (Arg* arg : block->args()) {
           emit_generating_extension_allocs(arg);
         }
@@ -848,18 +974,16 @@ namespace metajit {
       }
 
       for (Arg* arg : _section->entry()->args()) {
-        _builder.CreateStore(
-          _builder.CreateCall(
-            _llvm_api.entry_arg,
+        _builder.build_store(
+          _built.at(arg),
+          _builder.build_call(
+            _syms.entry_arg, Type::Ptr,
             {
               _jitir_builder,
-              llvm::ConstantInt::get(
-                llvm::Type::getInt64Ty(_context),
-                arg->index()
-              )
+              _builder.build_const(Type::Int64, arg->index())
             }
           ),
-          _built.at(arg)
+          AliasingGroup(0), 0
         );
       }
     }
@@ -877,6 +1001,9 @@ namespace metajit {
       _is_const.init(section);
       _is_used.init(section);
       _built.init(section);
+      _values.init(section);
+
+      _syms = GenExtSymbols(_genext_section->context());
 
       emit_entry();
     }

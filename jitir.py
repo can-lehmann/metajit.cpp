@@ -621,6 +621,91 @@ lwir(
     placeholder = lambda name: "/* ${" + name + "} */"
 )
 
+class GenExtPlugin:
+    def run(self, ir):
+        # GenExtSymbols struct
+        struct = "struct GenExtSymbols {\n"
+        for inst in ir.insts:
+            struct += f"  Symbol* {inst.format_builder_name(ir)} = nullptr;\n"
+        struct += "  Symbol* set_arg = nullptr;\n"
+        struct += "  Symbol* build_const_fast = nullptr;\n"
+        struct += "  Symbol* build_guard = nullptr;\n"
+        struct += "  Symbol* entry_arg = nullptr;\n"
+        struct += "  Symbol* is_const_inst = nullptr;\n"
+        struct += "\n"
+        struct += "  GenExtSymbols() {}\n"
+        struct += "  GenExtSymbols(Context& context) {\n"
+        for inst in ir.insts:
+            name = f"jitir_{inst.format_builder_name(ir)}"
+            struct += f"    {inst.format_builder_name(ir)} = context.build_symbol(Type::Ptr, \"{name}\");\n"
+        struct += f"    set_arg = context.build_symbol(Type::Ptr, \"jitir_set_arg\");\n"
+        struct += f"    build_const_fast = context.build_symbol(Type::Ptr, \"jitir_build_const_fast\");\n"
+        struct += f"    build_guard = context.build_symbol(Type::Ptr, \"jitir_build_guard\");\n"
+        struct += f"    entry_arg = context.build_symbol(Type::Ptr, \"jitir_entry_arg\");\n"
+        struct += f"    is_const_inst = context.build_symbol(Type::Ptr, \"jitir_is_const_inst\");\n"
+        struct += "  }\n"
+        struct += "};\n"
+
+        # build_build_inst function
+        func = "inline Value* build_build_inst(Builder& builder,\n"
+        func += "                              Inst* inst,\n"
+        func += "                              Value* jitir_builder,\n"
+        func += "                              const std::vector<Value*>& args,\n"
+        func += "                              std::map<Block*, Block*>& blocks,\n"
+        func += "                              GenExtSymbols& syms) {\n"
+        for inst in ir.insts:
+            name = inst.format_name(ir)
+            func += f"  if ({name}* i = dynamic_cast<{name}*>(inst)) {{\n"
+            func += f"    std::vector<Value*> build_args;\n"
+            func += f"    build_args.push_back(jitir_builder);\n"
+
+            value_index = 0
+            varargs = None
+            for arg in inst.args:
+                match arg.type:
+                    case CountVarargsValueType():
+                        func += f"    build_args.push_back(builder.build_const(Type::Int64, args.size() - {value_index}));\n"
+                        varargs = arg
+                    case ValueType():
+                        func += f"    build_args.push_back(args[{value_index}]);\n"
+                        value_index += 1
+                    case Type(name="Block*"):
+                        func += f"    build_args.push_back(builder.build_const(Type::Ptr, (uint64_t)(void*)blocks.at(i->{arg.name}())));\n"
+                    case Type():
+                        func += f"    build_args.push_back(builder.build_const(Type::Int32, (uint64_t)i->{arg.name}()));\n"
+
+            func += f"    Value* built = builder.build_call(syms.{inst.format_builder_name(ir)}, Type::Ptr, build_args);\n"
+
+            if varargs is not None:
+                func += f"    for (size_t it = {value_index}; it < args.size(); it++) {{\n"
+                func += f"      builder.build_call(syms.set_arg, Type::Void, {{\n"
+                func += f"        built,\n"
+                func += f"        builder.build_const(Type::Int64, it),\n"
+                func += f"        args[it]\n"
+                func += f"      }});\n"
+                func += f"    }}\n"
+
+            func += f"    return built;\n"
+            func += f"  }}\n"
+        func += f"  assert(false && \"Unknown instruction\");\n"
+        func += f"  return nullptr;\n"
+        func += f"}}\n"
+
+        return {
+            "genext_symbols": struct,
+            "build_build_inst": func
+        }
+
+lwir(
+    template_path = "genext.tmpl.hpp",
+    output_path = "genext.hpp",
+    ir = jitir,
+    plugins = [
+        GenExtPlugin()
+    ],
+    placeholder = lambda name: "/* ${" + name + "} */"
+)
+
 class MarkdownPlugin:
     def run(self, ir):
         code = ""

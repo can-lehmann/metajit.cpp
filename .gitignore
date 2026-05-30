@@ -1,5 +1,6 @@
 __pycache__
 .vscode/
+genext.hpp
 jitir.hpp
 jitir_llvmapi.hpp
 main

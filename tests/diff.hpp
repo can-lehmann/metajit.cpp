@@ -768,7 +768,7 @@ namespace metajit {
       // Generate the generating extension
       llvm::LLVMContext llvm_context;
       std::unique_ptr<llvm::Module> genext_module = std::make_unique<llvm::Module>("genext_module", llvm_context);
-      LLVMCodeGen::run(section, genext_module.get(), "genext_func", true);
+      LLVMCodeGen::run(section, genext_module.get(), "genext_func");
 
       if (!output_path.empty()) {
         std::error_code error_code;
