@@ -36,6 +36,7 @@
 #include "../llvmgen.hpp"
 #include "../x86gen.hpp"
 #include "../lowerllvm.hpp"
+#include "../genext.hpp"
 
 namespace metajit {
   namespace test {
@@ -766,9 +767,16 @@ namespace metajit {
       }
 
       // Generate the generating extension
+      Context genext_context;
+      Allocator genext_allocator;
+      Section* genext_section = new Section(genext_context, genext_allocator);
+      CreateGenExt::run(section, genext_section);
+      section->write(std::cerr);
+      genext_section->write(std::cerr);
+
       llvm::LLVMContext llvm_context;
       std::unique_ptr<llvm::Module> genext_module = std::make_unique<llvm::Module>("genext_module", llvm_context);
-      LLVMCodeGen::run(section, genext_module.get(), "genext_func");
+      LLVMCodeGen::run(genext_section, genext_module.get(), "genext_func");
 
       if (!output_path.empty()) {
         std::error_code error_code;
@@ -916,6 +924,7 @@ namespace metajit {
       }
 
       delete[] static_data;
+      delete genext_section;
     }
 
     class GenExtTest: public unittest::BaseTest<GenExtTest> {

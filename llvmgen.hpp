@@ -45,6 +45,7 @@ namespace metajit {
     Section* _section;
     llvm::LLVMContext& _context;
     llvm::Module* _module = nullptr;
+    LLVM_API _llvm_api;
     llvm::Function* _function = nullptr;
     llvm::IRBuilder<> _builder;
 
@@ -109,6 +110,11 @@ namespace metajit {
           constant->value(),
           false
         );
+      } else if (dynmatch(Symbol, symbol, value)) {
+        std::string name(symbol->symbol().data(), symbol->symbol().size());
+        auto it = _llvm_api.by_name.find(name);
+        assert(it != _llvm_api.by_name.end() && "Unknown symbol");
+        return _builder.CreateBitOrPointerCast(it->second, llvm::PointerType::get(_context, 0));
       } else if (value->is_named()) {
         return _values.at((NamedValue*) value);
       } else {
@@ -306,6 +312,7 @@ namespace metajit {
         _section(section),
         _context(module->getContext()),
         _module(module),
+        _llvm_api(module),
         _builder(module->getContext()) {
             
       assert(_section->ordering() >= BlockOrdering::Dominator);

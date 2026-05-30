@@ -115,3 +115,4 @@ clean:
 	mkdir -p tests/output/test_source
 	mkdir -p tests/output/test_reader
 	mkdir -p tests/output/test_mem2reg
+	mkdir -p tests/output/test_genext

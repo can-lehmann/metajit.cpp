@@ -49,15 +49,17 @@ class LLVMAPIPlugin:
             for arg in inst.args:
                 arg_types.append(self.type_substitutions[arg.type])
             arg_types = ", ".join(arg_types)
+            sym_name = f"{self.prefix}_{inst.format_builder_name(ir)}"
             inits += f"    {inst.format_builder_name(ir)} = module->getOrInsertFunction(\n"
-            inits += f"      \"{self.prefix}_{inst.format_builder_name(ir)}\",\n"
+            inits += f"      \"{sym_name}\",\n"
             inits += f"      llvm::FunctionType::get(\n"
             inits += f"        llvm::PointerType::get(context, 0),\n"
             inits += f"        std::vector<llvm::Type*>({{ {arg_types} }}),\n"
             inits += f"        false\n"
             inits += f"      )\n"
             inits += f"    );\n"
-        
+            inits += f"    by_name[\"{sym_name}\"] = {inst.format_builder_name(ir)}.getCallee();\n"
+
         return {
             "llvmapi_defs": defs,
             "llvmapi_inits": inits

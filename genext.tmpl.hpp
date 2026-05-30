@@ -996,7 +996,7 @@ namespace metajit {
         _uses(section),
         _binding_time_groups(section),
         _trace_capabilities(section, _binding_time_groups) {
-      
+
       section->autoname();
       _is_const.init(section);
       _is_used.init(section);
@@ -1005,7 +1005,37 @@ namespace metajit {
 
       _syms = GenExtSymbols(_genext_section->context());
 
+      std::vector<Type> entry_arg_types;
+      for (Arg* arg : section->entry()->args()) {
+        entry_arg_types.push_back(arg->type());
+      }
+      entry_arg_types.push_back(Type::Ptr);
+      _builder.move_to_end(_builder.build_block(entry_arg_types));
+
+      for (Block* block : *section) {
+        std::vector<Type> arg_types;
+        for (Arg* arg : block->args()) {
+          arg_types.push_back(arg->type());
+        }
+        Block* genext_block = _builder.build_block(arg_types);
+        _blocks[block] = genext_block;
+
+        for (Arg* arg : block->args()) {
+          _values[arg] = genext_block->arg(arg->index());
+        }
+      }
+
       emit_entry();
+
+      std::vector<Value*> entry_jump_args;
+      for (Arg* arg : section->entry()->args()) {
+        entry_jump_args.push_back(_genext_section->entry()->arg(arg->index()));
+      }
+      _builder.build_jump(_blocks.at(section->entry()), entry_jump_args);
+
+      for (Block* block : *section) {
+        emit_generating_extension(block);
+      }
     }
   };
 }
