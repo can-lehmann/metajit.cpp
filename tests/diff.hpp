@@ -771,6 +771,16 @@ namespace metajit {
       Allocator genext_allocator;
       Section* genext_section = new Section(genext_context, genext_allocator);
       CreateGenExt::run(section, genext_section);
+
+      Simplify::run(genext_section, 10);
+      SimplifyCFG::run(genext_section);
+      Mem2Reg::run(genext_section);
+      DeadCodeElim::run(genext_section);
+      CommonSubexprElim::run(genext_section);
+      Simplify::run(genext_section, 10);
+      SimplifyCFG::run(genext_section);
+      DeadCodeElim::run(genext_section);
+
       section->write(std::cerr);
       genext_section->write(std::cerr);
 
