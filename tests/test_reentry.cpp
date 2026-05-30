@@ -35,7 +35,9 @@ namespace metajit {
           Builder builder(section);
           builder.move_to_end(builder.build_block({ /* result */ Type::Ptr }));
           std::vector<TestCase> test_cases = build(builder);
-          builder.build_exit();
+          if (!builder.block()->terminator()) {
+            builder.build_exit();
+          }
           section->set_ordering(BlockOrdering::Topological);
 
           assert(!section->verify(std::cerr));
@@ -102,7 +104,7 @@ namespace metajit {
     class ReentryTestSuite: public unittest::Suite {
     private:
     public:
-      ReentryTestSuite(): unittest::Suite() {}
+      ReentryTestSuite(int argc = 0, char** argv = nullptr): unittest::Suite(argc, argv) {}
 
       ReentryTest reentry_test(const std::string& name) {
         return ReentryTest(name).suite(*this);
@@ -114,8 +116,8 @@ namespace metajit {
 using namespace metajit;
 using namespace metajit::test;
 
-int main() {
-  ReentryTestSuite suite;
+int main(int argc, char** argv) {
+  ReentryTestSuite suite(argc, argv);
 
   using Bits = Interpreter::Bits;
   using TestCase = ReentryTest::TestCase;

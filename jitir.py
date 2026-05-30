@@ -370,6 +370,12 @@ jitir = IR(
             args = [Arg("a")],
             type = "a->type()",
             type_checks = [],
+            doc = "If a is poison, produce an arbitrary but fixed value. Otherwise, return a unchanged."
+        ),
+        Inst("Promote",
+            args = [Arg("a")],
+            type = "a->type()",
+            type_checks = [],
             doc = "Bind a value at tracing time. Insert a guard to check that the value is the same at runtime."
         ),
         Inst("AssumeConst",

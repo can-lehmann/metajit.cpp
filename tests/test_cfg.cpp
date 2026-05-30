@@ -19,10 +19,10 @@
 using namespace metajit;
 using namespace metajit::test;
 
-int main() {
+int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
-  DiffTestSuite suite("tests/output/test_cfg");
+  DiffTestSuite suite("tests/output/test_cfg", argc, argv);
 
   suite.diff_test("branch").run([](Builder& builder, TestData& data) {
     Block* a = builder.build_block();

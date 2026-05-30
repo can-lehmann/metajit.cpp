@@ -37,10 +37,10 @@ void check_roundtrip(Section* section) {
     unittest_assert(section_str == read_section_str);
 }
 
-int main() {
+int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
-  DiffTestSuite suite("tests/output/test_reader");
+  DiffTestSuite suite("tests/output/test_reader", argc, argv);
 
   suite.diff_test("bug_fold_lt_u").run([](Builder& builder, TestData& data) {
     Value* lt = builder.fold_lt_u(

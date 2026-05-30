@@ -15,6 +15,17 @@
 
 ### Freeze
 
+If a is poison, produce an arbitrary but fixed value. Otherwise, return a unchanged.
+
+Arguments
+
+- **a**: `Value*`
+
+Return Type: `a->type()`
+
+
+### Promote
+
 Bind a value at tracing time. Insert a guard to check that the value is the same at runtime.
 
 Arguments

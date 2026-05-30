@@ -210,6 +210,40 @@ void test_call_default_void_store(uint32_t* out, uint32_t a, uint32_t b) {
   *out = a + b + 1;
 }
 
+void test_freeze(DiffTestSuite& suite) {
+  #define freeze_type(type) \
+    suite.diff_test("freeze_" #type).run([](Builder& builder, TestData& data) { \
+      data.output(builder.build_freeze(data.input(Type::type))); \
+    });
+
+  freeze_type(Bool)
+  freeze_type(Int8)
+  freeze_type(Int16)
+  freeze_type(Int32)
+  freeze_type(Int64)
+
+  // freeze(poison) - freeze(poison) == 0: freeze returns a fixed value, not a fresh one each use
+  suite.diff_test("freeze_poison_shl_Int32").run([](Builder& builder, TestData& data) {
+    Value* val = data.input(Type::Int32);
+    Value* shift = data.input(RandomRange(Type::Int32, 32, type_mask(Type::Int32)));
+    Value* frozen = builder.build_freeze(builder.build_shl(val, shift));
+    data.output(builder.build_sub(frozen, frozen));
+  });
+}
+
+void test_assume_const(DiffTestSuite& suite) {
+  #define assume_const_type(type) \
+    suite.diff_test("assume_const_" #type).run([](Builder& builder, TestData& data) { \
+      data.output(builder.build_assume_const(data.input(Type::type))); \
+    });
+
+  assume_const_type(Bool)
+  assume_const_type(Int8)
+  assume_const_type(Int16)
+  assume_const_type(Int32)
+  assume_const_type(Int64)
+}
+
 void test_alloca(DiffTestSuite& suite) {
   suite.diff_test("alloca_store_load_Int32").run([](Builder& builder, TestData& data) {
     Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 4), 4);
@@ -248,7 +282,7 @@ void test_alloca(DiffTestSuite& suite) {
 }
 
 void test_call(DiffTestSuite& suite) {
-  suite.diff_test("call_preserve_none").interpreter(false).run([](Builder& builder, TestData& data) {
+  suite.diff_test("call_preserve_none").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* a = data.input(Type::Int64);
     Value* b = data.input(Type::Int64);
     Value* c = data.input(Type::Int64);
@@ -264,13 +298,13 @@ void test_call(DiffTestSuite& suite) {
     data.output(result);
   });
 
-  suite.diff_test("call_preserve_none_0").interpreter(false).run([](Builder& builder, TestData& data) {
+  suite.diff_test("call_preserve_none_0").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_preserve_none_target_0);
     Value* result = builder.build_call(callee, Type::Int64, std::vector<Value*>(), CallConv::PreserveNone);
     data.output(result);
   });
 
-  suite.diff_test("call_preserve_none_1_smoke").interpreter(false).run([](Builder& builder, TestData& data) {
+  suite.diff_test("call_preserve_none_1_smoke").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* a = data.input(Type::Int64);
 
     Value* callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_preserve_none_target_1);
@@ -282,7 +316,7 @@ void test_call(DiffTestSuite& suite) {
     );
   });
 
-  suite.diff_test("call_preserve_none_4_smoke").interpreter(false).run([](Builder& builder, TestData& data) {
+  suite.diff_test("call_preserve_none_4_smoke").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* a = data.input(Type::Int64);
     Value* b = data.input(Type::Int64);
     Value* c = data.input(Type::Int64);
@@ -297,7 +331,7 @@ void test_call(DiffTestSuite& suite) {
     );
   });
 
-  suite.diff_test("call_default").interpreter(false).run([](Builder& builder, TestData& data) {
+  suite.diff_test("call_default").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* a = data.input(Type::Int64);
     Value* b = data.input(Type::Int64);
     Value* c = data.input(Type::Int64);
@@ -313,20 +347,20 @@ void test_call(DiffTestSuite& suite) {
     data.output(result);
   });
 
-  suite.diff_test("call_default_0").interpreter(false).run([](Builder& builder, TestData& data) {
+  suite.diff_test("call_default_0").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_default_target_0);
     Value* result = builder.build_call(callee, Type::Int64, std::vector<Value*>(), CallConv::Default);
     data.output(result);
   });
 
-  suite.diff_test("call_default_1").interpreter(false).run([](Builder& builder, TestData& data) {
+  suite.diff_test("call_default_1").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* a = data.input(Type::Int64);
     Value* callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_default_target_1);
     Value* result = builder.build_call(callee, Type::Int64, std::vector<Value*>({a}), CallConv::Default);
     data.output(result);
   });
 
-  suite.diff_test("call_default_2").interpreter(false).run([](Builder& builder, TestData& data) {
+  suite.diff_test("call_default_2").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* a = data.input(Type::Int64);
     Value* b = data.input(Type::Int64);
     Value* callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_default_target_2);
@@ -334,7 +368,7 @@ void test_call(DiffTestSuite& suite) {
     data.output(result);
   });
 
-  suite.diff_test("call_default_4").interpreter(false).run([](Builder& builder, TestData& data) {
+  suite.diff_test("call_default_4").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* a = data.input(Type::Int64);
     Value* b = data.input(Type::Int64);
     Value* c = data.input(Type::Int64);
@@ -344,7 +378,7 @@ void test_call(DiffTestSuite& suite) {
     data.output(result);
   });
 
-  suite.diff_test("call_default_mixed_types").interpreter(false).run([](Builder& builder, TestData& data) {
+  suite.diff_test("call_default_mixed_types").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* b = data.input(Type::Bool);
     Value* i8 = data.input(Type::Int8);
     Value* i16 = data.input(Type::Int16);
@@ -361,7 +395,7 @@ void test_call(DiffTestSuite& suite) {
     data.output(result);
   });
 
-  suite.diff_test("call_default_ptr_ret").interpreter(false).run([](Builder& builder, TestData& data) {
+  suite.diff_test("call_default_ptr_ret").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* ptr = builder.build_const(Type::Ptr, (uint64_t)(void*) &test_call_ptr_anchor);
     Value* callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_default_ptr_id);
     Value* result = builder.build_call(
@@ -373,7 +407,7 @@ void test_call(DiffTestSuite& suite) {
     data.output(result);
   });
 
-  suite.diff_test("call_default_void_ret").interpreter(false).run([](Builder& builder, TestData& data) {
+  suite.diff_test("call_default_void_ret").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* out_ptr = builder.build_const(Type::Ptr, (uint64_t)(void*) &test_call_default_void_slot);
     Value* a = data.input(Type::Int32);
     Value* b = data.input(Type::Int32);
@@ -391,16 +425,18 @@ void test_call(DiffTestSuite& suite) {
   });
 }
 
-int main() {
+int main(int argc, char** argv) {
   LLVMCodeGen::initilize_llvm_jit();
 
-  DiffTestSuite suite("tests/output/test_insts");
+  DiffTestSuite suite("tests/output/test_insts", argc, argv);
 
   test_binop(suite);
   test_shift(suite);
   test_div_mod(suite);
   test_select(suite);
   test_resize(suite);
+  test_freeze(suite);
+  test_assume_const(suite);
   test_alloca(suite);
   test_call(suite);
 

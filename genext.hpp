@@ -313,6 +313,10 @@ namespace metajit {
     }
 
     Value* emit_const_prop(Inst* inst) {
+      // all the cases that use the instruction args and call emit_arg need to
+      // emit an LLVM Freeze instruction to deal with the possibility of the
+      // argument being a poison value. the result of this method must not be
+      // poison.
       if (dynamic_cast<PromoteInst*>(inst)) {
         return _builder.build_const(Type::Bool, 1);
       } else if (dynamic_cast<AssumeConstInst*>(inst)) {

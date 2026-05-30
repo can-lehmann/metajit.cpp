@@ -19,10 +19,10 @@
 using namespace metajit;
 using namespace metajit::test;
 
-int main() {
+int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
-  DiffTestSuite suite("tests/output/test_fuzzer");
+  DiffTestSuite suite("tests/output/test_fuzzer", argc, argv);
 
   // These are all the test cases that were found by the fuzzer
 

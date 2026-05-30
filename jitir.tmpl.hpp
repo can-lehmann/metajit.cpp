@@ -14,6 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <iostream>
 #include <sstream>
 #include <vector>
 #include <cassert>
@@ -23,10 +24,12 @@
 #include <unordered_set>
 #include <set>
 #include <map>
+#include <queue>
 #include <optional>
 #include <cstring>
 #include <fstream>
 #include <algorithm>
+#include <chrono>
 
 #include "../lwir.cpp/lwir_utils.hpp"
 
@@ -132,6 +135,35 @@ namespace metajit {
   };
 
   using Allocator = ArenaAllocator;
+
+  class Timer {
+  private:
+    using Clock = std::chrono::high_resolution_clock;
+    
+    Clock::time_point _start;
+    Clock::duration _time = Clock::duration::zero();
+    bool _is_running = false;
+  public:
+    Timer() {}  
+
+    void start() {
+      assert(!_is_running && "Timer already running");
+      _start = Clock::now();
+      _is_running = true;
+    }
+
+    void stop() {
+      Clock::time_point end = Clock::now();
+      _time = end - _start;
+      assert(_is_running && "Timer not running");
+      _is_running = false;
+    }
+
+    bool is_running() const { return _is_running; }
+    Clock::duration time() const { return _time; }
+
+    size_t as_us() const { return std::chrono::duration_cast<std::chrono::microseconds>(_time).count(); }
+  };
 
   inline std::string escape_json(const std::string& string) {
     // TODO: Check that this actually covers all cases
@@ -3266,6 +3298,7 @@ namespace metajit {
 
       static Bits eval(Inst* inst, NameMap<Bits>& values) {
         if (dynamic_cast<FreezeInst*>(inst) ||
+            dynamic_cast<PromoteInst*>(inst) ||
             dynamic_cast<AssumeConstInst*>(inst)) {
           return at(values, inst->arg(0));
         } else if (dynmatch(SelectInst, select, inst)) {
@@ -4152,6 +4185,9 @@ namespace metajit {
     Section* _section;
     std::vector<std::vector<Block*>> incoming;
     std::map<Value*, Value*> substs;
+    std::vector<bool> removed;
+    std::vector<bool> scheduled;
+    std::queue<Block*> todo;
     Builder builder;
     bool changes = false;
 
@@ -4186,6 +4222,8 @@ namespace metajit {
     #endif
 
     void remove(Block* block) {
+      assert (!removed[block->name()]);
+      removed[block->name()] = true;
       auto succs = block->successors();
       for (Block* succ : succs) {
         remove_from_incoming(block, succ);
@@ -4273,6 +4311,15 @@ namespace metajit {
       return false;
     }
 
+    void schedule_predecessors(Block* block) {
+      for (Block* pred : incoming[block->name()]) {
+        if (!scheduled[pred->name()]) {
+          todo.push(pred);
+          scheduled[pred->name()] = true;
+        }
+      }
+    }
+
   public:
     SimplifyCFG(Section* section): Pass(section), _section(section), incoming(section->block_count()),
         builder(section) {
@@ -4280,6 +4327,18 @@ namespace metajit {
       _compute_incoming(incoming);
 
       for (Block* block : *_section) {
+        todo.push(block);
+        removed.push_back(false);
+        scheduled.push_back(true);
+      }
+
+      while (todo.size() > 0) {
+        Block* block = todo.front();
+        todo.pop();
+        scheduled[block->name()] = false;
+        if (removed.at(block->name())) {
+          continue;
+        }
         // remove unreachable blocks
         if (block != _section->entry() && incoming[block->name()].empty()) {
           remove(block);
@@ -4302,6 +4361,7 @@ namespace metajit {
               // check that it's still there once
               assert (std::find(target_incoming.begin(), target_incoming.end(), block) != target_incoming.end());
               changes = true;
+              schedule_predecessors(block);
               continue;
             }
             // if the condition is constant, we can just jump to the taken branch
@@ -4314,6 +4374,7 @@ namespace metajit {
               Block* other = const_cond->value() != 0 ? branch->false_block() : branch->true_block();
               remove_from_incoming(block, other);
               changes = true;
+              schedule_predecessors(block);
               continue;
             }
 
@@ -4338,6 +4399,7 @@ namespace metajit {
               remove_from_incoming(block, branch->true_block());
               remove_from_incoming(block, branch->false_block());
               changes = true;
+              schedule_predecessors(block);
               continue;
             }
 
@@ -4382,6 +4444,7 @@ namespace metajit {
               }
               remove(target);
               changes = true;
+              schedule_predecessors(block);
               continue;
             }
             // do jump-threading: if the target block only has a single instruction,
@@ -4412,6 +4475,16 @@ namespace metajit {
                 block->remove(jump);
                 incoming[final_target->name()].push_back(block);
                 remove_from_incoming(block, target);
+                // target's incoming count dropped by 1; if it now has exactly one
+                // predecessor, that predecessor becomes eligible for block merging
+                if (!removed[target->name()] && incoming[target->name()].size() == 1) {
+                  Block* remaining_pred = incoming[target->name()][0];
+                  if (!scheduled[remaining_pred->name()]) {
+                    todo.push(remaining_pred);
+                    scheduled[remaining_pred->name()] = true;
+                  }
+                }
+                schedule_predecessors(block);
                 changes = true;
                 continue;
               }
@@ -4469,7 +4542,7 @@ namespace metajit {
         }
 
         for (Inst* inst : *block) {
-          if (dynmatch(FreezeInst, freeze, inst)) {
+          if (dynmatch(PromoteInst, promote, inst)) {
             _groups[inst] = ALWAYS;
           } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
             _groups[inst] = ALWAYS;
@@ -4600,7 +4673,7 @@ namespace metajit {
         }
       }
 
-      if (dynamic_cast<FreezeInst*>(by) ||
+      if (dynamic_cast<PromoteInst*>(by) ||
           (dynamic_cast<AssumeConstInst*>(by) && !is_int_or_bool(value->type()))) {
         _can_trace_inst[value] = true;
         _can_trace_const[value] = true;
@@ -4619,7 +4692,7 @@ namespace metajit {
         for (Inst* inst : block->rev_range()) {
           if (inst->has_side_effect() ||
               inst->is_terminator() ||
-              dynamic_cast<FreezeInst*>(inst) ||
+              dynamic_cast<PromoteInst*>(inst) ||
               dynamic_cast<AssumeConstInst*>(inst) ||
               dynamic_cast<CommentInst*>(inst)) {
             _can_trace_inst[inst] = true;
@@ -4946,7 +5019,17 @@ namespace metajit {
         defined.insert(arg);
       }
 
+      bool seen_terminator = false;
       for (Inst* inst : *block) {
+        if (seen_terminator) {
+          errors << "Block ";
+          block->write_arg(errors);
+          errors << " has instruction after terminator: ";
+          inst->write_arg(errors);
+          errors << "\n";
+          return true;
+        }
+
         for (Value* arg : inst->args()) {
           if (arg == nullptr) {
             errors << "Instruction ";
@@ -4964,6 +5047,10 @@ namespace metajit {
             errors << "\n";
             return true;
           }
+        }
+
+        if (inst->is_terminator()) {
+          seen_terminator = true;
         }
 
         defined.insert(inst);
@@ -5056,11 +5143,11 @@ namespace metajit {
               stream << " may produce a guard after memory write";
               throw SimpleReentryViolation(stream.str());
             }
-          } else if (dynmatch(FreezeInst, freeze, inst)) {
-            if (memory_written && !binding_time_groups.is_static(freeze->arg(0))) {
+          } else if (dynmatch(PromoteInst, promote, inst)) {
+            if (memory_written && !binding_time_groups.is_static(promote->arg(0))) {
               std::ostringstream stream;
-              stream << "Freeze instruction ";
-              freeze->arg(0)->write_arg(stream);
+              stream << "Promote instruction ";
+              promote->arg(0)->write_arg(stream);
               stream << " may produce a guard after memory write";
               throw SimpleReentryViolation(stream.str());
             }
@@ -5078,8 +5165,8 @@ namespace metajit {
 
   inline Value* unwrap_binding(Value* value) {
     while (true) {
-      if (dynmatch(FreezeInst, freeze, value)) {
-        value = freeze->arg(0);
+      if (dynmatch(PromoteInst, promote, value)) {
+        value = promote->arg(0);
       } else if (dynmatch(AssumeConstInst, assume_const, value)) {
         value = assume_const->arg(0);
       } else {
@@ -5127,9 +5214,9 @@ namespace metajit {
               _closures.emplace(*branch->true_block()->begin(), Closure());
               _closures.emplace(*branch->false_block()->begin(), Closure());
             }
-          } else if (dynmatch(FreezeInst, freeze, inst)) {
-            if (!_binding_time_groups.is_static(freeze->arg(0))) {
-              _closures.emplace(freeze, Closure());
+          } else if (dynmatch(PromoteInst, promote, inst)) {
+            if (!_binding_time_groups.is_static(promote->arg(0))) {
+              _closures.emplace(promote, Closure());
             }
           }
         }
