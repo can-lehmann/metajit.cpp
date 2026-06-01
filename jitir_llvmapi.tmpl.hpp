@@ -19,6 +19,8 @@
 namespace metajit {
   class LLVM_API {
   public:
+    std::unordered_map<std::string, llvm::Value*> by_name;
+
     /* ${llvmapi_defs} */
     llvm::FunctionCallee build_const;
     llvm::FunctionCallee build_const_fast;
@@ -42,7 +44,9 @@ namespace metajit {
       );
 
       build_const = module->getOrInsertFunction("jitir_build_const", build_const_type);
+      by_name["jitir_build_const"] = build_const.getCallee();
       build_const_fast = module->getOrInsertFunction("jitir_build_const_fast", build_const_type);
+      by_name["jitir_build_const_fast"] = build_const_fast.getCallee();
 
       build_guard = module->getOrInsertFunction(
         "jitir_build_guard",
@@ -56,6 +60,7 @@ namespace metajit {
           false
         )
       );
+      by_name["jitir_build_guard"] = build_guard.getCallee();
 
       entry_arg = module->getOrInsertFunction(
         "jitir_entry_arg",
@@ -68,7 +73,8 @@ namespace metajit {
           false
         )
       );
-      
+      by_name["jitir_entry_arg"] = entry_arg.getCallee();
+
       is_const_inst = module->getOrInsertFunction(
         "jitir_is_const_inst",
         llvm::FunctionType::get(
@@ -79,6 +85,7 @@ namespace metajit {
           false
         )
       );
+      by_name["jitir_is_const_inst"] = is_const_inst.getCallee();
 
       set_arg = module->getOrInsertFunction(
         "jitir_set_arg",
@@ -92,6 +99,7 @@ namespace metajit {
           false
         )
       );
+      by_name["jitir_set_arg"] = set_arg.getCallee();
     }
   };
 

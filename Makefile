@@ -1,7 +1,7 @@
 LLVM_FLAGS := $(shell llvm-config --cflags --libs)
 Z3_FLAGS := -I/usr/include/z3 -lz3
 CFLAGS := ${LLVM_FLAGS} -g
-HEADER_FILES := jitir.hpp jitir_llvmapi.hpp $(wildcard *.hpp)
+HEADER_FILES := jitir.hpp jitir_llvmapi.hpp genext.hpp $(wildcard *.hpp)
 TEST_HEADER_FILES := $(wildcard tests/*.hpp)
 TEST_CFLAGS := ${CFLAGS} -DMETAJIT_DEBUG
 
@@ -93,6 +93,9 @@ jitir.hpp: jitir.py jitir.tmpl.hpp
 jitir_llvmapi.hpp: jitir.py jitir_llvmapi.tmpl.hpp
 	PYTHONPATH="../lwir.cpp" python3 $<
 
+genext.hpp: jitir.py genext.tmpl.hpp
+	PYTHONPATH="../lwir.cpp" python3 $<
+
 clean:
 	-rm main
 	-rm tests/test_knownbits
@@ -109,6 +112,7 @@ clean:
 	-rm tests/fuzzer
 	-rm jitir.hpp
 	-rm jitir_llvmapi.hpp
+	-rm genext.hpp
 	-rm tests/source/*.ll
 	-rm -r tests/output
 	mkdir -p tests/output/test_insts
