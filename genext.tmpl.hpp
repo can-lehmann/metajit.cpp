@@ -1038,4 +1038,91 @@ namespace metajit {
       }
     }
   };
+
+  class AddRecord: public Pass<AddRecord> {
+  private:
+    Section* _section;
+    Builder _builder;
+    size_t _min_align;
+
+    void apply() {
+      Arg* tape_ptr = _builder.alloc_arg(Type::Ptr, _section->entry()->args().size());
+      _builder.add_args_to_block(_section->entry(), {tape_ptr});
+      
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(LoadInst, load, inst)) {
+            if (load->flags().has(LoadFlags::Record)) {
+              size_t load_size = std::max(_min_align, type_size(load->type()));
+
+              _builder.move_after(block, inst);
+              Value* ptr = _builder.build_load(tape_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), 0);
+              Value* size = _builder.build_const(Type::Int64, load_size);
+              if (load_size > 1 && load_size > _min_align) {
+                Value* align = _builder.fold_mod_u(_builder.fold_resize_u(ptr, Type::Int64), size);
+                Value* align_offset = _builder.fold_select(
+                  _builder.build_eq(align, _builder.build_const(Type::Int64, 0)),
+                  _builder.build_const(Type::Int64, 0),
+                  _builder.fold_sub(size, align)
+                );
+                ptr = _builder.fold_add_ptr(ptr, align_offset);
+              }
+              _builder.build_store(ptr, load, AliasingGroup(0), 0);
+              ptr = _builder.fold_add_ptr(ptr, size);
+              _builder.build_store(tape_ptr, ptr, AliasingGroup(0), 0);
+            }
+          }
+        }
+      }
+    }
+  public:
+    AddRecord(Section* section, size_t min_align = 1):
+        Pass(section),
+        _section(section),
+        _builder(section),
+        _min_align(min_align) {
+      
+      apply();
+    }
+
+    AddRecord(Section* section, size_t& max_write_size, size_t min_align = 1):
+        Pass(section),
+        _section(section),
+        _builder(section),
+        _min_align(min_align) {
+      
+      apply();
+
+      max_write_size = this->max_write_size();
+    }
+
+    size_t max_write_size() {
+      assert(_section->ordering() >= BlockOrdering::Topological);
+
+      size_t max_size = 0;
+      std::unordered_map<Block*, size_t> max_entry_sizes;
+      for (Block* block : *_section) {
+        size_t size = max_entry_sizes[block];
+        for (Inst* inst : *block) {
+          if (dynmatch(LoadInst, load, inst)) {
+            if (load->flags().has(LoadFlags::Record)) {
+              size_t load_size = std::max(_min_align, type_size(load->type()));
+              if (size % load_size != 0) {
+                size += load_size - (size % load_size);
+              }
+              size += load_size;
+            }
+          }
+        }
+
+        for (Block* succ : block->successors()) {
+          max_entry_sizes[succ] = std::max(max_entry_sizes[succ], size);
+        }
+
+        max_size = std::max(max_size, size);
+      }
+
+      return max_size;
+    }
+  };
 }

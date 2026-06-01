@@ -879,7 +879,9 @@ namespace metajit {
       // Guaranteed to be in bounds of an allocation, so will not trap
       InBounds = 1 << 1,
       // The value of this load is known at section entry
-      EntryFrozen = 1 << 2
+      EntryFrozen = 1 << 2,
+      // The value should be recorded
+      Record = 1 << 3
     };
 
     using BaseFlags<LoadFlags>::BaseFlags;
@@ -887,10 +889,11 @@ namespace metajit {
     constexpr static const char* NAMES[] = {
       "Pure",
       "InBounds",
-      "EntryFrozen"
+      "EntryFrozen",
+      "Record"
     };
 
-    constexpr static size_t COUNT = 3;
+    constexpr static size_t COUNT = 4;
   };
 
   enum class CallConv {
@@ -1125,6 +1128,10 @@ namespace metajit {
       _before = inst;
     }
 
+    void move_after(Block* block, Inst* inst) {
+      move_before(block, inst->next());  
+    }
+
     Arg* entry_arg(size_t index) const {
       return _section->entry()->arg(index);
     }
@@ -1293,6 +1300,13 @@ namespace metajit {
 
     AllocaInst* build_alloca(Type type) {
       return build_alloca(build_const(Type::Int64, type_size(type)), type_size(type));
+    }
+
+    void add_args_to_block(Block* block, const std::vector<Arg*>& args) {
+      lwir::Span<Arg*> new_args = alloc_span<Arg*>(block->args().size() + args.size());
+      std::copy(block->args().begin(), block->args().end(), new_args.begin());
+      std::copy(args.begin(), args.end(), new_args.begin() + block->args().size());
+      block->set_args(new_args);
     }
 
     // Folding

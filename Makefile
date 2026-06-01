@@ -24,7 +24,7 @@ test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_cl
 fuzz: tests/fuzzer
 	./tests/fuzzer
 
-main: main.cpp jitir.hpp jitir_llvmapi.hpp llvmgen.hpp x86gen.hpp
+main: main.cpp ${HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
 tests/test_knownbits: tests/test_knownbits.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
