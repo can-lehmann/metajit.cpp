@@ -2424,6 +2424,10 @@ namespace metajit {
       assert(name < _size);
       return _data[name];
     }
+
+    void fill(const T& value) {
+      std::fill(_data, _data + _size, value);
+    }
   };
 
   void Inst::substitute_args(NameMap<Value*>& substs) {
@@ -5824,23 +5828,55 @@ namespace metajit {
 
   class Mem2Reg: public Pass<Mem2Reg> {
   private:
+    class BitVector {
+    private:
+      std::vector<uint64_t> _words;
+      size_t _size = 0;
+    public:
+      BitVector() {}
+      BitVector(size_t size): _words((size + 63) / 64, 0), _size(size) {}
+
+      void assign(size_t size, bool value) {
+        _size = size;
+        _words.assign((size + 63) / 64, value ? ~uint64_t(0) : 0);
+      }
+
+      void set(size_t idx) { _words[idx / 64] |= uint64_t(1) << (idx % 64); }
+      void clear(size_t idx) { _words[idx / 64] &= ~(uint64_t(1) << (idx % 64)); }
+      bool test(size_t idx) const { return (_words[idx / 64] >> (idx % 64)) & 1; }
+
+      void or_with(const BitVector& other) {
+        for (size_t w = 0; w < _words.size(); w++) {
+          _words[w] |= other._words[w];
+        }
+      }
+
+      bool operator==(const BitVector& other) const { return _words == other._words; }
+      bool operator!=(const BitVector& other) const { return _words != other._words; }
+    };
+
     struct BlockData {
-      std::set<AllocaInst*> live; // Live allocas at entry
-      std::map<AllocaInst*, Value*> values_at_entry; // Values at entry for live allocas
-      std::map<AllocaInst*, Value*> values_at_exit; // Values at exit for live allocas
+      BitVector live; // Live allocas at entry, one bit per alloca index
+      std::vector<Value*> values_at_entry; // Values at entry, indexed by alloca index (nullptr = unknown)
+      std::vector<Value*> values_at_exit;  // Values at exit, indexed by alloca index (nullptr = unknown)
       std::map<AllocaInst*, Arg*> args;
     };
 
     Section* _section = nullptr;
-    std::set<AllocaInst*> _lowerable_allocas;
+    NameMap<size_t> _alloca_index; // alloca name -> dense index, SIZE_MAX if not lowerable
+    std::vector<AllocaInst*> _lowerable_allocas; // dense index -> alloca
     std::unordered_map<Block*, BlockData> _blocks;
     std::map<LoadInst*, Value*> _loads;
     Builder _builder;
 
     void find_lowerable_allocas() {
+      _alloca_index.init(_section);
+      _alloca_index.fill(SIZE_MAX);
+
       for (Inst* inst : *_section->entry()) {
         if (dynmatch(AllocaInst, alloca, inst)) {
-          _lowerable_allocas.insert(alloca);
+          _alloca_index[alloca] = _lowerable_allocas.size();
+          _lowerable_allocas.push_back(alloca);
         }
       }
 
@@ -5848,51 +5884,73 @@ namespace metajit {
         for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst)) {
             if (dynmatch(AllocaInst, alloca, store->value())) {
-              _lowerable_allocas.erase(alloca);
+              _alloca_index[alloca] = SIZE_MAX;
             } else if (dynmatch(AllocaInst, alloca, store->ptr())) {
               if (store->offset() != 0) {
-                _lowerable_allocas.erase(alloca);
+                _alloca_index[alloca] = SIZE_MAX;
               }
             }
           } else if (dynmatch(LoadInst, load, inst)) {
             if (dynmatch(AllocaInst, alloca, load->ptr())) {
               if (load->offset() != 0) {
-                _lowerable_allocas.erase(alloca);
+                _alloca_index[alloca] = SIZE_MAX;
               }
             }
           } else {
             for (Value* arg : inst->args()) {
               if (dynmatch(AllocaInst, alloca, arg)) {
-                _lowerable_allocas.erase(alloca);
+                _alloca_index[alloca] = SIZE_MAX;
               }
             }
           }
         }
       }
+
+      // remove allocas that were marked non-lowerable, keeping the vector dense
+      std::vector<AllocaInst*> filtered;
+      for (AllocaInst* alloca : _lowerable_allocas) {
+        if (_alloca_index[alloca] != SIZE_MAX) {
+          _alloca_index[alloca] = filtered.size();
+          filtered.push_back(alloca);
+        }
+      }
+      _lowerable_allocas = std::move(filtered);
     }
 
     void find_liveness() {
       // TODO: Optimize with queue
+      size_t n = _lowerable_allocas.size();
+
+      // Initialize live/value vectors for all blocks
+      for (Block* block : *_section) {
+        _blocks[block].live.assign(n, false);
+        _blocks[block].values_at_entry.assign(n, nullptr);
+        _blocks[block].values_at_exit.assign(n, nullptr);
+      }
 
       bool changed = true;
       while (changed) {
         changed = false;
 
         for (Block* block : _section->rev_range()) {
-          std::set<AllocaInst*> live;
+          BitVector live(n);
           for (Block* succ : block->successors()) {
-            live.insert(_blocks[succ].live.begin(), _blocks[succ].live.end());
+            live.or_with(_blocks[succ].live);
           }
 
           for (Inst* inst : block->rev_range()) {
             if (dynmatch(StoreInst, store, inst)) {
               if (dynmatch(AllocaInst, alloca, store->ptr())) {
-                live.erase(alloca);
+                size_t idx = _alloca_index[alloca];
+                if (idx != SIZE_MAX) {
+                  live.clear(idx);
+                }
               }
             } else if (dynmatch(LoadInst, load, inst)) {
               if (dynmatch(AllocaInst, alloca, load->ptr())) {
-                if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
-                  live.insert(alloca);
+                size_t idx = _alloca_index[alloca];
+                if (idx != SIZE_MAX) {
+                  live.set(idx);
                   _loads[load] = nullptr;
                 }
               }
@@ -5915,24 +5973,26 @@ namespace metajit {
       while (changed) {
         changed = false;
         for (Block* block : *_section) {
-          std::map<AllocaInst*, Value*> values = _blocks[block].values_at_entry;
+          std::vector<Value*> values = _blocks[block].values_at_entry;
           for (Inst* inst : *block) {
             if (dynmatch(StoreInst, store, inst)) {
               if (dynmatch(AllocaInst, alloca, store->ptr())) {
-                if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
+                size_t idx = _alloca_index[alloca];
+                if (idx != SIZE_MAX) {
                   Value* value = store->value();
                   if (dynmatch(LoadInst, load, value)) {
                     if (_loads.find(load) != _loads.end()) {
                       value = _loads.at(load);
                     }
                   }
-                  values[alloca] = value;
+                  values[idx] = value;
                 }
               }
             } else if (dynmatch(LoadInst, load, inst)) {
               if (dynmatch(AllocaInst, alloca, load->ptr())) {
-                if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
-                  Value* value = values.at(alloca);
+                size_t idx = _alloca_index[alloca];
+                if (idx != SIZE_MAX) {
+                  Value* value = values[idx];
                   if (_loads[load] != value) {
                     _loads[load] = value;
                     changed = true;
@@ -5944,19 +6004,21 @@ namespace metajit {
 
           _blocks[block].values_at_exit = values;
 
-          for (Block* block : block->successors()) {
-            for (AllocaInst* alloca : _blocks[block].live) {
-              if (values.find(alloca) != values.end() && values.at(alloca)) {
-                if (_blocks[block].values_at_entry.find(alloca) == _blocks[block].values_at_entry.end()) {
-                  _blocks[block].values_at_entry[alloca] = values.at(alloca);
+          for (Block* succ : block->successors()) {
+            const BitVector& succ_live = _blocks[succ].live;
+            std::vector<Value*>& succ_entry = _blocks[succ].values_at_entry;
+            for (size_t idx = 0; idx < _lowerable_allocas.size(); idx++) {
+              if (!succ_live.test(idx) || !values[idx]) continue;
+              if (!succ_entry[idx]) {
+                succ_entry[idx] = values[idx];
+                changed = true;
+              } else if (succ_entry[idx] != values[idx]) {
+                AllocaInst* alloca = _lowerable_allocas[idx];
+                if (_blocks[succ].args.find(alloca) == _blocks[succ].args.end()) {
+                  Arg* arg = _builder.alloc_arg(values[idx]->type(), _blocks[succ].args.size() + succ->args().size());
+                  _blocks[succ].args[alloca] = arg;
+                  succ_entry[idx] = arg;
                   changed = true;
-                } else if (_blocks[block].values_at_entry.at(alloca) != values.at(alloca)) {
-                  if (_blocks[block].args.find(alloca) == _blocks[block].args.end()) {
-                    Arg* arg = _builder.alloc_arg(values.at(alloca)->type(), _blocks[block].args.size() + block->args().size());
-                    _blocks[block].args[alloca] = arg;
-                    _blocks[block].values_at_entry[alloca] = arg;
-                    changed = true;
-                  }
                 }
               }
             }
@@ -5985,7 +6047,7 @@ namespace metajit {
             }
           } else if (dynmatch(StoreInst, store, inst)) {
             if (dynmatch(AllocaInst, alloca, store->ptr())) {
-              if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
+              if (_alloca_index[alloca] != SIZE_MAX) {
                 it = it.erase();
                 continue;
               }
@@ -6020,7 +6082,7 @@ namespace metajit {
           }
           for (auto& [alloca, arg] : target_data.args) {
             assert(args[arg->index()] == nullptr);
-            args[arg->index()] = data.values_at_exit.at(alloca);
+            args[arg->index()] = data.values_at_exit[_alloca_index[alloca]];
           }
           jump->set_args(args);
         } else if (dynmatch(BranchInst, branch, block->terminator())) {
@@ -6031,7 +6093,7 @@ namespace metajit {
               _builder.move_to_end(jump_block); \
               JumpInst* jump = _builder.build_jump(edge_data.args.size(), branch->name##_block()); \
               for (auto& [alloca, arg] : edge_data.args) { \
-                jump->set_arg(arg->index(), data.values_at_exit.at(alloca)); \
+                jump->set_arg(arg->index(), data.values_at_exit[_alloca_index[alloca]]); \
               } \
               branch->set_##name##_block(jump_block); \
             } \
@@ -6054,9 +6116,17 @@ namespace metajit {
       assert(section->ordering() >= BlockOrdering::Dominator);
      
       find_lowerable_allocas();
+      std::cerr << "mem2reg: " << _section->block_count() << " blocks, " << _lowerable_allocas.size() << " allocas\n";
+      auto t0 = std::chrono::steady_clock::now();
       find_liveness();
+      auto t1 = std::chrono::steady_clock::now();
+      std::cerr << "mem2reg liveness done\n";
       find_values();
+      auto t2 = std::chrono::steady_clock::now();
       apply();
+      auto t3 = std::chrono::steady_clock::now();
+      auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b-a).count(); };
+      std::cerr << "mem2reg liveness=" << us(t0,t1) << "us values=" << us(t1,t2) << "us apply=" << us(t2,t3) << "us\n";
     }
   };
 }
