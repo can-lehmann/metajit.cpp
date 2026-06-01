@@ -6,6 +6,7 @@ jitir_llvmapi.hpp
 main
 asm.bin
 section.json
+*.dot
 tests/test_insts
 tests/test_interpreter
 tests/test_clone
@@ -20,3 +21,4 @@ tests/source/*.ll
 tests/test_source
 tests/test_reentry
 tests/test_mem2reg
+tests/test_genext
