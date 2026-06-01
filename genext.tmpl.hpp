@@ -284,10 +284,21 @@ namespace metajit {
   /* ${build_build_inst} */
 
   class CreateGenExt: public Pass<CreateGenExt> {
+  public:
+    struct Config {
+      bool use_tape;
+      size_t min_align;
+      bool comments;
+
+      constexpr Config():
+        use_tape(false),
+        min_align(1),
+        comments(false) {}
+    };
   private:
     Section* _section;
     Section* _genext_section;
-    bool _comments = false;
+    Config _config;
 
     Builder _builder;
 
@@ -630,7 +641,7 @@ namespace metajit {
     
 
     void emit_build_inst(Inst* inst) {
-      if (_comments &&
+      if (_config.comments &&
           !dynamic_cast<CommentInst*>(inst)) {
         std::ostringstream comment_stream;
         inst->write_arg(comment_stream);
@@ -988,10 +999,11 @@ namespace metajit {
       }
     }
   public:
-    CreateGenExt(Section* section, Section* genext_section):
+    CreateGenExt(Section* section, Section* genext_section, const Config& config = Config()):
         Pass(section),
         _section(section),
         _genext_section(genext_section),
+        _config(config),
         _builder(genext_section),
         _uses(section),
         _binding_time_groups(section),
