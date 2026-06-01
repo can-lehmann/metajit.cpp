@@ -45,7 +45,7 @@ jobs:
         working-directory: metajit.cpp
         run: |
           make clean
-          make test -j
+          make test
       - name: Fuzz a bit
         working-directory: metajit.cpp
         run: |
