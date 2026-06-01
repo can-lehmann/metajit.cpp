@@ -8,9 +8,10 @@ TEST_CFLAGS := ${CFLAGS} -DMETAJIT_DEBUG
 run: main
 	./main
 
-test: tests/test_knownbits tests/test_insts tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_reentry tests/test_mem2reg tests/test_source
+test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
 	./tests/test_knownbits
 	./tests/test_insts
+	./tests/test_interpreter
 	./tests/test_clone
 	./tests/test_cfg
 	./tests/test_fuzzer
@@ -18,6 +19,7 @@ test: tests/test_knownbits tests/test_insts tests/test_clone tests/test_cfg test
 	./tests/test_reentry
 	./tests/test_mem2reg
 	./tests/test_source
+	./tests/test_genext
 
 fuzz: tests/fuzzer
 	./tests/fuzzer
@@ -29,6 +31,9 @@ tests/test_knownbits: tests/test_knownbits.cpp ${HEADER_FILES} ${TEST_HEADER_FIL
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_insts: tests/test_insts.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${TEST_CFLAGS} -o $@ $<
+
+tests/test_interpreter: tests/test_interpreter.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_clone: tests/test_clone.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
@@ -95,6 +100,8 @@ clean:
 	-rm main
 	-rm tests/test_knownbits
 	-rm tests/test_insts
+	-rm tests/test_interpreter
+	-rm tests/test_clone
 	-rm tests/test_fuzzer
 	-rm tests/test_cfg
 	-rm tests/test_opt
