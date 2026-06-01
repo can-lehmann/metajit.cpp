@@ -4181,7 +4181,8 @@ namespace metajit {
 
           if (inst->has_side_effect() ||
               inst->is_terminator() ||
-              dynamic_cast<CommentInst*>(inst)) {
+              dynamic_cast<CommentInst*>(inst) ||
+              dynamic_cast<AllocaInst*>(inst)) {
             inst_it++;
             continue;
           }
