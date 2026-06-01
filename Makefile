@@ -8,7 +8,7 @@ TEST_CFLAGS := ${CFLAGS} -DMETAJIT_DEBUG
 run: main
 	./main
 
-test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_reentry tests/test_mem2reg tests/test_source
+test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
 	./tests/test_knownbits
 	./tests/test_insts
 	./tests/test_interpreter
@@ -19,6 +19,7 @@ test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_cl
 	./tests/test_reentry
 	./tests/test_mem2reg
 	./tests/test_source
+	./tests/test_genext
 
 fuzz: tests/fuzzer
 	./tests/fuzzer
@@ -117,3 +118,4 @@ clean:
 	mkdir -p tests/output/test_source
 	mkdir -p tests/output/test_reader
 	mkdir -p tests/output/test_mem2reg
+	mkdir -p tests/output/test_genext

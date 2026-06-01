@@ -41,6 +41,18 @@ void check_simplifycfg(const std::string& expected, Section* section) {
   unittest_assert(ss.str() == expected);
 }
 
+void check_cse(const std::string& expected, Section* section) {
+  unittest_assert(!section->verify(std::cout));
+  metajit::CommonSubexprElim::run(section);
+  unittest_assert(!section->verify(std::cout));
+  std::stringstream ss;
+  section->write(ss);
+  if (ss.str() != expected) {
+    std::cerr << "Expected:\n" << expected << "\n\nGot:\n" << ss.str() << std::endl;
+  }
+  unittest_assert(ss.str() == expected);
+}
+
 void check_block_order(const std::string& expected, Section* section, BlockOrdering target_order = BlockOrdering::Natural) {
   section->order_blocks(target_order);
   unittest_assert (!section->verify(std::cout));
@@ -892,6 +904,38 @@ b3:
 }
 )", builder.section());
     assert(builder.section()->ordering() == BlockOrdering::Topological);
+  });
+
+  suite.test("cse does not merge distinct allocas").run([]() {
+    Context context;
+    Allocator allocator;
+    Section* section = new Section(context, allocator);
+    Builder builder(section);
+    builder.move_to_end(builder.build_block({Type::Ptr}));
+    Value* size = builder.build_const(Type::Int64, 8);
+    Value* a1 = builder.build_alloca(size, 8);
+    Value* a2 = builder.build_alloca(size, 8);
+    builder.build_store(a1, builder.build_const(Type::Int64, 1), AliasingGroup(0), 0);
+    builder.build_store(a2, builder.build_const(Type::Int64, 2), AliasingGroup(0), 0);
+    Value* v1 = builder.build_load(a1, Type::Int64, {}, AliasingGroup(0), 0);
+    Value* v2 = builder.build_load(a2, Type::Int64, {}, AliasingGroup(0), 0);
+    builder.build_store(builder.entry_arg(0), builder.build_add(v1, v2), AliasingGroup(0), 0);
+    builder.build_exit();
+    section->set_ordering(BlockOrdering::Dominator);
+    check_cse(R"(section {
+b0(%0: Ptr):
+  %1 = Alloca 8:Int64, align=8
+  %2 = Alloca 8:Int64, align=8
+  Store %1, 1:Int64, aliasing=0, offset=0
+  Store %2, 2:Int64, aliasing=0, offset=0
+  %5 = Load %1, type=Int64, flags={}, aliasing=0, offset=0
+  %6 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
+  %7 = Add %5, %6
+  Store %0, %7, aliasing=0, offset=0
+  Exit
+}
+)", section);
+    delete section;
   });
 
   return suite.finish();
