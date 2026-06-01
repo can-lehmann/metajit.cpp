@@ -210,6 +210,12 @@ void test_call_default_void_store(uint32_t* out, uint32_t a, uint32_t b) {
   *out = a + b + 1;
 }
 
+// Takes two separate pointer args: writes sum of their first int32s to out[0]
+extern "C" __attribute__((noinline))
+void test_call_two_ptr_args(uint32_t* out, uint32_t* a, uint32_t* b) {
+  out[0] = *a + *b;
+}
+
 void test_freeze(DiffTestSuite& suite) {
   #define freeze_type(type) \
     suite.diff_test("freeze_" #type).run([](Builder& builder, TestData& data) { \
@@ -405,6 +411,31 @@ void test_call(DiffTestSuite& suite) {
       CallConv::Default
     );
     data.output(result);
+  });
+
+  // Two consecutive calls where the second call takes args from the results/inputs
+  // of the first — exercises the parallel-move problem in call argument setup.
+  suite.diff_test("call_default_two_calls_two_args").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
+    Value* a = data.input(Type::Int64);
+    Value* b = data.input(Type::Int64);
+    Value* callee2 = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_default_target_2);
+    Value* r1 = builder.build_call(callee2, Type::Int64, std::vector<Value*>({a, b}), CallConv::Default);
+    // Second call: pass r1 and a — a was live across the first call
+    Value* r2 = builder.build_call(callee2, Type::Int64, std::vector<Value*>({r1, a}), CallConv::Default);
+    data.output(r2);
+  });
+
+  // Section with two entry-like ptr args (simulate genext scenario):
+  // call a function passing both ptr args as arguments.
+  suite.diff_test("call_default_two_ptr_entry_args").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
+    Value* a = data.input(Type::Int64);
+    Value* b = data.input(Type::Int64);
+    Value* c = data.input(Type::Int64);
+    Value* callee3 = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_default_target);
+    // First call uses a and b, second uses b and c — b must survive the first call
+    Value* r1 = builder.build_call(callee3, Type::Int64, std::vector<Value*>({a, b, c}), CallConv::Default);
+    Value* r2 = builder.build_call(callee3, Type::Int64, std::vector<Value*>({b, c, r1}), CallConv::Default);
+    data.output(r2);
   });
 
   suite.diff_test("call_default_void_ret").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
