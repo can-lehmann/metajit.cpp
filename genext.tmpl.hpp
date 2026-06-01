@@ -310,8 +310,9 @@ namespace metajit {
     NameMap<Value*> _is_used;
     NameMap<Value*> _built;
     NameMap<Value*> _values;
-    std::map<Block*, Block*> _blocks;
+    BlockMap<Block*> _blocks;
     Value* _jitir_builder = nullptr;
+    Value* _tape_ptr = nullptr;
 
     GenExtSymbols _syms;
 
@@ -348,113 +349,7 @@ namespace metajit {
     }
 
     Value* emit_inst(Inst* inst) {
-      if (dynmatch(FreezeInst, freeze, inst)) {
-        return _builder.build_freeze(emit_arg(freeze->arg(0)));
-      } else if (dynmatch(PromoteInst, promote, inst)) {
-        return emit_arg(promote->arg(0));
-      } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
-        return emit_arg(assume_const->arg(0));
-      } else if (dynmatch(SelectInst, select, inst)) {
-        return _builder.build_select(
-          emit_arg(select->arg(0)),
-          emit_arg(select->arg(1)),
-          emit_arg(select->arg(2))
-        );
-      } else if (dynmatch(ResizeUInst, resize_u, inst)) {
-        return _builder.build_resize_u(emit_arg(resize_u->arg(0)), resize_u->type());
-      } else if (dynmatch(ResizeSInst, resize_s, inst)) {
-        return _builder.build_resize_s(emit_arg(resize_s->arg(0)), resize_s->type());
-      } else if (dynmatch(ResizeXInst, resize_x, inst)) {
-        return _builder.build_resize_x(emit_arg(resize_x->arg(0)), resize_x->type());
-      } else if (dynmatch(FloatToIntSInst, float_to_int_s, inst)) {
-        return _builder.build_float_to_int_s(emit_arg(float_to_int_s->arg(0)), float_to_int_s->type());
-      } else if (dynmatch(IntToFloatSInst, int_to_float_s, inst)) {
-        return _builder.build_int_to_float_s(emit_arg(int_to_float_s->arg(0)), int_to_float_s->type());
-      } else if (dynmatch(LoadInst, load, inst)) {
-        return _builder.build_load(
-          emit_arg(load->arg(0)),
-          load->type(),
-          load->flags(),
-          load->aliasing(),
-          load->offset()
-        );
-      } else if (dynmatch(StoreInst, store, inst)) {
-        return _builder.build_store(
-          emit_arg(store->arg(0)),
-          emit_arg(store->arg(1)),
-          store->aliasing(),
-          store->offset()
-        );
-      } else if (dynmatch(AllocaInst, alloca_inst, inst)) {
-        return _builder.build_alloca(emit_arg(alloca_inst->size()), alloca_inst->align());
-      } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
-        return _builder.build_add_ptr(emit_arg(add_ptr->arg(0)), emit_arg(add_ptr->arg(1)));
-      } else if (dynmatch(CallInst, call, inst)) {
-        std::vector<Value*> args;
-        for (size_t it = 1; it < call->arg_count(); it++) {
-          args.push_back(emit_arg(call->arg(it)));
-        }
-        return _builder.build_call(emit_arg(call->callee()), call->type(), args, call->call_conv());
-      } else if (dynmatch(EqInst, eq, inst)) {
-        return _builder.build_eq(emit_arg(eq->arg(0)), emit_arg(eq->arg(1)));
-      } else if (dynmatch(CommentInst, comment, inst)) {
-        return nullptr;
-      }
-
-      #define binop(Name, method) \
-        else if (dynmatch(Name##Inst, name, inst)) { \
-          return _builder.method(emit_arg(name->arg(0)), emit_arg(name->arg(1))); \
-        }
-
-      binop(Add, build_add)
-      binop(Sub, build_sub)
-      binop(Mul, build_mul)
-      binop(DivS, build_div_s)
-      binop(DivU, build_div_u)
-      binop(ModS, build_mod_s)
-      binop(ModU, build_mod_u)
-      binop(And, build_and)
-      binop(Or, build_or)
-      binop(Xor, build_xor)
-      binop(Shl, build_shl)
-      binop(ShrU, build_shr_u)
-      binop(ShrS, build_shr_s)
-      binop(AddF, build_add_f)
-      binop(SubF, build_sub_f)
-      binop(MulF, build_mul_f)
-      binop(DivF, build_div_f)
-      binop(LtU, build_lt_u)
-      binop(LtS, build_lt_s)
-      binop(LtFO, build_lt_f_o)
-      binop(LtFU, build_lt_f_u)
-
-      #undef binop
-
-      inst->write(std::cerr);
-      std::cerr << std::endl;
-      assert(false && "Unknown instruction");
-      return nullptr;
-    }
-
-    Value* emit_terminator(Inst* inst, Block* block) {
-      if (dynmatch(BranchInst, branch, inst)) {
-        return _builder.build_branch(
-          emit_arg(branch->cond()),
-          _blocks.at(branch->true_block()),
-          _blocks.at(branch->false_block())
-        );
-      } else if (dynmatch(JumpInst, jump, inst)) {
-        std::vector<Value*> args;
-        for (size_t i = 0; i < jump->arg_count(); i++) {
-          args.push_back(emit_arg(jump->arg(i)));
-        }
-        return _builder.build_jump(_blocks.at(jump->block()), args);
-      } else if (dynmatch(ExitInst, exit, inst)) {
-        return _builder.build_exit();
-      } else {
-        assert(false && "Unknown terminator");
-        return nullptr;
-      }
+      return Clone::clone(inst, _builder, _blocks, _values);
     }
 
     Value* is_const(Value* value) {
@@ -950,7 +845,7 @@ namespace metajit {
           _builder.build_store(_built.at(arg), emit_built_arg(jump->arg(arg->index())), AliasingGroup(0), 0);
         }
       }
-      _values[inst] = emit_terminator(inst, block);
+      _values[inst] = emit_inst(inst);
     }
 
     void emit_generating_extension_allocs(NamedValue* value) {
@@ -970,9 +865,11 @@ namespace metajit {
     }
 
     void emit_entry() {
-      _jitir_builder = _genext_section->entry()->arg(
-        _section->entry()->args().size()
-      );
+      size_t builder_index = _section->entry()->args().size();
+      _jitir_builder = _genext_section->entry()->arg(builder_index);
+      if (_config.use_tape) {
+        _tape_ptr = _genext_section->entry()->arg(builder_index + 1);
+      }
 
       for (Block* block : *_section) {
         for (Arg* arg : block->args()) {
@@ -1010,6 +907,7 @@ namespace metajit {
         _trace_capabilities(section, _binding_time_groups) {
 
       section->autoname();
+      _blocks.init(section);
       _is_const.init(section);
       _is_used.init(section);
       _built.init(section);
@@ -1022,6 +920,9 @@ namespace metajit {
         entry_arg_types.push_back(arg->type());
       }
       entry_arg_types.push_back(Type::Ptr);
+      if (_config.use_tape) {
+        entry_arg_types.push_back(Type::Ptr);
+      }
       _builder.move_to_end(_builder.build_block(entry_arg_types));
 
       for (Block* block : *section) {

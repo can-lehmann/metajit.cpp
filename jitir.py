@@ -311,7 +311,7 @@ class ClonePlugin:
         for inst in ir.insts:
             name = inst.format_name(ir)
             code += f"if (dynamic_cast<{name}*>(inst)) {{\n"
-            code += f"  {name}* clone = _builder.{inst.format_builder_name(ir)}("
+            code += f"  {name}* clone = builder.{inst.format_builder_name(ir)}("
             args = []
             value_index = 0
             varargs = None
@@ -321,10 +321,10 @@ class ClonePlugin:
                         args.append(f"inst->arg_count() - {value_index}")
                         varargs = arg
                     case ValueType():
-                        args.append(f"clone_arg(inst->arg({value_index}))")
+                        args.append(f"clone_arg(inst->arg({value_index}), builder, values)")
                         value_index += 1
                     case Type(name = "Block*"):
-                        args.append(f"_blocks[(({name}*) inst)->{arg.name}()->name()]")
+                        args.append(f"blocks[(({name}*) inst)->{arg.name}()]")
                     case Type():
                         args.append(f"(({name}*) inst)->{arg.name}()")
             code += ", ".join(args)
@@ -332,7 +332,7 @@ class ClonePlugin:
 
             if varargs is not None:
                 code += f"  for (size_t it = {value_index}; it < inst->arg_count(); it++) {{\n"
-                code += f"    clone->set_arg(it, clone_arg(inst->arg(it)));\n"
+                code += f"    clone->set_arg(it, clone_arg(inst->arg(it), builder, values));\n"
                 code += f"  }}\n"
 
             code += f"  return clone;\n"
@@ -653,7 +653,7 @@ class GenExtPlugin:
         func += "                              Inst* inst,\n"
         func += "                              Value* jitir_builder,\n"
         func += "                              const std::vector<Value*>& args,\n"
-        func += "                              std::map<Block*, Block*>& blocks,\n"
+        func += "                              BlockMap<Block*>& blocks,\n"
         func += "                              GenExtSymbols& syms) {\n"
         for inst in ir.insts:
             name = inst.format_name(ir)

@@ -1259,6 +1259,10 @@ namespace metajit {
 
     #undef define_build_const
 
+    Poison* build_poison(Type type) {
+      return _section->context().build_poison(type);
+    }
+
     /* ${builder} */
 
     ShlInst* build_shl(Value* a, size_t shift) {
@@ -2393,41 +2397,41 @@ namespace metajit {
 
   /* ${capi} */
 
-  template<class T>
-  class NameMap {
+  template<class K, class T, class Self>
+  class BaseNameMap {
   private:
     T* _data = nullptr;
     size_t _size = 0;
   public:
-    NameMap() {}
-    NameMap(Section* section) { init(section); }
+    BaseNameMap() {}
+    BaseNameMap(Section* section) { ((Self*)this)->init(section); }
 
-    NameMap(const NameMap<T>&) = delete;
-    NameMap<T>& operator=(const NameMap<T>&) = delete;
+    BaseNameMap(const BaseNameMap<K, T, Self>&) = delete;
+    BaseNameMap<K, T, Self>& operator=(const BaseNameMap<K, T, Self>&) = delete;
 
-    ~NameMap() { if (_data) { delete[] _data; } }
+    ~BaseNameMap() { if (_data) { delete[] _data; } }
 
-    void init(Section* section) {
+    void init_size(size_t size) {
       assert(_data == nullptr);
-      _size = section->name_count();
+      _size = size;
       _data = new T[_size]();
     }
 
     size_t size() const { return _size; }
 
-    T& at(NamedValue* value) {
-      assert(value->name() < _size);
-      return _data[value->name()];
+    T& at(K* key) {
+      assert(key->name() < _size);
+      return _data[key->name()];
     }
 
-    T& operator[](NamedValue* value) { return at(value); }
+    T& operator[](K* key) { return at(key); }
 
-    const T& at(NamedValue* value) const {
-      assert(value->name() < _size);
-      return _data[value->name()];
+    const T& at(K* key) const {
+      assert(key->name() < _size);
+      return _data[key->name()];
     }
 
-    const T& operator[](NamedValue* value) const { return at(value); }
+    const T& operator[](K* key) const { return at(key); }
 
     T& at_name(size_t name) {
       assert(name < _size);
@@ -2437,6 +2441,32 @@ namespace metajit {
     const T& at_name(size_t name) const {
       assert(name < _size);
       return _data[name];
+    }
+
+    void fill(const T& value) {
+      for (size_t i = 0; i < _size; i++) {
+        _data[i] = value;
+      }
+    }
+  };
+
+  template <class T>
+  class NameMap: public BaseNameMap<NamedValue, T, NameMap<T>> {
+  public:
+    using BaseNameMap<NamedValue, T, NameMap<T>>::BaseNameMap;
+
+    void init(Section* section) {
+      BaseNameMap<NamedValue, T, NameMap<T>>::init_size(section->name_count());
+    }
+  };
+
+  template <class T>
+  class BlockMap: public BaseNameMap<Block, T, BlockMap<T>> {
+  public:
+    using BaseNameMap<Block, T, BlockMap<T>>::BaseNameMap;
+
+    void init(Section* section) {
+      BaseNameMap<Block, T, BlockMap<T>>::init_size(section->block_count());
     }
   };
 
@@ -5638,22 +5668,20 @@ namespace metajit {
     Section* _cloned_section;
     Builder _builder;
 
-    std::vector<Block*> _blocks;
+    BlockMap<Block*> _blocks;
     NameMap<Value*> _values;
 
-    Value* clone_arg(Value* value) {
+    static Value* clone_arg(Value* value, Builder& builder, const NameMap<Value*>& values) {
       if (value->is_named()) {
-        return _values.at((NamedValue*) value);
+        return values.at((NamedValue*) value);
       } else if (dynmatch(Const, constant, value)) {
-        return _builder.build_const(constant->type(), constant->value());
+        return builder.build_const(constant->type(), constant->value());
+      } else if (dynmatch(Poison, poison, value)) {
+        return builder.build_poison(poison->type());
       } else {
         assert(false);
         return nullptr;
       }
-    }
-
-    Inst* clone_inst(Inst* inst) {
-      /* ${clone} */
     }
   public:
     Clone(Section* section, Section* cloned_section):
@@ -5661,7 +5689,7 @@ namespace metajit {
         _section(section),
         _cloned_section(cloned_section),
         _builder(cloned_section),
-        _blocks(section->block_count(), nullptr),
+        _blocks(section),
         _values(section) {
       
       assert(section->ordering() >= BlockOrdering::Dominator);
@@ -5675,16 +5703,23 @@ namespace metajit {
           cloned->set_arg(arg->index(), cloned_arg);
           _values[arg] = cloned_arg;
         }
-        _blocks[block->name()] = cloned;
+        _blocks[block] = cloned;
       }
 
       for (Block* block : *_section) {
-        _builder.move_to_end(_blocks[block->name()]);
+        _builder.move_to_end(_blocks[block]);
 
         for (Inst* inst : *block) {
-          _values[inst] = clone_inst(inst);
+          _values[inst] = clone(inst, _builder, _blocks, _values);
         }
       }
+    }
+
+    static Inst* clone(Inst* inst,
+                       Builder& builder,
+                       const BlockMap<Block*>& blocks,
+                       const NameMap<Value*>& values) {
+      /* ${clone} */
     }
   };
 
