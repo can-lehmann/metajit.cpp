@@ -425,6 +425,13 @@ namespace metajit {
                        Type type,
                        const std::function<Value*()>& emit_then,
                        const std::function<Value*()>& emit_else) {
+      if (dynmatch(Const, constant, cond)) {
+        if (constant->value()) {
+          return emit_then();
+        } else {
+          return emit_else();
+        }
+      }
       Block* then_block = _builder.build_block_after(_builder.block());
       Block* else_block = _builder.build_block_after(then_block);
       Block* cont_block = _builder.build_block_after(else_block, {type});
