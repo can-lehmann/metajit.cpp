@@ -52,9 +52,11 @@ jobs:
         run: |
           make coverage-report 2>/dev/null | python3 tests/coverage_to_markdown.py > coverage.md
           make diff-cover || true
-          gh pr comment ${{ github.event.pull_request.number }} --body "$(printf '### Coverage\n\n'; cat coverage.md; printf '\n### Diff Coverage\n\n<details>\n<summary>Diff Coverage</summary>\n\n'; cat tests/coverage/diff-report.md; printf '\n</details>')"
+          gh pr comment ${{ github.event.pull_request.number }} --body "$(printf '### Coverage\n\n'; cat coverage.md; printf '\n\n<details>\n<summary>Diff Coverage</summary>\n\n'; cat tests/coverage/diff-report.md; printf '\n</details>')"
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: metajit.cpp/tests/coverage/report.html
+          path: |
+            metajit.cpp/tests/coverage/report.html
+            metajit.cpp/tests/coverage/diff-report.md
