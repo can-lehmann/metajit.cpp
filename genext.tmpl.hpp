@@ -644,7 +644,7 @@ namespace metajit {
         });
       }
 
-      return emit_branch(
+      Value* built = emit_branch(
         is_used(inst),
         Type::Ptr,
         [&]() -> Value* {
@@ -730,11 +730,7 @@ namespace metajit {
                 trace_const,
                 [&]() -> Value* {
                   if (_trace_capabilities.can_trace_inst(inst)) {
-                    Value* built = build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
-                    if (dynmatch(LoadInst, load, inst)) {
-                      emit_update_load_const(load, built);
-                    }
-                    return built;
+                    return build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
                   }
                   return _builder.build_const(Type::Ptr, 0);
                 }
@@ -742,11 +738,7 @@ namespace metajit {
             }
           } else {
             if (_trace_capabilities.any(inst)) {
-              Value* built = build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
-              if (dynmatch(LoadInst, load, inst)) {
-                emit_update_load_const(load, built);
-              }
-              return built;
+              return build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
             }
           }
 
@@ -756,6 +748,12 @@ namespace metajit {
           return _builder.build_const(Type::Ptr, 0);
         }
       );
+
+      if (dynmatch(LoadInst, load, inst)) {
+        emit_update_load_const(load, built);
+      }
+
+      return built;
     }
 
     void emit_generating_extension(Block* block) {
