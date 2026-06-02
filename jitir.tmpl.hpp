@@ -880,8 +880,6 @@ namespace metajit {
       InBounds = 1 << 1,
       // The value of this load is known at section entry
       EntryFrozen = 1 << 2,
-      // The value should be recorded
-      Record = 1 << 3
     };
 
     using BaseFlags<LoadFlags>::BaseFlags;
@@ -890,10 +888,9 @@ namespace metajit {
       "Pure",
       "InBounds",
       "EntryFrozen",
-      "Record"
     };
 
-    constexpr static size_t COUNT = 4;
+    constexpr static size_t COUNT = 3;
   };
 
   enum class CallConv {
