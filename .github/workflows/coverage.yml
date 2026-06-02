@@ -38,14 +38,16 @@ jobs:
           sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-20 200
       - name: Build and run coverage
         working-directory: metajit.cpp
-        run: make -j coverage
+        run: |
+          mkdir -p tests/coverage
+          make -j coverage
       - name: Post coverage report
         working-directory: metajit.cpp
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          make coverage-report > coverage.txt
-          gh pr comment ${{ github.event.pull_request.number }} --body "$(printf '### Coverage\n```\n'; cat coverage.txt; printf '```')"
+          make coverage-report 2>/dev/null | python3 tests/coverage_to_markdown.py > coverage.md
+          gh pr comment ${{ github.event.pull_request.number }} --body "$(printf '### Coverage\n\n'; cat coverage.md)"
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:
