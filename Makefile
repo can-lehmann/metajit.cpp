@@ -99,6 +99,8 @@ tests/coverage/%.profraw: tests/%.cpp jitir.hpp jitir_llvmapi.hpp genext.hpp ${H
 	clang++ $(COVERAGE_CFLAGS) -o tests/coverage/$* $<
 	LLVM_PROFILE_FILE=$@ tests/coverage/$*
 
+tests/coverage/test_source.profraw: ${TEST_SOURCE_LL_FILES}
+
 tests/coverage/merged.profdata: $(COVERAGE_PROFRAW_FILES)
 	llvm-profdata-20 merge -sparse $^ -o $@
 
