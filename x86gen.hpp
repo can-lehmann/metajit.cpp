@@ -427,7 +427,7 @@ namespace metajit {
       data->call_conv = call_conv;
       data->args = args;
       data->ret = ret;
-      return &build(X86Inst::Kind::Call).set_reg(callee).set_data(data);
+      return &build(X86Inst::Kind::Call).set_rm(callee).set_data(data);
     }
   };
 
@@ -1568,10 +1568,20 @@ namespace metajit {
 
             for (size_t it = 0; it < reg_file.size(); it++) {
               Reg preg = Reg::phys(it);
-              if (!reg_file.is_free(preg) && !info.is_preserved(preg) && !info.is_arg(preg, data->args.size())) {
+              if (!reg_file.is_free(preg) &&
+                  !info.is_preserved(preg) &&
+                  !info.is_arg(preg, data->args.size()) &&
+                  reg_file[preg] != std::get<Reg>(inst->rm())) {
                 spill(reg_file, preg, false);
               }
             }
+
+            inst->visit_regs([&](Reg& reg) {
+              VRegInfo& info = _vreg_info[reg.id()];
+              assert(info.current_reg.is_physical());
+              reg_file.touch(info.current_reg);
+              reg = info.current_reg;
+            });
 
             for (size_t it = 0; it < reg_file.size(); it++) {
               Reg preg = Reg::phys(it);
@@ -1585,6 +1595,7 @@ namespace metajit {
             reg_file.set(info.ret(), data->ret);
             reg_file.touch(info.ret());
 
+            it++;
             continue;
           } else {
             inst->visit_regs([&](Reg reg) {
