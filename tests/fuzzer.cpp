@@ -17,6 +17,28 @@
 #include "../tv.hpp"
 #include "diff.hpp"
 
+// Predefined call targets for fuzzing. All take uint64_t args and return
+// uint64_t so they work uniformly with any integer type passed in registers.
+extern "C" __attribute__((noinline))
+uint64_t fuzzer_call_1(uint64_t a) { return a * 2654435761ULL; }
+
+extern "C" __attribute__((noinline))
+uint64_t fuzzer_call_2(uint64_t a, uint64_t b) { return (a + b) ^ (a * b); }
+
+extern "C" __attribute__((noinline))
+uint64_t fuzzer_call_3(uint64_t a, uint64_t b, uint64_t c) { return (a ^ b) + c; }
+
+struct FuzzerCallTarget {
+  void* fn;
+  size_t arg_count;
+};
+
+static const FuzzerCallTarget fuzzer_call_targets[] = {
+  { (void*) fuzzer_call_1, 1 },
+  { (void*) fuzzer_call_2, 2 },
+  { (void*) fuzzer_call_3, 3 },
+};
+
 namespace metajit {
   namespace test {
     template<typename DataType = TestData>
@@ -27,6 +49,7 @@ namespace metajit {
       std::vector<Value*> _all_values;
       std::vector<Value*> _tv_inputs; // pre-allocated inputs for TVTestData
       size_t _depth = 0;
+      bool _calls = false;
 
       size_t _max_depth = 16;
 
@@ -47,8 +70,22 @@ namespace metajit {
         return (Type) (rand() % 5 + (size_t) Type::Bool);
       }
 
+      Value* gen_call(RandomRange random_range) {
+        const FuzzerCallTarget& target = fuzzer_call_targets[
+          rand() % (sizeof(fuzzer_call_targets) / sizeof(fuzzer_call_targets[0]))
+        ];
+        std::vector<Value*> args;
+        for (size_t i = 0; i < target.arg_count; i++) {
+          Value* arg = gen(RandomRange(gen_int_type()));
+          args.push_back(_builder->build_resize_u(arg, Type::Int64));
+        }
+        Value* callee = _builder->build_const(Type::Ptr, (uint64_t) target.fn);
+        Value* result = _builder->build_call(callee, Type::Int64, args, CallConv::Default);
+        return _builder->build_resize_u(result, random_range.type());
+      }
+
       Value* gen_int(RandomRange random_range) {
-        switch (rand() % 14) {
+        switch (rand() % 15) {
           #define binop(name) \
             return _builder->build_##name( \
               gen(RandomRange(random_range.type())), \
@@ -99,6 +136,14 @@ namespace metajit {
             }
           case 13:
             return _builder->build_freeze(gen(random_range));
+          case 14:
+            if constexpr (!std::is_same_v<DataType, TraceTestData> &&
+                          !std::is_same_v<DataType, tv::TVTestData>) {
+              if (_calls) {
+                return gen_call(random_range);
+              }
+            }
+            return gen(random_range);
           default:
             assert(false && "Unreachable");
 
@@ -290,7 +335,7 @@ namespace metajit {
         return result;
       }
     public:
-      Fuzzer() {}
+      Fuzzer(bool calls = false): _calls(calls) {}
 
       void run() {
         
@@ -337,8 +382,8 @@ namespace metajit {
                 section,
                 *_data,
                 2048,
-                true,
-                /*verify_interpreter=*/ true,
+                /*optimize_section_for_interpreter=*/ !_calls,
+                /*verify_interpreter=*/ !_calls,
                 /*verify_aot=*/ false
               );
             }
@@ -440,13 +485,14 @@ cl::OptionCategory category("Options");
 cl::opt<int> seed("seed", cl::desc("seed for the rng, to reproduce crashes"), cl::cat(category));
 cl::opt<int> number_of_runs("number-of-runs", cl::desc("How many random programs to test (default is run forever)"), cl::cat(category));
 
-enum class FuzzerMode { Regular, Trace, TV };
+enum class FuzzerMode { Regular, Trace, TV, Call };
 cl::opt<FuzzerMode> mode("mode",
   cl::desc("Fuzzer mode"),
   cl::values(
     clEnumValN(FuzzerMode::Regular, "regular", "Test codegen correctness (default)"),
     clEnumValN(FuzzerMode::Trace,   "trace",   "Test generating extensions (meta-tracing)"),
-    clEnumValN(FuzzerMode::TV,      "tv",      "Test optimization correctness using translation validation")
+    clEnumValN(FuzzerMode::TV,      "tv",      "Test optimization correctness using translation validation"),
+    clEnumValN(FuzzerMode::Call,    "call",    "Test codegen correctness with calls (LLVM vs x86 only)")
   ),
   cl::init(FuzzerMode::Regular),
   cl::cat(category));
@@ -516,6 +562,10 @@ int main(int argc, char** argv) {
     }
     case FuzzerMode::TV: {
       Fuzzer<tv::TVTestData> fuzzer;
+      return run_fuzzer_loop(fuzzer, seed.getValue(), number_of_runs.getValue());
+    }
+    case FuzzerMode::Call: {
+      Fuzzer<TestData> fuzzer(/*calls=*/ true);
       return run_fuzzer_loop(fuzzer, seed.getValue(), number_of_runs.getValue());
     }
     case FuzzerMode::Regular: {
