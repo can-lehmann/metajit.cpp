@@ -459,13 +459,9 @@ namespace metajit {
       if (dynmatch(Const, constant, value)) {
         return _builder.build_const(Type::Bool, 1);
       } else if (value->is_named()) {
-        return _builder.build_load(
-          _is_const.at((NamedValue*) value),
-          Type::Bool,
-          LoadFlags::None,
-          AliasingGroup(0),
-          0
-        );
+        Value* is_const = _is_const.at((NamedValue*) value);
+        assert(is_const);
+        return is_const;
       } else {
         assert(false && "Unknown value");
         return nullptr;
@@ -629,7 +625,7 @@ namespace metajit {
       if (load->flags().has(LoadFlags::Pure)) {
         is_const_load = _builder.fold_or(is_const_load, is_const(load->arg(0)));
       }
-      _builder.build_store(_is_const.at(load), is_const_load, AliasingGroup(0), 0);
+      _is_const[load] = is_const_load;
     }
 
     Value* emit_build_inst(Inst* inst) {
@@ -811,7 +807,7 @@ namespace metajit {
         }
 
         const_group->add("const", PRIO_MAX, const_deps, {}, [inst, this](){
-          _builder.build_store(_is_const.at(inst), emit_const_prop(inst), AliasingGroup(0), 0);
+          _is_const[inst] = emit_const_prop(inst);
         });
 
         std::vector<ActionGroup*> build_deps = {const_group, used_group, last_build_group};
@@ -930,11 +926,6 @@ namespace metajit {
     }
 
     void emit_generating_extension_allocs(NamedValue* value) {
-      _is_const[value] = _builder.build_alloca(Type::Bool);
-
-      // False is always a valid overapproximation
-      _builder.build_store(_is_const.at(value), _builder.build_const(Type::Bool, 0), AliasingGroup(0), 0);
-
       _is_used[value] = _builder.build_alloca(Type::Bool);
 
       // True is always a valid overapproximation
@@ -1002,7 +993,7 @@ namespace metajit {
         size_t index = 0;
         for (Arg* arg : block->args()) {
           _values[arg] = genext_block->arg(index++);
-          //_is_const[arg] = genext_block->arg(index++);
+          _is_const[arg] = genext_block->arg(index++);
           _built[arg] = genext_block->arg(index++);
         }
       }
@@ -1012,7 +1003,7 @@ namespace metajit {
       std::vector<Value*> entry_jump_args;
       for (Arg* arg : section->entry()->args()) {
         entry_jump_args.push_back(_genext_section->entry()->arg(arg->index()));
-        //entry_jump_args.push_back(_builder.build_const(Type::Bool, 0)); // is_const
+        entry_jump_args.push_back(_builder.build_const(Type::Bool, 0)); // is_const
         entry_jump_args.push_back(_builder.build_call(
           _syms.entry_arg, Type::Ptr,
           {
