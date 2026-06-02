@@ -613,30 +613,24 @@ namespace metajit {
           Type::Ptr, (uint64_t)(void*) constant
         );
       } else if (value->is_named()) {
-        return _builder.build_load(
-          _built.at((NamedValue*) value),
-          Type::Ptr,
-          LoadFlags::None,
-          AliasingGroup(0),
-          0
-        );
+        Value* built = _built.at((NamedValue*) value);
+        assert(built);
+        return built;
       } else {
         assert(false && "Unknown value");
         return nullptr;
       }
     }
 
-    void emit_update_load_const(LoadInst* load) {
+    void emit_update_load_const(LoadInst* load, Value* built) {
       Value* is_const_load = _builder.build_call(
-        _syms.is_const_inst, Type::Bool, {emit_built_arg(load)}
+        _syms.is_const_inst, Type::Bool, {built}
       );
       if (load->flags().has(LoadFlags::Pure)) {
         is_const_load = _builder.fold_or(is_const_load, is_const(load->arg(0)));
       }
       _builder.build_store(_is_const.at(load), is_const_load, AliasingGroup(0), 0);
     }
-
-    
 
     Value* emit_build_inst(Inst* inst) {
       if (_config.comments &&
@@ -739,7 +733,7 @@ namespace metajit {
                   if (_trace_capabilities.can_trace_inst(inst)) {
                     Value* built = build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
                     if (dynmatch(LoadInst, load, inst)) {
-                      emit_update_load_const(load);
+                      emit_update_load_const(load, built);
                     }
                     return built;
                   }
@@ -751,7 +745,7 @@ namespace metajit {
             if (_trace_capabilities.any(inst)) {
               Value* built = build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
               if (dynmatch(LoadInst, load, inst)) {
-                emit_update_load_const(load);
+                emit_update_load_const(load, built);
               }
               return built;
             }
@@ -828,7 +822,7 @@ namespace metajit {
           }
         }
         build_group->add("build", PRIO_MAX, build_deps, {}, [inst, this](){
-          _builder.build_store(_built.at(inst), emit_build_inst(inst), AliasingGroup(0), 0);
+          _built[inst] = emit_build_inst(inst);
         });
 
         emit_groups[inst] = emit_group;
@@ -923,10 +917,14 @@ namespace metajit {
           _builder.build_resize_u(emit_arg(branch->arg(0)), Type::Int32)
         });
       } else if (dynmatch(JumpInst, jump, inst)) {
-        for (Arg* arg : jump->block()->args()) {
-          _builder.build_store(_is_const.at(arg), is_const(jump->arg(arg->index())), AliasingGroup(0), 0);
-          _builder.build_store(_built.at(arg), emit_built_arg(jump->arg(arg->index())), AliasingGroup(0), 0);
+        std::vector<Value*> args;
+        for (Value* arg : jump->args()) {
+          args.push_back(emit_arg(arg));
+          //args.push_back(is_const(arg));
+          args.push_back(emit_built_arg(arg));
         }
+        _builder.build_jump(_blocks.at(jump->block()), args);
+        return;
       }
       _values[inst] = emit_inst(inst);
     }
@@ -941,10 +939,6 @@ namespace metajit {
 
       // True is always a valid overapproximation
       _builder.build_store(_is_used.at(value), _builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
-
-      _built[value] = _builder.build_alloca(Type::Ptr);
-
-      _builder.build_store(_built.at(value), _builder.build_const(Type::Ptr, 0), AliasingGroup(0), 0);
     }
 
     void emit_entry() {
@@ -962,20 +956,6 @@ namespace metajit {
         for (Inst* inst : *block) {
           emit_generating_extension_allocs(inst);
         }
-      }
-
-      for (Arg* arg : _section->entry()->args()) {
-        _builder.build_store(
-          _built.at(arg),
-          _builder.build_call(
-            _syms.entry_arg, Type::Ptr,
-            {
-              _jitir_builder,
-              _builder.build_const(Type::Int64, arg->index())
-            }
-          ),
-          AliasingGroup(0), 0
-        );
       }
     }
   public:
@@ -1011,13 +991,19 @@ namespace metajit {
       for (Block* block : *section) {
         std::vector<Type> arg_types;
         for (Arg* arg : block->args()) {
-          arg_types.push_back(arg->type());
+          arg_types.push_back(arg->type()); // values
+          //arg_types.push_back(Type::Bool); // is_const
+          arg_types.push_back(Type::Ptr); // built
         }
+
         Block* genext_block = _builder.build_block(arg_types);
         _blocks[block] = genext_block;
 
+        size_t index = 0;
         for (Arg* arg : block->args()) {
-          _values[arg] = genext_block->arg(arg->index());
+          _values[arg] = genext_block->arg(index++);
+          //_is_const[arg] = genext_block->arg(index++);
+          _built[arg] = genext_block->arg(index++);
         }
       }
 
@@ -1026,6 +1012,14 @@ namespace metajit {
       std::vector<Value*> entry_jump_args;
       for (Arg* arg : section->entry()->args()) {
         entry_jump_args.push_back(_genext_section->entry()->arg(arg->index()));
+        //entry_jump_args.push_back(_builder.build_const(Type::Bool, 0)); // is_const
+        entry_jump_args.push_back(_builder.build_call(
+          _syms.entry_arg, Type::Ptr,
+          {
+            _jitir_builder,
+            _builder.build_const(Type::Int64, arg->index())
+          }
+        ));
       }
       _builder.build_jump(_blocks.at(section->entry()), entry_jump_args);
 
