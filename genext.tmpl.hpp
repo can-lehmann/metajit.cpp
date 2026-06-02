@@ -554,14 +554,13 @@ namespace metajit {
       }
     }
 
-    Value* is_used(Inst* inst) {
-      return _builder.build_load(
-        _is_used.at(inst),
-        Type::Bool,
-        LoadFlags::None,
-        AliasingGroup(0),
-        0
-      );
+    Value* is_used(Inst* inst, bool allow_overapproximation = false) {
+      Value* is_used = _is_used.at(inst);
+      if (allow_overapproximation && !is_used) {
+        return _builder.build_const(Type::Bool, 1);
+      }
+      assert(is_used);
+      return is_used;
     }
 
     Value* emit_used(Inst* inst) {
@@ -570,7 +569,7 @@ namespace metajit {
       } else {
         Value* used = _builder.build_const(Type::Bool, 0);
         for (Uses::Use use : _uses.at(inst)) {
-          Value* use_used = is_used(use.inst);
+          Value* use_used = is_used(use.inst, true);
           
           if (is_int_or_bool(use.inst->type()) &&
               // Promote is always constant, but needs this instruction to perform the check
@@ -866,7 +865,7 @@ namespace metajit {
 
         if (always_used.at(inst)) {
           used_group->add("always used", PRIO_MAX, {}, {}, [inst, this](){
-            _builder.build_store(_is_used.at(inst), _builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
+            _is_used[inst] = _builder.build_const(Type::Bool, 1);
           });
         } else {
           std::vector<ActionGroup*> used_deps;
@@ -893,7 +892,7 @@ namespace metajit {
             prio++;
           }
           used_group->add("used", prio, {}, used_deps, [inst, this](){
-            _builder.build_store(_is_used.at(inst), emit_used(inst), AliasingGroup(0), 0);
+            _is_used[inst] = emit_used(inst);
           });
         }
       }
@@ -926,28 +925,11 @@ namespace metajit {
       _values[inst] = emit_inst(inst);
     }
 
-    void emit_generating_extension_allocs(NamedValue* value) {
-      _is_used[value] = _builder.build_alloca(Type::Bool);
-
-      // True is always a valid overapproximation
-      _builder.build_store(_is_used.at(value), _builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
-    }
-
     void emit_entry() {
       size_t builder_index = _section->entry()->args().size();
       _jitir_builder = _genext_section->entry()->arg(builder_index);
       if (_config.use_tape) {
         _tape_ptr = _genext_section->entry()->arg(builder_index + 1);
-      }
-
-      for (Block* block : *_section) {
-        for (Arg* arg : block->args()) {
-          emit_generating_extension_allocs(arg);
-        }
-
-        for (Inst* inst : *block) {
-          emit_generating_extension_allocs(inst);
-        }
       }
     }
   public:
