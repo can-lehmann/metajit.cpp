@@ -1516,6 +1516,17 @@ namespace metajit {
             assert(reg.is_virtual());
             _vreg_info[reg.id()].interval.incl(inst->name());
           });
+
+          if (inst->kind() == X86Inst::Kind::Call) {
+            X86CallData* data = (X86CallData*) inst->data();
+            for (Reg arg : data->args) {
+              assert(arg.is_virtual());
+              _vreg_info[arg.id()].interval.incl(inst->name());
+            }
+            if (data->ret.is_virtual()) {
+              _vreg_info[data->ret.id()].interval.incl(inst->name());
+            }
+          }
         }
       }
 
