@@ -48,7 +48,6 @@ for line in sys.stdin:
     if row["file"] == "TOTAL":
         total = row
     else:
-        # strip common prefix
         name = row["file"]
         for prefix in ("metajit.cpp/", "lwir.cpp/", "unittest.cpp/"):
             if name.startswith(prefix):

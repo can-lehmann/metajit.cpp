@@ -115,7 +115,7 @@ coverage: tests/coverage/merged.profdata
 coverage-report: tests/coverage/merged.profdata
 	llvm-cov-20 report --instr-profile=$< \
 		$(patsubst %,-object tests/coverage/%,$(COVERAGE_TESTS)) \
-		--ignore-filename-regex="^/usr"
+		--ignore-filename-regex="^/usr|/tests/|lwir_utils\.hpp|unittest\.hpp"
 
 clean:
 	-rm -r tests/coverage
