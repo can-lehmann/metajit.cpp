@@ -90,31 +90,55 @@ tests/test_tv: tests/test_tv.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 tests/test_genext: tests/test_genext.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
-jitir.hpp: jitir.py jitir.tmpl.hpp
-	PYTHONPATH="../lwir.cpp" python3 $<
+jitir.hpp jitir_llvmapi.hpp genext.hpp &: jitir.py jitir.tmpl.hpp jitir_llvmapi.tmpl.hpp genext.tmpl.hpp
+	PYTHONPATH="../lwir.cpp" python3 jitir.py
 
-jitir_llvmapi.hpp: jitir.py jitir_llvmapi.tmpl.hpp
-	PYTHONPATH="../lwir.cpp" python3 $<
+COVERAGE_PROFRAW_FILES := $(patsubst %,tests/coverage/%.profraw,$(COVERAGE_TESTS))
 
-genext.hpp: jitir.py genext.tmpl.hpp
-	PYTHONPATH="../lwir.cpp" python3 $<
+tests/coverage/%.profraw: tests/%.cpp jitir.hpp jitir_llvmapi.hpp genext.hpp ${HEADER_FILES} ${TEST_HEADER_FILES} | tests/coverage
+	clang++ $(COVERAGE_CFLAGS) -o tests/coverage/$* $<
+	LLVM_PROFILE_FILE=$@ tests/coverage/$*
 
-coverage: jitir.hpp jitir_llvmapi.hpp genext.hpp
+tests/coverage/test_source.profraw: ${TEST_SOURCE_LL_FILES}
+
+tests/coverage/merged.profdata: $(COVERAGE_PROFRAW_FILES)
+	llvm-profdata-20 merge -sparse $^ -o $@
+
+tests/coverage:
 	mkdir -p tests/coverage
-	$(foreach t,$(COVERAGE_TESTS), \
-		clang++ $(COVERAGE_CFLAGS) -o tests/coverage/$(t) tests/$(t).cpp && \
-		LLVM_PROFILE_FILE=tests/coverage/$(t).profraw tests/coverage/$(t) ;)
-	llvm-profdata-20 merge -sparse $(patsubst %,tests/coverage/%.profraw,$(COVERAGE_TESTS)) -o tests/coverage/merged.profdata
-	llvm-cov-20 show --format=html --instr-profile=tests/coverage/merged.profdata \
+
+coverage: tests/coverage/merged.profdata
+	llvm-cov-20 show --format=html --instr-profile=$< \
 		$(patsubst %,-object tests/coverage/%,$(COVERAGE_TESTS)) \
 		--ignore-filename-regex="^/usr" \
 		> tests/coverage/report.html
 	@echo "Coverage report: tests/coverage/report.html"
 
-coverage-report:
-	llvm-cov-20 report --instr-profile=tests/coverage/merged.profdata \
+coverage-report: tests/coverage/merged.profdata
+	llvm-cov-20 report --instr-profile=$< \
 		$(patsubst %,-object tests/coverage/%,$(COVERAGE_TESTS)) \
-		--ignore-filename-regex="^/usr"
+		--ignore-filename-regex="^/usr|/tests/|lwir_utils\.hpp|unittest\.hpp"
+
+diff-cover: tests/coverage/merged.profdata
+	$(eval MERGE_BASE := $(shell git merge-base HEAD origin/main))
+	$(eval WORKTREE := $(shell mktemp -d))
+	git worktree add $(WORKTREE) $(MERGE_BASE)
+	cd $(WORKTREE) && PYTHONPATH="$(abspath ../lwir.cpp)" python3 jitir.py
+	{ \
+	  printf 'diff --git a/jitir.hpp b/jitir.hpp\n--- a/jitir.hpp\n+++ b/jitir.hpp\n'; \
+	  diff -u $(WORKTREE)/jitir.hpp jitir.hpp | tail -n +3; \
+	  printf 'diff --git a/jitir_llvmapi.hpp b/jitir_llvmapi.hpp\n--- a/jitir_llvmapi.hpp\n+++ b/jitir_llvmapi.hpp\n'; \
+	  diff -u $(WORKTREE)/jitir_llvmapi.hpp jitir_llvmapi.hpp | tail -n +3; \
+	  printf 'diff --git a/genext.hpp b/genext.hpp\n--- a/genext.hpp\n+++ b/genext.hpp\n'; \
+	  diff -u $(WORKTREE)/genext.hpp genext.hpp | tail -n +3; \
+	  git diff $(MERGE_BASE) -- . ':(exclude)jitir.hpp' ':(exclude)jitir_llvmapi.hpp' ':(exclude)genext.hpp'; \
+	} > tests/coverage/combined.diff || true
+	llvm-cov-20 export --format=lcov --instr-profile=$< \
+		$(patsubst %,-object tests/coverage/%,$(COVERAGE_TESTS)) \
+		--ignore-filename-regex="^/usr|/tests/|lwir_utils\.hpp|unittest\.hpp" \
+		> tests/coverage/coverage.lcov 2>/dev/null
+	diff-cover tests/coverage/coverage.lcov --diff-file=tests/coverage/combined.diff --format markdown:tests/coverage/diff-report.md
+	git worktree remove $(WORKTREE)
 
 clean:
 	-rm -r tests/coverage
@@ -144,3 +168,4 @@ clean:
 	mkdir -p tests/output/test_reader
 	mkdir -p tests/output/test_mem2reg
 	mkdir -p tests/output/test_genext
+	mkdir -p tests/coverage
