@@ -455,11 +455,14 @@ namespace metajit {
       return Clone::clone(inst, _builder, _blocks, _values);
     }
 
-    Value* is_const(Value* value) {
+    Value* is_const(Value* value, bool allow_overapproximation = false) {
       if (dynmatch(Const, constant, value)) {
         return _builder.build_const(Type::Bool, 1);
       } else if (value->is_named()) {
         Value* is_const = _is_const.at((NamedValue*) value);
+        if (allow_overapproximation && !is_const) {
+          return _builder.build_const(Type::Bool, 0);
+        }
         assert(is_const);
         return is_const;
       } else {
@@ -574,7 +577,7 @@ namespace metajit {
               !dynamic_cast<PromoteInst*>(use.inst)) {
             use_used = _builder.fold_and(
               use_used,
-              _builder.fold_not(is_const(use.inst))
+              _builder.fold_not(is_const(use.inst, true))
             );
           }
 
@@ -588,7 +591,7 @@ namespace metajit {
                 use_used = _builder.fold_and(
                   use_used,
                   _builder.fold_select(
-                    is_const(select->arg(0)),
+                    is_const(select->arg(0), true),
                     branch_used,
                     _builder.build_const(Type::Bool, 1)
                   )
@@ -916,7 +919,7 @@ namespace metajit {
         std::vector<Value*> args;
         for (Value* arg : jump->args()) {
           args.push_back(emit_arg(arg));
-          //args.push_back(is_const(arg));
+          args.push_back(is_const(arg));
           args.push_back(emit_built_arg(arg));
         }
         _builder.build_jump(_blocks.at(jump->block()), args);
@@ -983,7 +986,7 @@ namespace metajit {
         std::vector<Type> arg_types;
         for (Arg* arg : block->args()) {
           arg_types.push_back(arg->type()); // values
-          //arg_types.push_back(Type::Bool); // is_const
+          arg_types.push_back(Type::Bool); // is_const
           arg_types.push_back(Type::Ptr); // built
         }
 
