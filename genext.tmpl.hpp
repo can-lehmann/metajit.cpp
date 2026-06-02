@@ -942,14 +942,6 @@ namespace metajit {
       }
       _values[inst] = emit_inst(inst);
     }
-
-    void emit_entry() {
-      size_t builder_index = _section->entry()->args().size();
-      _jitir_builder = _genext_section->entry()->arg(builder_index);
-      if (_config.record.has_value()) {
-        _tape_ptr = _genext_section->entry()->arg(builder_index + 1);
-      }
-    }
   public:
     CreateGenExt(Section* section, Section* genext_section, const Config& config = Config()):
         Pass(section),
@@ -975,10 +967,16 @@ namespace metajit {
         entry_arg_types.push_back(arg->type());
       }
       entry_arg_types.push_back(Type::Ptr);
-      if (_config.use_tape) {
+      if (_config.record.has_value()) {
         entry_arg_types.push_back(Type::Ptr);
       }
       _builder.move_to_end(_builder.build_block(entry_arg_types));
+
+      size_t builder_index = _section->entry()->args().size();
+      _jitir_builder = _genext_section->entry()->arg(builder_index);
+      if (_config.record.has_value()) {
+        _tape_ptr = _genext_section->entry()->arg(builder_index + 1);
+      }
 
       for (Block* block : *section) {
         std::vector<Type> arg_types;
@@ -998,8 +996,6 @@ namespace metajit {
           _built[arg] = genext_block->arg(index++);
         }
       }
-
-      emit_entry();
 
       std::vector<Value*> entry_jump_args;
       for (Arg* arg : section->entry()->args()) {
