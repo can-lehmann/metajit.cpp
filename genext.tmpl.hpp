@@ -37,13 +37,13 @@ namespace metajit {
       _builder.add_args_to_block(_section->entry(), {tape_ptr});
       
       for (Block* block : *_section) {
-        for (Inst* inst : *block) {
+        for (Inst* inst = *block->begin(); inst; inst = inst->next()) {
           if (dynmatch(LoadInst, load, inst)) {
             if (_config.has(load->aliasing())) {
               _builder.move_after(block, inst);
-      
+
               Value* aligned_ptr = build_tape_advance(_builder, tape_ptr, _config.min_align, load->type());
-              _builder.build_store(aligned_ptr, load, AliasingGroup(0), 0);
+              inst = _builder.build_store(aligned_ptr, load, AliasingGroup(0), 0);
             }
           }
         }
@@ -116,6 +116,7 @@ namespace metajit {
         max_size = std::max(max_size, size);
       }
 
+      assert(max_size % _config.min_align == 0);
       return max_size;
     }
   };
