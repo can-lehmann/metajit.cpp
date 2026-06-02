@@ -21,4 +21,5 @@ tests/source/*.ll
 tests/test_source
 tests/test_reentry
 tests/test_mem2reg
+tests/coverage/
 tests/test_genext

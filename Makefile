@@ -4,6 +4,9 @@ CFLAGS := ${LLVM_FLAGS} -g
 HEADER_FILES := jitir.hpp jitir_llvmapi.hpp genext.hpp $(wildcard *.hpp)
 TEST_HEADER_FILES := $(wildcard tests/*.hpp)
 TEST_CFLAGS := ${CFLAGS} -DMETAJIT_DEBUG
+COVERAGE_CFLAGS := ${TEST_CFLAGS} -fprofile-instr-generate -fcoverage-mapping
+
+COVERAGE_TESTS := test_knownbits test_insts test_interpreter test_clone test_cfg test_fuzzer test_opt test_reentry test_mem2reg test_source test_genext
 
 run: main
 	./main
@@ -96,7 +99,25 @@ jitir_llvmapi.hpp: jitir.py jitir_llvmapi.tmpl.hpp
 genext.hpp: jitir.py genext.tmpl.hpp
 	PYTHONPATH="../lwir.cpp" python3 $<
 
+coverage: jitir.hpp jitir_llvmapi.hpp genext.hpp
+	mkdir -p tests/coverage
+	$(foreach t,$(COVERAGE_TESTS), \
+		clang++ $(COVERAGE_CFLAGS) -o tests/coverage/$(t) tests/$(t).cpp && \
+		LLVM_PROFILE_FILE=tests/coverage/$(t).profraw tests/coverage/$(t) ;)
+	llvm-profdata-20 merge -sparse $(patsubst %,tests/coverage/%.profraw,$(COVERAGE_TESTS)) -o tests/coverage/merged.profdata
+	llvm-cov-20 show --format=html --instr-profile=tests/coverage/merged.profdata \
+		$(patsubst %,-object tests/coverage/%,$(COVERAGE_TESTS)) \
+		--ignore-filename-regex="^/usr" \
+		> tests/coverage/report.html
+	@echo "Coverage report: tests/coverage/report.html"
+
+coverage-report:
+	llvm-cov-20 report --instr-profile=tests/coverage/merged.profdata \
+		$(patsubst %,-object tests/coverage/%,$(COVERAGE_TESTS)) \
+		--ignore-filename-regex="^/usr"
+
 clean:
+	-rm -r tests/coverage
 	-rm main
 	-rm tests/test_knownbits
 	-rm tests/test_insts
