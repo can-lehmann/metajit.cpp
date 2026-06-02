@@ -15,6 +15,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           path: metajit.cpp
+          fetch-depth: 0
       - name: Checkout unittest.cpp
         uses: actions/checkout@v6
         with:
@@ -42,13 +43,16 @@ jobs:
           make clean
           mkdir -p tests/coverage
           make -j coverage
+      - name: Install diff-cover
+        run: pip install diff-cover
       - name: Post coverage report
         working-directory: metajit.cpp
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           make coverage-report 2>/dev/null | python3 tests/coverage_to_markdown.py > coverage.md
-          gh pr comment ${{ github.event.pull_request.number }} --body "$(printf '### Coverage\n\n'; cat coverage.md)"
+          make diff-cover || true
+          gh pr comment ${{ github.event.pull_request.number }} --body "$(printf '### Coverage\n\n'; cat coverage.md; printf '\n### Diff Coverage\n\n<details>\n<summary>Diff Coverage</summary>\n\n'; cat tests/coverage/diff-report.md; printf '\n</details>')"
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:
