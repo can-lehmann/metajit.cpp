@@ -6116,17 +6116,9 @@ namespace metajit {
       assert(section->ordering() >= BlockOrdering::Dominator);
      
       find_lowerable_allocas();
-      std::cerr << "mem2reg: " << _section->block_count() << " blocks, " << _lowerable_allocas.size() << " allocas\n";
-      auto t0 = std::chrono::steady_clock::now();
       find_liveness();
-      auto t1 = std::chrono::steady_clock::now();
-      std::cerr << "mem2reg liveness done\n";
       find_values();
-      auto t2 = std::chrono::steady_clock::now();
       apply();
-      auto t3 = std::chrono::steady_clock::now();
-      auto us = [](auto a, auto b) { return std::chrono::duration_cast<std::chrono::microseconds>(b-a).count(); };
-      std::cerr << "mem2reg liveness=" << us(t0,t1) << "us values=" << us(t1,t2) << "us apply=" << us(t2,t3) << "us\n";
     }
   };
 }
