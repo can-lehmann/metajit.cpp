@@ -879,7 +879,9 @@ namespace metajit {
       // Guaranteed to be in bounds of an allocation, so will not trap
       InBounds = 1 << 1,
       // The value of this load is known at section entry
-      EntryFrozen = 1 << 2
+      EntryFrozen = 1 << 2,
+      // The value should be recorded
+      Record = 1 << 3
     };
 
     using BaseFlags<LoadFlags>::BaseFlags;
@@ -887,10 +889,11 @@ namespace metajit {
     constexpr static const char* NAMES[] = {
       "Pure",
       "InBounds",
-      "EntryFrozen"
+      "EntryFrozen",
+      "Record"
     };
 
-    constexpr static size_t COUNT = 3;
+    constexpr static size_t COUNT = 4;
   };
 
   enum class CallConv {
@@ -1125,6 +1128,10 @@ namespace metajit {
       _before = inst;
     }
 
+    void move_after(Block* block, Inst* inst) {
+      move_before(block, inst->next());  
+    }
+
     Arg* entry_arg(size_t index) const {
       return _section->entry()->arg(index);
     }
@@ -1252,6 +1259,10 @@ namespace metajit {
 
     #undef define_build_const
 
+    Poison* build_poison(Type type) {
+      return _section->context().build_poison(type);
+    }
+
     /* ${builder} */
 
     ShlInst* build_shl(Value* a, size_t shift) {
@@ -1293,6 +1304,13 @@ namespace metajit {
 
     AllocaInst* build_alloca(Type type) {
       return build_alloca(build_const(Type::Int64, type_size(type)), type_size(type));
+    }
+
+    void add_args_to_block(Block* block, const std::vector<Arg*>& args) {
+      lwir::Span<Arg*> new_args = alloc_span<Arg*>(block->args().size() + args.size());
+      std::copy(block->args().begin(), block->args().end(), new_args.begin());
+      std::copy(args.begin(), args.end(), new_args.begin() + block->args().size());
+      block->set_args(new_args);
     }
 
     // Folding
@@ -2379,41 +2397,41 @@ namespace metajit {
 
   /* ${capi} */
 
-  template<class T>
-  class NameMap {
+  template<class K, class T, class Self>
+  class BaseNameMap {
   private:
     T* _data = nullptr;
     size_t _size = 0;
   public:
-    NameMap() {}
-    NameMap(Section* section) { init(section); }
+    BaseNameMap() {}
+    BaseNameMap(Section* section) { ((Self*)this)->init(section); }
 
-    NameMap(const NameMap<T>&) = delete;
-    NameMap<T>& operator=(const NameMap<T>&) = delete;
+    BaseNameMap(const BaseNameMap<K, T, Self>&) = delete;
+    BaseNameMap<K, T, Self>& operator=(const BaseNameMap<K, T, Self>&) = delete;
 
-    ~NameMap() { if (_data) { delete[] _data; } }
+    ~BaseNameMap() { if (_data) { delete[] _data; } }
 
-    void init(Section* section) {
+    void init_size(size_t size) {
       assert(_data == nullptr);
-      _size = section->name_count();
+      _size = size;
       _data = new T[_size]();
     }
 
     size_t size() const { return _size; }
 
-    T& at(NamedValue* value) {
-      assert(value->name() < _size);
-      return _data[value->name()];
+    T& at(K* key) {
+      assert(key->name() < _size);
+      return _data[key->name()];
     }
 
-    T& operator[](NamedValue* value) { return at(value); }
+    T& operator[](K* key) { return at(key); }
 
-    const T& at(NamedValue* value) const {
-      assert(value->name() < _size);
-      return _data[value->name()];
+    const T& at(K* key) const {
+      assert(key->name() < _size);
+      return _data[key->name()];
     }
 
-    const T& operator[](NamedValue* value) const { return at(value); }
+    const T& operator[](K* key) const { return at(key); }
 
     T& at_name(size_t name) {
       assert(name < _size);
@@ -2423,6 +2441,32 @@ namespace metajit {
     const T& at_name(size_t name) const {
       assert(name < _size);
       return _data[name];
+    }
+
+    void fill(const T& value) {
+      for (size_t i = 0; i < _size; i++) {
+        _data[i] = value;
+      }
+    }
+  };
+
+  template <class T>
+  class NameMap: public BaseNameMap<NamedValue, T, NameMap<T>> {
+  public:
+    using BaseNameMap<NamedValue, T, NameMap<T>>::BaseNameMap;
+
+    void init(Section* section) {
+      BaseNameMap<NamedValue, T, NameMap<T>>::init_size(section->name_count());
+    }
+  };
+
+  template <class T>
+  class BlockMap: public BaseNameMap<Block, T, BlockMap<T>> {
+  public:
+    using BaseNameMap<Block, T, BlockMap<T>>::BaseNameMap;
+
+    void init(Section* section) {
+      BaseNameMap<Block, T, BlockMap<T>>::init_size(section->block_count());
     }
   };
 
@@ -5624,22 +5668,20 @@ namespace metajit {
     Section* _cloned_section;
     Builder _builder;
 
-    std::vector<Block*> _blocks;
+    BlockMap<Block*> _blocks;
     NameMap<Value*> _values;
 
-    Value* clone_arg(Value* value) {
+    static Value* clone_arg(Value* value, Builder& builder, const NameMap<Value*>& values) {
       if (value->is_named()) {
-        return _values.at((NamedValue*) value);
+        return values.at((NamedValue*) value);
       } else if (dynmatch(Const, constant, value)) {
-        return _builder.build_const(constant->type(), constant->value());
+        return builder.build_const(constant->type(), constant->value());
+      } else if (dynmatch(Poison, poison, value)) {
+        return builder.build_poison(poison->type());
       } else {
         assert(false);
         return nullptr;
       }
-    }
-
-    Inst* clone_inst(Inst* inst) {
-      /* ${clone} */
     }
   public:
     Clone(Section* section, Section* cloned_section):
@@ -5647,7 +5689,7 @@ namespace metajit {
         _section(section),
         _cloned_section(cloned_section),
         _builder(cloned_section),
-        _blocks(section->block_count(), nullptr),
+        _blocks(section),
         _values(section) {
       
       assert(section->ordering() >= BlockOrdering::Dominator);
@@ -5661,16 +5703,23 @@ namespace metajit {
           cloned->set_arg(arg->index(), cloned_arg);
           _values[arg] = cloned_arg;
         }
-        _blocks[block->name()] = cloned;
+        _blocks[block] = cloned;
       }
 
       for (Block* block : *_section) {
-        _builder.move_to_end(_blocks[block->name()]);
+        _builder.move_to_end(_blocks[block]);
 
         for (Inst* inst : *block) {
-          _values[inst] = clone_inst(inst);
+          _values[inst] = clone(inst, _builder, _blocks, _values);
         }
       }
+    }
+
+    static Inst* clone(Inst* inst,
+                       Builder& builder,
+                       const BlockMap<Block*>& blocks,
+                       const NameMap<Value*>& values) {
+      /* ${clone} */
     }
   };
 
@@ -5824,23 +5873,55 @@ namespace metajit {
 
   class Mem2Reg: public Pass<Mem2Reg> {
   private:
+    class BitVector {
+    private:
+      std::vector<uint64_t> _words;
+      size_t _size = 0;
+    public:
+      BitVector() {}
+      BitVector(size_t size): _words((size + 63) / 64, 0), _size(size) {}
+
+      void assign(size_t size, bool value) {
+        _size = size;
+        _words.assign((size + 63) / 64, value ? ~uint64_t(0) : 0);
+      }
+
+      void set(size_t idx) { _words[idx / 64] |= uint64_t(1) << (idx % 64); }
+      void clear(size_t idx) { _words[idx / 64] &= ~(uint64_t(1) << (idx % 64)); }
+      bool test(size_t idx) const { return (_words[idx / 64] >> (idx % 64)) & 1; }
+
+      void or_with(const BitVector& other) {
+        for (size_t w = 0; w < _words.size(); w++) {
+          _words[w] |= other._words[w];
+        }
+      }
+
+      bool operator==(const BitVector& other) const { return _words == other._words; }
+      bool operator!=(const BitVector& other) const { return _words != other._words; }
+    };
+
     struct BlockData {
-      std::set<AllocaInst*> live; // Live allocas at entry
-      std::map<AllocaInst*, Value*> values_at_entry; // Values at entry for live allocas
-      std::map<AllocaInst*, Value*> values_at_exit; // Values at exit for live allocas
+      BitVector live; // Live allocas at entry, one bit per alloca index
+      std::vector<Value*> values_at_entry; // Values at entry, indexed by alloca index (nullptr = unknown)
+      std::vector<Value*> values_at_exit;  // Values at exit, indexed by alloca index (nullptr = unknown)
       std::map<AllocaInst*, Arg*> args;
     };
 
     Section* _section = nullptr;
-    std::set<AllocaInst*> _lowerable_allocas;
-    std::unordered_map<Block*, BlockData> _blocks;
+    NameMap<size_t> _alloca_index; // alloca name -> dense index, SIZE_MAX if not lowerable
+    std::vector<AllocaInst*> _lowerable_allocas; // dense index -> alloca
+    BlockMap<BlockData> _blocks;
     std::map<LoadInst*, Value*> _loads;
     Builder _builder;
 
     void find_lowerable_allocas() {
+      _alloca_index.init(_section);
+      _alloca_index.fill(SIZE_MAX);
+
       for (Inst* inst : *_section->entry()) {
         if (dynmatch(AllocaInst, alloca, inst)) {
-          _lowerable_allocas.insert(alloca);
+          _alloca_index[alloca] = _lowerable_allocas.size();
+          _lowerable_allocas.push_back(alloca);
         }
       }
 
@@ -5848,51 +5929,74 @@ namespace metajit {
         for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst)) {
             if (dynmatch(AllocaInst, alloca, store->value())) {
-              _lowerable_allocas.erase(alloca);
+              _alloca_index[alloca] = SIZE_MAX;
             } else if (dynmatch(AllocaInst, alloca, store->ptr())) {
               if (store->offset() != 0) {
-                _lowerable_allocas.erase(alloca);
+                _alloca_index[alloca] = SIZE_MAX;
               }
             }
           } else if (dynmatch(LoadInst, load, inst)) {
             if (dynmatch(AllocaInst, alloca, load->ptr())) {
               if (load->offset() != 0) {
-                _lowerable_allocas.erase(alloca);
+                _alloca_index[alloca] = SIZE_MAX;
               }
             }
           } else {
             for (Value* arg : inst->args()) {
               if (dynmatch(AllocaInst, alloca, arg)) {
-                _lowerable_allocas.erase(alloca);
+                _alloca_index[alloca] = SIZE_MAX;
               }
             }
           }
         }
       }
+
+      // remove allocas that were marked non-lowerable, keeping the vector dense
+      std::vector<AllocaInst*> filtered;
+      for (AllocaInst* alloca : _lowerable_allocas) {
+        if (_alloca_index[alloca] != SIZE_MAX) {
+          _alloca_index[alloca] = filtered.size();
+          filtered.push_back(alloca);
+        }
+      }
+      _lowerable_allocas = std::move(filtered);
     }
 
     void find_liveness() {
       // TODO: Optimize with queue
+      size_t n = _lowerable_allocas.size();
+      _blocks.init(_section);
+
+      // Initialize live/value vectors for all blocks
+      for (Block* block : *_section) {
+        _blocks[block].live.assign(n, false);
+        _blocks[block].values_at_entry.assign(n, nullptr);
+        _blocks[block].values_at_exit.assign(n, nullptr);
+      }
 
       bool changed = true;
       while (changed) {
         changed = false;
 
         for (Block* block : _section->rev_range()) {
-          std::set<AllocaInst*> live;
+          BitVector live(n);
           for (Block* succ : block->successors()) {
-            live.insert(_blocks[succ].live.begin(), _blocks[succ].live.end());
+            live.or_with(_blocks[succ].live);
           }
 
           for (Inst* inst : block->rev_range()) {
             if (dynmatch(StoreInst, store, inst)) {
               if (dynmatch(AllocaInst, alloca, store->ptr())) {
-                live.erase(alloca);
+                size_t idx = _alloca_index[alloca];
+                if (idx != SIZE_MAX) {
+                  live.clear(idx);
+                }
               }
             } else if (dynmatch(LoadInst, load, inst)) {
               if (dynmatch(AllocaInst, alloca, load->ptr())) {
-                if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
-                  live.insert(alloca);
+                size_t idx = _alloca_index[alloca];
+                if (idx != SIZE_MAX) {
+                  live.set(idx);
                   _loads[load] = nullptr;
                 }
               }
@@ -5915,24 +6019,26 @@ namespace metajit {
       while (changed) {
         changed = false;
         for (Block* block : *_section) {
-          std::map<AllocaInst*, Value*> values = _blocks[block].values_at_entry;
+          std::vector<Value*> values = _blocks[block].values_at_entry;
           for (Inst* inst : *block) {
             if (dynmatch(StoreInst, store, inst)) {
               if (dynmatch(AllocaInst, alloca, store->ptr())) {
-                if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
+                size_t idx = _alloca_index[alloca];
+                if (idx != SIZE_MAX) {
                   Value* value = store->value();
                   if (dynmatch(LoadInst, load, value)) {
                     if (_loads.find(load) != _loads.end()) {
                       value = _loads.at(load);
                     }
                   }
-                  values[alloca] = value;
+                  values[idx] = value;
                 }
               }
             } else if (dynmatch(LoadInst, load, inst)) {
               if (dynmatch(AllocaInst, alloca, load->ptr())) {
-                if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
-                  Value* value = values.at(alloca);
+                size_t idx = _alloca_index[alloca];
+                if (idx != SIZE_MAX) {
+                  Value* value = values[idx];
                   if (_loads[load] != value) {
                     _loads[load] = value;
                     changed = true;
@@ -5944,19 +6050,21 @@ namespace metajit {
 
           _blocks[block].values_at_exit = values;
 
-          for (Block* block : block->successors()) {
-            for (AllocaInst* alloca : _blocks[block].live) {
-              if (values.find(alloca) != values.end() && values.at(alloca)) {
-                if (_blocks[block].values_at_entry.find(alloca) == _blocks[block].values_at_entry.end()) {
-                  _blocks[block].values_at_entry[alloca] = values.at(alloca);
+          for (Block* succ : block->successors()) {
+            const BitVector& succ_live = _blocks[succ].live;
+            std::vector<Value*>& succ_entry = _blocks[succ].values_at_entry;
+            for (size_t idx = 0; idx < _lowerable_allocas.size(); idx++) {
+              if (!succ_live.test(idx) || !values[idx]) continue;
+              if (!succ_entry[idx]) {
+                succ_entry[idx] = values[idx];
+                changed = true;
+              } else if (succ_entry[idx] != values[idx]) {
+                AllocaInst* alloca = _lowerable_allocas[idx];
+                if (_blocks[succ].args.find(alloca) == _blocks[succ].args.end()) {
+                  Arg* arg = _builder.alloc_arg(values[idx]->type(), _blocks[succ].args.size() + succ->args().size());
+                  _blocks[succ].args[alloca] = arg;
+                  succ_entry[idx] = arg;
                   changed = true;
-                } else if (_blocks[block].values_at_entry.at(alloca) != values.at(alloca)) {
-                  if (_blocks[block].args.find(alloca) == _blocks[block].args.end()) {
-                    Arg* arg = _builder.alloc_arg(values.at(alloca)->type(), _blocks[block].args.size() + block->args().size());
-                    _blocks[block].args[alloca] = arg;
-                    _blocks[block].values_at_entry[alloca] = arg;
-                    changed = true;
-                  }
                 }
               }
             }
@@ -5985,7 +6093,7 @@ namespace metajit {
             }
           } else if (dynmatch(StoreInst, store, inst)) {
             if (dynmatch(AllocaInst, alloca, store->ptr())) {
-              if (_lowerable_allocas.find(alloca) != _lowerable_allocas.end()) {
+              if (_alloca_index[alloca] != SIZE_MAX) {
                 it = it.erase();
                 continue;
               }
@@ -5996,12 +6104,13 @@ namespace metajit {
         }
       }
 
+      size_t original_block_count = _blocks.size();
       for (Block* block : *_section) {
-        if (_blocks.find(block) == _blocks.end()) {
+        if (block->name() >= original_block_count) {
           continue; // This is a newly inserted jump block
         }
 
-        BlockData& data = _blocks.at(block);
+        BlockData& data = _blocks[block];
         lwir::Span<Arg*> args = _builder.alloc_span<Arg*>(block->args().size() + data.args.size()).zeroed();
         for (Arg* arg : block->args()) {
           args[arg->index()] = arg;
@@ -6013,25 +6122,26 @@ namespace metajit {
         block->set_args(args);
 
         if (dynmatch(JumpInst, jump, block->terminator())) {
-          BlockData& target_data = _blocks.at(jump->block());
+          BlockData& target_data = _blocks[jump->block()];
           lwir::Span<Value*> args = _builder.alloc_span<Value*>(jump->args().size() + target_data.args.size()).zeroed();
           for (size_t i = 0; i < jump->args().size(); i++) {
             args[i] = jump->arg(i);
           }
           for (auto& [alloca, arg] : target_data.args) {
             assert(args[arg->index()] == nullptr);
-            args[arg->index()] = data.values_at_exit.at(alloca);
+            args[arg->index()] = data.values_at_exit[_alloca_index[alloca]];
           }
           jump->set_args(args);
         } else if (dynmatch(BranchInst, branch, block->terminator())) {
           #define edge(name) { \
-            BlockData& edge_data = _blocks.at(branch->name##_block()); \
+            BlockData& edge_data = _blocks[branch->name##_block()]; \
             if (edge_data.args.size() != 0) { \
               Block* jump_block = _builder.build_block_after(block); \
+              jump_block->set_name(SIZE_MAX); \
               _builder.move_to_end(jump_block); \
               JumpInst* jump = _builder.build_jump(edge_data.args.size(), branch->name##_block()); \
               for (auto& [alloca, arg] : edge_data.args) { \
-                jump->set_arg(arg->index(), data.values_at_exit.at(alloca)); \
+                jump->set_arg(arg->index(), data.values_at_exit[_alloca_index[alloca]]); \
               } \
               branch->set_##name##_block(jump_block); \
             } \
