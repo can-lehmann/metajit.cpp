@@ -38,6 +38,7 @@ namespace metajit {
       assert(_section->ordering() >= BlockOrdering::Topological);
 
       _max_write_size = 0;
+      size_t max_load_size = 0;
       std::unordered_map<Block*, size_t> max_entry_sizes;
       for (Block* block : *_section) {
         size_t size = max_entry_sizes[block];
@@ -49,6 +50,7 @@ namespace metajit {
                 size += load_size - (size % load_size);
               }
               size += load_size;
+              max_load_size = std::max(max_load_size, load_size);
             }
           }
         }
@@ -60,6 +62,7 @@ namespace metajit {
         _max_write_size = std::max(_max_write_size, size);
       }
 
+      _max_write_size += max_load_size; // Add padding for worst-case alignment (+1)
       assert(_max_write_size % _config.min_align == 0);
     }
 
