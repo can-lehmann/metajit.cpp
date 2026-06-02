@@ -39,6 +39,7 @@ jobs:
       - name: Build and run coverage
         working-directory: metajit.cpp
         run: |
+          make clean
           mkdir -p tests/coverage
           make -j coverage
       - name: Post coverage report
