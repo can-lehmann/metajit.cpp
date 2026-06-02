@@ -17,6 +17,100 @@
 #include "jitir.hpp"
 
 namespace metajit {
+  class AddRecord: public Pass<AddRecord> {
+  private:
+    Section* _section;
+    Builder _builder;
+    size_t _min_align;
+
+    void apply() {
+      Arg* tape_ptr = _builder.alloc_arg(Type::Ptr, _section->entry()->args().size());
+      _builder.add_args_to_block(_section->entry(), {tape_ptr});
+      
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(LoadInst, load, inst)) {
+            if (load->flags().has(LoadFlags::Record)) {
+              _builder.move_after(block, inst);
+      
+              Value* aligned_ptr = build_tape_advance(_builder, tape_ptr, _min_align, load->type());
+              _builder.build_store(aligned_ptr, load, AliasingGroup(0), 0);
+            }
+          }
+        }
+      }
+    }
+  public:
+    AddRecord(Section* section, size_t min_align = 1):
+        Pass(section),
+        _section(section),
+        _builder(section),
+        _min_align(min_align) {
+      
+      apply();
+    }
+
+    AddRecord(Section* section, size_t& max_write_size, size_t min_align = 1):
+        Pass(section),
+        _section(section),
+        _builder(section),
+        _min_align(min_align) {
+      
+      apply();
+
+      max_write_size = this->max_write_size();
+    }
+
+    static Value* build_tape_advance(Builder& builder, Value* tape_ptr, size_t min_align, Type type) {
+      size_t load_size = std::max(min_align, type_size(type));
+      Value* ptr = builder.build_load(tape_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), 0);
+      Value* size = builder.build_const(Type::Int64, load_size);
+      if (load_size > 1 && load_size > min_align) {
+        Value* align = builder.fold_mod_u(builder.fold_resize_u(ptr, Type::Int64), size);
+        Value* align_offset = builder.fold_select(
+          builder.build_eq(align, builder.build_const(Type::Int64, 0)),
+          builder.build_const(Type::Int64, 0),
+          builder.fold_sub(size, align)
+        );
+        ptr = builder.fold_add_ptr(ptr, align_offset);
+      }
+      Value* aligned_ptr = ptr;
+      ptr = builder.fold_add_ptr(ptr, size);
+      builder.build_store(tape_ptr, ptr, AliasingGroup(0), 0);
+
+      return aligned_ptr;
+    }
+
+    size_t max_write_size() {
+      assert(_section->ordering() >= BlockOrdering::Topological);
+
+      size_t max_size = 0;
+      std::unordered_map<Block*, size_t> max_entry_sizes;
+      for (Block* block : *_section) {
+        size_t size = max_entry_sizes[block];
+        for (Inst* inst : *block) {
+          if (dynmatch(LoadInst, load, inst)) {
+            if (load->flags().has(LoadFlags::Record)) {
+              size_t load_size = std::max(_min_align, type_size(load->type()));
+              if (size % load_size != 0) {
+                size += load_size - (size % load_size);
+              }
+              size += load_size;
+            }
+          }
+        }
+
+        for (Block* succ : block->successors()) {
+          max_entry_sizes[succ] = std::max(max_entry_sizes[succ], size);
+        }
+
+        max_size = std::max(max_size, size);
+      }
+
+      return max_size;
+    }
+  };
+
   // Codegen for the generating extension uses topological sorting.
   // Cycles are broken by selecting an overapproximation.
   // This is implemented using action groups where only one action of
@@ -284,10 +378,21 @@ namespace metajit {
   /* ${build_build_inst} */
 
   class CreateGenExt: public Pass<CreateGenExt> {
+  public:
+    struct Config {
+      bool use_tape;
+      size_t min_align;
+      bool comments;
+
+      constexpr Config():
+        use_tape(false),
+        min_align(1),
+        comments(false) {}
+    };
   private:
     Section* _section;
     Section* _genext_section;
-    bool _comments = false;
+    Config _config;
 
     Builder _builder;
 
@@ -299,8 +404,9 @@ namespace metajit {
     NameMap<Value*> _is_used;
     NameMap<Value*> _built;
     NameMap<Value*> _values;
-    std::map<Block*, Block*> _blocks;
+    BlockMap<Block*> _blocks;
     Value* _jitir_builder = nullptr;
+    Value* _tape_ptr = nullptr;
 
     GenExtSymbols _syms;
 
@@ -315,148 +421,50 @@ namespace metajit {
       }
     }
 
-    void emit_branch(Value* cond,
-                     const std::function<void()>& emit_then,
-                     const std::function<void()>& emit_else,
-                     const std::string& name = "") {
+    Value* emit_branch(Value* cond,
+                       Type type,
+                       const std::function<Value*()>& emit_then,
+                       const std::function<Value*()>& emit_else) {
       Block* then_block = _builder.build_block_after(_builder.block());
       Block* else_block = _builder.build_block_after(then_block);
-      Block* cont_block = _builder.build_block_after(else_block);
+      Block* cont_block = _builder.build_block_after(else_block, {type});
 
       _builder.build_branch(cond, then_block, else_block);
 
       _builder.move_to_end(then_block);
-      emit_then();
-      _builder.build_jump(cont_block);
+      Value* then_value = emit_then();
+      _builder.build_jump(cont_block, {then_value});
 
       _builder.move_to_end(else_block);
-      emit_else();
-      _builder.build_jump(cont_block);
+      Value* else_value = emit_else();
+      _builder.build_jump(cont_block, {else_value});
 
       _builder.move_to_end(cont_block);
+      return cont_block->args().at(0);
     }
 
     Value* emit_inst(Inst* inst) {
-      if (dynmatch(FreezeInst, freeze, inst)) {
-        return _builder.build_freeze(emit_arg(freeze->arg(0)));
-      } else if (dynmatch(PromoteInst, promote, inst)) {
-        return emit_arg(promote->arg(0));
-      } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
-        return emit_arg(assume_const->arg(0));
-      } else if (dynmatch(SelectInst, select, inst)) {
-        return _builder.build_select(
-          emit_arg(select->arg(0)),
-          emit_arg(select->arg(1)),
-          emit_arg(select->arg(2))
-        );
-      } else if (dynmatch(ResizeUInst, resize_u, inst)) {
-        return _builder.build_resize_u(emit_arg(resize_u->arg(0)), resize_u->type());
-      } else if (dynmatch(ResizeSInst, resize_s, inst)) {
-        return _builder.build_resize_s(emit_arg(resize_s->arg(0)), resize_s->type());
-      } else if (dynmatch(ResizeXInst, resize_x, inst)) {
-        return _builder.build_resize_x(emit_arg(resize_x->arg(0)), resize_x->type());
-      } else if (dynmatch(FloatToIntSInst, float_to_int_s, inst)) {
-        return _builder.build_float_to_int_s(emit_arg(float_to_int_s->arg(0)), float_to_int_s->type());
-      } else if (dynmatch(IntToFloatSInst, int_to_float_s, inst)) {
-        return _builder.build_int_to_float_s(emit_arg(int_to_float_s->arg(0)), int_to_float_s->type());
-      } else if (dynmatch(LoadInst, load, inst)) {
-        return _builder.build_load(
-          emit_arg(load->arg(0)),
-          load->type(),
-          load->flags(),
-          load->aliasing(),
-          load->offset()
-        );
-      } else if (dynmatch(StoreInst, store, inst)) {
-        return _builder.build_store(
-          emit_arg(store->arg(0)),
-          emit_arg(store->arg(1)),
-          store->aliasing(),
-          store->offset()
-        );
-      } else if (dynmatch(AllocaInst, alloca_inst, inst)) {
-        return _builder.build_alloca(emit_arg(alloca_inst->size()), alloca_inst->align());
-      } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
-        return _builder.build_add_ptr(emit_arg(add_ptr->arg(0)), emit_arg(add_ptr->arg(1)));
-      } else if (dynmatch(CallInst, call, inst)) {
-        std::vector<Value*> args;
-        for (size_t it = 1; it < call->arg_count(); it++) {
-          args.push_back(emit_arg(call->arg(it)));
+      if (_config.use_tape) {
+        if (dynmatch(LoadInst, load, inst)) {
+          if (load->flags().has(LoadFlags::Record)) {
+            Value* aligned_ptr = AddRecord::build_tape_advance(_builder, _tape_ptr, _config.min_align, load->type());
+            return _builder.build_load(aligned_ptr, load->type(), LoadFlags::None, AliasingGroup(0), 0);
+          }
         }
-        return _builder.build_call(emit_arg(call->callee()), call->type(), args, call->call_conv());
-      } else if (dynmatch(EqInst, eq, inst)) {
-        return _builder.build_eq(emit_arg(eq->arg(0)), emit_arg(eq->arg(1)));
-      } else if (dynmatch(CommentInst, comment, inst)) {
-        return nullptr;
       }
-
-      #define binop(Name, method) \
-        else if (dynmatch(Name##Inst, name, inst)) { \
-          return _builder.method(emit_arg(name->arg(0)), emit_arg(name->arg(1))); \
-        }
-
-      binop(Add, build_add)
-      binop(Sub, build_sub)
-      binop(Mul, build_mul)
-      binop(DivS, build_div_s)
-      binop(DivU, build_div_u)
-      binop(ModS, build_mod_s)
-      binop(ModU, build_mod_u)
-      binop(And, build_and)
-      binop(Or, build_or)
-      binop(Xor, build_xor)
-      binop(Shl, build_shl)
-      binop(ShrU, build_shr_u)
-      binop(ShrS, build_shr_s)
-      binop(AddF, build_add_f)
-      binop(SubF, build_sub_f)
-      binop(MulF, build_mul_f)
-      binop(DivF, build_div_f)
-      binop(LtU, build_lt_u)
-      binop(LtS, build_lt_s)
-      binop(LtFO, build_lt_f_o)
-      binop(LtFU, build_lt_f_u)
-
-      #undef binop
-
-      inst->write(std::cerr);
-      std::cerr << std::endl;
-      assert(false && "Unknown instruction");
-      return nullptr;
+      return Clone::clone(inst, _builder, _blocks, _values);
     }
 
-    Value* emit_terminator(Inst* inst, Block* block) {
-      if (dynmatch(BranchInst, branch, inst)) {
-        return _builder.build_branch(
-          emit_arg(branch->cond()),
-          _blocks.at(branch->true_block()),
-          _blocks.at(branch->false_block())
-        );
-      } else if (dynmatch(JumpInst, jump, inst)) {
-        std::vector<Value*> args;
-        for (size_t i = 0; i < jump->arg_count(); i++) {
-          args.push_back(emit_arg(jump->arg(i)));
-        }
-        return _builder.build_jump(_blocks.at(jump->block()), args);
-      } else if (dynmatch(ExitInst, exit, inst)) {
-        return _builder.build_exit();
-      } else {
-        assert(false && "Unknown terminator");
-        return nullptr;
-      }
-    }
-
-    Value* is_const(Value* value) {
+    Value* is_const(Value* value, bool allow_overapproximation = false) {
       if (dynmatch(Const, constant, value)) {
         return _builder.build_const(Type::Bool, 1);
       } else if (value->is_named()) {
-        return _builder.build_load(
-          _is_const.at((NamedValue*) value),
-          Type::Bool,
-          LoadFlags::None,
-          AliasingGroup(0),
-          0
-        );
+        Value* is_const = _is_const.at((NamedValue*) value);
+        if (allow_overapproximation && !is_const) {
+          return _builder.build_const(Type::Bool, 0);
+        }
+        assert(is_const);
+        return is_const;
       } else {
         assert(false && "Unknown value");
         return nullptr;
@@ -546,14 +554,13 @@ namespace metajit {
       }
     }
 
-    Value* is_used(Inst* inst) {
-      return _builder.build_load(
-        _is_used.at(inst),
-        Type::Bool,
-        LoadFlags::None,
-        AliasingGroup(0),
-        0
-      );
+    Value* is_used(Inst* inst, bool allow_overapproximation = false) {
+      Value* is_used = _is_used.at(inst);
+      if (allow_overapproximation && !is_used) {
+        return _builder.build_const(Type::Bool, 1);
+      }
+      assert(is_used);
+      return is_used;
     }
 
     Value* emit_used(Inst* inst) {
@@ -562,14 +569,14 @@ namespace metajit {
       } else {
         Value* used = _builder.build_const(Type::Bool, 0);
         for (Uses::Use use : _uses.at(inst)) {
-          Value* use_used = is_used(use.inst);
+          Value* use_used = is_used(use.inst, true);
           
           if (is_int_or_bool(use.inst->type()) &&
               // Promote is always constant, but needs this instruction to perform the check
               !dynamic_cast<PromoteInst*>(use.inst)) {
             use_used = _builder.fold_and(
               use_used,
-              _builder.fold_not(is_const(use.inst))
+              _builder.fold_not(is_const(use.inst, true))
             );
           }
 
@@ -583,7 +590,7 @@ namespace metajit {
                 use_used = _builder.fold_and(
                   use_used,
                   _builder.fold_select(
-                    is_const(select->arg(0)),
+                    is_const(select->arg(0), true),
                     branch_used,
                     _builder.build_const(Type::Bool, 1)
                   )
@@ -604,33 +611,27 @@ namespace metajit {
           Type::Ptr, (uint64_t)(void*) constant
         );
       } else if (value->is_named()) {
-        return _builder.build_load(
-          _built.at((NamedValue*) value),
-          Type::Ptr,
-          LoadFlags::None,
-          AliasingGroup(0),
-          0
-        );
+        Value* built = _built.at((NamedValue*) value);
+        assert(built);
+        return built;
       } else {
         assert(false && "Unknown value");
         return nullptr;
       }
     }
 
-    void emit_update_load_const(LoadInst* load) {
+    void emit_update_load_const(LoadInst* load, Value* built) {
       Value* is_const_load = _builder.build_call(
-        _syms.is_const_inst, Type::Bool, {emit_built_arg(load)}
+        _syms.is_const_inst, Type::Bool, {built}
       );
       if (load->flags().has(LoadFlags::Pure)) {
         is_const_load = _builder.fold_or(is_const_load, is_const(load->arg(0)));
       }
-      _builder.build_store(_is_const.at(load), is_const_load, AliasingGroup(0), 0);
+      _is_const[load] = is_const_load;
     }
 
-    
-
-    void emit_build_inst(Inst* inst) {
-      if (_comments &&
+    Value* emit_build_inst(Inst* inst) {
+      if (_config.comments &&
           !dynamic_cast<CommentInst*>(inst)) {
         std::ostringstream comment_stream;
         inst->write_arg(comment_stream);
@@ -642,21 +643,19 @@ namespace metajit {
         });
       }
 
-      emit_branch(
+      Value* built = emit_branch(
         is_used(inst),
-        [&](){
+        Type::Ptr,
+        [&]() -> Value* {
           if (dynmatch(PromoteInst, promote, inst)) {
             if (is_int_or_bool(promote->type())) {
-              emit_branch(
+              return emit_branch(
                 is_const(promote->arg(0)),
-                [&](){
-                  _builder.build_store(
-                    _built.at(inst),
-                    emit_built_arg(promote->arg(0)),
-                    AliasingGroup(0), 0
-                  );
+                Type::Ptr,
+                [&]() -> Value* {
+                  return emit_built_arg(promote->arg(0));
                 },
-                [&](){
+                [&]() -> Value* {
                   Value* built_const = _builder.build_call(
                     _syms.build_const_fast, Type::Ptr,
                     {
@@ -679,25 +678,15 @@ namespace metajit {
                     _builder.build_const(Type::Int32, 1)
                   });
 
-                  _builder.build_store(
-                    _built.at(inst),
-                    built_const,
-                    AliasingGroup(0), 0
-                  );
-                },
-                "freeze_"
+                  return built_const;
+                }
               );
             } else {
-              _builder.build_store(
-                _built.at(inst),
-                emit_built_arg(promote->arg(0)),
-                AliasingGroup(0), 0
-              );
+              return emit_built_arg(promote->arg(0));
             }
-            return;
           } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
             if (is_int_or_bool(assume_const->type())) {
-              Value* built_const = _builder.build_call(
+              return _builder.build_call(
                 _syms.build_const_fast, Type::Ptr,
                 {
                   _jitir_builder,
@@ -705,20 +694,9 @@ namespace metajit {
                   _builder.build_resize_u(emit_arg(inst), Type::Int64)
                 }
               );
-
-              _builder.build_store(
-                _built.at(inst),
-                built_const,
-                AliasingGroup(0), 0
-              );
             } else {
-              _builder.build_store(
-                _built.at(inst),
-                emit_built_arg(assume_const->arg(0)),
-                AliasingGroup(0), 0
-              );
+              return emit_built_arg(assume_const->arg(0));
             }
-            return;
           }
 
           std::vector<Value*> args;
@@ -727,9 +705,9 @@ namespace metajit {
           }
 
           if (is_int_or_bool(inst->type())) {
-            auto trace_const = [&](){
+            auto trace_const = [&]() -> Value* {
               if (_trace_capabilities.can_trace_const(inst)) {
-                Value* built = _builder.build_call(
+                return _builder.build_call(
                   _syms.build_const_fast, Type::Ptr,
                   {
                     _jitir_builder,
@@ -737,43 +715,44 @@ namespace metajit {
                     _builder.build_resize_u(emit_arg(inst), Type::Int64)
                   }
                 );
-                _builder.build_store(_built.at(inst), built, AliasingGroup(0), 0);
               }
+
+              return _builder.build_const(Type::Ptr, 0);
             };
             if (_trace_capabilities.can_trace_const(inst) && !_trace_capabilities.can_trace_inst(inst)) {
               // This only happens for always const values, so we do not need to check is_const(inst)
-              trace_const();
+              return trace_const();
             } else {
-              emit_branch(
+              return emit_branch(
                 is_const(inst),
+                Type::Ptr,
                 trace_const,
-                [&](){
+                [&]() -> Value* {
                   if (_trace_capabilities.can_trace_inst(inst)) {
-                    Value* built = build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
-                    _builder.build_store(_built.at(inst), built, AliasingGroup(0), 0);
-
-                    if (dynmatch(LoadInst, load, inst)) {
-                      emit_update_load_const(load);
-                    }
+                    return build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
                   }
-                },
-                "const_"
+                  return _builder.build_const(Type::Ptr, 0);
+                }
               );
             }
           } else {
             if (_trace_capabilities.any(inst)) {
-              Value* built = build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
-              _builder.build_store(_built.at(inst), built, AliasingGroup(0), 0);
-
-              if (dynmatch(LoadInst, load, inst)) {
-                emit_update_load_const(load);
-              }
+              return build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
             }
           }
+
+          return _builder.build_const(Type::Ptr, 0);
         },
-        [&](){},
-        "used_"
+        [&]() -> Value* {
+          return _builder.build_const(Type::Ptr, 0);
+        }
       );
+
+      if (dynmatch(LoadInst, load, inst)) {
+        emit_update_load_const(load, built);
+      }
+
+      return built;
     }
 
     void emit_generating_extension(Block* block) {
@@ -828,7 +807,7 @@ namespace metajit {
         }
 
         const_group->add("const", PRIO_MAX, const_deps, {}, [inst, this](){
-          _builder.build_store(_is_const.at(inst), emit_const_prop(inst), AliasingGroup(0), 0);
+          _is_const[inst] = emit_const_prop(inst);
         });
 
         std::vector<ActionGroup*> build_deps = {const_group, used_group, last_build_group};
@@ -839,7 +818,7 @@ namespace metajit {
           }
         }
         build_group->add("build", PRIO_MAX, build_deps, {}, [inst, this](){
-          emit_build_inst(inst);
+          _built[inst] = emit_build_inst(inst);
         });
 
         emit_groups[inst] = emit_group;
@@ -886,7 +865,7 @@ namespace metajit {
 
         if (always_used.at(inst)) {
           used_group->add("always used", PRIO_MAX, {}, {}, [inst, this](){
-            _builder.build_store(_is_used.at(inst), _builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
+            _is_used[inst] = _builder.build_const(Type::Bool, 1);
           });
         } else {
           std::vector<ActionGroup*> used_deps;
@@ -913,7 +892,7 @@ namespace metajit {
             prio++;
           }
           used_group->add("used", prio, {}, used_deps, [inst, this](){
-            _builder.build_store(_is_used.at(inst), emit_used(inst), AliasingGroup(0), 0);
+            _is_used[inst] = emit_used(inst);
           });
         }
       }
@@ -934,70 +913,38 @@ namespace metajit {
           _builder.build_resize_u(emit_arg(branch->arg(0)), Type::Int32)
         });
       } else if (dynmatch(JumpInst, jump, inst)) {
-        for (Arg* arg : jump->block()->args()) {
-          _builder.build_store(_is_const.at(arg), is_const(jump->arg(arg->index())), AliasingGroup(0), 0);
-          _builder.build_store(_built.at(arg), emit_built_arg(jump->arg(arg->index())), AliasingGroup(0), 0);
+        std::vector<Value*> args;
+        for (Value* arg : jump->args()) {
+          args.push_back(emit_arg(arg));
+          args.push_back(is_const(arg));
+          args.push_back(emit_built_arg(arg));
         }
+        _builder.build_jump(_blocks.at(jump->block()), args);
+        return;
       }
-      _values[inst] = emit_terminator(inst, block);
-    }
-
-    void emit_generating_extension_allocs(NamedValue* value) {
-      _is_const[value] = _builder.build_alloca(Type::Bool);
-
-      // False is always a valid overapproximation
-      _builder.build_store(_is_const.at(value), _builder.build_const(Type::Bool, 0), AliasingGroup(0), 0);
-
-      _is_used[value] = _builder.build_alloca(Type::Bool);
-
-      // True is always a valid overapproximation
-      _builder.build_store(_is_used.at(value), _builder.build_const(Type::Bool, 1), AliasingGroup(0), 0);
-
-      _built[value] = _builder.build_alloca(Type::Ptr);
-
-      _builder.build_store(_built.at(value), _builder.build_const(Type::Ptr, 0), AliasingGroup(0), 0);
+      _values[inst] = emit_inst(inst);
     }
 
     void emit_entry() {
-      _jitir_builder = _genext_section->entry()->arg(
-        _section->entry()->args().size()
-      );
-
-      for (Block* block : *_section) {
-        for (Arg* arg : block->args()) {
-          emit_generating_extension_allocs(arg);
-        }
-
-        for (Inst* inst : *block) {
-          emit_generating_extension_allocs(inst);
-        }
-      }
-
-      for (Arg* arg : _section->entry()->args()) {
-        _builder.build_store(
-          _built.at(arg),
-          _builder.build_call(
-            _syms.entry_arg, Type::Ptr,
-            {
-              _jitir_builder,
-              _builder.build_const(Type::Int64, arg->index())
-            }
-          ),
-          AliasingGroup(0), 0
-        );
+      size_t builder_index = _section->entry()->args().size();
+      _jitir_builder = _genext_section->entry()->arg(builder_index);
+      if (_config.use_tape) {
+        _tape_ptr = _genext_section->entry()->arg(builder_index + 1);
       }
     }
   public:
-    CreateGenExt(Section* section, Section* genext_section):
+    CreateGenExt(Section* section, Section* genext_section, const Config& config = Config()):
         Pass(section),
         _section(section),
         _genext_section(genext_section),
+        _config(config),
         _builder(genext_section),
         _uses(section),
         _binding_time_groups(section),
         _trace_capabilities(section, _binding_time_groups) {
 
       section->autoname();
+      _blocks.init(section);
       _is_const.init(section);
       _is_used.init(section);
       _built.init(section);
@@ -1010,18 +957,27 @@ namespace metajit {
         entry_arg_types.push_back(arg->type());
       }
       entry_arg_types.push_back(Type::Ptr);
+      if (_config.use_tape) {
+        entry_arg_types.push_back(Type::Ptr);
+      }
       _builder.move_to_end(_builder.build_block(entry_arg_types));
 
       for (Block* block : *section) {
         std::vector<Type> arg_types;
         for (Arg* arg : block->args()) {
-          arg_types.push_back(arg->type());
+          arg_types.push_back(arg->type()); // values
+          arg_types.push_back(Type::Bool); // is_const
+          arg_types.push_back(Type::Ptr); // built
         }
+
         Block* genext_block = _builder.build_block(arg_types);
         _blocks[block] = genext_block;
 
+        size_t index = 0;
         for (Arg* arg : block->args()) {
-          _values[arg] = genext_block->arg(arg->index());
+          _values[arg] = genext_block->arg(index++);
+          _is_const[arg] = genext_block->arg(index++);
+          _built[arg] = genext_block->arg(index++);
         }
       }
 
@@ -1030,6 +986,14 @@ namespace metajit {
       std::vector<Value*> entry_jump_args;
       for (Arg* arg : section->entry()->args()) {
         entry_jump_args.push_back(_genext_section->entry()->arg(arg->index()));
+        entry_jump_args.push_back(_builder.build_const(Type::Bool, 0)); // is_const
+        entry_jump_args.push_back(_builder.build_call(
+          _syms.entry_arg, Type::Ptr,
+          {
+            _jitir_builder,
+            _builder.build_const(Type::Int64, arg->index())
+          }
+        ));
       }
       _builder.build_jump(_blocks.at(section->entry()), entry_jump_args);
 

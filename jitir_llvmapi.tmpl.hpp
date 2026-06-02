@@ -128,7 +128,7 @@ namespace metajit {
 
     uint32_t jitir_is_const_inst(void* value_ptr) {
       Value* value = (Value*)value_ptr;
-      return dynamic_cast<Const*>(value) != nullptr;
+      return value && dynamic_cast<Const*>(value);
     }
 
     void jitir_set_arg(void* inst_ptr, uint64_t index, void* value_ptr) {
