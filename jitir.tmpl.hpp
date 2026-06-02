@@ -5910,7 +5910,7 @@ namespace metajit {
     Section* _section = nullptr;
     NameMap<size_t> _alloca_index; // alloca name -> dense index, SIZE_MAX if not lowerable
     std::vector<AllocaInst*> _lowerable_allocas; // dense index -> alloca
-    std::unordered_map<Block*, BlockData> _blocks;
+    BlockMap<BlockData> _blocks;
     std::map<LoadInst*, Value*> _loads;
     Builder _builder;
 
@@ -5965,6 +5965,7 @@ namespace metajit {
     void find_liveness() {
       // TODO: Optimize with queue
       size_t n = _lowerable_allocas.size();
+      _blocks.init(_section);
 
       // Initialize live/value vectors for all blocks
       for (Block* block : *_section) {
@@ -6103,12 +6104,13 @@ namespace metajit {
         }
       }
 
+      size_t original_block_count = _blocks.size();
       for (Block* block : *_section) {
-        if (_blocks.find(block) == _blocks.end()) {
+        if (block->name() >= original_block_count) {
           continue; // This is a newly inserted jump block
         }
 
-        BlockData& data = _blocks.at(block);
+        BlockData& data = _blocks[block];
         lwir::Span<Arg*> args = _builder.alloc_span<Arg*>(block->args().size() + data.args.size()).zeroed();
         for (Arg* arg : block->args()) {
           args[arg->index()] = arg;
@@ -6120,7 +6122,7 @@ namespace metajit {
         block->set_args(args);
 
         if (dynmatch(JumpInst, jump, block->terminator())) {
-          BlockData& target_data = _blocks.at(jump->block());
+          BlockData& target_data = _blocks[jump->block()];
           lwir::Span<Value*> args = _builder.alloc_span<Value*>(jump->args().size() + target_data.args.size()).zeroed();
           for (size_t i = 0; i < jump->args().size(); i++) {
             args[i] = jump->arg(i);
@@ -6132,9 +6134,10 @@ namespace metajit {
           jump->set_args(args);
         } else if (dynmatch(BranchInst, branch, block->terminator())) {
           #define edge(name) { \
-            BlockData& edge_data = _blocks.at(branch->name##_block()); \
+            BlockData& edge_data = _blocks[branch->name##_block()]; \
             if (edge_data.args.size() != 0) { \
               Block* jump_block = _builder.build_block_after(block); \
+              jump_block->set_name(SIZE_MAX); \
               _builder.move_to_end(jump_block); \
               JumpInst* jump = _builder.build_jump(edge_data.args.size(), branch->name##_block()); \
               for (auto& [alloca, arg] : edge_data.args) { \
