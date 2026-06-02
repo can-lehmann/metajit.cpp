@@ -59,3 +59,18 @@ jobs:
         working-directory: metajit.cpp
         run: |
           tests/fuzzer --mode=tv --number-of-runs=50
+      - name: Coverage report
+        if: github.event_name == 'pull_request'
+        working-directory: metajit.cpp
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          make -j coverage
+          make coverage-report > coverage.txt
+          gh pr comment ${{ github.event.pull_request.number }} --body "$(printf '### Coverage\n```\n'; cat coverage.txt; printf '```')"
+      - name: Upload coverage report
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: metajit.cpp/tests/coverage/report.html
