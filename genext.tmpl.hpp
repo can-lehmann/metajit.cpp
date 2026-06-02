@@ -32,6 +32,37 @@ namespace metajit {
     Builder _builder;
     Config _config;
 
+    size_t _max_write_size = 0;
+
+    void find_max_write_size() {
+      assert(_section->ordering() >= BlockOrdering::Topological);
+
+      _max_write_size = 0;
+      std::unordered_map<Block*, size_t> max_entry_sizes;
+      for (Block* block : *_section) {
+        size_t size = max_entry_sizes[block];
+        for (Inst* inst : *block) {
+          if (dynmatch(LoadInst, load, inst)) {
+            if (_config.has(load->aliasing())) {
+              size_t load_size = std::max(_config.min_align, type_size(load->type()));
+              if (size % load_size != 0) {
+                size += load_size - (size % load_size);
+              }
+              size += load_size;
+            }
+          }
+        }
+
+        for (Block* succ : block->successors()) {
+          max_entry_sizes[succ] = std::max(max_entry_sizes[succ], size);
+        }
+
+        _max_write_size = std::max(_max_write_size, size);
+      }
+
+      assert(_max_write_size % _config.min_align == 0);
+    }
+
     void apply() {
       Arg* tape_ptr = _builder.alloc_arg(Type::Ptr, _section->entry()->args().size());
       _builder.add_args_to_block(_section->entry(), {tape_ptr});
@@ -56,6 +87,7 @@ namespace metajit {
         _builder(section),
         _config(config) {
       
+      find_max_write_size();
       apply();
     }
 
@@ -65,9 +97,10 @@ namespace metajit {
         _builder(section),
         _config(config) {
 
+      find_max_write_size();
       apply();
 
-      *max_write_size = this->max_write_size();
+      *max_write_size = _max_write_size;
     }
 
     static Value* build_tape_advance(Builder& builder, Value* tape_ptr, size_t min_align, Type type) {
@@ -90,35 +123,7 @@ namespace metajit {
       return aligned_ptr;
     }
 
-    size_t max_write_size() {
-      assert(_section->ordering() >= BlockOrdering::Topological);
-
-      size_t max_size = 0;
-      std::unordered_map<Block*, size_t> max_entry_sizes;
-      for (Block* block : *_section) {
-        size_t size = max_entry_sizes[block];
-        for (Inst* inst : *block) {
-          if (dynmatch(LoadInst, load, inst)) {
-            if (_config.has(load->aliasing())) {
-              size_t load_size = std::max(_config.min_align, type_size(load->type()));
-              if (size % load_size != 0) {
-                size += load_size - (size % load_size);
-              }
-              size += load_size;
-            }
-          }
-        }
-
-        for (Block* succ : block->successors()) {
-          max_entry_sizes[succ] = std::max(max_entry_sizes[succ], size);
-        }
-
-        max_size = std::max(max_size, size);
-      }
-
-      assert(max_size % _config.min_align == 0);
-      return max_size;
-    }
+    size_t max_write_size() const { return _max_write_size; }
   };
 
   // Codegen for the generating extension uses topological sorting.
