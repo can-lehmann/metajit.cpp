@@ -757,8 +757,10 @@ namespace metajit {
     inline void check_trace_differential(std::string output_path,
                                          Section* section,
                                          TraceTestData& data,
+                                         bool record_replay = false,
                                          size_t static_sample_count = 16,
                                          size_t dynamic_sample_count = 64) {
+      
       section->autoname();
 
       if (!output_path.empty()) {
@@ -766,11 +768,25 @@ namespace metajit {
         section->write(stream);
       }
 
-      // Generate the generating extension
       Context genext_context;
       Allocator genext_allocator;
+      
+      CreateGenExt::Config genext_config;
+
+      Section* record_section = nullptr;
+      size_t max_write_size = 0;
+      if (record_replay) {
+        record_section = new Section(genext_context, genext_allocator);
+        AddRecord::Config config;
+        config.groups.insert(AliasingGroup(0));
+        Clone::run(section, record_section);
+        AddRecord::run(record_section, &max_write_size, config);
+        genext_config.record = config;
+      }
+
+      // Generate the generating extension
       Section* genext_section = new Section(genext_context, genext_allocator);
-      CreateGenExt::run(section, genext_section);
+      CreateGenExt::run(section, genext_section, genext_config);
 
       Simplify::run(genext_section, 10);
       SimplifyCFG::run(genext_section);
@@ -786,7 +802,11 @@ namespace metajit {
 
       llvm::LLVMContext llvm_context;
       std::unique_ptr<llvm::Module> genext_module = std::make_unique<llvm::Module>("genext_module", llvm_context);
+      
       LLVMCodeGen::run(genext_section, genext_module.get(), "genext_func");
+      if (record_replay) {
+        LLVMCodeGen::run(record_section, genext_module.get(), "record_func");
+      }
 
       if (!output_path.empty()) {
         std::error_code error_code;
@@ -817,9 +837,22 @@ namespace metajit {
       )));
 
       using GenExtFunc = void(*)(uint8_t*, void*);
-      GenExtFunc genext_func = ExitOnErr(jit->lookup("genext_func")).toPtr<GenExtFunc>();
+
+      using RecordFunc = void(*)(uint8_t*, uint8_t**);
+      using ReplayGenExtFunc = void(*)(uint8_t*, void*, uint8_t**);
+
+      GenExtFunc genext_func = nullptr;
+      RecordFunc record_func = nullptr;
+      ReplayGenExtFunc replay_genext_func = nullptr;
+      if (record_replay) {
+        record_func = ExitOnErr(jit->lookup("record_func")).toPtr<RecordFunc>();
+        replay_genext_func = ExitOnErr(jit->lookup("genext_func")).toPtr<ReplayGenExtFunc>();
+      } else {
+        genext_func = ExitOnErr(jit->lookup("genext_func")).toPtr<GenExtFunc>();
+      }
 
       uint8_t* static_data = new uint8_t[data.data_size()]();
+      uint8_t* tape = new uint8_t[std::max((size_t) 1, max_write_size) * 1024]();
 
       for (size_t static_sample = 0; static_sample < static_sample_count; static_sample++) {
         // Pick random values for static inputs
@@ -833,7 +866,16 @@ namespace metajit {
         std::vector<Type> args = {Type::Ptr};
         trace_builder.move_to_end(trace_builder.build_block(args));
 
-        genext_func(static_data, &trace_builder);
+        if (record_replay) {
+          uint8_t* record_tape_ptr = tape;
+          record_func(static_data, &record_tape_ptr);
+          uint8_t* replay_tape_ptr = tape;
+          replay_genext_func(static_data, &trace_builder, &replay_tape_ptr);
+          unittest_assert(record_tape_ptr == replay_tape_ptr);
+          unittest_assert((record_tape_ptr - tape) <= max_write_size);
+        } else {
+          genext_func(static_data, &trace_builder);
+        }
 
         trace_builder.build_exit();
 
@@ -934,12 +976,14 @@ namespace metajit {
       }
 
       delete[] static_data;
+      delete[] tape;
       delete genext_section;
     }
 
     class GenExtTest: public unittest::BaseTest<GenExtTest> {
     private:
       std::string _output_path;
+      bool _record_replay = false;
       size_t _static_sample_count = 16;
       size_t _dynamic_sample_count = 64;
     public:
@@ -949,6 +993,11 @@ namespace metajit {
       GenExtTest&& samples(size_t static_samples, size_t dynamic_samples) && {
         _static_sample_count = static_samples;
         _dynamic_sample_count = dynamic_samples;
+        return std::move(*this);
+      }
+
+      GenExtTest&& record_replay(bool record_replay) && {
+        _record_replay = record_replay;
         return std::move(*this);
       }
 
@@ -970,10 +1019,15 @@ namespace metajit {
 
           unittest_assert(!section->verify(std::cout));
 
+          OrderBlocks::run(section, BlockOrdering::Topological);
+
+          unittest_assert(!section->verify(std::cout));
+
           check_trace_differential(
             _output_path + "/" + name(),
             section,
             data,
+            _record_replay,
             _static_sample_count,
             _dynamic_sample_count
           );
@@ -986,12 +1040,24 @@ namespace metajit {
     class GenExtTestSuite: public unittest::Suite {
     private:
       std::string _output_path;
+      bool _record_replay = false;
     public:
       GenExtTestSuite(const std::string& output_path, int argc = 0, char** argv = nullptr):
         unittest::Suite(argc, argv), _output_path(output_path) {}
+      
+      void set_record_replay(bool record_replay) {
+        _record_replay = record_replay;
+      }
 
       GenExtTest gen_ext_test(const std::string& name) {
-        return GenExtTest(name, _output_path).suite(*this);
+        std::ostringstream stream;
+        stream << name;
+        if (_record_replay) {
+          stream << ".record_replay";
+        } else {
+          stream << ".direct";
+        }
+        return GenExtTest(stream.str(), _output_path).suite(*this).record_replay(_record_replay);
       }
     };
 

@@ -59,7 +59,7 @@ namespace metajit {
       apply();
     }
 
-    AddRecord(Section* section, size_t& max_write_size, Config config):
+    AddRecord(Section* section, size_t* max_write_size, Config config):
         Pass(section),
         _section(section),
         _builder(section),
@@ -67,7 +67,7 @@ namespace metajit {
 
       apply();
 
-      max_write_size = this->max_write_size();
+      *max_write_size = this->max_write_size();
     }
 
     static Value* build_tape_advance(Builder& builder, Value* tape_ptr, size_t min_align, Type type) {
@@ -75,7 +75,7 @@ namespace metajit {
       Value* ptr = builder.build_load(tape_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), 0);
       Value* size = builder.build_const(Type::Int64, load_size);
       if (load_size > 1 && load_size > min_align) {
-        Value* align = builder.fold_mod_u(builder.fold_resize_u(ptr, Type::Int64), size);
+        Value* align = builder.fold_mod_u(builder.fold_ptr_to_int(ptr, Type::Int64), size);
         Value* align_offset = builder.fold_select(
           builder.build_eq(align, builder.build_const(Type::Int64, 0)),
           builder.build_const(Type::Int64, 0),
