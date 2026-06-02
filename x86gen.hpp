@@ -152,12 +152,13 @@ namespace metajit {
     };
 
     using RM = std::variant<std::monostate, Reg, Mem>;
-    using Imm = std::variant<std::monostate, uint64_t, X86Block*, const char*>;
+    using Imm = std::variant<std::monostate, uint64_t, X86Block*>;
   private:
     Kind _kind;
     Reg _reg;
     RM _rm;
     Imm _imm;
+    void* _data = nullptr;
     size_t _name = 0;
   public:
     X86Inst(Kind kind): _kind(kind) {}
@@ -166,23 +167,16 @@ namespace metajit {
     Reg reg() const { return _reg; }
     RM rm() const { return _rm; }
     Imm imm() const { return _imm; }
+    void* data() const { return _data; }
 
     X86Inst& set_kind(Kind kind) { _kind = kind; return *this; }
     X86Inst& set_reg(Reg reg) { _reg = reg; return *this; }
     X86Inst& set_rm(const RM& rm) { _rm = rm; return *this; }
     X86Inst& set_imm(const Imm& imm) { _imm = imm; return *this; }
+    X86Inst& set_data(void* data) { _data = data; return *this; }
 
     size_t name() const { return _name; }
     void set_name(size_t name) { _name = name; }
-
-    bool is_64_bit() const {
-      switch (_kind) {
-        #define x86_inst(name, lowercase, usedef, is_64_bit, ...) \
-          case Kind::name: return is_64_bit;
-        #include "x86insts.inc.hpp"
-      }
-      return false;
-    }
 
     template <class Fn>
     void visit_regs(const Fn& fn) {
@@ -305,7 +299,7 @@ namespace metajit {
 
   void X86Inst::write(std::ostream& stream) const {
     if (_kind == Kind::Comment) {
-      stream << "; " << std::get<const char*>(_imm);
+      stream << "; " << (const char*) _data;
       return;
     }
 
@@ -331,10 +325,14 @@ namespace metajit {
       stream << " imm=" << std::get<uint64_t>(_imm);
     } else if (std::holds_alternative<X86Block*>(_imm)) {
       stream << " imm=b" << std::get<X86Block*>(_imm)->name();
-    } else if (std::holds_alternative<const char*>(_imm)) {
-      stream << " imm=\"" << std::get<const char*>(_imm) << "\"";
     }
   }
+
+  struct X86CallData {
+    CallConv call_conv;
+    lwir::Span<Reg> args;
+    Reg ret;
+  };
 
   class X86InstBuilder {
   private:
@@ -414,17 +412,29 @@ namespace metajit {
     }
 
     X86Inst* comment(const std::string& text) {
-      char* imm = (char*) _allocator.alloc(text.size() + 1, alignof(char));
-      std::copy(text.c_str(), text.c_str() + text.size(), imm);
-      imm[text.size()] = '\0';
-      return &build(X86Inst::Kind::Comment).set_imm(imm);
+      char* data = (char*) _allocator.alloc(text.size() + 1, alignof(char));
+      std::copy(text.c_str(), text.c_str() + text.size(), data);
+      data[text.size()] = '\0';
+      return &build(X86Inst::Kind::Comment).set_data(data);
+    }
+
+    lwir::Span<Reg> alloc_regs(size_t count) {
+      return lwir::Span<Reg>((Reg*) _allocator.alloc(sizeof(Reg) * count, alignof(Reg)), count);
+    }
+
+    X86Inst* call(Reg callee, Reg ret, CallConv call_conv, lwir::Span<Reg> args) {
+      X86CallData* data = new (_allocator.alloc<X86CallData>()) X86CallData();
+      data->call_conv = call_conv;
+      data->args = args;
+      data->ret = ret;
+      return &build(X86Inst::Kind::Call).set_reg(callee).set_data(data);
     }
   };
 
   class CallConvInfo {
   private:
     lwir::Span<const Reg> _arg_regs;
-    lwir::Span<const Reg> _clobbered_regs;
+    lwir::Span<const Reg> _preserved_regs;
     Reg _ret_reg;
 
     static constexpr Reg preserve_none_arg_regs[] = {
@@ -433,34 +443,28 @@ namespace metajit {
       Reg::X86_R8(), Reg::X86_R9(), Reg::X86_R11(), Reg::X86_RAX()
     };
 
-    static constexpr Reg preserve_none_clobbered_regs[] = {
-      Reg::X86_RAX(), Reg::X86_RBX(), Reg::X86_RCX(), Reg::X86_RDX(),
-      Reg::X86_RSI(), Reg::X86_RDI(),
-      Reg::X86_R8(), Reg::X86_R9(), Reg::X86_R10(), Reg::X86_R11(),
-      Reg::X86_R12(), Reg::X86_R13(), Reg::X86_R14(), Reg::X86_R15()
-    };
+    static constexpr Reg preserve_none_preserved_regs[] = {};
 
     static constexpr Reg default_arg_regs[] = {
       Reg::X86_RDI(), Reg::X86_RSI(), Reg::X86_RDX(), Reg::X86_RCX(),
       Reg::X86_R8(), Reg::X86_R9()
     };
 
-    static constexpr Reg default_clobbered_regs[] = {
-      Reg::X86_RAX(), Reg::X86_RCX(), Reg::X86_RDX(),
-      Reg::X86_RSI(), Reg::X86_RDI(),
-      Reg::X86_R8(), Reg::X86_R9(), Reg::X86_R10(), Reg::X86_R11()
+    static constexpr Reg default_preserved_regs[] = {
+      Reg::X86_RBX(), Reg::X86_RBP(), Reg::X86_R12(), Reg::X86_R13(),
+      Reg::X86_R14(), Reg::X86_R15()
     };
   public:
     CallConvInfo(CallConv call_conv) {
       switch (call_conv) {
         case CallConv::PreserveNone:
           _arg_regs = lwir::Span<const Reg>(preserve_none_arg_regs, sizeof(preserve_none_arg_regs) / sizeof(preserve_none_arg_regs[0]));
-          _clobbered_regs = lwir::Span<const Reg>(preserve_none_clobbered_regs, sizeof(preserve_none_clobbered_regs) / sizeof(preserve_none_clobbered_regs[0]));
+          _preserved_regs = lwir::Span<const Reg>(preserve_none_preserved_regs, sizeof(preserve_none_preserved_regs) / sizeof(preserve_none_preserved_regs[0]));
           _ret_reg = Reg::X86_RAX();
         break;
         case CallConv::Default:
           _arg_regs = lwir::Span<const Reg>(default_arg_regs, sizeof(default_arg_regs) / sizeof(default_arg_regs[0]));
-          _clobbered_regs = lwir::Span<const Reg>(default_clobbered_regs, sizeof(default_clobbered_regs) / sizeof(default_clobbered_regs[0]));
+          _preserved_regs = lwir::Span<const Reg>(default_preserved_regs, sizeof(default_preserved_regs) / sizeof(default_preserved_regs[0]));
           _ret_reg = Reg::X86_RAX();
         break;
         default:
@@ -468,9 +472,32 @@ namespace metajit {
       }
     }
 
-    const lwir::Span<const Reg>& arg_regs() const { return _arg_regs; }
-    const lwir::Span<const Reg>& clobbered_regs() const { return _clobbered_regs; }
-    Reg ret_reg() const { return _ret_reg; }
+    const lwir::Span<const Reg>& args() const { return _arg_regs; }
+    const lwir::Span<const Reg>& preserved() const { return _preserved_regs; }
+    
+    Reg arg(size_t index) const { return _arg_regs.at(index); }
+    Reg preserved(size_t index) const { return _preserved_regs.at(index); }
+    Reg ret() const { return _ret_reg; }
+
+    // TODO: Optimize
+
+    bool is_preserved(Reg reg) const {
+      for (Reg preserved_reg : _preserved_regs) {
+        if (reg == preserved_reg) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    bool is_arg(Reg reg, size_t arg_count) const {
+      for (size_t it = 0; it < arg_count && it < _arg_regs.size(); it++) {
+        if (reg == _arg_regs.at(it)) {
+          return true;
+        }
+      }
+      return false;
+    }
   };
 
   class X86CodeGen: public Pass<X86CodeGen> {
@@ -1007,35 +1034,25 @@ namespace metajit {
         CallConvInfo info(call->call_conv());
 
         assert(call->arg_count() >= 1);
-        assert(call->arg_count() - 1 <= info.arg_regs().size() && "Call with too many register arguments");
+        assert(call->arg_count() - 1 <= info.args().size() && "Call with too many register arguments");
 
-        std::vector<Reg> arg_copies;
-        arg_copies.reserve(call->arg_count() - 1);
-        for (size_t it = 1; it < call->arg_count(); it++) {
-          Reg copy = vreg();
-          _builder.mov64(copy, vreg(call->arg(it)));
-          arg_copies.push_back(copy);
+        lwir::Span<Reg> args = _builder.alloc_regs(call->args().size() - 1);
+        for (size_t it = 1; it < call->args().size(); it++) {
+          Reg arg_reg = fix_to_preg(vreg(), info.arg(it - 1));
+          _builder.mov64(arg_reg, vreg(call->arg(it)));
+          args[it - 1] = arg_reg;
         }
 
-        for (Reg preg : info.clobbered_regs()) {
-          Reg clobber = fix_to_preg(vreg(), preg);
-          _builder.pseudo_def(clobber);
-        }
-
-        for (size_t it = 0; it < arg_copies.size(); it++) {
-          Reg arg_reg = fix_to_preg(vreg(), info.arg_regs()[it]);
-          _builder.mov64(arg_reg, arg_copies[it]);
-        }
-
+        Reg ret_reg = fix_to_preg(vreg(), info.ret());
         Reg callee_reg = fix_to_preg(vreg(), Reg::X86_R10());
         _builder.mov64(callee_reg, vreg(call->callee()));
-        _stack_offset_alloc.require_call_alignment();
-        _builder.call(callee_reg);
+        _builder.call(callee_reg, ret_reg, call->call_conv(), args);
 
         if (call->type() != Type::Void) {
-          Reg ret_reg = fix_to_preg(vreg(), info.ret_reg());
           _builder.mov64(vreg(call), ret_reg);
         }
+
+        _stack_offset_alloc.require_call_alignment();
       } else if (dynmatch(BranchInst, branch, inst)) {
         if (branch->arg(0)->is_inst()) {
           Inst* pred_inst = (Inst*) branch->arg(0);
@@ -1544,6 +1561,30 @@ namespace metajit {
             src_info.current_reg = Reg();
 
             it = it.erase();
+            continue;
+          } else if (inst->kind() == X86Inst::Kind::Call) {
+            X86CallData* data = (X86CallData*) inst->data();
+            CallConvInfo info(data->call_conv);
+
+            for (size_t it = 0; it < reg_file.size(); it++) {
+              Reg preg = Reg::phys(it);
+              if (!reg_file.is_free(preg) && !info.is_preserved(preg) && !info.is_arg(preg, data->args.size())) {
+                spill(reg_file, preg, false);
+              }
+            }
+
+            for (size_t it = 0; it < reg_file.size(); it++) {
+              Reg preg = Reg::phys(it);
+              Reg vreg = reg_file[preg];
+              if (vreg.is_virtual() && !info.is_preserved(preg)) {
+                reg_file.free(preg);
+                _vreg_info[vreg.id()].current_reg = Reg();
+              }
+            }
+
+            reg_file.set(info.ret(), data->ret);
+            reg_file.touch(info.ret());
+
             continue;
           } else {
             inst->visit_regs([&](Reg reg) {
