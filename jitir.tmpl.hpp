@@ -3751,6 +3751,8 @@ namespace metajit {
         } else {
           _values[_inst] = a;
         }
+      } else if (dynmatch(CommentInst, comment, _inst)) {
+        // Ignore comments
       }
 
       #define binop(name, expr) \
@@ -3784,7 +3786,7 @@ namespace metajit {
       #undef binop
     
       else {
-        assert(false);
+        assert(false && "Unsupported instruction in interpreter");
       }
 
       _inst = _inst->next();
