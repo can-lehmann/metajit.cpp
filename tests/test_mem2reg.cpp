@@ -243,6 +243,24 @@ int main(int argc, char** argv) {
     Mem2Reg::run(section);
   });
 
+  suite.opt_test("no_lowering_store_offset").run([](Builder& builder, TestData& data) {
+    // Non-zero store offset prevents lowering
+    Value* alloca = builder.build_alloca(Type::Int64);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 8);
+    data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 8));
+  }, [&](Section* section){
+    Mem2Reg::run(section);
+  });
+
+  suite.opt_test("no_lowering_load_offset").run([](Builder& builder, TestData& data) {
+    // Non-zero load offset prevents lowering
+    Value* alloca = builder.build_alloca(Type::Int64);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 8);
+    data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 8));
+  }, [&](Section* section){
+    Mem2Reg::run(section);
+  });
+
   suite.opt_test("existing_block_args_preserved").run([](Builder& builder, TestData& data) {
     Value* val = data.input(Type::Int64);
     Value* alloca = builder.build_alloca(Type::Int64);
