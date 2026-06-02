@@ -1,11 +1,14 @@
 __pycache__
 .vscode/
+genext.hpp
 jitir.hpp
 jitir_llvmapi.hpp
 main
 asm.bin
 section.json
+*.dot
 tests/test_insts
+tests/test_interpreter
 tests/test_clone
 tests/test_fuzzer
 tests/test_cfg
@@ -18,3 +21,5 @@ tests/source/*.ll
 tests/test_source
 tests/test_reentry
 tests/test_mem2reg
+tests/coverage/
+tests/test_genext

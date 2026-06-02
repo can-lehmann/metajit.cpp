@@ -1,0 +1,62 @@
+name: coverage
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  coverage:
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Checkout metajit.cpp
+        uses: actions/checkout@v6
+        with:
+          path: metajit.cpp
+          fetch-depth: 0
+      - name: Checkout unittest.cpp
+        uses: actions/checkout@v6
+        with:
+          path: unittest.cpp
+          repository: can-lehmann/unittest.cpp
+      - name: Checkout lwir.cpp
+        uses: actions/checkout@v6
+        with:
+          path: lwir.cpp
+          repository: can-lehmann/lwir.cpp
+      - name: Set up LLVM
+        run: |
+          # See https://apt.llvm.org/
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 20
+          sudo apt-get update
+          sudo apt-get install -y llvm-20-dev llvm-20-tools
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 200
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 200
+          sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-20 200
+      - name: Build and run coverage
+        working-directory: metajit.cpp
+        run: |
+          make clean
+          mkdir -p tests/coverage
+          make -j coverage
+      - name: Install diff-cover
+        run: pip install diff-cover
+      - name: Post coverage report
+        working-directory: metajit.cpp
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          make coverage-report 2>/dev/null | python3 tests/coverage_to_markdown.py > coverage.md
+          make diff-cover || true
+          gh pr comment ${{ github.event.pull_request.number }} --body "$(printf '### Coverage\n\n'; cat coverage.md; printf '\n\n<details>\n<summary>Diff Coverage</summary>\n\n'; cat tests/coverage/diff-report.md; printf '\n</details>')"
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            metajit.cpp/tests/coverage/report.html
+            metajit.cpp/tests/coverage/diff-report.md

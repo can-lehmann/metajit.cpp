@@ -1,16 +1,20 @@
 LLVM_FLAGS := $(shell llvm-config --cflags --libs)
 Z3_FLAGS := -I/usr/include/z3 -lz3
 CFLAGS := ${LLVM_FLAGS} -g
-HEADER_FILES := jitir.hpp jitir_llvmapi.hpp $(wildcard *.hpp)
+HEADER_FILES := jitir.hpp jitir_llvmapi.hpp genext.hpp $(wildcard *.hpp)
 TEST_HEADER_FILES := $(wildcard tests/*.hpp)
 TEST_CFLAGS := ${CFLAGS} -DMETAJIT_DEBUG
+COVERAGE_CFLAGS := ${TEST_CFLAGS} -fprofile-instr-generate -fcoverage-mapping
+
+COVERAGE_TESTS := test_knownbits test_insts test_interpreter test_clone test_cfg test_fuzzer test_opt test_reentry test_mem2reg test_source test_genext
 
 run: main
 	./main
 
-test: tests/test_knownbits tests/test_insts tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_reentry tests/test_mem2reg tests/test_source
+test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
 	./tests/test_knownbits
 	./tests/test_insts
+	./tests/test_interpreter
 	./tests/test_clone
 	./tests/test_cfg
 	./tests/test_fuzzer
@@ -18,17 +22,21 @@ test: tests/test_knownbits tests/test_insts tests/test_clone tests/test_cfg test
 	./tests/test_reentry
 	./tests/test_mem2reg
 	./tests/test_source
+	./tests/test_genext
 
 fuzz: tests/fuzzer
 	./tests/fuzzer
 
-main: main.cpp jitir.hpp jitir_llvmapi.hpp llvmgen.hpp x86gen.hpp
+main: main.cpp ${HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
 tests/test_knownbits: tests/test_knownbits.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_insts: tests/test_insts.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${TEST_CFLAGS} -o $@ $<
+
+tests/test_interpreter: tests/test_interpreter.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_clone: tests/test_clone.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
@@ -82,16 +90,63 @@ tests/test_tv: tests/test_tv.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 tests/test_genext: tests/test_genext.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
-jitir.hpp: jitir.py jitir.tmpl.hpp
-	PYTHONPATH="../lwir.cpp" python3 $<
+jitir.hpp jitir_llvmapi.hpp genext.hpp &: jitir.py jitir.tmpl.hpp jitir_llvmapi.tmpl.hpp genext.tmpl.hpp
+	PYTHONPATH="../lwir.cpp" python3 jitir.py
 
-jitir_llvmapi.hpp: jitir.py jitir_llvmapi.tmpl.hpp
-	PYTHONPATH="../lwir.cpp" python3 $<
+COVERAGE_PROFRAW_FILES := $(patsubst %,tests/coverage/%.profraw,$(COVERAGE_TESTS))
+
+tests/coverage/%.profraw: tests/%.cpp jitir.hpp jitir_llvmapi.hpp genext.hpp ${HEADER_FILES} ${TEST_HEADER_FILES} | tests/coverage
+	clang++ $(COVERAGE_CFLAGS) -o tests/coverage/$* $<
+	LLVM_PROFILE_FILE=$@ tests/coverage/$*
+
+tests/coverage/test_source.profraw: ${TEST_SOURCE_LL_FILES}
+
+tests/coverage/merged.profdata: $(COVERAGE_PROFRAW_FILES)
+	llvm-profdata-20 merge -sparse $^ -o $@
+
+tests/coverage:
+	mkdir -p tests/coverage
+
+coverage: tests/coverage/merged.profdata
+	llvm-cov-20 show --format=html --instr-profile=$< \
+		$(patsubst %,-object tests/coverage/%,$(COVERAGE_TESTS)) \
+		--ignore-filename-regex="^/usr" \
+		> tests/coverage/report.html
+	@echo "Coverage report: tests/coverage/report.html"
+
+coverage-report: tests/coverage/merged.profdata
+	llvm-cov-20 report --instr-profile=$< \
+		$(patsubst %,-object tests/coverage/%,$(COVERAGE_TESTS)) \
+		--ignore-filename-regex="^/usr|/tests/|lwir_utils\.hpp|unittest\.hpp"
+
+diff-cover: tests/coverage/merged.profdata
+	$(eval MERGE_BASE := $(shell git merge-base HEAD origin/main))
+	$(eval WORKTREE := $(shell mktemp -d))
+	git worktree add $(WORKTREE) $(MERGE_BASE)
+	cd $(WORKTREE) && PYTHONPATH="$(abspath ../lwir.cpp)" python3 jitir.py
+	{ \
+	  printf 'diff --git a/jitir.hpp b/jitir.hpp\n--- a/jitir.hpp\n+++ b/jitir.hpp\n'; \
+	  diff -u $(WORKTREE)/jitir.hpp jitir.hpp | tail -n +3; \
+	  printf 'diff --git a/jitir_llvmapi.hpp b/jitir_llvmapi.hpp\n--- a/jitir_llvmapi.hpp\n+++ b/jitir_llvmapi.hpp\n'; \
+	  diff -u $(WORKTREE)/jitir_llvmapi.hpp jitir_llvmapi.hpp | tail -n +3; \
+	  printf 'diff --git a/genext.hpp b/genext.hpp\n--- a/genext.hpp\n+++ b/genext.hpp\n'; \
+	  diff -u $(WORKTREE)/genext.hpp genext.hpp | tail -n +3; \
+	  git diff $(MERGE_BASE) -- . ':(exclude)jitir.hpp' ':(exclude)jitir_llvmapi.hpp' ':(exclude)genext.hpp'; \
+	} > tests/coverage/combined.diff || true
+	llvm-cov-20 export --format=lcov --instr-profile=$< \
+		$(patsubst %,-object tests/coverage/%,$(COVERAGE_TESTS)) \
+		--ignore-filename-regex="^/usr|/tests/|lwir_utils\.hpp|unittest\.hpp" \
+		> tests/coverage/coverage.lcov 2>/dev/null
+	diff-cover tests/coverage/coverage.lcov --diff-file=tests/coverage/combined.diff --format markdown:tests/coverage/diff-report.md
+	git worktree remove $(WORKTREE)
 
 clean:
+	-rm -r tests/coverage
 	-rm main
 	-rm tests/test_knownbits
 	-rm tests/test_insts
+	-rm tests/test_interpreter
+	-rm tests/test_clone
 	-rm tests/test_fuzzer
 	-rm tests/test_cfg
 	-rm tests/test_opt
@@ -102,6 +157,7 @@ clean:
 	-rm tests/fuzzer
 	-rm jitir.hpp
 	-rm jitir_llvmapi.hpp
+	-rm genext.hpp
 	-rm tests/source/*.ll
 	-rm -r tests/output
 	mkdir -p tests/output/test_insts
@@ -111,3 +167,5 @@ clean:
 	mkdir -p tests/output/test_source
 	mkdir -p tests/output/test_reader
 	mkdir -p tests/output/test_mem2reg
+	mkdir -p tests/output/test_genext
+	mkdir -p tests/coverage

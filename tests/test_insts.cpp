@@ -39,9 +39,9 @@ void test_binop(DiffTestSuite& suite) {
   binop(sub, false)
   binop(mul, false)
 
-  binop(and, false)
-  binop(or, false)
-  binop(xor, false)
+  binop(and, true)
+  binop(or, true)
+  binop(xor, true)
 
   binop(eq, false)
   binop(lt_u, false)

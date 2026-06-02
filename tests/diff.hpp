@@ -36,6 +36,7 @@
 #include "../llvmgen.hpp"
 #include "../x86gen.hpp"
 #include "../lowerllvm.hpp"
+#include "../genext.hpp"
 
 namespace metajit {
   namespace test {
@@ -766,9 +767,26 @@ namespace metajit {
       }
 
       // Generate the generating extension
+      Context genext_context;
+      Allocator genext_allocator;
+      Section* genext_section = new Section(genext_context, genext_allocator);
+      CreateGenExt::run(section, genext_section);
+
+      Simplify::run(genext_section, 10);
+      SimplifyCFG::run(genext_section);
+      Mem2Reg::run(genext_section);
+      DeadCodeElim::run(genext_section);
+      CommonSubexprElim::run(genext_section);
+      Simplify::run(genext_section, 10);
+      SimplifyCFG::run(genext_section);
+      DeadCodeElim::run(genext_section);
+
+      section->write(std::cerr);
+      genext_section->write(std::cerr);
+
       llvm::LLVMContext llvm_context;
       std::unique_ptr<llvm::Module> genext_module = std::make_unique<llvm::Module>("genext_module", llvm_context);
-      LLVMCodeGen::run(section, genext_module.get(), "genext_func", true);
+      LLVMCodeGen::run(genext_section, genext_module.get(), "genext_func");
 
       if (!output_path.empty()) {
         std::error_code error_code;
@@ -916,6 +934,7 @@ namespace metajit {
       }
 
       delete[] static_data;
+      delete genext_section;
     }
 
     class GenExtTest: public unittest::BaseTest<GenExtTest> {
@@ -973,6 +992,85 @@ namespace metajit {
 
       GenExtTest gen_ext_test(const std::string& name) {
         return GenExtTest(name, _output_path).suite(*this);
+      }
+    };
+
+    class InterpreterTest: public unittest::BaseTest<InterpreterTest> {
+    public:
+      struct TestCase {
+        std::vector<Interpreter::Bits> entry_args;
+        std::map<Value*, Interpreter::Bits> expected_values;
+        
+        TestCase() {}
+        TestCase(const std::vector<Interpreter::Bits>& _entry_args,
+                 const std::map<Value*, Interpreter::Bits>& _expected_values):
+          entry_args(_entry_args), expected_values(_expected_values) {}
+      };
+    private:
+      std::string _output_path;
+    public:
+      InterpreterTest(const std::string& name, const std::string& output_path):
+        unittest::BaseTest<InterpreterTest>(name), _output_path(output_path) {}
+      
+      void run(const std::function<std::vector<TestCase>(Builder&)> build) {
+        unittest::BaseTest<InterpreterTest>::run([&]() {
+          Context context;
+          Allocator allocator;
+          Section* section = new Section(context, allocator);
+
+          Builder builder(section);
+          std::vector<TestCase> test_cases = build(builder);
+
+          if (!builder.block()->terminator()) {
+            builder.build_exit();
+          }
+
+          unittest_assert(!section->verify(std::cout));
+
+          for (const TestCase& test_case : test_cases) {
+            Interpreter interpreter(section, test_case.entry_args);
+            Interpreter::Event event = interpreter.run();
+            if (event != Interpreter::Event::Exit) {
+              throw unittest::AssertionError(
+                "Interpreter did not exit cleanly",
+                __LINE__,
+                __FILE__
+              );
+            }
+
+            for (const auto& [value, expected] : test_case.expected_values) {
+              Interpreter::Bits actual = interpreter.at(value);
+              if (actual != expected) {
+                std::ostringstream stream;
+                stream << "Expected value ";
+                expected.write(stream);
+                stream << ", but got ";
+                actual.write(stream);
+                stream << " for ";
+                value->write_arg(stream);
+                stream << "\n";
+                throw unittest::AssertionError(
+                  "Interpreter produced unexpected value",
+                  __LINE__,
+                  __FILE__,
+                  stream.str()
+                );
+              }
+            }
+          }
+        });
+      }
+    };
+
+    class InterpreterTestSuite: public unittest::Suite {
+    private:
+      std::string _output_path;
+    public:
+      InterpreterTestSuite(const std::string& output_path, int argc = 0, char** argv = nullptr):
+        unittest::Suite(argc, argv), _output_path(output_path) {}
+      
+      InterpreterTest interpreter_test(const std::string& name) {
+        return InterpreterTest(name, _output_path).suite(*this);
       }
     };
   }

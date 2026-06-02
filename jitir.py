@@ -49,15 +49,17 @@ class LLVMAPIPlugin:
             for arg in inst.args:
                 arg_types.append(self.type_substitutions[arg.type])
             arg_types = ", ".join(arg_types)
+            sym_name = f"{self.prefix}_{inst.format_builder_name(ir)}"
             inits += f"    {inst.format_builder_name(ir)} = module->getOrInsertFunction(\n"
-            inits += f"      \"{self.prefix}_{inst.format_builder_name(ir)}\",\n"
+            inits += f"      \"{sym_name}\",\n"
             inits += f"      llvm::FunctionType::get(\n"
             inits += f"        llvm::PointerType::get(context, 0),\n"
             inits += f"        std::vector<llvm::Type*>({{ {arg_types} }}),\n"
             inits += f"        false\n"
             inits += f"      )\n"
             inits += f"    );\n"
-        
+            inits += f"    by_name[\"{sym_name}\"] = {inst.format_builder_name(ir)}.getCallee();\n"
+
         return {
             "llvmapi_defs": defs,
             "llvmapi_inits": inits
@@ -309,7 +311,7 @@ class ClonePlugin:
         for inst in ir.insts:
             name = inst.format_name(ir)
             code += f"if (dynamic_cast<{name}*>(inst)) {{\n"
-            code += f"  {name}* clone = _builder.{inst.format_builder_name(ir)}("
+            code += f"  {name}* clone = builder.{inst.format_builder_name(ir)}("
             args = []
             value_index = 0
             varargs = None
@@ -319,10 +321,10 @@ class ClonePlugin:
                         args.append(f"inst->arg_count() - {value_index}")
                         varargs = arg
                     case ValueType():
-                        args.append(f"clone_arg(inst->arg({value_index}))")
+                        args.append(f"clone_arg(inst->arg({value_index}), builder, values)")
                         value_index += 1
                     case Type(name = "Block*"):
-                        args.append(f"_blocks[(({name}*) inst)->{arg.name}()->name()]")
+                        args.append(f"blocks[(({name}*) inst)->{arg.name}()]")
                     case Type():
                         args.append(f"(({name}*) inst)->{arg.name}()")
             code += ", ".join(args)
@@ -330,7 +332,7 @@ class ClonePlugin:
 
             if varargs is not None:
                 code += f"  for (size_t it = {value_index}; it < inst->arg_count(); it++) {{\n"
-                code += f"    clone->set_arg(it, clone_arg(inst->arg(it)));\n"
+                code += f"    clone->set_arg(it, clone_arg(inst->arg(it), builder, values));\n"
                 code += f"  }}\n"
 
             code += f"  return clone;\n"
@@ -617,6 +619,91 @@ lwir(
         MapSymbolsInstPlugin(
             prefix = "jitir"
         )
+    ],
+    placeholder = lambda name: "/* ${" + name + "} */"
+)
+
+class GenExtPlugin:
+    def run(self, ir):
+        # GenExtSymbols struct
+        struct = "struct GenExtSymbols {\n"
+        for inst in ir.insts:
+            struct += f"  Symbol* {inst.format_builder_name(ir)} = nullptr;\n"
+        struct += "  Symbol* set_arg = nullptr;\n"
+        struct += "  Symbol* build_const_fast = nullptr;\n"
+        struct += "  Symbol* build_guard = nullptr;\n"
+        struct += "  Symbol* entry_arg = nullptr;\n"
+        struct += "  Symbol* is_const_inst = nullptr;\n"
+        struct += "\n"
+        struct += "  GenExtSymbols() {}\n"
+        struct += "  GenExtSymbols(Context& context) {\n"
+        for inst in ir.insts:
+            name = f"jitir_{inst.format_builder_name(ir)}"
+            struct += f"    {inst.format_builder_name(ir)} = context.build_symbol(Type::Ptr, \"{name}\");\n"
+        struct += f"    set_arg = context.build_symbol(Type::Ptr, \"jitir_set_arg\");\n"
+        struct += f"    build_const_fast = context.build_symbol(Type::Ptr, \"jitir_build_const_fast\");\n"
+        struct += f"    build_guard = context.build_symbol(Type::Ptr, \"jitir_build_guard\");\n"
+        struct += f"    entry_arg = context.build_symbol(Type::Ptr, \"jitir_entry_arg\");\n"
+        struct += f"    is_const_inst = context.build_symbol(Type::Ptr, \"jitir_is_const_inst\");\n"
+        struct += "  }\n"
+        struct += "};\n"
+
+        # build_build_inst function
+        func = "inline Value* build_build_inst(Builder& builder,\n"
+        func += "                              Inst* inst,\n"
+        func += "                              Value* jitir_builder,\n"
+        func += "                              const std::vector<Value*>& args,\n"
+        func += "                              BlockMap<Block*>& blocks,\n"
+        func += "                              GenExtSymbols& syms) {\n"
+        for inst in ir.insts:
+            name = inst.format_name(ir)
+            func += f"  if ({name}* i = dynamic_cast<{name}*>(inst)) {{\n"
+            func += f"    std::vector<Value*> build_args;\n"
+            func += f"    build_args.push_back(jitir_builder);\n"
+
+            value_index = 0
+            varargs = None
+            for arg in inst.args:
+                match arg.type:
+                    case CountVarargsValueType():
+                        func += f"    build_args.push_back(builder.build_const(Type::Int64, args.size() - {value_index}));\n"
+                        varargs = arg
+                    case ValueType():
+                        func += f"    build_args.push_back(args[{value_index}]);\n"
+                        value_index += 1
+                    case Type(name="Block*"):
+                        func += f"    build_args.push_back(builder.build_const(Type::Ptr, (uint64_t)(void*)blocks.at(i->{arg.name}())));\n"
+                    case Type():
+                        func += f"    build_args.push_back(builder.build_const(Type::Int32, (uint64_t)i->{arg.name}()));\n"
+
+            func += f"    Value* built = builder.build_call(syms.{inst.format_builder_name(ir)}, Type::Ptr, build_args);\n"
+
+            if varargs is not None:
+                func += f"    for (size_t it = {value_index}; it < args.size(); it++) {{\n"
+                func += f"      builder.build_call(syms.set_arg, Type::Void, {{\n"
+                func += f"        built,\n"
+                func += f"        builder.build_const(Type::Int64, it),\n"
+                func += f"        args[it]\n"
+                func += f"      }});\n"
+                func += f"    }}\n"
+
+            func += f"    return built;\n"
+            func += f"  }}\n"
+        func += f"  assert(false && \"Unknown instruction\");\n"
+        func += f"  return nullptr;\n"
+        func += f"}}\n"
+
+        return {
+            "genext_symbols": struct,
+            "build_build_inst": func
+        }
+
+lwir(
+    template_path = "genext.tmpl.hpp",
+    output_path = "genext.hpp",
+    ir = jitir,
+    plugins = [
+        GenExtPlugin()
     ],
     placeholder = lambda name: "/* ${" + name + "} */"
 )
