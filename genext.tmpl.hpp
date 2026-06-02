@@ -946,7 +946,7 @@ namespace metajit {
     void emit_entry() {
       size_t builder_index = _section->entry()->args().size();
       _jitir_builder = _genext_section->entry()->arg(builder_index);
-      if (_config.use_tape) {
+      if (_config.record.has_value()) {
         _tape_ptr = _genext_section->entry()->arg(builder_index + 1);
       }
     }
