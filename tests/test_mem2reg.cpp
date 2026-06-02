@@ -243,5 +243,22 @@ int main(int argc, char** argv) {
     Mem2Reg::run(section);
   });
 
+  suite.opt_test("existing_block_args_preserved").run([](Builder& builder, TestData& data) {
+    Value* val = data.input(Type::Int64);
+    Value* alloca = builder.build_alloca(Type::Int64);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
+
+    Block* cont_block = builder.build_block({Type::Int64});
+    builder.build_jump(cont_block, {val});
+
+    builder.move_to_end(cont_block);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
+    data.output(cont_block->arg(0));
+    data.output(builder.build_load(alloca, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+  }, [&](Section* section) {
+    Mem2Reg::run(section);
+    check_no_allocas(section);
+  });
+
   return suite.finish();
 }
