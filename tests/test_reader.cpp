@@ -37,6 +37,9 @@ void check_roundtrip(Section* section) {
     unittest_assert(section_str == read_section_str);
 }
 
+extern "C" __attribute__((noinline))
+uint64_t test_reader_symbol_target(uint64_t a, uint64_t b) { return a ^ b; }
+
 int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
@@ -97,5 +100,26 @@ int main(int argc, char** argv) {
     check_roundtrip(builder.section());
 
   });
+  unittest::Test("symbol_call").suite(suite).run([]() {
+    // can't use diff_test, we don't want to actually run the section
+    Context context;
+    Allocator allocator;
+    Section* section = new Section(context, allocator);
+    Builder builder(section);
+    builder.move_to_end(builder.build_block({Type::Ptr}));
+
+    TestData data(builder);
+    Value* a = data.input(RandomRange(Type::Int64));
+    Value* b = data.input(RandomRange(Type::Int64));
+    Value* callee = section->context().build_symbol(Type::Ptr, "test_reader_symbol_target");
+    Value* result = builder.build_call(callee, Type::Int64, {a, b}, CallConv::Default);
+    data.output(result);
+    builder.build_exit();
+
+    unittest_assert(!section->verify(std::cout));
+    check_roundtrip(section);
+    delete section;
+  });
+
   return suite.finish();
 }
