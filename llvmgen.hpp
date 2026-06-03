@@ -177,6 +177,11 @@ namespace metajit {
           emit_arg(int_to_float_s->arg(0)),
           emit_type(int_to_float_s->type())
         );
+      } else if (dynmatch(PtrToIntInst, ptr_to_int, inst)) {
+        return _builder.CreatePtrToInt(
+          emit_arg(ptr_to_int->arg(0)),
+          emit_type(ptr_to_int->type())
+        );
       } else if (dynmatch(LoadInst, load, inst)) {
         return _builder.CreateLoad(
           emit_type(load->type()),

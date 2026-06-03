@@ -18,47 +18,92 @@
 
 namespace metajit {
   class AddRecord: public Pass<AddRecord> {
+  public:
+    struct Config {
+      std::set<AliasingGroup> groups;
+      size_t min_align = 1;
+
+      bool has(AliasingGroup group) const {
+        return groups.find(group) != groups.end();
+      }
+    };
   private:
     Section* _section;
     Builder _builder;
-    size_t _min_align;
+    Config _config;
+
+    size_t _max_write_size = 0;
+
+    void find_max_write_size() {
+      assert(_section->ordering() >= BlockOrdering::Topological);
+
+      _max_write_size = 0;
+      size_t max_load_size = 0;
+      std::unordered_map<Block*, size_t> max_entry_sizes;
+      for (Block* block : *_section) {
+        size_t size = max_entry_sizes[block];
+        for (Inst* inst : *block) {
+          if (dynmatch(LoadInst, load, inst)) {
+            if (_config.has(load->aliasing())) {
+              size_t load_size = std::max(_config.min_align, type_size(load->type()));
+              if (size % load_size != 0) {
+                size += load_size - (size % load_size);
+              }
+              size += load_size;
+              max_load_size = std::max(max_load_size, load_size);
+            }
+          }
+        }
+
+        for (Block* succ : block->successors()) {
+          max_entry_sizes[succ] = std::max(max_entry_sizes[succ], size);
+        }
+
+        _max_write_size = std::max(_max_write_size, size);
+      }
+
+      _max_write_size += max_load_size; // Add padding for worst-case alignment (+1)
+      assert(_max_write_size % _config.min_align == 0);
+    }
 
     void apply() {
       Arg* tape_ptr = _builder.alloc_arg(Type::Ptr, _section->entry()->args().size());
       _builder.add_args_to_block(_section->entry(), {tape_ptr});
       
       for (Block* block : *_section) {
-        for (Inst* inst : *block) {
+        for (Inst* inst = *block->begin(); inst; inst = inst->next()) {
           if (dynmatch(LoadInst, load, inst)) {
-            if (load->flags().has(LoadFlags::Record)) {
+            if (_config.has(load->aliasing())) {
               _builder.move_after(block, inst);
-      
-              Value* aligned_ptr = build_tape_advance(_builder, tape_ptr, _min_align, load->type());
-              _builder.build_store(aligned_ptr, load, AliasingGroup(0), 0);
+
+              Value* aligned_ptr = build_tape_advance(_builder, tape_ptr, _config.min_align, load->type());
+              inst = _builder.build_store(aligned_ptr, load, AliasingGroup(0), 0);
             }
           }
         }
       }
     }
   public:
-    AddRecord(Section* section, size_t min_align = 1):
+    AddRecord(Section* section, Config config):
         Pass(section),
         _section(section),
         _builder(section),
-        _min_align(min_align) {
+        _config(config) {
       
+      find_max_write_size();
       apply();
     }
 
-    AddRecord(Section* section, size_t& max_write_size, size_t min_align = 1):
+    AddRecord(Section* section, size_t* max_write_size, Config config):
         Pass(section),
         _section(section),
         _builder(section),
-        _min_align(min_align) {
-      
+        _config(config) {
+
+      find_max_write_size();
       apply();
 
-      max_write_size = this->max_write_size();
+      *max_write_size = _max_write_size;
     }
 
     static Value* build_tape_advance(Builder& builder, Value* tape_ptr, size_t min_align, Type type) {
@@ -66,7 +111,7 @@ namespace metajit {
       Value* ptr = builder.build_load(tape_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), 0);
       Value* size = builder.build_const(Type::Int64, load_size);
       if (load_size > 1 && load_size > min_align) {
-        Value* align = builder.fold_mod_u(builder.fold_resize_u(ptr, Type::Int64), size);
+        Value* align = builder.fold_mod_u(builder.fold_ptr_to_int(ptr, Type::Int64), size);
         Value* align_offset = builder.fold_select(
           builder.build_eq(align, builder.build_const(Type::Int64, 0)),
           builder.build_const(Type::Int64, 0),
@@ -81,34 +126,7 @@ namespace metajit {
       return aligned_ptr;
     }
 
-    size_t max_write_size() {
-      assert(_section->ordering() >= BlockOrdering::Topological);
-
-      size_t max_size = 0;
-      std::unordered_map<Block*, size_t> max_entry_sizes;
-      for (Block* block : *_section) {
-        size_t size = max_entry_sizes[block];
-        for (Inst* inst : *block) {
-          if (dynmatch(LoadInst, load, inst)) {
-            if (load->flags().has(LoadFlags::Record)) {
-              size_t load_size = std::max(_min_align, type_size(load->type()));
-              if (size % load_size != 0) {
-                size += load_size - (size % load_size);
-              }
-              size += load_size;
-            }
-          }
-        }
-
-        for (Block* succ : block->successors()) {
-          max_entry_sizes[succ] = std::max(max_entry_sizes[succ], size);
-        }
-
-        max_size = std::max(max_size, size);
-      }
-
-      return max_size;
-    }
+    size_t max_write_size() const { return _max_write_size; }
   };
 
   // Codegen for the generating extension uses topological sorting.
@@ -380,13 +398,11 @@ namespace metajit {
   class CreateGenExt: public Pass<CreateGenExt> {
   public:
     struct Config {
-      bool use_tape;
-      size_t min_align;
+      std::optional<AddRecord::Config> record;
       bool comments;
 
       constexpr Config():
-        use_tape(false),
-        min_align(1),
+        record(),
         comments(false) {}
     };
   private:
@@ -451,11 +467,15 @@ namespace metajit {
     }
 
     Value* emit_inst(Inst* inst) {
-      if (_config.use_tape) {
+      if (_config.record.has_value()) {
         if (dynmatch(LoadInst, load, inst)) {
-          if (load->flags().has(LoadFlags::Record)) {
-            Value* aligned_ptr = AddRecord::build_tape_advance(_builder, _tape_ptr, _config.min_align, load->type());
+          if (_config.record->has(load->aliasing())) {
+            Value* aligned_ptr = AddRecord::build_tape_advance(_builder, _tape_ptr, _config.record->min_align, load->type());
             return _builder.build_load(aligned_ptr, load->type(), LoadFlags::None, AliasingGroup(0), 0);
+          }
+        } else if (dynmatch(StoreInst, store, inst)) {
+          if (_config.record->has(store->aliasing())) {
+            return nullptr;
           }
         }
       }
@@ -931,14 +951,6 @@ namespace metajit {
       }
       _values[inst] = emit_inst(inst);
     }
-
-    void emit_entry() {
-      size_t builder_index = _section->entry()->args().size();
-      _jitir_builder = _genext_section->entry()->arg(builder_index);
-      if (_config.use_tape) {
-        _tape_ptr = _genext_section->entry()->arg(builder_index + 1);
-      }
-    }
   public:
     CreateGenExt(Section* section, Section* genext_section, const Config& config = Config()):
         Pass(section),
@@ -964,10 +976,16 @@ namespace metajit {
         entry_arg_types.push_back(arg->type());
       }
       entry_arg_types.push_back(Type::Ptr);
-      if (_config.use_tape) {
+      if (_config.record.has_value()) {
         entry_arg_types.push_back(Type::Ptr);
       }
       _builder.move_to_end(_builder.build_block(entry_arg_types));
+
+      size_t builder_index = _section->entry()->args().size();
+      _jitir_builder = _genext_section->entry()->arg(builder_index);
+      if (_config.record.has_value()) {
+        _tape_ptr = _genext_section->entry()->arg(builder_index + 1);
+      }
 
       for (Block* block : *section) {
         std::vector<Type> arg_types;
@@ -987,8 +1005,6 @@ namespace metajit {
           _built[arg] = genext_block->arg(index++);
         }
       }
-
-      emit_entry();
 
       std::vector<Value*> entry_jump_args;
       for (Arg* arg : section->entry()->args()) {

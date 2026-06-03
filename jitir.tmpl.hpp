@@ -880,8 +880,6 @@ namespace metajit {
       InBounds = 1 << 1,
       // The value of this load is known at section entry
       EntryFrozen = 1 << 2,
-      // The value should be recorded
-      Record = 1 << 3
     };
 
     using BaseFlags<LoadFlags>::BaseFlags;
@@ -890,10 +888,9 @@ namespace metajit {
       "Pure",
       "InBounds",
       "EntryFrozen",
-      "Record"
     };
 
-    constexpr static size_t COUNT = 4;
+    constexpr static size_t COUNT = 3;
   };
 
   enum class CallConv {
@@ -1838,6 +1835,10 @@ namespace metajit {
       unop_const_prop(type, const_a->value());
       
       return build_resize_x(a, type);
+    }
+
+    Value* fold_ptr_to_int(Value* a, Type type) {
+      return build_ptr_to_int(a, type);
     }
 
     Value* fold_shl(Value* a, Value* b) {
@@ -3569,6 +3570,11 @@ namespace metajit {
         }
       }
 
+      Bits ptr_to_int(Type to) const {
+        assert(type == Type::Ptr);
+        return Bits::constant(to, value);
+      }
+
       void store(uint8_t* ptr) {
         assert(!is_poison);
         switch (type_size(type)) {
@@ -3734,6 +3740,9 @@ namespace metajit {
       } else if (dynmatch(ResizeXInst, resize_x, _inst)) {
         Bits a = at(resize_x->arg(0));
         _values[_inst] = a.resize_x(resize_x->type());
+      } else if (dynmatch(PtrToIntInst, ptr_to_int, _inst)) {
+        Bits a = at(ptr_to_int->arg(0));
+        _values[_inst] = a.ptr_to_int(ptr_to_int->type());
       } else if (dynmatch(FreezeInst, freeze, _inst)) {
         Bits a = at(freeze->arg(0));
         // Poison is refined to a non-poison value, we choose zero in this case
@@ -3742,6 +3751,8 @@ namespace metajit {
         } else {
           _values[_inst] = a;
         }
+      } else if (dynmatch(CommentInst, comment, _inst)) {
+        // Ignore comments
       }
 
       #define binop(name, expr) \
@@ -3775,7 +3786,7 @@ namespace metajit {
       #undef binop
     
       else {
-        assert(false);
+        assert(false && "Unsupported instruction in interpreter");
       }
 
       _inst = _inst->next();

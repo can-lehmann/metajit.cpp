@@ -437,6 +437,14 @@ jitir = IR(
                 "is_int(type)"
             ]
         ),
+        Inst("PtrToInt",
+            args = [Arg("a"), Arg("type", Type("Type"))],
+            type = "type",
+            type_checks = [
+                "a->type() == Type::Ptr",
+                "is_int(type)"
+            ]
+        ),
         Inst("Load",
             args = [
                 Arg("ptr", getter=Getter.Always),

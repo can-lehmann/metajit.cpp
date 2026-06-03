@@ -375,7 +375,7 @@ namespace metajit {
 
           try {
             if constexpr (std::is_same_v<DataType, TraceTestData>) {
-              check_trace_differential("", section, *_data, 4, 256);
+              check_trace_differential("", section, *_data, false, 4, 256);
             } else {
               check_codegen_differential(
                 "",

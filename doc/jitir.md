@@ -137,6 +137,20 @@ Type Checks:
 - `is_float(a->type())`
 - `is_int(type)`
 
+### PtrToInt
+
+Arguments
+
+- **a**: `Value*`
+- **type**: `Type`
+
+Return Type: `type`
+
+Type Checks:
+
+- `a->type() == Type::Ptr`
+- `is_int(type)`
+
 ### Load
 
 Arguments
