@@ -2614,6 +2614,12 @@ namespace metajit {
           error("Undefined value '" + value_name + "'");
         }
         return _value_labels[value_name];
+      } else if (c == '@') {
+        get_char(); // consume '@'
+        std::string sym_name = get_word();
+        expect_char(':');
+        Type type = read_type();
+        return _builder.section()->context().build_symbol(type, sym_name);
       } else {
         return read_const();
       }
@@ -2785,14 +2791,17 @@ namespace metajit {
         if (!value_name.empty()) {
           _value_labels[value_name] = value;
           if (dynmatch(Inst, inst, value)) {
-            if (inst->has_side_effect()) {
-              error("Instructions with side effects cannot be named");
+            if (inst->has_side_effect() && inst->type() == Type::Void) {
+              error("Instructions with side effects and no return value cannot be named");
             }
           }
         } else {
           if (dynmatch(Inst, inst, value)) {
             if (!inst->has_side_effect() && !inst->is_terminator() && !dynamic_cast<CommentInst*>(inst)) {
               error("Instructions without side effects must be named");
+            }
+            if (inst->has_side_effect() && inst->type() != Type::Void) {
+              error("Instructions with side effects and a return value must be named");
             }
           }
         }

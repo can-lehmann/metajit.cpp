@@ -198,6 +198,7 @@ class InstReadPlugin:
             # read arguments
             need_comma = False
             varargs = None
+            varargs_offset = 0
             build_args = []
             for arg in inst.args:
                 if need_comma:
@@ -206,6 +207,8 @@ class InstReadPlugin:
                 if arg.type == ValueType():
                     code += f"    Value* {arg.name} = read_value_arg();\n"
                     build_args.append(arg.name)
+                    if varargs is None:
+                        varargs_offset += 1
                     continue
                 elif arg.type == CountVarargsValueType():
                     code += f"    std::vector<Value*> {arg.name} = read_value_arg_list();\n"
@@ -237,8 +240,8 @@ class InstReadPlugin:
             builder_call = f"_builder.{inst.format_builder_name(ir)}({build_args})\n"
             if varargs is not None:
                 code += f"    Inst* result = {builder_call};\n"
-                code += f"    for (size_t it = {0}; it < {varargs}.size(); it++) {{\n"
-                code += f"      result->set_arg(it, {varargs}[it]);\n"
+                code += f"    for (size_t it = 0; it < {varargs}.size(); it++) {{\n"
+                code += f"      result->set_arg(it + {varargs_offset}, {varargs}[it]);\n"
                 code += f"    }}\n"
                 code += f"    return result;"
             else:
