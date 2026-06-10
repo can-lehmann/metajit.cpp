@@ -201,6 +201,8 @@ namespace metajit {
           case Type::Int32: stream << *(uint32_t*)data; break;
           case Type::Int64: stream << *(uint64_t*)data; break;
           case Type::Ptr: stream << *(void**) data; break;
+          case Type::Float32: stream << *(float32_t*) data; break;
+          case Type::Float64: stream << *(float64_t*) data; break;
           default: assert(false && "Unsupported type");
         }
       }

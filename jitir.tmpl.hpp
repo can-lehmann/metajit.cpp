@@ -290,7 +290,13 @@ namespace metajit {
 
   inline Type int_type_of_size(size_t size) {
     return int_type_of_width(size * 8);
-  } 
+  }
+
+  template <class T, class S>
+  inline T bit_cast(S value) {
+    static_assert(sizeof(T) == sizeof(S));
+    return *(T*) &value;
+  }
 
   enum class BlockOrdering {
     None,
@@ -3461,6 +3467,14 @@ namespace metajit {
         return Bits::constant(Type::Ptr, (uint64_t)(uintptr_t) ptr);
       }
 
+      static Bits constant(float32_t value) {
+        return Bits::constant(Type::Float32, bit_cast<uint32_t>(value));
+      }
+
+      static Bits constant(float64_t value) {
+        return Bits::constant(Type::Float64, bit_cast<uint64_t>(value));
+      }
+
       static Bits poison(Type type) {
         return Bits(type, true, 0);
       }
@@ -3514,6 +3528,35 @@ namespace metajit {
       }
 
       #undef switch_type
+      
+      #define float_binop(name, expr) \
+        static Bits name(Type type, uint64_t _a, uint64_t _b) { \
+          switch (type) { \
+            case Type::Float32: { \
+              float32_t a = bit_cast<float32_t>((uint32_t) _a); \
+              float32_t b = bit_cast<float32_t>((uint32_t) _b); \
+              return Bits::constant(expr); \
+            } \
+            case Type::Float64: { \
+              float64_t a = bit_cast<float64_t>(_a); \
+              float64_t b = bit_cast<float64_t>(_b); \
+              return Bits::constant(expr); \
+            } \
+            default: \
+              assert(false && "Unsupported type"); \
+              return Bits::constant(type, 0); \
+          } \
+        }
+      
+      float_binop(add_f, a + b)
+      float_binop(sub_f, a - b)
+      float_binop(mul_f, a * b)
+      float_binop(div_f, a / b)
+
+      float_binop(lt_f_u, !(a >= b))
+      float_binop(lt_f_o, a < b)
+
+      #undef float_binop
 
       #define propagating_binop(name, expr) \
         Bits name(const Bits& other) const { \
@@ -3543,6 +3586,14 @@ namespace metajit {
       propagating_binop(shl, Bits::constant(type, value << other.value))
       propagating_binop(shr_s, shr_s(type, value, other.value))
       propagating_binop(shr_u, Bits::constant(type, value >> other.value))
+
+      propagating_binop(add_f, add_f(type, value, other.value))
+      propagating_binop(sub_f, sub_f(type, value, other.value))
+      propagating_binop(mul_f, mul_f(type, value, other.value))
+      propagating_binop(div_f, div_f(type, value, other.value))
+
+      propagating_binop(lt_f_u, lt_f_u(type, value, other.value))
+      propagating_binop(lt_f_o, lt_f_o(type, value, other.value))
 
       #undef propagating_binop
 
@@ -3791,6 +3842,14 @@ namespace metajit {
       binop(EqInst, a.eq(b))
       binop(LtSInst, a.lt_s(b))
       binop(LtUInst, a.lt_u(b))
+
+      binop(AddFInst, a.add_f(b))
+      binop(SubFInst, a.sub_f(b))
+      binop(MulFInst, a.mul_f(b))
+      binop(DivFInst, a.div_f(b))
+
+      binop(LtFUInst, a.lt_f_u(b))
+      binop(LtFOInst, a.lt_f_o(b))
 
       #undef binop
     
