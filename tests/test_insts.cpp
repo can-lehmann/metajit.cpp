@@ -456,6 +456,28 @@ void test_call(DiffTestSuite& suite) {
   });
 }
 
+void test_binop_f(DiffTestSuite& suite) {
+  #define binop_f_type(name, type) \
+    suite.diff_test(#name "_" #type).x86(false).aot(false).run([](Builder& builder, TestData& data) { \
+      data.output(builder.build_##name(data.input(Type::type), data.input(Type::type))); \
+    }); \
+    suite.diff_test(#name "_" #type "_imm").x86(false).aot(false).run([](Builder& builder, TestData& data) { \
+      data.output(builder.build_##name(data.input(Type::type), RandomRange(Type::type).gen_const(builder))); \
+    });
+  
+  #define binop_f(name) \
+    binop_f_type(name, Float32) \
+    binop_f_type(name, Float64)
+  
+  binop_f(add_f)
+  binop_f(sub_f)
+  binop_f(mul_f)
+  binop_f(div_f)
+  
+  binop_f(lt_f_u)
+  binop_f(lt_f_o)
+}
+
 int main(int argc, char** argv) {
   LLVMCodeGen::initilize_llvm_jit();
 
@@ -470,6 +492,7 @@ int main(int argc, char** argv) {
   test_assume_const(suite);
   test_alloca(suite);
   test_call(suite);
+  test_binop_f(suite);
 
   return suite.finish();
 }

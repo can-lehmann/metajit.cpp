@@ -201,6 +201,8 @@ namespace metajit {
           case Type::Int32: stream << *(uint32_t*)data; break;
           case Type::Int64: stream << *(uint64_t*)data; break;
           case Type::Ptr: stream << *(void**) data; break;
+          case Type::Float32: stream << *(float32_t*) data; break;
+          case Type::Float64: stream << *(float64_t*) data; break;
           default: assert(false && "Unsupported type");
         }
       }
@@ -246,6 +248,7 @@ namespace metajit {
                                            TestData& data,
                                            size_t sample_count = 1024,
                                            bool optimize_section_for_interpreter = false,
+                                           bool verify_x86 = true,
                                            bool verify_interpreter = true,
                                            bool verify_aot = true) {
       
@@ -291,15 +294,18 @@ namespace metajit {
       using X86Func = void(* [[clang::preserve_none]])(uint8_t*);
       LLVMFunc llvm_func = ExitOnErr(jit->lookup("llvm_func")).toPtr<LLVMFunc>();
 
-      X86CodeGen x86cg(section, { Reg::phys(12) });
-      
-      if (!output_path.empty()) {
-        std::ofstream stream(output_path + "_x86.asm");
-        x86cg.write(stream);
-        x86cg.save(output_path + "_x86.bin");
+      X86Func x86_func = nullptr;
+      if (verify_x86) {
+        X86CodeGen x86cg(section, { Reg::phys(12) });
+        
+        if (!output_path.empty()) {
+          std::ofstream stream(output_path + "_x86.asm");
+          x86cg.write(stream);
+          x86cg.save(output_path + "_x86.bin");
+        }
+        
+        x86_func = (X86Func) x86cg.deploy();
       }
-      
-      X86Func x86_func = (X86Func) x86cg.deploy();
 
       X86Func aot_func = nullptr;
       if (verify_aot) {
@@ -332,7 +338,10 @@ namespace metajit {
         std::copy(llvm_data, llvm_data + data.data_size(), interp_data2);
 
         llvm_func(llvm_data);
-        x86_func(x86_data);
+
+        if (verify_x86) {
+          x86_func(x86_data);
+        }
 
         if (verify_interpreter) {
           Interpreter interpreter(section, {
@@ -371,7 +380,7 @@ namespace metajit {
         for (const TestData::Output& output : data.outputs()) {
           bool is_equal = true;
           for (size_t it = 0; it < type_size(output.type); it++) {
-            if (llvm_data[output.offset + it] != x86_data[output.offset + it] ||
+            if ((verify_x86 && llvm_data[output.offset + it] != x86_data[output.offset + it]) ||
                 (verify_interpreter && llvm_data[output.offset + it] != interp_data[output.offset + it]) ||
                 (verify_aot && llvm_data[output.offset + it] != aot_data[output.offset + it]) ||
                 (optimize_section_for_interpreter && llvm_data[output.offset + it] != interp_data2[output.offset + it])) {
@@ -385,8 +394,10 @@ namespace metajit {
             data.write_inputs(stream, llvm_data);
             stream << "LLVM Output:\n";
             data.write_outputs(stream, llvm_data);
-            stream << "x86 Output:\n";
-            data.write_outputs(stream, x86_data);
+            if (verify_x86) {
+              stream << "x86 Output:\n";
+              data.write_outputs(stream, x86_data);
+            }
             if (verify_interpreter) {
               stream << "Interpreter Output:\n";
               data.write_outputs(stream, interp_data);
@@ -470,11 +481,17 @@ namespace metajit {
     class DiffTest: public unittest::BaseTest<DiffTest> {
     private:
       std::string _output_path;
+      bool _verify_x86 = true;
       bool _verify_interpreter = true;
       bool _verify_aot = true;
     public:
       DiffTest(const std::string& name, const std::string& output_path):
         unittest::BaseTest<DiffTest>(name), _output_path(output_path) {}
+
+      DiffTest&& x86(bool verify_x86) && {
+        _verify_x86 = verify_x86;
+        return std::move(*this);
+      }
 
       DiffTest&& interpreter(bool verify_interpreter) && {
         _verify_interpreter = verify_interpreter;
@@ -510,6 +527,7 @@ namespace metajit {
             data,
             1024,
             false,
+            _verify_x86,
             _verify_interpreter,
             _verify_aot
           );

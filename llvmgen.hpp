@@ -104,6 +104,16 @@ namespace metajit {
             (llvm::Constant*) addr,
             llvm::PointerType::get(_context, 0)
           );
+        } else if (constant->type() == Type::Float32) {
+          return llvm::ConstantFP::get(
+            llvm::Type::getFloatTy(_context),
+            bit_cast<float>((uint32_t) constant->value())
+          );
+        } else if (constant->type() == Type::Float64) {
+          return llvm::ConstantFP::get(
+            llvm::Type::getDoubleTy(_context),
+            bit_cast<double>(constant->value())
+          );
         }
         return llvm::ConstantInt::get(
           emit_type(constant->type()),
