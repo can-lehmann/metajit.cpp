@@ -383,6 +383,7 @@ namespace metajit {
                 *_data,
                 2048,
                 /*optimize_section_for_interpreter=*/ !_calls,
+                /*verify_x86=*/ true,
                 /*verify_interpreter=*/ !_calls,
                 /*verify_aot=*/ false
               );
