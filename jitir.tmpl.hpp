@@ -899,29 +899,54 @@ namespace metajit {
     constexpr static size_t COUNT = 3;
   };
 
+  class CallFlags final: public BaseFlags<CallFlags> {
+  public:
+    enum : uint32_t {
+      None = 0,
+      // Pure function of the arguments
+      Pure = 1 << 0,
+      Idempotent = 1 << 1,
+    };
+
+    using BaseFlags<CallFlags>::BaseFlags;
+
+    constexpr static const char* NAMES[] = {
+      "Pure",
+      "Idempotent"
+    };
+
+    constexpr static size_t COUNT = 2;
+  };
+
   enum class CallConv {
     Default,
     PreserveNone
   };
 }
 
-template <>
-struct std::hash<metajit::LoadFlags> {
-  size_t operator()(const metajit::LoadFlags& flags) const {
-    return std::hash<uint32_t>()((uint32_t) flags);
+#define define_flags_overloads(Flags) \
+  template <> \
+  struct std::hash<Flags> { \
+    size_t operator()(const Flags& flags) const { \
+      return std::hash<uint32_t>()((uint32_t) flags); \
+    } \
+  }; \
+  \
+  std::ostream& operator<<(std::ostream& stream, Flags flags) { \
+    metajit::PlainPrettyStream plain_stream(stream); \
+    flags.write(plain_stream); \
+    return stream; \
+  } \
+  \
+  metajit::PrettyStream& operator<<(metajit::PrettyStream& stream, const Flags& flags) { \
+    flags.write(stream); \
+    return stream; \
   }
-};
 
-std::ostream& operator<<(std::ostream& stream, metajit::LoadFlags flags) {
-  metajit::PlainPrettyStream plain_stream(stream);
-  flags.write(plain_stream);
-  return stream;
-}
+define_flags_overloads(metajit::LoadFlags)
+define_flags_overloads(metajit::CallFlags)
 
-metajit::PrettyStream& operator<<(metajit::PrettyStream& stream, const metajit::LoadFlags& flags) {
-  flags.write(stream);
-  return stream;
-}
+#undef define_flags_overloads
 
 std::ostream& operator<<(std::ostream& stream, metajit::CallConv call_conv) {
   static const char* names[] = {
@@ -1293,16 +1318,24 @@ namespace metajit {
       return build_jump(0, block);
     }
 
-    CallInst* build_call(Value* callee, Type type, const lwir::Span<Value*>& args, CallConv call_conv = CallConv::Default) {
-      CallInst* call = build_call(callee, args.size(), type, call_conv);
+    CallInst* build_call(Value* callee,
+                         Type type,
+                         const lwir::Span<Value*>& args,
+                         CallConv call_conv = CallConv::Default,
+                         CallFlags call_flags = CallFlags::None) {
+      CallInst* call = build_call(callee, args.size(), type, call_conv, call_flags);
       for (size_t it = 0; it < args.size(); it++) {
         call->set_arg(it + 1, args[it]);
       }
       return call;
     }
 
-    CallInst* build_call(Value* callee, Type type, const std::vector<Value*>& args, CallConv call_conv = CallConv::Default) {
-      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv);
+    CallInst* build_call(Value* callee,
+                         Type type,
+                         const std::vector<Value*>& args,
+                         CallConv call_conv = CallConv::Default,
+                         CallFlags call_flags = CallFlags::None) {
+      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv, call_flags);
     }
 
     AllocaInst* build_alloca(Type type) {
@@ -2330,15 +2363,23 @@ namespace metajit {
       }
     }
 
-    Value* build_call(Value* callee, Type type, const lwir::Span<Value*>& args, CallConv call_conv = CallConv::Default) {
+    Value* build_call(Value* callee,
+                      Type type,
+                      const lwir::Span<Value*>& args,
+                      CallConv call_conv = CallConv::Default,
+                      CallFlags call_flags = CallFlags::None) {
       // Calls may read/write memory reachable through pointers, so invalidate
       // forwarding and exact aliasing state conservatively.
       invalidate_memory_state();
-      return Builder::build_call(callee, type, args, call_conv);
+      return Builder::build_call(callee, type, args, call_conv, call_flags);
     }
 
-    Value* build_call(Value* callee, Type type, const std::vector<Value*>& args, CallConv call_conv = CallConv::Default) {
-      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv);
+    Value* build_call(Value* callee,
+                      Type type,
+                      const std::vector<Value*>& args,
+                      CallConv call_conv = CallConv::Default,
+                      CallFlags call_flags = CallFlags::None) {
+      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv, call_flags);
     }
 
     template <class... Args>
@@ -2702,6 +2743,10 @@ namespace metajit {
     LoadFlags read_load_flags() {
       // use the templated method to read flags
       return read_flags<LoadFlags>();
+    }
+
+    CallFlags read_call_flags() {
+      return read_flags<CallFlags>();
     }
 
 
