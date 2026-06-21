@@ -227,6 +227,8 @@ class InstReadPlugin:
                     code += f"    CallConv {arg.name} = read_call_conv();\n"
                 elif arg.type == Type("LoadFlags"):
                     code += f"    LoadFlags {arg.name} = read_load_flags();\n"
+                elif arg.type == Type("CallFlags"):
+                    code += f"    CallFlags {arg.name} = read_call_flags();\n"
                 elif arg.type == Type("AliasingGroup") or \
                      arg.type == Type("uint64_t") or \
                      arg.type == Type("uint32_t") or \
@@ -270,7 +272,7 @@ class PrettyInstWritePlugin(InstWritePlugin):
             code += f"{value}->write_arg({stream});"
         elif arg.type == Type("Type") or arg.type == Type("CallConv"):
             code += f"{stream} << Highlight::Type << {value} << Highlight::None;"
-        elif arg.type == Type("LoadFlags"):
+        elif arg.type == Type("LoadFlags") or arg.type == Type("CallFlags"):
             code += f"{stream} << {value};"
         elif arg.type == Type("AliasingGroup") or \
              arg.type == Type("uint64_t") or \
@@ -296,7 +298,7 @@ class JitirInstWriteJsonPlugin(InstWriteJsonPlugin):
             return f"{stream} << {value}->name()"
         elif arg.type == Type("Type") or arg.type == Type("CallConv"):
             return f"{stream} << \"\\\"\" << {value} << \"\\\"\""
-        elif arg.type == Type("LoadFlags"):
+        elif arg.type == Type("LoadFlags") or arg.type == Type("CallFlags"):
             return f"{value}.write_json({stream})"
         elif arg.type == Type("AliasingGroup") or \
              arg.type == Type("uint64_t") or \
@@ -520,6 +522,7 @@ jitir = IR(
                 Arg("args", type=CountVarargsValueType()),
                 Arg("type", Type("Type")),
                 Arg("call_conv", Type("CallConv"), setter=True),
+                Arg("flags", Type("CallFlags"), setter=True)
             ],
             type = "type",
             type_checks = [
@@ -587,7 +590,7 @@ lwir(
                 Type("Type"): "uint32_t",
                 Type("CallConv"): "uint32_t",
                 Type("LoadFlags"): "uint32_t",
-                Type("InputFlags"): "uint32_t",
+                Type("CallFlags"): "uint32_t",
                 Type("Block*"): "void*",
                 Type("AliasingGroup"): "uint32_t", # Needs to be passed by LLVM IR
                 Type("const char*"): "const char*",
@@ -607,7 +610,7 @@ llvm_type_substitutions = {
     Type("Type"): "llvm::Type::getInt32Ty(context)",
     Type("CallConv"): "llvm::Type::getInt32Ty(context)",
     Type("LoadFlags"): "llvm::Type::getInt32Ty(context)",
-    Type("InputFlags"): "llvm::Type::getInt32Ty(context)",
+    Type("CallFlags"): "llvm::Type::getInt32Ty(context)",
     Type("Block*"): "llvm::PointerType::get(context, 0)",
     Type("AliasingGroup"): "llvm::Type::getInt32Ty(context)",
     Type("const char*"): "llvm::PointerType::get(context, 0)",

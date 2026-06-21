@@ -529,6 +529,7 @@ Arguments
 - **args**: Variable number of arguments
 - **type**: `Type`
 - **call_conv**: `CallConv`
+- **flags**: `CallFlags`
 
 Return Type: `type`
 
