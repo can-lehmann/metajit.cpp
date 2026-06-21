@@ -1291,6 +1291,10 @@ namespace metajit {
       return _section->context().build_poison(type);
     }
 
+    Symbol* build_symbol(Type type, const std::string& symbol) {
+      return _section->context().build_symbol(type, symbol);
+    }
+
     /* ${builder} */
 
     ShlInst* build_shl(Value* a, size_t shift) {
@@ -2666,7 +2670,7 @@ namespace metajit {
         std::string sym_name = get_word();
         expect_char(':');
         Type type = read_type();
-        return _builder.section()->context().build_symbol(type, sym_name);
+        return _builder.build_symbol(type, sym_name);
       } else {
         return read_const();
       }
