@@ -1,0 +1,51 @@
+# Can Joshua Lehmann 2026
+# An attempt to model my personal style preferences in a .clang-format
+
+BasedOnStyle: LLVM
+
+IndentWidth: 2
+ContinuationIndentWidth: 2
+NamespaceIndentation: All
+FixNamespaceComments: false
+PointerAlignment: Left
+
+AlignConsecutiveAssignments: None
+AlignArrayOfStructures: None
+AlignConsecutiveBitFields: None
+AlignOperands: Align
+
+SpaceAfterCStyleCast: true
+SpaceAfterLogicalNot: false
+SpaceAfterTemplateKeyword: true
+
+
+IndentCaseLabels: true
+AllowShortCaseLabelsOnASingleLine: true
+
+# :
+SpaceBeforeInheritanceColon: false
+SpaceBeforeCtorInitializerColon: false
+BreakConstructorInitializers: AfterColon
+
+BreakTemplateDeclarations: Yes
+
+EmptyLineAfterAccessModifier: Leave
+EmptyLineBeforeAccessModifier: Leave
+
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: Never
+
+IndentPPDirectives: BeforeHash
+AlignEscapedNewlines: DontAlign
+
+RemoveBracesLLVM: false
+InsertBraces: true
+
+BinPackParameters: OnePerLine
+BinPackArguments: false
+PackConstructorInitializers: CurrentLine
+
+IncludeBlocks: Preserve
+
+PenaltyBreakAssignment: 100
+PenaltyReturnTypeOnItsOwnLine: 200
