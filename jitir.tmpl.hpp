@@ -2017,6 +2017,14 @@ namespace metajit {
       return build_store(ptr, value, aliasing, offset);
     }
 
+    Value* fold_promote(Value* a) {
+      if (dynamic_cast<Const*>(a) || dynamic_cast<PromoteInst*>(a)) {
+        return a;
+      }
+
+      return build_promote(a);
+    }
+
     #undef binop_const_prop
     #undef unop_const_prop
   };
