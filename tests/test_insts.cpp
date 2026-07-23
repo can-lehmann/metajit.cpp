@@ -478,6 +478,18 @@ void test_binop_f(DiffTestSuite& suite) {
   binop_f(lt_f_o)
 }
 
+void test_popcount(DiffTestSuite& suite) {
+  #define popcount_type(type) \
+    suite.diff_test("popcount_" #type).run([](Builder& builder, TestData& data) { \
+      data.output(builder.build_popcount(data.input(Type::type))); \
+    });
+
+  popcount_type(Int8)
+  popcount_type(Int16)
+  popcount_type(Int32)
+  popcount_type(Int64)
+}
+
 int main(int argc, char** argv) {
   LLVMCodeGen::initilize_llvm_jit();
 
@@ -493,6 +505,7 @@ int main(int argc, char** argv) {
   test_alloca(suite);
   test_call(suite);
   test_binop_f(suite);
+  test_popcount(suite);
 
   return suite.finish();
 }

@@ -442,6 +442,13 @@ jitir = IR(
                 "is_int(type)"
             ]
         ),
+        Inst("Popcount",
+            args = [Arg("a")],
+            type = "a->type()",
+            type_checks = [
+                "is_int(a->type())"
+            ]
+        ),
         Inst("PtrToInt",
             args = [Arg("a"), Arg("type", Type("Type"))],
             type = "type",

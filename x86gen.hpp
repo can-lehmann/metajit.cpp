@@ -1030,6 +1030,20 @@ namespace metajit {
         } else {
           assert(false);
         }
+      } else if (dynmatch(PopcountInst, popcount, inst)) {
+        switch (type_size(popcount->type())) {
+          case 1: {
+            Reg zext = vreg();
+            _builder.movzx8to64(zext, vreg(popcount->arg(0)));
+            _builder.popcnt32(vreg(inst), zext);
+          }
+          break;
+          case 2: _builder.popcnt16(vreg(inst), vreg(popcount->arg(0))); break;
+          case 4: _builder.popcnt32(vreg(inst), vreg(popcount->arg(0))); break;
+          case 8: _builder.popcnt64(vreg(inst), vreg(popcount->arg(0))); break;
+          default:
+            assert(false && "Unsupported popcount type");
+        }
       } else if (dynmatch(CallInst, call, inst)) {
         CallConvInfo info(call->call_conv());
 

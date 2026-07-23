@@ -152,6 +152,10 @@ unop_x86_inst(SetE8, sete8, { def(rm); }, false, { rex(); byte(0x0f); byte(0x94)
 unop_x86_inst(SetL8, setl8, { def(rm); }, false, { rex(); byte(0x0f); byte(0x9c); modrm(); })
 unop_x86_inst(SetB8, setb8, { def(rm); }, false, { rex(); byte(0x0f); byte(0x92); modrm(); })
 
+binop_x86_inst(Popcnt16, popcnt16, { use(rm); def(reg); }, true, { byte(0x66); byte(0xf3); rex_opt(); byte(0x0f); byte(0xb8); modrm(); })
+binop_x86_inst(Popcnt32, popcnt32, { use(rm); def(reg); }, true, { byte(0xf3); rex_opt(); byte(0x0f); byte(0xb8); modrm(); })
+binop_x86_inst(Popcnt64, popcnt64, { use(rm); def(reg); }, true, { byte(0xf3); rex_w(); byte(0x0f); byte(0xb8); modrm(); })
+
 binop_x86_inst(CMovNZ64, cmovnz64, binop_usedef, true, { rex_w(); byte(0x0f); byte(0x45); modrm(); })
 binop_x86_inst(CMovE64, cmove64, binop_usedef, true, { rex_w(); byte(0x0f); byte(0x44); modrm(); })
 binop_x86_inst(CMovL64, cmovl64, binop_usedef, true, { rex_w(); byte(0x0f); byte(0x4c); modrm(); })
