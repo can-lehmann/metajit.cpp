@@ -137,6 +137,18 @@ Type Checks:
 - `is_float(a->type())`
 - `is_int(type)`
 
+### Popcount
+
+Arguments
+
+- **a**: `Value*`
+
+Return Type: `a->type()`
+
+Type Checks:
+
+- `is_int(a->type())`
+
 ### PtrToInt
 
 Arguments

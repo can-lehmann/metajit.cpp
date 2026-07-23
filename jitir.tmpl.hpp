@@ -3692,6 +3692,13 @@ namespace metajit {
         return Bits::constant(to, value);
       }
 
+      Bits popcount() const {
+        if (is_poison) {
+          return Bits::poison(type);
+        }
+        return Bits::constant(type, __builtin_popcountll(value));
+      }
+
       void store(uint8_t* ptr) {
         assert(!is_poison);
         switch (type_size(type)) {
@@ -3860,6 +3867,9 @@ namespace metajit {
       } else if (dynmatch(PtrToIntInst, ptr_to_int, _inst)) {
         Bits a = at(ptr_to_int->arg(0));
         _values[_inst] = a.ptr_to_int(ptr_to_int->type());
+      } else if (dynmatch(PopcountInst, popcount, _inst)) {
+        Bits a = at(popcount->arg(0));
+        _values[_inst] = a.popcount();
       } else if (dynmatch(FreezeInst, freeze, _inst)) {
         Bits a = at(freeze->arg(0));
         // Poison is refined to a non-poison value, we choose zero in this case
