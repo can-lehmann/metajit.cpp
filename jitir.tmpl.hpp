@@ -2025,6 +2025,10 @@ namespace metajit {
       return build_promote(a);
     }
 
+    Value* fold_popcount(Value* a) {
+      return build_popcount(a);
+    }
+
     #undef binop_const_prop
     #undef unop_const_prop
   };
