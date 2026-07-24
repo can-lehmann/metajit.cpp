@@ -122,9 +122,11 @@ namespace metajit {
         );
       } else if (dynmatch(Symbol, symbol, value)) {
         std::string name(symbol->symbol().data(), symbol->symbol().size());
-        auto it = _llvm_api.by_name.find(name);
-        assert(it != _llvm_api.by_name.end() && "Unknown symbol");
-        return _builder.CreateBitOrPointerCast(it->second, llvm::PointerType::get(_context, 0));
+        llvm::FunctionCallee callee = _module->getOrInsertFunction(
+          name,
+          llvm::FunctionType::get(llvm::Type::getVoidTy(_context), false)
+        );
+        return _builder.CreateBitOrPointerCast(callee.getCallee(), llvm::PointerType::get(_context, 0));
       } else if (value->is_named()) {
         return _values.at((NamedValue*) value);
       } else {

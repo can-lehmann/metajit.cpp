@@ -58,7 +58,6 @@ class LLVMAPIPlugin:
             inits += f"        false\n"
             inits += f"      )\n"
             inits += f"    );\n"
-            inits += f"    by_name[\"{sym_name}\"] = {inst.format_builder_name(ir)}.getCallee();\n"
 
         return {
             "llvmapi_defs": defs,
