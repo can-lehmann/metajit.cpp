@@ -2457,6 +2457,7 @@ namespace metajit {
   public:
     BaseNameMap() {}
     BaseNameMap(Section* section) { ((Self*)this)->init(section); }
+    BaseNameMap(size_t size) { init_size(size); }
 
     BaseNameMap(const BaseNameMap<K, T, Self>&) = delete;
     BaseNameMap<K, T, Self>& operator=(const BaseNameMap<K, T, Self>&) = delete;
@@ -5184,76 +5185,23 @@ namespace metajit {
     }
   };
 
-  class DominatorTree {
+  class DominatorTree: public lwir::DominatorTreeBase<DominatorTree, Block, BlockMap> {
   private:
     Section* _section;
-    std::vector<Block*> _idom;
 
-    void traverse(Block* block,
-                  std::vector<std::vector<Block*>>& incoming,
-                  std::vector<Block*>& post_order,
-                  std::vector<size_t>& nums) {
-      
-      assert(block);
-      for (Block* succ : block->successors()) {
-        if (!_idom[succ->name()]) {
-          _idom[succ->name()] = block;
-          traverse(succ, incoming, post_order, nums);
-        }
-        incoming[succ->name()].push_back(block);
-      }
-      nums[block->name()] = post_order.size();
-      post_order.push_back(block);
+    static size_t block_count(Section* section) {
+      section->autoname();
+      return section->block_count();
     }
   public:
-    DominatorTree(Section* section): _section(section), _idom(section->block_count(), nullptr) {
-      // Loosely based on ideas from Keith D. Cooper, Timothy J. Harvey,
-      // and Ken Kennedy "A Simple, Fast Dominance Algorithm"
-      
-      std::vector<std::vector<Block*>> incoming(section->block_count());
-      std::vector<Block*> post_order;
-      std::vector<size_t> nums(section->block_count(), ~size_t(0));
-
-      traverse(section->entry(), incoming, post_order, nums);
-
-      post_order.pop_back();
-
-      bool changed = true;
-      while (changed) {
-        changed = false;
-
-        for (size_t it = post_order.size(); it-- > 0; ) {
-          Block* block = post_order[it];
-          
-          Block* idom = _idom[block->name()];
-          assert(idom);
-          for (Block* pred : incoming[block->name()]) {
-            while (pred != idom) {
-              if (nums[pred->name()] < nums[idom->name()]) {
-                pred = _idom[pred->name()];
-              } else {
-                idom = _idom[idom->name()];
-              }
-            }
-          }
-
-          if (idom != _idom[block->name()]) {
-            _idom[block->name()] = idom;
-            changed = true;
-          }
-        }
-      }
+    std::vector<Block*> successors(Block* block) {
+      return block->successors();
     }
 
-    Block* idom(Block* block) const {
-      return _idom[block->name()];
-    }
-
-    bool dominates(Block* dominator, Block* dominated) const {
-      while (dominated && dominated != dominator) {
-        dominated = idom(dominated);
-      }
-      return dominated == dominator;
+    DominatorTree(Section* section):
+        lwir::DominatorTreeBase<DominatorTree, Block, BlockMap>(block_count(section)),
+        _section(section) {
+      build(section->entry());
     }
 
     void write_dot(std::ostream& stream, bool non_tree_edges = true) {
