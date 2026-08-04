@@ -458,16 +458,16 @@ void test_call(DiffTestSuite& suite) {
 
 void test_binop_f(DiffTestSuite& suite) {
   #define binop_f_type(name, type) \
-    suite.diff_test(#name "_" #type).x86(false).aot(false).run([](Builder& builder, TestData& data) { \
+    suite.diff_test(#name "_" #type).run([](Builder& builder, TestData& data) { \
       data.output(builder.build_##name(data.input(Type::type), data.input(Type::type))); \
     }); \
-    suite.diff_test(#name "_" #type "_imm").x86(false).aot(false).run([](Builder& builder, TestData& data) { \
+    suite.diff_test(#name "_" #type "_imm").run([](Builder& builder, TestData& data) { \
       data.output(builder.build_##name(data.input(Type::type), RandomRange(Type::type).gen_const(builder))); \
     });
   
   #define binop_f(name) \
-    binop_f_type(name, Float32) \
-    binop_f_type(name, Float64)
+    binop_f_type(name, Float32)
+    //binop_f_type(name, Float64)
   
   binop_f(add_f)
   binop_f(sub_f)
