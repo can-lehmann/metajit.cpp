@@ -466,8 +466,8 @@ void test_binop_f(DiffTestSuite& suite) {
     });
   
   #define binop_f(name) \
-    binop_f_type(name, Float32)
-    //binop_f_type(name, Float64)
+    binop_f_type(name, Float32) \
+    binop_f_type(name, Float64)
   
   binop_f(add_f)
   binop_f(sub_f)
