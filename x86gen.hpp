@@ -619,16 +619,30 @@ namespace metajit {
     Reg vreg(Value* value) {
       if (dynmatch(Const, constant, value)) {
         Reg reg = vreg();
-        switch (type_size(constant->type())) {
-          case 1: _builder.mov8_imm(reg, constant->value()); break;
-          case 2: _builder.mov16_imm(reg, constant->value()); break;
-          case 4: _builder.mov32_imm(reg, constant->value()); break;
-          case 8:
+        switch (constant->type()) {
+          case Type::Bool:
+          case Type::Int8: _builder.mov8_imm(reg, constant->value()); break;
+          case Type::Int16: _builder.mov16_imm(reg, constant->value()); break;
+          case Type::Int32: _builder.mov32_imm(reg, constant->value()); break;
+          case Type::Int64:
+          case Type::Ptr:
             if (is_sext_imm32(constant)) {
               _builder.mov64_imm(reg, constant->value());
             } else {
               _builder.mov64_imm64(reg, constant->value());
             }
+          break;
+          case Type::Float32: {
+            Reg tmp = vreg();
+            _builder.mov32_imm(tmp, constant->value());
+            _builder.movd(reg, tmp);
+          }
+          break;
+          case Type::Float64: {
+            Reg tmp = vreg();
+            _builder.mov64_imm64(tmp, constant->value());
+            _builder.movq(reg, tmp);
+          }
           break;
           default:
             assert(false && "Unsupported constant type");
@@ -773,16 +787,28 @@ namespace metajit {
         _builder.mov64(vreg(inst), vreg(resize_x->arg(0)));
       } else if (dynmatch(LoadInst, load, inst)) {
         X86Inst::Mem mem(vreg(load->arg(0)), load->offset());
-        switch (type_size(load->type())) {
-          case 1: _builder.mov8(vreg(inst), mem); break;
-          case 2: _builder.mov16(vreg(inst), mem); break;
-          case 4: _builder.mov32(vreg(inst), mem); break;
-          case 8: _builder.mov64(vreg(inst), mem); break;
+        switch (load->type()) {
+          case Type::Bool:
+          case Type::Int8: _builder.mov8(vreg(inst), mem); break;
+          case Type::Int16: _builder.mov16(vreg(inst), mem); break;
+          case Type::Int32: _builder.mov32(vreg(inst), mem); break;
+          case Type::Ptr:
+          case Type::Int64: _builder.mov64(vreg(inst), mem); break;
+          case Type::Float32: _builder.movss(vreg(inst), mem); break;
+          case Type::Float64: _builder.movsd(vreg(inst), mem); break;
           default:
             assert(false && "Unsupported load type");
         }
       } else if (dynmatch(StoreInst, store, inst)) {
         X86Inst::Mem mem(vreg(store->arg(0)), store->offset());
+        
+        switch (store->arg(1)->type()) {
+          case Type::Float32: _builder.movss_mem(mem, vreg(store->arg(1))); return;
+          case Type::Float64: _builder.movsd_mem(mem, vreg(store->arg(1))); return;
+          default:
+            break;
+        }
+
         if (dynmatch(Const, constant_value, store->arg(1))) {
           switch (type_size(store->arg(1)->type())) {
             case 1: _builder.mov8_imm(mem, constant_value->value()); return;
@@ -1044,6 +1070,72 @@ namespace metajit {
           default:
             assert(false && "Unsupported popcount type");
         }
+      } else if (dynmatch(AddFInst, add_f, inst)) {
+        switch (add_f->type()) {
+          case Type::Float32:
+            _builder.movss(vreg(inst), vreg(add_f->arg(0)));
+            _builder.addss(vreg(inst), vreg(add_f->arg(1)));
+          break;
+          case Type::Float64:
+            _builder.movsd(vreg(inst), vreg(add_f->arg(0)));
+            _builder.addsd(vreg(inst), vreg(add_f->arg(1)));
+          break;
+          default:
+            assert(false && "Unsupported addf type");
+        }
+      } else if (dynmatch(SubFInst, sub_f, inst)) {
+        switch (sub_f->type()) {
+          case Type::Float32:
+            _builder.movss(vreg(inst), vreg(sub_f->arg(0)));
+            _builder.subss(vreg(inst), vreg(sub_f->arg(1)));
+          break;
+          case Type::Float64:
+            _builder.movsd(vreg(inst), vreg(sub_f->arg(0)));
+            _builder.subsd(vreg(inst), vreg(sub_f->arg(1)));
+          break;
+          default:
+            assert(false && "Unsupported subf type");
+        }
+      } else if (dynmatch(MulFInst, mul_f, inst)) {
+        switch (mul_f->type()) {
+          case Type::Float32:
+            _builder.movss(vreg(inst), vreg(mul_f->arg(0)));
+            _builder.mulss(vreg(inst), vreg(mul_f->arg(1)));
+          break;
+          case Type::Float64:
+            _builder.movsd(vreg(inst), vreg(mul_f->arg(0)));
+            _builder.mulsd(vreg(inst), vreg(mul_f->arg(1)));
+          break;
+          default:
+            assert(false && "Unsupported mulf type");
+        }
+      } else if (dynmatch(DivFInst, div_f, inst)) {
+        switch (div_f->type()) {
+          case Type::Float32:
+            _builder.movss(vreg(inst), vreg(div_f->arg(0)));
+            _builder.divss(vreg(inst), vreg(div_f->arg(1)));
+          break;
+          case Type::Float64:
+            _builder.movsd(vreg(inst), vreg(div_f->arg(0)));
+            _builder.divsd(vreg(inst), vreg(div_f->arg(1)));
+          break;
+          default:
+            assert(false && "Unsupported divf type");
+        }
+      } else if (dynmatch(LtFOInst, lt_f_o, inst)) {
+        switch (lt_f_o->arg(0)->type()) {
+          case Type::Float32: _builder.ucomiss(vreg(lt_f_o->arg(1)), vreg(lt_f_o->arg(0))); break;
+          case Type::Float64: _builder.ucomisd(vreg(lt_f_o->arg(1)), vreg(lt_f_o->arg(0))); break;
+          default: assert(false && "Unsupported LtFO type");
+        }
+        _builder.seta8(vreg(inst)); // cf=0 & zf=0 <=> !unordered(a, b) & b > a <=> b >_o a <=> a <_o b
+      } else if (dynmatch(LtFUInst, lt_f_u, inst)) {
+        switch (lt_f_u->arg(0)->type()) {
+          case Type::Float32: _builder.ucomiss(vreg(lt_f_u->arg(0)), vreg(lt_f_u->arg(1))); break;
+          case Type::Float64: _builder.ucomisd(vreg(lt_f_u->arg(0)), vreg(lt_f_u->arg(1))); break;
+          default: assert(false && "Unsupported LtFU type");
+        }
+        _builder.setb8(vreg(inst)); // cf=1 <=> unordered(a, b) | (a < b)
       } else if (dynmatch(CallInst, call, inst)) {
         CallConvInfo info(call->call_conv());
 
@@ -1127,7 +1219,7 @@ namespace metajit {
       } else {
         inst->write(std::cerr);
         std::cerr << std::endl;
-        assert(false && "Unknown instruction");
+        throw std::runtime_error("Unsupported instruction");
       }
     }
 
