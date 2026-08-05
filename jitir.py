@@ -441,6 +441,15 @@ jitir = IR(
                 "is_int(type)"
             ]
         ),
+        Inst("ResizeF",
+            args = [Arg("a"), Arg("type", Type("Type"))],
+            type = "type",
+            type_checks = [
+                "is_float(a->type())",
+                "is_float(type)"
+            ],
+            doc = "Convert a floating-point value to a different floating-point width."
+        ),
         Inst("Popcount",
             args = [Arg("a")],
             type = "a->type()",

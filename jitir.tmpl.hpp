@@ -3681,6 +3681,25 @@ namespace metajit {
         return resize_u(to);
       }
 
+      Bits resize_f(Type to) const {
+        if (is_poison) {
+          return Bits::poison(to);
+        }
+        switch (type) {
+          case Type::Float32: {
+            float32_t a = bit_cast<float32_t>((uint32_t) value);
+            return to == Type::Float64 ? Bits::constant((float64_t) a) : Bits::constant(a);
+          }
+          case Type::Float64: {
+            float64_t a = bit_cast<float64_t>(value);
+            return to == Type::Float32 ? Bits::constant((float32_t) a) : Bits::constant(a);
+          }
+          default:
+            assert(false && "Unsupported type for resize_f");
+            return Bits::constant(to, 0);
+        }
+      }
+
       Bits select(const Bits& a, const Bits& b) const {
         if (is_poison) {
           return Bits::poison(a.type);
@@ -3695,6 +3714,44 @@ namespace metajit {
       Bits ptr_to_int(Type to) const {
         assert(type == Type::Ptr);
         return Bits::constant(to, value);
+      }
+
+      Bits int_to_float_s(Type to) const {
+        if (is_poison) {
+          return Bits::poison(to);
+        }
+        int64_t signed_value;
+        switch (type) {
+          case Type::Int8: signed_value = (int8_t) value; break;
+          case Type::Int16: signed_value = (int16_t) value; break;
+          case Type::Int32: signed_value = (int32_t) value; break;
+          case Type::Int64: signed_value = (int64_t) value; break;
+          default:
+            assert(false && "Unsupported type for int_to_float_s");
+            return Bits::poison(to);
+        }
+        switch (to) {
+          case Type::Float32: return Bits::constant((float32_t) signed_value);
+          case Type::Float64: return Bits::constant((float64_t) signed_value);
+          default:
+            assert(false && "Unsupported type for int_to_float_s");
+            return Bits::poison(to);
+        }
+      }
+
+      Bits float_to_int_s(Type to) const {
+        if (is_poison) {
+          return Bits::poison(to);
+        }
+        int64_t result;
+        switch (type) {
+          case Type::Float32: result = (int64_t) bit_cast<float32_t>((uint32_t) value); break;
+          case Type::Float64: result = (int64_t) bit_cast<float64_t>(value); break;
+          default:
+            assert(false && "Unsupported type for float_to_int_s");
+            return Bits::poison(to);
+        }
+        return Bits::constant(to, (uint64_t) result);
       }
 
       Bits popcount() const {
@@ -3869,6 +3926,15 @@ namespace metajit {
       } else if (dynmatch(ResizeXInst, resize_x, _inst)) {
         Bits a = at(resize_x->arg(0));
         _values[_inst] = a.resize_x(resize_x->type());
+      } else if (dynmatch(ResizeFInst, resize_f, _inst)) {
+        Bits a = at(resize_f->arg(0));
+        _values[_inst] = a.resize_f(resize_f->type());
+      } else if (dynmatch(IntToFloatSInst, int_to_float_s, _inst)) {
+        Bits a = at(int_to_float_s->arg(0));
+        _values[_inst] = a.int_to_float_s(int_to_float_s->type());
+      } else if (dynmatch(FloatToIntSInst, float_to_int_s, _inst)) {
+        Bits a = at(float_to_int_s->arg(0));
+        _values[_inst] = a.float_to_int_s(float_to_int_s->type());
       } else if (dynmatch(PtrToIntInst, ptr_to_int, _inst)) {
         Bits a = at(ptr_to_int->arg(0));
         _values[_inst] = a.ptr_to_int(ptr_to_int->type());
