@@ -478,6 +478,52 @@ void test_binop_f(DiffTestSuite& suite) {
   binop_f(lt_f_o)
 }
 
+void test_convert_f(DiffTestSuite& suite) {
+  #define resize_f_type(from_type, to_type) \
+    suite.diff_test("resize_f_" #from_type "_to_" #to_type).run([](Builder& builder, TestData& data) { \
+      data.output(builder.build_resize_f(data.input(Type::from_type), Type::to_type)); \
+    });
+
+  resize_f_type(Float32, Float64)
+  resize_f_type(Float64, Float32)
+
+  #undef resize_f_type
+
+  #define int_to_float_s_type(from_type, to_type) \
+    suite.diff_test("int_to_float_s_" #from_type "_to_" #to_type).run([](Builder& builder, TestData& data) { \
+      data.output(builder.build_int_to_float_s(data.input(Type::from_type), Type::to_type)); \
+    });
+
+  int_to_float_s_type(Int8, Float32)
+  int_to_float_s_type(Int8, Float64)
+  int_to_float_s_type(Int16, Float32)
+  int_to_float_s_type(Int16, Float64)
+  int_to_float_s_type(Int32, Float32)
+  int_to_float_s_type(Int32, Float64)
+  int_to_float_s_type(Int64, Float32)
+  int_to_float_s_type(Int64, Float64)
+
+  #undef int_to_float_s_type
+
+  #define float_to_int_s_type(from_type, to_type, max_safe) \
+    suite.diff_test("float_to_int_s_" #from_type "_to_" #to_type).run([](Builder& builder, TestData& data) { \
+      Value* i = data.input(RandomRange(Type::to_type, 0, max_safe)); \
+      Value* f = builder.build_int_to_float_s(i, Type::from_type); \
+      data.output(builder.build_float_to_int_s(f, Type::to_type)); \
+    });
+
+  float_to_int_s_type(Float32, Int8, 100)
+  float_to_int_s_type(Float32, Int16, 20000)
+  float_to_int_s_type(Float32, Int32, 1000000000)
+  float_to_int_s_type(Float32, Int64, 1000000000)
+  float_to_int_s_type(Float64, Int8, 100)
+  float_to_int_s_type(Float64, Int16, 20000)
+  float_to_int_s_type(Float64, Int32, 1000000000)
+  float_to_int_s_type(Float64, Int64, 1000000000000000000ULL)
+
+  #undef float_to_int_s_type
+}
+
 void test_popcount(DiffTestSuite& suite) {
   #define popcount_type(type) \
     suite.diff_test("popcount_" #type).run([](Builder& builder, TestData& data) { \
@@ -505,6 +551,7 @@ int main(int argc, char** argv) {
   test_alloca(suite);
   test_call(suite);
   test_binop_f(suite);
+  test_convert_f(suite);
   test_popcount(suite);
 
   return suite.finish();

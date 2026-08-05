@@ -137,6 +137,22 @@ Type Checks:
 - `is_float(a->type())`
 - `is_int(type)`
 
+### ResizeF
+
+Convert a floating-point value to a different floating-point width.
+
+Arguments
+
+- **a**: `Value*`
+- **type**: `Type`
+
+Return Type: `type`
+
+Type Checks:
+
+- `is_float(a->type())`
+- `is_float(type)`
+
 ### Popcount
 
 Arguments

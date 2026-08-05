@@ -785,6 +785,36 @@ namespace metajit {
         }
       } else if (dynmatch(ResizeXInst, resize_x, inst)) {
         _builder.mov64(vreg(inst), vreg(resize_x->arg(0)));
+      } else if (dynmatch(ResizeFInst, resize_f, inst)) {
+        switch (resize_f->type()) {
+          case Type::Float32: _builder.cvtsd2ss(vreg(inst), vreg(resize_f->arg(0))); break;
+          case Type::Float64: _builder.cvtss2sd(vreg(inst), vreg(resize_f->arg(0))); break;
+          default:
+            assert(false && "Unsupported resize_f type");
+        }
+      } else if (dynmatch(IntToFloatSInst, int_to_float_s, inst)) {
+        Reg src = vreg();
+        switch (type_size(int_to_float_s->arg(0)->type())) {
+          case 1: _builder.movsx8to64(src, vreg(int_to_float_s->arg(0))); break;
+          case 2: _builder.movsx16to64(src, vreg(int_to_float_s->arg(0))); break;
+          case 4: _builder.movsx32to64(src, vreg(int_to_float_s->arg(0))); break;
+          case 8: src = vreg(int_to_float_s->arg(0)); break;
+          default:
+            assert(false && "Unsupported int_to_float_s source type");
+        }
+        switch (int_to_float_s->type()) {
+          case Type::Float32: _builder.cvtsi2ss(vreg(inst), src); break;
+          case Type::Float64: _builder.cvtsi2sd(vreg(inst), src); break;
+          default:
+            assert(false && "Unsupported int_to_float_s type");
+        }
+      } else if (dynmatch(FloatToIntSInst, float_to_int_s, inst)) {
+        switch (float_to_int_s->arg(0)->type()) {
+          case Type::Float32: _builder.cvttss2si(vreg(inst), vreg(float_to_int_s->arg(0))); break;
+          case Type::Float64: _builder.cvttsd2si(vreg(inst), vreg(float_to_int_s->arg(0))); break;
+          default:
+            assert(false && "Unsupported float_to_int_s source type");
+        }
       } else if (dynmatch(LoadInst, load, inst)) {
         X86Inst::Mem mem(vreg(load->arg(0)), load->offset());
         switch (load->type()) {

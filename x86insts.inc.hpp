@@ -198,6 +198,14 @@ binop_x86_inst(MovQ, movq, mov_usedef, true, { byte(0x66); rex_w(); byte(0x0f); 
 binop_x86_inst(UComISS, ucomiss, binop_usedef, false, { byte(0x0f); byte(0x2e); modrm(); })
 binop_x86_inst(UComISD, ucomisd, binop_usedef, true, { byte(0x66); rex_opt(); byte(0x0f); byte(0x2e); modrm(); })
 
+binop_x86_inst(CvtSS2SD, cvtss2sd, mov_usedef, true, { byte(0xf3); rex_opt(); byte(0x0f); byte(0x5a); modrm(); })
+binop_x86_inst(CvtSD2SS, cvtsd2ss, mov_usedef, false, { byte(0xf2); rex_opt(); byte(0x0f); byte(0x5a); modrm(); })
+
+binop_x86_inst(CvtSI2SD, cvtsi2sd, mov_usedef, true, { byte(0xf2); rex_w(); byte(0x0f); byte(0x2a); modrm(); })
+binop_x86_inst(CvtSI2SS, cvtsi2ss, mov_usedef, true, { byte(0xf3); rex_w(); byte(0x0f); byte(0x2a); modrm(); })
+binop_x86_inst(CvtTSD2SI, cvttsd2si, mov_usedef, true, { byte(0xf2); rex_w(); byte(0x0f); byte(0x2c); modrm(); })
+binop_x86_inst(CvtTSS2SI, cvttss2si, mov_usedef, true, { byte(0xf3); rex_w(); byte(0x0f); byte(0x2c); modrm(); })
+
 #undef x86_inst
 #undef binop_x86_inst
 #undef rev_binop_x86_inst

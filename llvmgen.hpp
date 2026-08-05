@@ -189,6 +189,11 @@ namespace metajit {
           emit_arg(int_to_float_s->arg(0)),
           emit_type(int_to_float_s->type())
         );
+      } else if (dynmatch(ResizeFInst, resize_f, inst)) {
+        return _builder.CreateFPCast(
+          emit_arg(resize_f->arg(0)),
+          emit_type(resize_f->type())
+        );
       } else if (dynmatch(PtrToIntInst, ptr_to_int, inst)) {
         return _builder.CreatePtrToInt(
           emit_arg(ptr_to_int->arg(0)),
