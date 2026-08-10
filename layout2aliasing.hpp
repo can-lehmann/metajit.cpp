@@ -261,9 +261,9 @@ namespace metajit {
         for (Inst* inst : *block) {
           if (dynmatch(LoadInst, load, inst)) {
             Pointer ptr = at(load->ptr()).add_offset(load->offset());
-            if (!ptr.is_bottom() && load->type() == Type::Ptr) {
+            if (!ptr.is_bottom()) {
               load->set_aliasing(group_for(ptr));
-              if (ptr.deref().layout->singleton()) {
+              if (ptr.deref().layout && ptr.deref().layout->singleton()) {
                 load->set_flags(load->flags() | LoadFlags::Pure);
               }
               if (ptr.is_in_bounds()) {
@@ -272,7 +272,7 @@ namespace metajit {
             }
           } else if (dynmatch(StoreInst, store, inst)) {
             Pointer ptr = at(store->ptr()).add_offset(store->offset());
-            if (!ptr.is_bottom() && store->value()->type() == Type::Ptr) {
+            if (!ptr.is_bottom()) {
               store->set_aliasing(group_for(ptr));
             }
           }
