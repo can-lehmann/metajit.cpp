@@ -27,11 +27,16 @@ namespace metajit {
     class Layout {
     private:
       bool _singleton = false;
+      std::optional<uint64_t> _size = std::nullopt;
     public:
       Layout(bool singleton): _singleton(singleton) {}
       virtual ~Layout() = default;
 
       bool singleton() const { return _singleton; }
+      Layout* set_singleton(bool singleton) { _singleton = singleton; return this; }
+
+      std::optional<uint64_t> size() const { return _size; }
+      Layout* set_size(std::optional<uint64_t> size) { _size = size; return this; }
 
       virtual Layout* deref(std::optional<uint64_t> offset) = 0;
     };
@@ -43,7 +48,11 @@ namespace metajit {
       Record(bool singleton, std::map<uint64_t, Layout*> fields):
         Layout(singleton), _fields(std::move(fields)) {}
 
-      Layout* field_at(uint64_t offset) const {
+      void add_field(uint64_t offset, Layout* layout) {
+        _fields[offset] = layout;
+      }
+
+      Layout* at(uint64_t offset) const {
         auto it = _fields.find(offset);
         if (it == _fields.end()) {
           return nullptr;
@@ -55,7 +64,7 @@ namespace metajit {
         if (!offset) {
           throw std::runtime_error("Layout2Aliasing: Record layout requires an offset");
         }
-        Layout* field = field_at(*offset);
+        Layout* field = at(*offset);
         if (!field) {
           throw std::runtime_error("Layout2Aliasing: no declared field at offset " + std::to_string(*offset));
         }
@@ -182,6 +191,13 @@ namespace metajit {
         }
         return offset < other.offset;
       }
+
+      bool is_in_bounds() const {
+        if (is_bottom() || is_top() || !layout->size().has_value()) {
+          return false;
+        }
+        return *offset < *layout->size();
+      }
     };
 
     NameMap<Pointer> _pointers;
@@ -249,6 +265,9 @@ namespace metajit {
               load->set_aliasing(group_for(ptr));
               if (ptr.deref().layout->singleton()) {
                 load->set_flags(load->flags() | LoadFlags::Pure);
+              }
+              if (ptr.is_in_bounds()) {
+                load->set_flags(load->flags() | LoadFlags::InBounds);
               }
             }
           } else if (dynmatch(StoreInst, store, inst)) {
