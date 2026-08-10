@@ -32,6 +32,8 @@ namespace metajit {
       virtual ~Layout() = default;
 
       bool singleton() const { return _singleton; }
+
+      virtual Layout* deref(std::optional<uint64_t> offset) const = 0;
     };
 
     class Record: public Layout {
@@ -48,6 +50,13 @@ namespace metajit {
         }
         return it->second;
       }
+
+      Layout* deref(std::optional<uint64_t> offset) const override {
+        if (!offset) {
+          throw std::runtime_error("Layout2Aliasing: Record layout requires an offset");
+        }
+        return field_at(*offset);
+      }
     };
 
     class Array: public Layout {
@@ -58,17 +67,26 @@ namespace metajit {
         Layout(singleton), _element(element) {}
 
       Layout* element() const { return _element; }
+
+      Layout* deref(std::optional<uint64_t> offset) const override {
+        return _element;
+      }
     };
 
     class Heap: public Layout {
     public:
       Heap(): Layout(false) {}
+
+      Layout* deref(std::optional<uint64_t> offset) const override {
+        return this;
+      }
     };
 
     class LayoutBuilder {
     private:
       Allocator* _allocator = nullptr;
       bool _owns_allocator = false;
+      Heap* _heap = nullptr;
     public:
       LayoutBuilder(): _allocator(new ArenaAllocator()), _owns_allocator(true) {}
       LayoutBuilder(Allocator& allocator): _allocator(&allocator), _owns_allocator(false) {}
@@ -80,7 +98,10 @@ namespace metajit {
       }
 
       Heap* heap() {
-        return new (_allocator->alloc<Heap>()) Heap();
+        if (!_heap) {
+          _heap = new (_allocator->alloc<Heap>()) Heap();
+        }
+        return _heap;
       }
 
       Array* array(bool singleton, Layout* element) {
@@ -98,66 +119,79 @@ namespace metajit {
     };
 
   private:
-    NameMap<Layout*> _layouts;
-    std::map<std::pair<const Layout*, uint64_t>, AliasingGroup> _group_ids;
+    // bottom < layout + offset < layout + unknown offset = top
+    struct Pointer {
+      Layout* layout = nullptr;
+      std::optional<uint64_t> offset = std::nullopt;
+
+      Pointer() = default;
+      Pointer(Layout* layout, std::optional<uint64_t> offset = std::nullopt):
+        layout(layout), offset(offset) {
+        
+        if (dynamic_cast<Heap*>(layout) || dynamic_cast<Array*>(layout)) {
+          offset = std::nullopt;
+        }
+      }
+     
+      // Currently, we canonicalize in constructor
+      Pointer canonical() const { return *this; }
+
+      bool is_bottom() const { return layout == nullptr; }
+      bool is_top() const { return layout != nullptr && !offset.has_value(); }
+
+      bool meet(const Pointer& other) {
+        if (other.is_bottom()) {
+          return false;
+        }
+        if (is_bottom()) {
+          *this = other;
+          return true;
+        }
+        if (is_top()) {
+          return false;
+        }
+        if (other.is_top()) {
+          offset = std::nullopt;
+          return true;
+        }
+        if (layout != other.layout || *offset != *other.offset) {
+          throw std::runtime_error("Layout2Aliasing: conflicting pointer meet");
+        }
+        return false;
+      }
+      
+      Pointer add_offset(uint64_t _offset) const {
+        if (is_bottom() || is_top()) {
+          return *this;
+        }
+        return Pointer(layout, *offset + _offset);
+      }
+
+      Pointer deref() const {
+        assert(!is_bottom());
+        return layout->deref(offset);
+      }
+    }; 
+
+    NameMap<Pointer> _pointers;
+    std::map<Pointer, AliasingGroup> _group_ids;
     AliasingGroup _next_group = 1;
     AliasingGroup _next_exact_group = -1;
     inline static Heap _call_result_heap;
 
-    AliasingGroup group_for(Layout* node, uint64_t offset) {
-      if (dynamic_cast<Heap*>(node)) {
+    AliasingGroup group_for(Pointer ptr) {
+      if (dynamic_cast<Heap*>(ptr.layout)) {
         return 0;
       }
-      if (dynamic_cast<Array*>(node)) {
-        offset = 0;
-      }
-      auto key = std::make_pair(node, offset);
-      if (_group_ids.find(key) == _group_ids.end()) {
-        if (dynamic_cast<Record*>(node) && node->singleton()) {
-          _group_ids[key] = _next_exact_group--;
+      ptr = ptr.canonical();
+      if (_group_ids.find(ptr) == _group_ids.end()) {
+        if (dynamic_cast<Record*>(ptr.layout) && ptr.layout->singleton()) {
+          _group_ids[ptr] = _next_exact_group--;
         } else {
-          _group_ids[key] = _next_group++;
+          _group_ids[ptr] = _next_group++;
         }
       }
-      return _group_ids[key];
-    }
-
-    Layout* at(Value* value) const {
-      if (value->is_named()) {
-        return _layouts[(NamedValue*) value];
-      } else {
-        return nullptr;
-      }
-    }
-
-    bool meet(NamedValue* target, Layout* incoming) {
-      if (!incoming) {
-        return false;
-      }
-      Layout*& current = _layouts[target];
-      if (!current) {
-        current = incoming;
-        return true;
-      }
-      if (current == incoming || (dynamic_cast<Heap*>(current) && dynamic_cast<Heap*>(incoming))) {
-        return false;
-      }
-      throw std::runtime_error("Layout2Aliasing: conflicting layouts merge at %" + std::to_string(target->name()));
-    }
-
-    Layout* child_of(Layout* node, uint64_t offset) {
-      if (dynmatch(Record, record, node)) {
-        Layout* field = record->field_at(offset);
-        if (field) {
-          return field;
-        }
-        throw std::runtime_error("Layout2Aliasing: no declared field at offset " + std::to_string(offset));
-      } else if (dynmatch(Array, array, node)) {
-        return array->element();
-      } else if (dynamic_cast<Heap*>(node)) {
-        return node;
-      }
-      throw std::runtime_error("Layout2Aliasing: unknown layout node kind");
+      return _group_ids[ptr];
     }
 
     void find_layouts(Section* section) {
@@ -167,23 +201,27 @@ namespace metajit {
         for (Block* block : *section) {
           for (Inst* inst : *block) {
             if (dynmatch(AddPtrInst, add_ptr, inst)) {
-              Layout* ptr = at(add_ptr->ptr());
-              if (dynamic_cast<Record*>(ptr)) {
-                throw std::runtime_error("Layout2Aliasing: AddPtr into Record layout is not supported at %" + std::to_string(add_ptr->name()));
+              Pointer ptr = at(add_ptr->ptr());
+              if (ptr.offset.has_value()) {
+                if (dynmatch(Const, constant, add_ptr->offset())) {
+                  *ptr.offset += constant->value();
+                } else {
+                  ptr.offset = std::nullopt;
+                }
               }
-              changed |= meet(add_ptr, ptr);
+              changed |= _pointers[add_ptr].meet(ptr);
             } else if (dynmatch(LoadInst, load, inst)) {
-              Layout* ptr = at(load->ptr());
-              if (ptr && load->type() == Type::Ptr) {
-                changed |= meet(load, child_of(ptr, load->offset()));
+              Pointer ptr = at(load->ptr()).add_offset(load->offset());
+              if (!ptr.is_bottom() && load->type() == Type::Ptr) {
+                changed |= _pointers[load].meet(ptr.deref());
               }
             } else if (dynmatch(JumpInst, jump, inst)) {
               for (Arg* arg : jump->block()->args()) {
-                changed |= meet(arg, at(jump->arg(arg->index())));
+                changed |= _pointers[arg].meet(at(jump->arg(arg->index())));
               }
             } else if (dynmatch(CallInst, call, inst)) {
               if (call->type() == Type::Ptr) {
-                changed |= meet(call, &_call_result_heap);
+                changed |= _pointers[call].meet(Pointer(&_call_result_heap));
               }
             }
           }
@@ -195,17 +233,17 @@ namespace metajit {
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(LoadInst, load, inst)) {
-            Layout* ptr = at(load->ptr());
-            if (ptr) {
-              load->set_aliasing(group_for(ptr, load->offset()));
-              if (child_of(ptr, load->offset())->singleton()) {
+            Pointer ptr = at(load->ptr()).add_offset(load->offset());
+            if (!ptr.is_bottom()) {
+              load->set_aliasing(group_for(ptr));
+              if (ptr.deref()->singleton()) {
                 load->set_flags(load->flags() | LoadFlags::Pure);
               }
             }
           } else if (dynmatch(StoreInst, store, inst)) {
-            Layout* ptr = at(store->ptr());
-            if (ptr) {
-              store->set_aliasing(group_for(ptr, store->offset()));
+            Pointer ptr = at(store->ptr()).add_offset(store->offset());
+            if (!ptr.is_bottom()) {
+              store->set_aliasing(group_for(ptr));
             }
           }
         }
@@ -223,6 +261,14 @@ namespace metajit {
 
       find_layouts(section);
       apply(section);
+    }
+
+    Pointer at(Value* value) const {
+      if (value->is_named()) {
+        return _pointers[(NamedValue*) value];
+      } else {
+        return Pointer();
+      }
     }
   };
 }
