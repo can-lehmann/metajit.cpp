@@ -33,7 +33,7 @@ namespace metajit {
 
       bool singleton() const { return _singleton; }
 
-      virtual Layout* deref(std::optional<uint64_t> offset) const = 0;
+      virtual Layout* deref(std::optional<uint64_t> offset) = 0;
     };
 
     class Record: public Layout {
@@ -51,11 +51,15 @@ namespace metajit {
         return it->second;
       }
 
-      Layout* deref(std::optional<uint64_t> offset) const override {
+      Layout* deref(std::optional<uint64_t> offset) override {
         if (!offset) {
           throw std::runtime_error("Layout2Aliasing: Record layout requires an offset");
         }
-        return field_at(*offset);
+        Layout* field = field_at(*offset);
+        if (!field) {
+          throw std::runtime_error("Layout2Aliasing: no declared field at offset " + std::to_string(*offset));
+        }
+        return field;
       }
     };
 
@@ -68,7 +72,7 @@ namespace metajit {
 
       Layout* element() const { return _element; }
 
-      Layout* deref(std::optional<uint64_t> offset) const override {
+      Layout* deref(std::optional<uint64_t> offset) override {
         return _element;
       }
     };
@@ -77,7 +81,7 @@ namespace metajit {
     public:
       Heap(): Layout(false) {}
 
-      Layout* deref(std::optional<uint64_t> offset) const override {
+      Layout* deref(std::optional<uint64_t> offset) override {
         return this;
       }
     };
@@ -169,9 +173,16 @@ namespace metajit {
 
       Pointer deref() const {
         assert(!is_bottom());
-        return layout->deref(offset);
+        return Pointer(layout->deref(offset), 0);
       }
-    }; 
+
+      bool operator<(const Pointer& other) const {
+        if (layout != other.layout) {
+          return layout < other.layout;
+        }
+        return offset < other.offset;
+      }
+    };
 
     NameMap<Pointer> _pointers;
     std::map<Pointer, AliasingGroup> _group_ids;
@@ -236,7 +247,7 @@ namespace metajit {
             Pointer ptr = at(load->ptr()).add_offset(load->offset());
             if (!ptr.is_bottom()) {
               load->set_aliasing(group_for(ptr));
-              if (ptr.deref()->singleton()) {
+              if (ptr.deref().layout->singleton()) {
                 load->set_flags(load->flags() | LoadFlags::Pure);
               }
             }
@@ -253,10 +264,10 @@ namespace metajit {
   public:
     Layout2Aliasing(Section* section,
                     const std::vector<Layout*>& args):
-        Pass(section), _layouts(section) {
-      
+        Pass(section), _pointers(section) {
+
       for (Arg* arg : section->entry()->args()) {
-        _layouts[arg] = args.at(arg->index());
+        _pointers[arg] = Pointer(args.at(arg->index()), 0);
       }
 
       find_layouts(section);
