@@ -22,115 +22,114 @@
 #include "jitir.hpp"
 
 namespace metajit {
-  class Layout2Aliasing: public Pass<Layout2Aliasing> {
+  class Layout {
+  private:
+    bool _singleton = false;
+    std::optional<uint64_t> _size = std::nullopt;
   public:
-    class Layout {
-    private:
-      bool _singleton = false;
-      std::optional<uint64_t> _size = std::nullopt;
-    public:
-      Layout(bool singleton): _singleton(singleton) {}
-      virtual ~Layout() = default;
+    Layout(bool singleton): _singleton(singleton) {}
+    virtual ~Layout() = default;
 
-      bool singleton() const { return _singleton; }
-      Layout* set_singleton(bool singleton) { _singleton = singleton; return this; }
+    bool singleton() const { return _singleton; }
+    Layout* set_singleton(bool singleton) { _singleton = singleton; return this; }
 
-      std::optional<uint64_t> size() const { return _size; }
-      Layout* set_size(std::optional<uint64_t> size) { _size = size; return this; }
+    std::optional<uint64_t> size() const { return _size; }
+    Layout* set_size(std::optional<uint64_t> size) { _size = size; return this; }
 
-      virtual Layout* deref(std::optional<uint64_t> offset) = 0;
-    };
+    virtual Layout* deref(std::optional<uint64_t> offset) = 0;
+  };
 
-    class Record: public Layout {
-    private:
-      std::map<uint64_t, Layout*> _fields;
-    public:
-      Record(bool singleton, std::map<uint64_t, Layout*> fields):
-        Layout(singleton), _fields(std::move(fields)) {}
+  class RecordLayout: public Layout {
+  private:
+    std::map<uint64_t, Layout*> _fields;
+  public:
+    RecordLayout(bool singleton, std::map<uint64_t, Layout*> fields):
+      Layout(singleton), _fields(std::move(fields)) {}
 
-      void add_field(uint64_t offset, Layout* layout) {
-        _fields[offset] = layout;
+    void add_field(uint64_t offset, Layout* layout) {
+      _fields[offset] = layout;
+    }
+
+    Layout* at(uint64_t offset) const {
+      auto it = _fields.find(offset);
+      if (it == _fields.end()) {
+        return nullptr;
       }
+      return it->second;
+    }
 
-      Layout* at(uint64_t offset) const {
-        auto it = _fields.find(offset);
-        if (it == _fields.end()) {
-          return nullptr;
-        }
-        return it->second;
+    Layout* deref(std::optional<uint64_t> offset) override {
+      if (!offset) {
+        throw std::runtime_error("Layout2Aliasing: Record layout requires an offset");
       }
-
-      Layout* deref(std::optional<uint64_t> offset) override {
-        if (!offset) {
-          throw std::runtime_error("Layout2Aliasing: Record layout requires an offset");
-        }
-        Layout* field = at(*offset);
-        if (!field) {
-          throw std::runtime_error("Layout2Aliasing: no declared field at offset " + std::to_string(*offset));
-        }
-        return field;
+      Layout* field = at(*offset);
+      if (!field) {
+        throw std::runtime_error("Layout2Aliasing: no declared field at offset " + std::to_string(*offset));
       }
-    };
+      return field;
+    }
+  };
 
-    class Array: public Layout {
-    private:
-      Layout* _element;
-    public:
-      Array(bool singleton, Layout* element):
-        Layout(singleton), _element(element) {}
+  class ArrayLayout: public Layout {
+  private:
+    Layout* _element;
+  public:
+    ArrayLayout(bool singleton, Layout* element):
+      Layout(singleton), _element(element) {}
 
-      Layout* element() const { return _element; }
+    Layout* element() const { return _element; }
 
-      Layout* deref(std::optional<uint64_t> offset) override {
-        return _element;
+    Layout* deref(std::optional<uint64_t> offset) override {
+      return _element;
+    }
+  };
+
+  class HeapLayout: public Layout {
+  public:
+    HeapLayout(): Layout(false) {}
+
+    Layout* deref(std::optional<uint64_t> offset) override {
+      return this;
+    }
+  };
+
+  class LayoutBuilder {
+  private:
+    Allocator* _allocator = nullptr;
+    bool _owns_allocator = false;
+    Heap* _heap = nullptr;
+  public:
+    LayoutBuilder(): _allocator(new ArenaAllocator()), _owns_allocator(true) {}
+    LayoutBuilder(Allocator& allocator): _allocator(&allocator), _owns_allocator(false) {}
+
+    ~LayoutBuilder() {
+      if (_owns_allocator && _allocator) {
+        delete _allocator;
       }
-    };
+    }
 
-    class Heap: public Layout {
-    public:
-      Heap(): Layout(false) {}
-
-      Layout* deref(std::optional<uint64_t> offset) override {
-        return this;
+    Heap* heap() {
+      if (!_heap) {
+        _heap = new (_allocator->alloc<HeapLayout>()) HeapLayout();
       }
-    };
+      return _heap;
+    }
 
-    class LayoutBuilder {
-    private:
-      Allocator* _allocator = nullptr;
-      bool _owns_allocator = false;
-      Heap* _heap = nullptr;
-    public:
-      LayoutBuilder(): _allocator(new ArenaAllocator()), _owns_allocator(true) {}
-      LayoutBuilder(Allocator& allocator): _allocator(&allocator), _owns_allocator(false) {}
+    ArrayLayout* array(bool singleton, Layout* element) {
+      return new (_allocator->alloc<ArrayLayout>()) ArrayLayout(singleton, element);
+    }
 
-      ~LayoutBuilder() {
-        if (_owns_allocator && _allocator) {
-          delete _allocator;
-        }
-      }
+    RecordLayout* record(bool singleton, std::map<uint64_t, Layout*> fields) {
+      return new (_allocator->alloc<RecordLayout>()) RecordLayout(singleton, std::move(fields));
+    }
 
-      Heap* heap() {
-        if (!_heap) {
-          _heap = new (_allocator->alloc<Heap>()) Heap();
-        }
-        return _heap;
-      }
+    ArrayLayout* array(Layout* element) { return array(false, element); }
+    ArrayLayout* array_singleton(Layout* element) { return array(true, element); }
+    RecordLayout* record(std::map<uint64_t, Layout*> fields) { return record(false, std::move(fields)); }
+    RecordLayout* record_singleton(std::map<uint64_t, Layout*> fields) { return record(true, std::move(fields)); }
+  };
 
-      Array* array(bool singleton, Layout* element) {
-        return new (_allocator->alloc<Array>()) Array(singleton, element);
-      }
-
-      Record* record(bool singleton, std::map<uint64_t, Layout*> fields) {
-        return new (_allocator->alloc<Record>()) Record(singleton, std::move(fields));
-      }
-
-      Array* array(Layout* element) { return array(false, element); }
-      Array* array_singleton(Layout* element) { return array(true, element); }
-      Record* record(std::map<uint64_t, Layout*> fields) { return record(false, std::move(fields)); }
-      Record* record_singleton(std::map<uint64_t, Layout*> fields) { return record(true, std::move(fields)); }
-    };
-
+  class Layout2Aliasing: public Pass<Layout2Aliasing> {
   private:
     // bottom < layout + offset < layout + unknown offset = top
     struct Pointer {
@@ -141,7 +140,7 @@ namespace metajit {
       Pointer(Layout* layout, std::optional<uint64_t> offset = std::nullopt):
         layout(layout), offset(offset) {
         
-        if (dynamic_cast<Heap*>(layout) || dynamic_cast<Array*>(layout)) {
+        if (dynamic_cast<HeapLayout*>(layout) || dynamic_cast<ArrayLayout*>(layout)) {
           offset = std::nullopt;
         }
       }
@@ -204,15 +203,15 @@ namespace metajit {
     std::map<Pointer, AliasingGroup> _group_ids;
     AliasingGroup _next_group = 1;
     AliasingGroup _next_exact_group = -1;
-    inline static Heap _call_result_heap;
+    inline static HeapLayout _call_result_heap;
 
     AliasingGroup group_for(Pointer ptr) {
-      if (dynamic_cast<Heap*>(ptr.layout)) {
+      if (dynamic_cast<HeapLayout*>(ptr.layout)) {
         return 0;
       }
       ptr = ptr.canonical();
       if (_group_ids.find(ptr) == _group_ids.end()) {
-        if (dynamic_cast<Record*>(ptr.layout) && ptr.layout->singleton()) {
+        if (dynamic_cast<RecordLayout*>(ptr.layout) && ptr.layout->singleton()) {
           _group_ids[ptr] = _next_exact_group--;
         } else {
           _group_ids[ptr] = _next_group++;
