@@ -221,8 +221,11 @@ namespace metajit {
   public:
     PointerLayouts(Section* section,
                    const std::vector<Layout*>& args):
-        _section(section), _pointers(section) {
-      
+        _section(section) {
+      _section->autoname();
+      _pointers.init(section);
+
+
       for (Arg* arg : section->entry()->args()) {
         _pointers[arg] = Pointer(args.at(arg->index()), 0);
       }
