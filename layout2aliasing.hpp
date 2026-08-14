@@ -25,13 +25,17 @@ namespace metajit {
   class Layout {
   private:
     bool _singleton = false;
+    bool _pure = false;
     std::optional<uint64_t> _size = std::nullopt;
   public:
-    Layout(bool singleton): _singleton(singleton) {}
+    Layout() {}
     virtual ~Layout() = default;
 
     bool singleton() const { return _singleton; }
     Layout* set_singleton(bool singleton) { _singleton = singleton; return this; }
+
+    bool pure() const { return _pure; }
+    Layout* set_pure(bool pure) { _pure = pure; return this; }
 
     std::optional<uint64_t> size() const { return _size; }
     Layout* set_size(std::optional<uint64_t> size) { _size = size; return this; }
@@ -43,8 +47,8 @@ namespace metajit {
   private:
     std::map<uint64_t, Layout*> _fields;
   public:
-    RecordLayout(bool singleton, std::map<uint64_t, Layout*> fields):
-      Layout(singleton), _fields(std::move(fields)) {}
+    RecordLayout(std::map<uint64_t, Layout*> fields):
+      Layout(), _fields(std::move(fields)) {}
 
     void add_field(uint64_t offset, Layout* layout) {
       _fields[offset] = layout;
@@ -74,8 +78,8 @@ namespace metajit {
   private:
     Layout* _element;
   public:
-    ArrayLayout(bool singleton, Layout* element):
-      Layout(singleton), _element(element) {}
+    ArrayLayout(Layout* element):
+      Layout(), _element(element) {}
 
     Layout* element() const { return _element; }
 
@@ -86,7 +90,7 @@ namespace metajit {
 
   class HeapLayout: public Layout {
   public:
-    HeapLayout(): Layout(false) {}
+    HeapLayout(): Layout() {}
 
     Layout* deref(std::optional<uint64_t> offset) override {
       return this;
@@ -98,6 +102,7 @@ namespace metajit {
     Allocator* _allocator = nullptr;
     bool _owns_allocator = false;
     HeapLayout* _heap = nullptr;
+    bool _pure = false;
   public:
     LayoutBuilder(): _allocator(new ArenaAllocator()), _owns_allocator(true) {}
     LayoutBuilder(Allocator& allocator): _allocator(&allocator), _owns_allocator(false) {}
@@ -108,6 +113,9 @@ namespace metajit {
       }
     }
 
+    bool pure() const { return _pure; }
+    void set_pure(bool pure) { _pure = pure; }
+
     HeapLayout* heap() {
       if (!_heap) {
         _heap = new (_allocator->alloc<HeapLayout>()) HeapLayout();
@@ -116,11 +124,17 @@ namespace metajit {
     }
 
     ArrayLayout* array(bool singleton, Layout* element) {
-      return new (_allocator->alloc<ArrayLayout>()) ArrayLayout(singleton, element);
+      ArrayLayout* array = new (_allocator->alloc<ArrayLayout>()) ArrayLayout(element);
+      array->set_pure(_pure);
+      array->set_singleton(singleton);
+      return array;
     }
 
     RecordLayout* record(bool singleton, std::map<uint64_t, Layout*> fields) {
-      return new (_allocator->alloc<RecordLayout>()) RecordLayout(singleton, std::move(fields));
+      RecordLayout* record = new (_allocator->alloc<RecordLayout>()) RecordLayout(std::move(fields));
+      record->set_pure(_pure);
+      record->set_singleton(singleton);
+      return record;
     }
 
     ArrayLayout* array(Layout* element) { return array(false, element); }
@@ -201,10 +215,13 @@ namespace metajit {
 
   private:
     inline static HeapLayout _call_result_heap;
+
+    Section* _section = nullptr;
     NameMap<Pointer> _pointers;
   public:
     PointerLayouts(Section* section,
-                   const std::vector<Layout*>& args): _pointers(section) {
+                   const std::vector<Layout*>& args):
+        _section(section), _pointers(section) {
       
       for (Arg* arg : section->entry()->args()) {
         _pointers[arg] = Pointer(args.at(arg->index()), 0);
@@ -251,13 +268,26 @@ namespace metajit {
         return Pointer();
       }
     }
+
+    void mark_impure() {
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(StoreInst, store, inst)) {
+            Pointer ptr = at(store->ptr()).add_offset(store->offset());
+            if (!ptr.is_bottom()) {
+              ptr.layout->set_pure(false);
+            }
+          }
+        }
+      }
+    }
   };
 
   class Layout2Aliasing: public Pass<Layout2Aliasing> {
   private:
     using Pointer = PointerLayouts::Pointer;
     
-    PointerLayouts _pointers;
+    PointerLayouts& _pointers;
     std::map<Pointer, AliasingGroup> _group_ids;
     AliasingGroup _next_group = 1;
     AliasingGroup _next_exact_group = -1;
@@ -290,6 +320,9 @@ namespace metajit {
               if (ptr.is_in_bounds()) {
                 load->set_flags(load->flags() | LoadFlags::InBounds);
               }
+              if (ptr.layout->pure()) {
+                load->set_flags(load->flags() | LoadFlags::Pure);
+              }
             }
           } else if (dynmatch(StoreInst, store, inst)) {
             Pointer ptr = _pointers.at(store->ptr()).add_offset(store->offset());
@@ -302,8 +335,8 @@ namespace metajit {
     }
 
   public:
-    Layout2Aliasing(Section* section, PointerLayouts& pointers):
-        Pass(section), _pointers(pointers) {
+    Layout2Aliasing(Section* section, PointerLayouts* pointers):
+        Pass(section), _pointers(*pointers) {
       apply(section);
     }
   };
