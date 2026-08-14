@@ -97,7 +97,7 @@ namespace metajit {
   private:
     Allocator* _allocator = nullptr;
     bool _owns_allocator = false;
-    Heap* _heap = nullptr;
+    HeapLayout* _heap = nullptr;
   public:
     LayoutBuilder(): _allocator(new ArenaAllocator()), _owns_allocator(true) {}
     LayoutBuilder(Allocator& allocator): _allocator(&allocator), _owns_allocator(false) {}
@@ -108,7 +108,7 @@ namespace metajit {
       }
     }
 
-    Heap* heap() {
+    HeapLayout* heap() {
       if (!_heap) {
         _heap = new (_allocator->alloc<HeapLayout>()) HeapLayout();
       }
@@ -129,8 +129,8 @@ namespace metajit {
     RecordLayout* record_singleton(std::map<uint64_t, Layout*> fields) { return record(true, std::move(fields)); }
   };
 
-  class Layout2Aliasing: public Pass<Layout2Aliasing> {
-  private:
+  class PointerLayouts {
+  public:
     // bottom < layout + offset < layout + unknown offset = top
     struct Pointer {
       Layout* layout = nullptr;
@@ -199,28 +199,17 @@ namespace metajit {
       }
     };
 
-    NameMap<Pointer> _pointers;
-    std::map<Pointer, AliasingGroup> _group_ids;
-    AliasingGroup _next_group = 1;
-    AliasingGroup _next_exact_group = -1;
+  private:
     inline static HeapLayout _call_result_heap;
-
-    AliasingGroup group_for(Pointer ptr) {
-      if (dynamic_cast<HeapLayout*>(ptr.layout)) {
-        return 0;
+    NameMap<Pointer> _pointers;
+  public:
+    PointerLayouts(Section* section,
+                   const std::vector<Layout*>& args): _pointers(section) {
+      
+      for (Arg* arg : section->entry()->args()) {
+        _pointers[arg] = Pointer(args.at(arg->index()), 0);
       }
-      ptr = ptr.canonical();
-      if (_group_ids.find(ptr) == _group_ids.end()) {
-        if (dynamic_cast<RecordLayout*>(ptr.layout) && ptr.layout->singleton()) {
-          _group_ids[ptr] = _next_exact_group--;
-        } else {
-          _group_ids[ptr] = _next_group++;
-        }
-      }
-      return _group_ids[ptr];
-    }
 
-    void find_layouts(Section* section) {
       bool changed = true;
       while (changed) {
         changed = false;
@@ -255,11 +244,44 @@ namespace metajit {
       }
     }
 
+    Pointer at(Value* value) const {
+      if (value->is_named()) {
+        return _pointers[(NamedValue*) value];
+      } else {
+        return Pointer();
+      }
+    }
+  };
+
+  class Layout2Aliasing: public Pass<Layout2Aliasing> {
+  private:
+    using Pointer = PointerLayouts::Pointer;
+    
+    PointerLayouts _pointers;
+    std::map<Pointer, AliasingGroup> _group_ids;
+    AliasingGroup _next_group = 1;
+    AliasingGroup _next_exact_group = -1;
+
+    AliasingGroup group_for(Pointer ptr) {
+      if (dynamic_cast<HeapLayout*>(ptr.layout)) {
+        return 0;
+      }
+      ptr = ptr.canonical();
+      if (_group_ids.find(ptr) == _group_ids.end()) {
+        if (dynamic_cast<RecordLayout*>(ptr.layout) && ptr.layout->singleton()) {
+          _group_ids[ptr] = _next_exact_group--;
+        } else {
+          _group_ids[ptr] = _next_group++;
+        }
+      }
+      return _group_ids[ptr];
+    }
+
     void apply(Section* section) {
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(LoadInst, load, inst)) {
-            Pointer ptr = at(load->ptr()).add_offset(load->offset());
+            Pointer ptr = _pointers.at(load->ptr()).add_offset(load->offset());
             if (!ptr.is_bottom()) {
               load->set_aliasing(group_for(ptr));
               if (ptr.deref().layout && ptr.deref().layout->singleton()) {
@@ -270,7 +292,7 @@ namespace metajit {
               }
             }
           } else if (dynmatch(StoreInst, store, inst)) {
-            Pointer ptr = at(store->ptr()).add_offset(store->offset());
+            Pointer ptr = _pointers.at(store->ptr()).add_offset(store->offset());
             if (!ptr.is_bottom()) {
               store->set_aliasing(group_for(ptr));
             }
@@ -280,24 +302,9 @@ namespace metajit {
     }
 
   public:
-    Layout2Aliasing(Section* section,
-                    const std::vector<Layout*>& args):
-        Pass(section), _pointers(section) {
-
-      for (Arg* arg : section->entry()->args()) {
-        _pointers[arg] = Pointer(args.at(arg->index()), 0);
-      }
-
-      find_layouts(section);
+    Layout2Aliasing(Section* section, PointerLayouts& pointers):
+        Pass(section), _pointers(pointers) {
       apply(section);
-    }
-
-    Pointer at(Value* value) const {
-      if (value->is_named()) {
-        return _pointers[(NamedValue*) value];
-      } else {
-        return Pointer();
-      }
     }
   };
 }
