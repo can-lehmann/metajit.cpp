@@ -23,6 +23,18 @@ namespace metajit {
       std::set<AliasingGroup> groups;
       size_t min_align = 1;
 
+      void add_all_groups(Section* section) {
+        for (Block* block : *section) {
+          for (Inst* inst : *block) {
+            if (dynmatch(LoadInst, load, inst)) {
+              groups.insert(load->aliasing());
+            } else if (dynmatch(StoreInst, store, inst)) {
+              groups.insert(store->aliasing());
+            }
+          }
+        }
+      }
+
       bool has(AliasingGroup group) const {
         return groups.find(group) != groups.end();
       }
