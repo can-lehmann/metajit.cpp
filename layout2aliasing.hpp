@@ -317,7 +317,7 @@ namespace metajit {
             Pointer ptr = _pointers.at(load->ptr()).add_offset(load->offset());
             if (!ptr.is_bottom()) {
               load->set_aliasing(group_for(ptr));
-              if (ptr.deref().layout && ptr.deref().layout->singleton()) {
+              if (load->type() == Type::Ptr && ptr.deref().layout && ptr.deref().layout->singleton()) {
                 load->set_flags(load->flags() | LoadFlags::Pure);
               }
               if (ptr.is_in_bounds()) {
