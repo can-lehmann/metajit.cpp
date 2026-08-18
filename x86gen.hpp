@@ -1235,7 +1235,7 @@ namespace metajit {
         _builder.jne(_blocks[branch->true_block()->name()]);
         _builder.jmp(_blocks[branch->false_block()->name()]);
       } else if (dynmatch(JumpInst, jump, inst)) {
-        Reg copies[jump->block()->args().size()];
+        lwir::Span<Reg> copies = _builder.alloc_regs(jump->block()->args().size());
         for (Arg* arg : jump->block()->args()) {
           copies[arg->index()] = vreg();
           _builder.mov64(copies[arg->index()], vreg(jump->arg(arg->index())));
