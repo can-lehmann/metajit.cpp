@@ -258,6 +258,10 @@ namespace metajit {
               if (call->type() == Type::Ptr) {
                 changed |= _pointers[call].meet(Pointer(&_call_result_heap));
               }
+            } else if (dynamic_cast<AssumeConstInst*>(inst) || dynamic_cast<PromoteInst*>(inst)) {
+              if (inst->type() == Type::Ptr) {
+                changed |= _pointers[inst].meet(at(inst->arg(0)));
+              }
             }
           }
         }
