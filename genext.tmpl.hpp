@@ -27,7 +27,9 @@ namespace metajit {
         for (Block* block : *section) {
           for (Inst* inst : *block) {
             if (dynmatch(LoadInst, load, inst)) {
-              groups.insert(load->aliasing());
+              if (!load->flags().has(LoadFlags::Pure)) {
+                groups.insert(load->aliasing());
+              }
             } else if (dynmatch(StoreInst, store, inst)) {
               groups.insert(store->aliasing());
             }
