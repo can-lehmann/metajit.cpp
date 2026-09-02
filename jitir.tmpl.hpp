@@ -4708,7 +4708,7 @@ namespace metajit {
       }
     }
 
-    #ifndef NDEBUG
+    #ifdef METAJIT_SLOW_ASSERTS
     void verify_incoming() {
       std::vector<std::vector<Block*>> expected(incoming.size());
       _compute_incoming(expected);
@@ -5001,7 +5001,7 @@ namespace metajit {
           }
           break;
         }
-        #ifndef NDEBUG
+        #ifdef METAJIT_SLOW_ASSERTS
         verify_incoming();
         #endif
       }
