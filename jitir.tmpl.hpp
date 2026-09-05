@@ -810,69 +810,20 @@ namespace metajit {
     }
   };
 
-
-  template <class Self>
-  class BaseFlags {
-  protected:
-    uint32_t _flags = 0;
+  template <class Self, class T = uint32_t>
+  class BaseFlags: public lwir::BaseFlags<Self, T> {
   public:
-    BaseFlags(uint32_t flags = 0): _flags(flags) {}
-
-    explicit operator uint32_t() const {
-      return _flags;
-    }
-
-    explicit operator uint64_t() const {
-      return _flags;
-    }
-
-    bool has(Self flag) const {
-      return (_flags & flag._flags) != 0;
-    }
-
-    bool operator==(const Self& other) const {
-      return _flags == other._flags;
-    }
-
-    bool operator!=(const Self& other) const {
-      return !(*this == other);
-    }
-
-    Self operator|(const Self& other) const {
-      return Self(_flags | other._flags);
-    }
-
-    Self& operator|=(const Self& other) {
-      _flags |= other._flags;
-      return (Self&) *this;
-    }
+    using lwir::BaseFlags<Self, T>::BaseFlags;
 
     void write(PrettyStream& stream) const {
       stream << "{";
       bool is_first = true;
-      for (size_t it = 0; it < Self::COUNT; it++) {
-        uint32_t bit = 1 << it;
-        if (_flags & bit) {
-          if (!is_first) { stream << ", "; }
-          is_first = false;
-          stream << Highlight::Constant << Self::NAMES[it] << Highlight::None;
-        }
+      for (const char* name : this->names()) {
+        if (!is_first) { stream << ", "; }
+        is_first = false;
+        stream << Highlight::Constant << name << Highlight::None;
       }
       stream << "}";
-    }
-
-    void write_json(std::ostream& stream) const {
-      stream << "[";
-      bool is_first = true;
-      for (size_t it = 0; it < Self::COUNT; it++) {
-        uint32_t bit = 1 << it;
-        if (_flags & bit) {
-          if (!is_first) { stream << ", "; }
-          is_first = false;
-          stream << "\"" << Self::NAMES[it] << "\"";
-        }
-      }
-      stream << "]";
     }
   };
 
