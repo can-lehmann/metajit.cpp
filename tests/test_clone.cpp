@@ -174,5 +174,15 @@ int main(int argc, char** argv) {
     );
   });
 
+  suite.clone_test("call symbol").run([](Builder& builder) {
+    builder.move_to_end(builder.build_block({Type::Int32, Type::Int32}));
+    builder.build_call(
+      builder.build_symbol(Type::Ptr, "callee"),
+      Type::Void,
+      {builder.entry_arg(0), builder.entry_arg(1)},
+      CallConv::Default
+    );
+  });
+
   return suite.finish();
 }
