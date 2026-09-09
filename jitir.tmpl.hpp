@@ -5793,6 +5793,11 @@ namespace metajit {
         return builder.build_const(constant->type(), constant->value());
       } else if (dynmatch(Poison, poison, value)) {
         return builder.build_poison(poison->type());
+      } else if (dynmatch(Symbol, symbol, value)) {
+        return builder.build_symbol(
+          symbol->type(),
+          std::string(symbol->symbol().data(), symbol->symbol().size())
+        );
       } else {
         assert(false);
         return nullptr;
@@ -6285,4 +6290,3 @@ namespace metajit {
     }
   };
 }
-
