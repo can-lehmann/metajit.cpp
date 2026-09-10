@@ -6029,9 +6029,6 @@ namespace metajit {
         _closures(closures),
         _builder(section) {
       
-      _closures.write(std::cerr);
-      std::cerr << std::endl;
-
       slice_blocks();
       build_dispatcher();
     }
