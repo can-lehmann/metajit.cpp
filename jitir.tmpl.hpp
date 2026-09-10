@@ -666,6 +666,10 @@ namespace metajit {
 
     void write(PrettyStream& stream, InfoWriter* info_writer = nullptr) {
       write_header(stream);
+      if (info_writer && info_writer->block) {
+        stream << " ; ";
+        info_writer->block(stream, this);
+      }
       stream << '\n';
       for (Inst* inst : _insts) {
         stream << "  ";
@@ -5709,8 +5713,9 @@ namespace metajit {
         _closures.emplace(inst, Closure());
       }
 
-      populate_closures();
       set_ids();
+      find_frontiers();
+      populate_closures_and_frontiers();
     }
 
     auto begin() const { return _closures.begin(); }
