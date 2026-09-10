@@ -375,5 +375,44 @@ int main(int argc, char** argv) {
     });
   });
 
+  suite.reentry_test("branch_join_arg").run([](Builder& builder) {
+    Value* cond = builder.build_load(builder.entry_arg(0), Type::Bool, LoadFlags::None, AliasingGroup(0), 0);
+    Value* value = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+
+    Block* true_block = builder.build_block();
+    Block* false_block = builder.build_block();
+    Block* cont_block = builder.build_block({Type::Int32});
+
+    Inst* branch = builder.build_branch(cond, true_block, false_block);
+
+    builder.move_to_end(true_block);
+    Inst* jump_true = builder.build_jump(cont_block, { builder.build_const(Type::Int32, 1) });
+
+    builder.move_to_end(false_block);
+    Inst* jump_false = builder.build_jump(cont_block, { builder.build_const(Type::Int32, 2) });
+
+    builder.move_to_end(cont_block);
+    Value* add = builder.build_add(cont_block->arg(0), value);
+    builder.build_store(builder.entry_arg(0), add, AliasingGroup(0), 0);
+    builder.build_exit();
+
+    return std::vector<TestCase> ({
+      TestCase {
+        .reentry_point = jump_true,
+        .closure = {
+          { value, Bits::constant(Type::Int32, 42) }
+        },
+        .expected = 43
+      },
+      TestCase {
+        .reentry_point = jump_false,
+        .closure = {
+          { value, Bits::constant(Type::Int32, 123) }
+        },
+        .expected = 125
+      }
+    });
+  });
+
   return suite.finish();
 }
