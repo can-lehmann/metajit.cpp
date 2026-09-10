@@ -5894,12 +5894,28 @@ namespace metajit {
         _builder.add_args_to_block(block, args);
         for (Block* predecessor : predecessors) {
           JumpInst* jump = dynamic_cast<JumpInst*>(predecessor->terminator());
-          assert(jump);
-          std::vector<Value*> jump_args(jump->args().begin(), jump->args().end());
+          std::vector<Value*> jump_args;
+          if (jump) {
+            jump_args.assign(jump->args().begin(), jump->args().end());
+          }
           for (Value* value : values) {
             jump_args.push_back(incoming_value(predecessor, value));
           }
-          jump->set_args(_builder.alloc_span(jump_args));
+          if (jump) {
+            jump->set_args(_builder.alloc_span(jump_args));
+          } else {
+            BranchInst* branch = dynamic_cast<BranchInst*>(predecessor->terminator());
+            assert(branch);
+            Block* edge = _builder.build_block_before(block, {});
+            _builder.move_to_end(edge);
+            _builder.build_jump(block, jump_args);
+            if (branch->true_block() == block) {
+              branch->set_true_block(edge);
+            }
+            if (branch->false_block() == block) {
+              branch->set_false_block(edge);
+            }
+          }
         }
       }
       return substs;

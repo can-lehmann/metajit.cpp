@@ -347,5 +347,67 @@ int main(int argc, char** argv) {
     });
   });
 
+  for (bool direct_on_true : {false, true}) {
+    suite.reentry_test(direct_on_true ? "reconvergence_direct_true_edge" :
+                                      "reconvergence_direct_false_edge").run([direct_on_true](Builder& builder) {
+      Value* result = builder.entry_arg(0);
+      Value* cond = builder.build_load(result, Type::Bool, LoadFlags::None, 0, 0);
+      Value* a = builder.build_load(result, Type::Int32, LoadFlags::None, 0, 0);
+      Block* arm = builder.build_block();
+      Block* join = builder.build_block();
+      Inst* branch = builder.build_branch(cond, direct_on_true ? join : arm, direct_on_true ? arm : join);
+
+      builder.move_to_end(arm);
+      Inst* add = builder.build_add(a, builder.build_const(Type::Int32, 1));
+      builder.build_store(result, add, 0, 0);
+      builder.build_jump(join);
+
+      builder.move_to_end(join);
+      builder.build_store(result, builder.build_add(a, builder.build_const(Type::Int32, 100)), 0, 0);
+
+      return std::vector<TestCase>({
+        {branch, {{cond, Bits::constant(direct_on_true)}, {a, Bits::constant(Type::Int32, 10)}}, 110},
+        {branch, {{cond, Bits::constant(!direct_on_true)}, {a, Bits::constant(Type::Int32, 20)}}, 120},
+        {add, {{a, Bits::constant(Type::Int32, 30)}}, 130}
+      });
+    });
+  }
+
+  suite.reentry_test("reconvergence_successive_joins").run([](Builder& builder) {
+    Value* result = builder.entry_arg(0);
+    Value* cond = builder.build_load(result, Type::Bool, LoadFlags::None, 0, 0);
+    Value* a = builder.build_load(result, Type::Int32, LoadFlags::None, 0, 0);
+    Block* first_arm = builder.build_block();
+    Block* first_join = builder.build_block();
+    Block* second_arm = builder.build_block();
+    Block* second_join = builder.build_block();
+    Inst* branch = builder.build_branch(cond, first_arm, first_join);
+
+    builder.move_to_end(first_arm);
+    Inst* first_add = builder.build_add(a, builder.build_const(Type::Int32, 1));
+    builder.build_store(result, first_add, 0, 0);
+    builder.build_jump(first_join);
+
+    builder.move_to_end(first_join);
+    Value* b = builder.build_add(a, builder.build_const(Type::Int32, 1));
+    builder.build_branch(cond, second_arm, second_join);
+
+    builder.move_to_end(second_arm);
+    Inst* second_add = builder.build_add(b, builder.build_const(Type::Int32, 1));
+    builder.build_store(result, second_add, 0, 0);
+    builder.build_branch(builder.build_const(Type::Bool, 1), second_join, second_join);
+
+    builder.move_to_end(second_join);
+    builder.build_store(result, builder.build_add(a, b), 0, 0);
+
+    return std::vector<TestCase>({
+      {branch, {{cond, Bits::constant(true)}, {a, Bits::constant(Type::Int32, 10)}}, 21},
+      {branch, {{cond, Bits::constant(false)}, {a, Bits::constant(Type::Int32, 20)}}, 41},
+      {first_add, {{cond, Bits::constant(true)}, {a, Bits::constant(Type::Int32, 30)}}, 61},
+      {first_add, {{cond, Bits::constant(false)}, {a, Bits::constant(Type::Int32, 40)}}, 81},
+      {second_add, {{a, Bits::constant(Type::Int32, 50)}, {b, Bits::constant(Type::Int32, 12)}}, 62}
+    });
+  });
+
   return suite.finish();
 }
