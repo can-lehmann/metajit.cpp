@@ -1020,7 +1020,7 @@ b3:
     delete section;
   });
 
-  suite.test("cse load invalidation is scoped to dominating path").run([]() {
+  suite.test("cse does not merge loads across block boundary").run([]() {
     Context context;
     Allocator allocator;
     Section* section = new Section(context, allocator);
@@ -1066,7 +1066,8 @@ b1:
   Store %1, %7, aliasing=0, offset=0
   Jump block=b3
 b2:
-  Store %1, %4, aliasing=0, offset=0
+  %10 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
+  Store %1, %10, aliasing=0, offset=0
   Jump block=b3
 b3:
   Exit
@@ -1075,7 +1076,7 @@ b3:
     delete section;
   });
 
-  suite.test("cse call invalidation is scoped to dominating path").run([]() {
+  suite.test("cse does not merge loads across block boundary after call").run([]() {
     Context context;
     Allocator allocator;
     Section* section = new Section(context, allocator);
@@ -1122,9 +1123,42 @@ b1:
   Store %1, %7, aliasing=0, offset=0
   Jump block=b3
 b2:
-  Store %1, %4, aliasing=0, offset=0
+  %10 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
+  Store %1, %10, aliasing=0, offset=0
   Jump block=b3
 b3:
+  Exit
+}
+)", section);
+    delete section;
+  });
+
+  suite.test("cse does not merge a load reused unmodified across a block boundary").run([]() {
+    Context context;
+    Allocator allocator;
+    Section* section = new Section(context, allocator);
+    Builder builder(section);
+    Block* b0 = builder.build_block({Type::Ptr});
+    builder.move_to_end(b0);
+    Value* ptr = b0->arg(0);
+    Value* l0 = builder.build_load(ptr, Type::Int64, {}, AliasingGroup(0), 0);
+
+    Block* b1 = builder.build_block();
+    builder.build_jump(b1);
+
+    builder.move_to_end(b1);
+    Value* l1 = builder.build_load(ptr, Type::Int64, {}, AliasingGroup(0), 0);
+    builder.build_store(ptr, l1, AliasingGroup(0), 8);
+    builder.build_exit();
+    (void) l0;
+    section->set_ordering(BlockOrdering::Dominator);
+    check_cse(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  Jump block=b1
+b1:
+  %3 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  Store %0, %3, aliasing=0, offset=8
   Exit
 }
 )", section);

@@ -5131,12 +5131,11 @@ namespace metajit {
       std::unordered_map<Value*, Value*> substs;
       std::unordered_map<Lookup, Const*, LookupHash> consts;
       BlockMap<Canon> canon_at(section->block_count());
-      BlockMap<ValidLoads> valid_loads_at(section->block_count());
 
       for (Block* block : *section) {
         Block* idom = dt.idom(block);
         Canon canon = idom ? canon_at[idom] : Canon();
-        ValidLoads valid_loads = idom ? valid_loads_at[idom] : ValidLoads();
+        ValidLoads valid_loads;
 
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
@@ -5198,8 +5197,13 @@ namespace metajit {
           }
         }
 
+        for (auto& [group, loads] : valid_loads) {
+          for (LoadInst* load : loads) {
+            canon.erase(Lookup(load));
+          }
+        }
+
         canon_at[block] = std::move(canon);
-        valid_loads_at[block] = std::move(valid_loads);
       }
     }
   };
