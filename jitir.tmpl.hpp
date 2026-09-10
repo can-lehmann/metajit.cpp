@@ -5119,15 +5119,24 @@ namespace metajit {
         return lookup.value->hash();
       }
     };
+
+    using Canon = std::unordered_map<Lookup, Value*, LookupHash>;
+    using ValidLoads = std::unordered_map<AliasingGroup, std::vector<LoadInst*>>;
   public:
     CommonSubexprElim(Section* section): Pass(section) {
       assert(section->ordering() >= BlockOrdering::Dominator);
 
+      DominatorTree dt(section);
+
       std::unordered_map<Value*, Value*> substs;
       std::unordered_map<Lookup, Const*, LookupHash> consts;
+      BlockMap<Canon> canon_at(section->block_count());
+      BlockMap<ValidLoads> valid_loads_at(section->block_count());
+
       for (Block* block : *section) {
-        std::unordered_map<Lookup, Value*, LookupHash> canon;
-        std::unordered_map<AliasingGroup, std::vector<LoadInst*>> valid_loads;
+        Block* idom = dt.idom(block);
+        Canon canon = idom ? canon_at[idom] : Canon();
+        ValidLoads valid_loads = idom ? valid_loads_at[idom] : ValidLoads();
 
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
@@ -5175,7 +5184,7 @@ namespace metajit {
             inst_it++;
             continue;
           }
-          
+
           Lookup lookup(inst);
           if (canon.find(lookup) == canon.end()) {
             canon[lookup] = inst;
@@ -5188,6 +5197,9 @@ namespace metajit {
             inst_it = inst_it.erase();
           }
         }
+
+        canon_at[block] = std::move(canon);
+        valid_loads_at[block] = std::move(valid_loads);
       }
     }
   };
