@@ -5611,6 +5611,7 @@ namespace metajit {
     Section* _section;
     BindingTimeGroups _binding_time_groups;
     std::unordered_map<Inst*, Closure> _closures;
+    std::vector<std::set<NamedValue*>> _live_before_block;
 
     void find_reentry_points() {
       _closures.emplace(*_section->entry()->begin(), Closure());
@@ -5661,11 +5662,11 @@ namespace metajit {
     }
 
     void populate_closures() {
-      std::vector<std::set<NamedValue*>> live_before_block(_section->block_count());
+      _live_before_block.resize(_section->block_count());
       for (Block* block : _section->rev_range()) {
         std::set<NamedValue*> live;
         for (Block* succ : block->successors()) {
-          for (NamedValue* value : live_before_block[succ->name()]) {
+          for (NamedValue* value : _live_before_block[succ->name()]) {
             live.insert(value);
           }
         }
@@ -5692,7 +5693,7 @@ namespace metajit {
           live.erase(arg);
         }
 
-        live_before_block[block->name()] = live;
+        _live_before_block[block->name()] = std::move(live);
       }
     }
 
@@ -5733,6 +5734,10 @@ namespace metajit {
 
     auto begin() const { return _closures.begin(); }
     auto end() const { return _closures.end(); }
+
+    const std::set<NamedValue*>& live_before(Block* block) const {
+      return _live_before_block.at(block->name());
+    }
 
     bool has(Inst* inst) const {
       return _closures.find(inst) != _closures.end();
@@ -5853,19 +5858,59 @@ namespace metajit {
     Builder _builder;
     Block* _original_entry;
     std::unordered_map<Inst*, Block*> _entry_blocks;
-    std::unordered_map<Block*, std::map<Value*, Value*>> _substs_at_entry;
+    std::unordered_map<Block*, std::vector<Block*>> _predecessors;
+    std::unordered_map<Block*, std::map<Value*, Value*>> _substs_at_exit;
+
+    Value* incoming_value(Block* predecessor, Value* value) const {
+      const auto& substs = _substs_at_exit.at(predecessor);
+      return substs.find(value) != substs.end() ? substs.at(value) : value;
+    }
+
+    std::map<Value*, Value*> merge_substs(Block* block) {
+      const auto& predecessors = _predecessors[block];
+      if (predecessors.empty()) {
+        return {};
+      }
+      std::map<Value*, Value*> substs = _substs_at_exit.at(predecessors.front());
+      if (predecessors.size() == 1) {
+        return substs;
+      }
+
+      std::vector<Value*> values;
+      std::vector<Arg*> args;
+      for (NamedValue* value : _closures.live_before(block)) {
+        Value* first = incoming_value(predecessors.front(), value);
+        for (Block* predecessor : predecessors) {
+          if (incoming_value(predecessor, value) != first) {
+            Arg* arg = _builder.alloc_arg(value->type(), block->args().size() + args.size());
+            args.push_back(arg);
+            values.push_back(value);
+            substs[value] = arg;
+            break;
+          }
+        }
+      }
+      if (!args.empty()) {
+        _builder.add_args_to_block(block, args);
+        for (Block* predecessor : predecessors) {
+          JumpInst* jump = dynamic_cast<JumpInst*>(predecessor->terminator());
+          assert(jump);
+          std::vector<Value*> jump_args(jump->args().begin(), jump->args().end());
+          for (Value* value : values) {
+            jump_args.push_back(incoming_value(predecessor, value));
+          }
+          jump->set_args(_builder.alloc_span(jump_args));
+        }
+      }
+      return substs;
+    }
 
     void slice_blocks() {
-      _substs_at_entry.emplace(
-        _section->entry(),
-        std::map<Value*, Value*>()
-      );
-
       Block* block = _section->entry();
       while (block) {
         Block* next_block = block->next();
         
-        std::map<Value*, Value*> substs = _substs_at_entry.at(block);
+        std::map<Value*, Value*> substs = merge_substs(block);
 
         Inst* inst = *block->begin();
         while (inst && !_closures.has(inst)) {
@@ -5909,11 +5954,12 @@ namespace metajit {
           inst = next_inst;
         }
 
-        for (Block* succ : _builder.block()->successors()) {
-          if (_substs_at_entry.find(succ) == _substs_at_entry.end()) {
-            _substs_at_entry.emplace(succ, substs);
-          } else {
-            assert(_substs_at_entry[succ] == substs && "Re-convergence from different closures is currently not supported.");
+        Block* last = _builder.block();
+        _substs_at_exit.emplace(last, std::move(substs));
+        for (Block* succ : last->successors()) {
+          auto& predecessors = _predecessors[succ];
+          if (predecessors.empty() || predecessors.back() != last) {
+            predecessors.push_back(last);
           }
         }
 

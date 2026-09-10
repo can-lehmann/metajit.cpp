@@ -286,5 +286,66 @@ int main(int argc, char** argv) {
     });
   });
 
+  suite.reentry_test("branch_arm_reconvergence").run([](Builder& builder) {
+    Value* result = builder.entry_arg(0);
+    Value* cond = builder.build_load(result, Type::Bool, LoadFlags::None, 0, 0);
+    Value* a = builder.build_load(result, Type::Int32, LoadFlags::None, 0, 0);
+    Block* on_true = builder.build_block();
+    Block* on_false = builder.build_block();
+    Block* join = builder.build_block();
+    Inst* branch = builder.build_branch(cond, on_true, on_false);
+
+    builder.move_to_end(on_true);
+    Inst* add_true = builder.build_add(a, builder.build_const(Type::Int32, 1));
+    builder.build_store(result, add_true, 0, 0);
+    builder.build_jump(join);
+
+    builder.move_to_end(on_false);
+    Inst* add_false = builder.build_add(a, builder.build_const(Type::Int32, 2));
+    builder.build_store(result, add_false, 0, 0);
+    builder.build_jump(join);
+
+    builder.move_to_end(join);
+    Value* stored = builder.build_load(result, Type::Int32, LoadFlags::None, 0, 0);
+    builder.build_store(result, builder.build_add(a, stored), 0, 0);
+
+    return std::vector<TestCase>({
+      {branch, {{cond, Bits::constant(true)}, {a, Bits::constant(Type::Int32, 10)}}, 21},
+      {branch, {{cond, Bits::constant(false)}, {a, Bits::constant(Type::Int32, 20)}}, 42},
+      {add_true, {{a, Bits::constant(Type::Int32, 30)}}, 61},
+      {add_false, {{a, Bits::constant(Type::Int32, 40)}}, 82}
+    });
+  });
+
+  suite.reentry_test("reconvergence_block_arguments").run([](Builder& builder) {
+    Value* result = builder.entry_arg(0);
+    Value* cond = builder.build_load(result, Type::Bool, LoadFlags::None, 0, 0);
+    Value* a = builder.build_load(result, Type::Int32, LoadFlags::None, 0, 0);
+    Block* on_true = builder.build_block();
+    Block* on_false = builder.build_block();
+    Block* join = builder.build_block({Type::Int32});
+    Inst* branch = builder.build_branch(cond, on_true, on_false);
+
+    builder.move_to_end(on_true);
+    Inst* add = builder.build_add(a, builder.build_const(Type::Int32, 1));
+    builder.build_jump(join, std::vector<Value*>{add});
+
+    builder.move_to_end(on_false);
+    Inst* sub = builder.build_sub(a, builder.build_const(Type::Int32, 1));
+    builder.build_jump(join, std::vector<Value*>{sub});
+
+    builder.move_to_end(join);
+    Inst* total = builder.build_add(join->arg(0), a);
+    builder.build_store(result, total, 0, 0);
+
+    return std::vector<TestCase>({
+      {branch, {{cond, Bits::constant(true)}, {a, Bits::constant(Type::Int32, 10)}}, 21},
+      {branch, {{cond, Bits::constant(false)}, {a, Bits::constant(Type::Int32, 20)}}, 39},
+      {add, {{a, Bits::constant(Type::Int32, 30)}}, 61},
+      {sub, {{a, Bits::constant(Type::Int32, 40)}}, 79},
+      {total, {{join->arg(0), Bits::constant(Type::Int32, 11)}, {a, Bits::constant(Type::Int32, 50)}}, 61}
+    });
+  });
+
   return suite.finish();
 }
