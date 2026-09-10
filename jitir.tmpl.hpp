@@ -2384,7 +2384,7 @@ namespace metajit {
 
       _guards[value] = expected;
 
-      Block* failure = build_block();
+      Block* failure = Builder::build_block();
       Block* success = build_block();
 
       Block* a = success;
