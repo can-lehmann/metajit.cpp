@@ -39,90 +39,6 @@ using float32_t = float;
 using float64_t = double;
 
 namespace metajit {
-  class ArenaAllocator {
-  private:
-    struct Chunk {
-      Chunk* next = nullptr;
-      uint8_t data[0];
-    };
-
-    static constexpr size_t CHUNK_SIZE = 1024 * 1024; // 1 MiB
-    static constexpr size_t USABLE_SIZE = CHUNK_SIZE - sizeof(Chunk);
-
-    Chunk* _first = nullptr;
-    Chunk* _current = nullptr;
-
-    size_t _left = 0;
-    uint8_t* _ptr = nullptr;
-
-    inline size_t align_pad(void* ptr, size_t align) {
-      size_t delta = (uintptr_t) ptr % align;
-      return delta ? align - delta : 0;
-    }
-  public:
-    ArenaAllocator() {
-      _first = (Chunk*) malloc(CHUNK_SIZE);
-      new (_first) Chunk();
-      _current = _first;
-    }
-
-    ~ArenaAllocator() {
-      Chunk* chunk = _first;
-      while (chunk) {
-        Chunk* next = chunk->next;
-        free(chunk);
-        chunk = next;
-      }
-    }
-
-    void* alloc(size_t size, size_t align) {
-      assert(size <= USABLE_SIZE);
-
-      size_t align_padding = align_pad(_ptr, align);
-
-      if (__builtin_expect(_left - align_padding < size, 0)) {
-        if (_current->next) {
-          _current = _current->next;
-        } else {
-          Chunk* chunk = (Chunk*) malloc(CHUNK_SIZE);
-          new (chunk) Chunk();
-          _current->next = chunk;
-          _current = chunk;  
-        }
-        _left = USABLE_SIZE;
-        _ptr = _current->data;
-        align_padding = align_pad(_ptr, align);
-      }
-
-      _ptr += align_padding;
-      _left -= align_padding;
-      void* ptr = (void*) _ptr;
-      _ptr += size;
-      _left -= size; 
-      return ptr;
-    }
-
-    template <class T>
-    T* alloc() {
-      return (T*) alloc(sizeof(T), alignof(T));
-    }
-
-    void dealloc_all() {
-      _current = _first;
-      _ptr = _first->data;
-      _left = USABLE_SIZE;
-    }
-
-    void zero_all() {
-      Chunk* chunk = _first;
-      while (chunk) {
-        std::memset(chunk->data, 0, USABLE_SIZE);
-        chunk = chunk->next;
-      }
-      dealloc_all();
-    }
-  };
-
   // WARNING: Does not deallocate, only use for testing
   class MallocAllocator {
   public:
@@ -134,7 +50,7 @@ namespace metajit {
     }
   };
 
-  using Allocator = ArenaAllocator;
+  using Allocator = lwir::ArenaAllocator;
 
   class Timer {
   private:

@@ -104,7 +104,7 @@ namespace metajit {
     HeapLayout* _heap = nullptr;
     bool _pure = false;
   public:
-    LayoutBuilder(): _allocator(new ArenaAllocator()), _owns_allocator(true) {}
+    LayoutBuilder(): _allocator(new Allocator()), _owns_allocator(true) {}
     LayoutBuilder(Allocator& allocator): _allocator(&allocator), _owns_allocator(false) {}
 
     ~LayoutBuilder() {
