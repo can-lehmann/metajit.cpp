@@ -4241,96 +4241,6 @@ namespace metajit {
     }
   };
 
-  class CommonSubexprElim: public Pass<CommonSubexprElim> {
-  private:
-    struct Lookup {
-      Value* value = nullptr;
-
-      Lookup(Value* _value): value(_value) {}
-
-      bool operator==(const Lookup& other) const {
-        return value->equals(other.value);
-      }
-    };
-
-    struct LookupHash {
-      size_t operator()(const Lookup& lookup) const {
-        return lookup.value->hash();
-      }
-    };
-  public:
-    CommonSubexprElim(Section* section): Pass(section) {
-      assert(section->ordering() >= BlockOrdering::Dominator);
-
-      std::unordered_map<Value*, Value*> substs;
-      std::unordered_map<Lookup, Const*, LookupHash> consts;
-      for (Block* block : *section) {
-        std::unordered_map<Lookup, Value*, LookupHash> canon;
-        std::unordered_map<AliasingGroup, std::vector<LoadInst*>> valid_loads;
-
-        for (auto inst_it = block->begin(); inst_it != block->end(); ) {
-          Inst* inst = *inst_it;
-
-          for (size_t it = 0; it < inst->arg_count(); it++) {
-            Value* arg = inst->arg(it);
-            if (substs.find(arg) != substs.end()) {
-              inst->set_arg(it, substs.at(arg));
-            } else if (dynmatch(Const, constant, arg)) {
-              Lookup lookup(constant);
-              if (consts.find(lookup) != consts.end()) {
-                inst->set_arg(it, consts.at(lookup));
-                substs[constant] = consts.at(lookup);
-              } else {
-                consts[lookup] = constant;
-              }
-            }
-          }
-
-          if (dynmatch(StoreInst, store, inst)) {
-            std::vector<LoadInst*> remaining_loads;
-            for (LoadInst* load : valid_loads[store->aliasing()]) {
-              if (could_alias(load, store)) {
-                assert(canon.find(Lookup(load)) != canon.end());
-                canon.erase(Lookup(load));
-              } else {
-                remaining_loads.push_back(load);
-              }
-            }
-            valid_loads[store->aliasing()] = remaining_loads;
-          } else if (dynamic_cast<CallInst*>(inst)) {
-            // Calls can invalidate any cached memory-derived value.
-            for (auto& [group, loads] : valid_loads) {
-              for (LoadInst* load : loads) {
-                canon.erase(Lookup(load));
-              }
-            }
-            valid_loads.clear();
-          }
-
-          if (inst->has_side_effect() ||
-              inst->is_terminator() ||
-              dynamic_cast<CommentInst*>(inst) ||
-              dynamic_cast<AllocaInst*>(inst)) {
-            inst_it++;
-            continue;
-          }
-          
-          Lookup lookup(inst);
-          if (canon.find(lookup) == canon.end()) {
-            canon[lookup] = inst;
-            if (dynmatch(LoadInst, load, inst)) {
-              valid_loads[load->aliasing()].push_back(load);
-            }
-            inst_it++;
-          } else {
-            substs[inst] = canon.at(lookup);
-            inst_it = inst_it.erase();
-          }
-        }
-      }
-    }
-  };
-
   class Loop {
   private:
     Section* _section = nullptr;
@@ -5189,6 +5099,96 @@ namespace metajit {
         throw std::runtime_error("Failed to open file for writing: " + path);
       }
       write_dot(file);
+    }
+  };
+
+  class CommonSubexprElim: public Pass<CommonSubexprElim> {
+  private:
+    struct Lookup {
+      Value* value = nullptr;
+
+      Lookup(Value* _value): value(_value) {}
+
+      bool operator==(const Lookup& other) const {
+        return value->equals(other.value);
+      }
+    };
+
+    struct LookupHash {
+      size_t operator()(const Lookup& lookup) const {
+        return lookup.value->hash();
+      }
+    };
+  public:
+    CommonSubexprElim(Section* section): Pass(section) {
+      assert(section->ordering() >= BlockOrdering::Dominator);
+
+      std::unordered_map<Value*, Value*> substs;
+      std::unordered_map<Lookup, Const*, LookupHash> consts;
+      for (Block* block : *section) {
+        std::unordered_map<Lookup, Value*, LookupHash> canon;
+        std::unordered_map<AliasingGroup, std::vector<LoadInst*>> valid_loads;
+
+        for (auto inst_it = block->begin(); inst_it != block->end(); ) {
+          Inst* inst = *inst_it;
+
+          for (size_t it = 0; it < inst->arg_count(); it++) {
+            Value* arg = inst->arg(it);
+            if (substs.find(arg) != substs.end()) {
+              inst->set_arg(it, substs.at(arg));
+            } else if (dynmatch(Const, constant, arg)) {
+              Lookup lookup(constant);
+              if (consts.find(lookup) != consts.end()) {
+                inst->set_arg(it, consts.at(lookup));
+                substs[constant] = consts.at(lookup);
+              } else {
+                consts[lookup] = constant;
+              }
+            }
+          }
+
+          if (dynmatch(StoreInst, store, inst)) {
+            std::vector<LoadInst*> remaining_loads;
+            for (LoadInst* load : valid_loads[store->aliasing()]) {
+              if (could_alias(load, store)) {
+                assert(canon.find(Lookup(load)) != canon.end());
+                canon.erase(Lookup(load));
+              } else {
+                remaining_loads.push_back(load);
+              }
+            }
+            valid_loads[store->aliasing()] = remaining_loads;
+          } else if (dynamic_cast<CallInst*>(inst)) {
+            // Calls can invalidate any cached memory-derived value.
+            for (auto& [group, loads] : valid_loads) {
+              for (LoadInst* load : loads) {
+                canon.erase(Lookup(load));
+              }
+            }
+            valid_loads.clear();
+          }
+
+          if (inst->has_side_effect() ||
+              inst->is_terminator() ||
+              dynamic_cast<CommentInst*>(inst) ||
+              dynamic_cast<AllocaInst*>(inst)) {
+            inst_it++;
+            continue;
+          }
+          
+          Lookup lookup(inst);
+          if (canon.find(lookup) == canon.end()) {
+            canon[lookup] = inst;
+            if (dynmatch(LoadInst, load, inst)) {
+              valid_loads[load->aliasing()].push_back(load);
+            }
+            inst_it++;
+          } else {
+            substs[inst] = canon.at(lookup);
+            inst_it = inst_it.erase();
+          }
+        }
+      }
     }
   };
 
