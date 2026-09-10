@@ -324,5 +324,56 @@ int main(int argc, char** argv) {
     });
   });
 
+  suite.reentry_test("branch_join_nested").run([](Builder& builder) {
+    Value* cond1 = builder.build_load(builder.entry_arg(0), Type::Bool, LoadFlags::None, AliasingGroup(0), 0);
+    Value* cond2 = builder.build_load(builder.entry_arg(0), Type::Bool, LoadFlags::None, AliasingGroup(0), 0);
+    Value* value = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+
+    Block* true_block_outer = builder.build_block();
+    Block* true_block_inner = builder.build_block();
+    Block* false_block_inner = builder.build_block();
+    Block* cont_block_inner = builder.build_block();
+    Block* false_block_outer = builder.build_block();
+    Block* cont_block_outer = builder.build_block();
+
+    Inst* branch_outer = builder.build_branch(cond1, true_block_outer, false_block_outer);
+
+    builder.move_to_end(true_block_outer);
+    Inst* branch_inner = builder.build_branch(cond2, true_block_inner, false_block_inner);
+
+    builder.move_to_end(true_block_inner);
+    Inst* jump_true_inner = builder.build_jump(cont_block_inner);
+
+    builder.move_to_end(false_block_inner);
+    Inst* jump_false_inner = builder.build_jump(cont_block_inner);
+
+    builder.move_to_end(cont_block_inner);
+    builder.build_jump(cont_block_outer);
+
+    builder.move_to_end(false_block_outer);
+    builder.build_jump(cont_block_outer);
+
+    builder.move_to_end(cont_block_outer);
+    builder.build_store(builder.entry_arg(0), value, AliasingGroup(0), 0);
+    builder.build_exit();
+
+    return std::vector<TestCase> ({
+      TestCase {
+        .reentry_point = jump_true_inner,
+        .closure = {
+          { value, Bits::constant(Type::Int32, 42) }
+        },
+        .expected = 42
+      },
+      TestCase {
+        .reentry_point = jump_false_inner,
+        .closure = {
+          { value, Bits::constant(Type::Int32, 123) }
+        },
+        .expected = 123
+      }
+    });
+  });
+
   return suite.finish();
 }
