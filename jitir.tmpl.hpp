@@ -5063,6 +5063,14 @@ namespace metajit {
       return block->successors();
     }
 
+    std::vector<Block*> blocks() {
+      std::vector<Block*> result;
+      for (Block* block : *_section) {
+        result.push_back(block);
+      }
+      return result;
+    }
+
     DominatorTree(Section* section):
         lwir::DominatorTreeBase<DominatorTree, Block, BlockMap>(block_count(section)),
         _section(section) {
