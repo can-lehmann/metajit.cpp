@@ -4544,6 +4544,15 @@ namespace metajit {
         assert(value);
         extent_jump->set_arg(it, value);
       }
+
+      for (Block* block : *loop->section()) {
+        if (block == loop->preheader()) {
+          continue;
+        }
+        for (Inst* inst : *block) {
+          inst->substitute_args(substs);
+        }
+      }
     }
   };
 
