@@ -5730,6 +5730,15 @@ namespace metajit {
       return _closures.at(inst);
     }
 
+    bool is_frontier(Block* block) const {
+      return _frontiers.find(block) != _frontiers.end();
+    }
+
+    Frontier& frontier(Block* block) {
+      assert(is_frontier(block));
+      return _frontiers.at(block);
+    }
+
     size_t max_size() const {
       size_t max = 0;
       for (const auto& [inst, closure] : _closures) {
@@ -5867,7 +5876,19 @@ namespace metajit {
       while (block) {
         Block* next_block = block->next();
         
-        std::map<Value*, Value*> substs = _substs_at_entry.at(block);
+        std::map<Value*, Value*> substs;
+        if (_closures.is_frontier(block)) {
+          ReentryClosures::Frontier& frontier = _closures.frontier(block);
+          std::vector<Arg*> args;
+          for (NamedValue* value : frontier.values) {
+            Arg* arg = _builder.alloc_arg(value->type(), args.size() + block->args().size());
+            substs.emplace(value, arg);
+            args.push_back(arg);
+          }
+          _builder.add_args_to_block(block, args);
+        } else {
+          substs = _substs_at_entry.at(block);
+        }
 
         Inst* inst = *block->begin();
         while (inst && !_closures.has(inst)) {
@@ -5911,11 +5932,36 @@ namespace metajit {
           inst = next_inst;
         }
 
+        if (dynmatch(JumpInst, jump, _builder.block()->terminator())) {
+          if (_closures.is_frontier(jump->block())) {
+            ReentryClosures::Frontier& frontier = _closures.frontier(jump->block());
+
+            lwir::Span<Value*> jump_args = _builder.alloc_span<Value*>(jump->args().size() + frontier.values.size());
+            for (size_t i = 0; i < jump->args().size(); i++) {
+              jump_args[i] = jump->arg(i);
+            }
+            for (size_t i = 0; i < frontier.values.size(); i++) {
+              Value* value = frontier.values[i];
+              if (substs.find(value) != substs.end()) {
+                value = substs.at(value);
+              }
+              jump_args[jump->args().size() + i] = value;
+            }
+            jump->set_args(jump_args);
+          }
+        } else {
+          for (Block* succ : _builder.block()->successors()) {
+            assert(!_closures.is_frontier(succ) && "Unimplemented terminator for passing frontier args");
+          }
+        }
+
         for (Block* succ : _builder.block()->successors()) {
-          if (_substs_at_entry.find(succ) == _substs_at_entry.end()) {
-            _substs_at_entry.emplace(succ, substs);
-          } else {
-            assert(_substs_at_entry[succ] == substs && "Re-convergence from different closures is currently not supported.");
+          if (!_closures.is_frontier(succ)) {
+            if (_substs_at_entry.find(succ) == _substs_at_entry.end()) {
+              _substs_at_entry.emplace(succ, substs);
+            } else {
+              assert(_substs_at_entry[succ] == substs && "Invariant broken. Re-convergence from different closures requires a frontier.");
+            }
           }
         }
 
@@ -5983,6 +6029,9 @@ namespace metajit {
         _closures(closures),
         _builder(section) {
       
+      _closures.write(std::cerr);
+      std::cerr << std::endl;
+
       slice_blocks();
       build_dispatcher();
     }
