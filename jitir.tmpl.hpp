@@ -1226,6 +1226,35 @@ namespace metajit {
       block->set_args(new_args);
     }
 
+    template <class Fn>
+    void add_args_to_terminator(Block* source, const Fn& fn) {
+      Inst* terminator = source->terminator();
+      if (dynmatch(JumpInst, jump, terminator)) {
+        std::vector<Value*> additional_args = fn(jump->block());
+        lwir::Span<Value*> new_args = alloc_span<Value*>(jump->arg_count() + additional_args.size());
+        std::copy(jump->args().begin(), jump->args().end(), new_args.begin());
+        std::copy(additional_args.begin(), additional_args.end(), new_args.begin() + jump->arg_count());
+        jump->set_args(new_args);
+      } else if (dynmatch(BranchInst, branch, terminator)) {
+        #define succ(name) { \
+          std::vector<Value*> additional_args = fn(branch->name()); \
+          if (!additional_args.empty()) { \
+            Builder builder(_section); \
+            Block* jump_block = builder.build_block_after(source); \
+            jump_block->set_name(SIZE_MAX); \
+            builder.move_to_end(jump_block); \
+            builder.build_jump(branch->name(), additional_args); \
+            branch->set_##name(jump_block); \
+          } \
+        }
+
+        succ(true_block)
+        succ(false_block)
+
+        #undef succ
+      }
+    }
+
     // Folding
 
   private:
@@ -5884,6 +5913,11 @@ namespace metajit {
       Block* block = _section->entry();
       while (block) {
         Block* next_block = block->next();
+
+        if (block->name() == SIZE_MAX) {
+          block = next_block;
+          continue;
+        }
         
         std::map<Value*, Value*> substs;
         if (_closures.is_frontier(block)) {
@@ -5941,28 +5975,20 @@ namespace metajit {
           inst = next_inst;
         }
 
-        if (dynmatch(JumpInst, jump, _builder.block()->terminator())) {
-          if (_closures.is_frontier(jump->block())) {
-            ReentryClosures::Frontier& frontier = _closures.frontier(jump->block());
-
-            lwir::Span<Value*> jump_args = _builder.alloc_span<Value*>(jump->args().size() + frontier.values.size());
-            for (size_t i = 0; i < jump->args().size(); i++) {
-              jump_args[i] = jump->arg(i);
-            }
-            for (size_t i = 0; i < frontier.values.size(); i++) {
-              Value* value = frontier.values[i];
+        _builder.add_args_to_terminator(_builder.block(), [&](Block* block) {
+          std::vector<Value*> args;
+          if (_closures.is_frontier(block)) {
+            ReentryClosures::Frontier& frontier = _closures.frontier(block);
+            for (Value* value : frontier.values) {
               if (substs.find(value) != substs.end()) {
-                value = substs.at(value);
+                args.push_back(substs.at(value));
+              } else {
+                args.push_back(value);
               }
-              jump_args[jump->args().size() + i] = value;
             }
-            jump->set_args(jump_args);
           }
-        } else {
-          for (Block* succ : _builder.block()->successors()) {
-            assert(!_closures.is_frontier(succ) && "Unimplemented terminator for passing frontier args");
-          }
-        }
+          return args;
+        });
 
         for (Block* succ : _builder.block()->successors()) {
           if (!_closures.is_frontier(succ)) {
@@ -6298,37 +6324,14 @@ namespace metajit {
         }
         block->set_args(args);
 
-        if (dynmatch(JumpInst, jump, block->terminator())) {
-          BlockData& target_data = _blocks[jump->block()];
-          lwir::Span<Value*> args = _builder.alloc_span<Value*>(jump->args().size() + target_data.args.size()).zeroed();
-          for (size_t i = 0; i < jump->args().size(); i++) {
-            args[i] = jump->arg(i);
-          }
+        _builder.add_args_to_terminator(block, [&](Block* target) {
+          BlockData& target_data = _blocks[target];
+          std::vector<Value*> args;
           for (auto& [alloca, arg] : target_data.args) {
-            assert(args[arg->index()] == nullptr);
-            args[arg->index()] = data.values_at_exit[_alloca_index[alloca]];
+            args.push_back(data.values_at_exit[_alloca_index[alloca]]);
           }
-          jump->set_args(args);
-        } else if (dynmatch(BranchInst, branch, block->terminator())) {
-          #define edge(name) { \
-            BlockData& edge_data = _blocks[branch->name##_block()]; \
-            if (edge_data.args.size() != 0) { \
-              Block* jump_block = _builder.build_block_after(block); \
-              jump_block->set_name(SIZE_MAX); \
-              _builder.move_to_end(jump_block); \
-              JumpInst* jump = _builder.build_jump(edge_data.args.size(), branch->name##_block()); \
-              for (auto& [alloca, arg] : edge_data.args) { \
-                jump->set_arg(arg->index(), data.values_at_exit[_alloca_index[alloca]]); \
-              } \
-              branch->set_##name##_block(jump_block); \
-            } \
-          }
-          
-          edge(true)
-          edge(false)
-
-          #undef edge
-        }
+          return args;
+        });
       }
 
       for (AllocaInst* alloca : _lowerable_allocas) {
