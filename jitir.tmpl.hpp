@@ -584,8 +584,10 @@ namespace metajit {
   struct InfoWriter {
   public:
     using InstFn = std::function<void(std::ostream&, Inst*)>;
+    using BlockFn = std::function<void(std::ostream&, Block*)>;
 
     InstFn inst = nullptr;
+    BlockFn block = nullptr;
 
     InfoWriter() {}
     InfoWriter(const InstFn& _inst): inst(_inst) {}
@@ -664,6 +666,10 @@ namespace metajit {
 
     void write(PrettyStream& stream, InfoWriter* info_writer = nullptr) {
       write_header(stream);
+      if (info_writer && info_writer->block) {
+        stream << " ; ";
+        info_writer->block(stream, this);
+      }
       stream << '\n';
       for (Inst* inst : _insts) {
         stream << "  ";
@@ -5547,10 +5553,15 @@ namespace metajit {
         size += type_size(value->type());
       }
     };
+
+    struct Frontier {
+      std::vector<NamedValue*> values;
+    };
   private:
     Section* _section;
     BindingTimeGroups _binding_time_groups;
     std::unordered_map<Inst*, Closure> _closures;
+    std::unordered_map<Block*, Frontier> _frontiers;
 
     void find_reentry_points() {
       _closures.emplace(*_section->entry()->begin(), Closure());
@@ -5600,7 +5611,7 @@ namespace metajit {
       }
     }
 
-    void populate_closures() {
+    void populate_closures_and_frontiers() {
       std::vector<std::set<NamedValue*>> live_before_block(_section->block_count());
       for (Block* block : _section->rev_range()) {
         std::set<NamedValue*> live;
@@ -5634,6 +5645,12 @@ namespace metajit {
 
         live_before_block[block->name()] = live;
       }
+
+      for (auto& [block, frontier] : _frontiers) {
+        for (NamedValue* value : live_before_block[block->name()]) {
+          frontier.values.push_back(value);
+        }
+      }
     }
 
     void set_ids() {
@@ -5641,6 +5658,34 @@ namespace metajit {
       for (auto& [inst, closure] : _closures) {
         if (!closure.reuse) {
           closure.id = id++;
+        }
+      }
+    }
+
+    void find_frontiers() {
+      std::unordered_map<Block*, std::set<Block*>> dom_frontiers;
+      dom_frontiers = DominatorTree(_section).frontiers();
+
+      std::queue<Block*> open;
+
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          if (_closures.find(inst) != _closures.end()) {
+            open.push(block);
+            break;
+          }
+        }
+      }
+
+      while (!open.empty()) {
+        Block* block = open.front();
+        open.pop();
+
+        for (Block* frontier : dom_frontiers[block]) {
+          if (_frontiers.find(frontier) == _frontiers.end()) {
+            _frontiers.emplace(frontier, Frontier());
+            open.push(frontier);
+          }
         }
       }
     }
@@ -5653,8 +5698,9 @@ namespace metajit {
 
       find_reentry_points();
       find_closure_reuse();
-      populate_closures();
       set_ids();
+      find_frontiers();
+      populate_closures_and_frontiers();
     }
 
     ReentryClosures(Section* section, const std::set<Inst*>& reentry_points):
@@ -5667,8 +5713,9 @@ namespace metajit {
         _closures.emplace(inst, Closure());
       }
 
-      populate_closures();
       set_ids();
+      find_frontiers();
+      populate_closures_and_frontiers();
     }
 
     auto begin() const { return _closures.begin(); }
@@ -5683,6 +5730,15 @@ namespace metajit {
       return _closures.at(inst);
     }
 
+    bool is_frontier(Block* block) const {
+      return _frontiers.find(block) != _frontiers.end();
+    }
+
+    Frontier& frontier(Block* block) {
+      assert(is_frontier(block));
+      return _frontiers.at(block);
+    }
+
     size_t max_size() const {
       size_t max = 0;
       for (const auto& [inst, closure] : _closures) {
@@ -5694,7 +5750,8 @@ namespace metajit {
     }
 
     void write(std::ostream& stream) const {
-      InfoWriter info_writer([&](std::ostream& stream, Inst* inst) {
+      InfoWriter info_writer;
+      info_writer.inst = [&](std::ostream& stream, Inst* inst) {
         if (_closures.find(inst) != _closures.end()) {
           const Closure& closure = _closures.at(inst);
           if (closure.reuse) {
@@ -5712,7 +5769,21 @@ namespace metajit {
             }
           }
         }
-      });
+      };
+      info_writer.block = [&](std::ostream& stream, Block* block) {
+        if (_frontiers.find(block) != _frontiers.end()) {
+          const Frontier& frontier = _frontiers.at(block);
+          stream << "Frontier capturing ";
+          bool is_first = true;
+          for (NamedValue* value : frontier.values) {
+            if (!is_first) {
+              stream << ", ";
+            }
+            value->write_arg(stream);
+            is_first = false;
+          }
+        }
+      };
       _section->write(stream, &info_writer);
     }
   };
@@ -5805,7 +5876,19 @@ namespace metajit {
       while (block) {
         Block* next_block = block->next();
         
-        std::map<Value*, Value*> substs = _substs_at_entry.at(block);
+        std::map<Value*, Value*> substs;
+        if (_closures.is_frontier(block)) {
+          ReentryClosures::Frontier& frontier = _closures.frontier(block);
+          std::vector<Arg*> args;
+          for (NamedValue* value : frontier.values) {
+            Arg* arg = _builder.alloc_arg(value->type(), args.size() + block->args().size());
+            substs.emplace(value, arg);
+            args.push_back(arg);
+          }
+          _builder.add_args_to_block(block, args);
+        } else {
+          substs = _substs_at_entry.at(block);
+        }
 
         Inst* inst = *block->begin();
         while (inst && !_closures.has(inst)) {
@@ -5849,11 +5932,36 @@ namespace metajit {
           inst = next_inst;
         }
 
+        if (dynmatch(JumpInst, jump, _builder.block()->terminator())) {
+          if (_closures.is_frontier(jump->block())) {
+            ReentryClosures::Frontier& frontier = _closures.frontier(jump->block());
+
+            lwir::Span<Value*> jump_args = _builder.alloc_span<Value*>(jump->args().size() + frontier.values.size());
+            for (size_t i = 0; i < jump->args().size(); i++) {
+              jump_args[i] = jump->arg(i);
+            }
+            for (size_t i = 0; i < frontier.values.size(); i++) {
+              Value* value = frontier.values[i];
+              if (substs.find(value) != substs.end()) {
+                value = substs.at(value);
+              }
+              jump_args[jump->args().size() + i] = value;
+            }
+            jump->set_args(jump_args);
+          }
+        } else {
+          for (Block* succ : _builder.block()->successors()) {
+            assert(!_closures.is_frontier(succ) && "Unimplemented terminator for passing frontier args");
+          }
+        }
+
         for (Block* succ : _builder.block()->successors()) {
-          if (_substs_at_entry.find(succ) == _substs_at_entry.end()) {
-            _substs_at_entry.emplace(succ, substs);
-          } else {
-            assert(_substs_at_entry[succ] == substs && "Re-convergence from different closures is currently not supported.");
+          if (!_closures.is_frontier(succ)) {
+            if (_substs_at_entry.find(succ) == _substs_at_entry.end()) {
+              _substs_at_entry.emplace(succ, substs);
+            } else {
+              assert(_substs_at_entry[succ] == substs && "Invariant broken. Re-convergence from different closures requires a frontier.");
+            }
           }
         }
 
