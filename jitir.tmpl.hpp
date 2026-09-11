@@ -1227,7 +1227,8 @@ namespace metajit {
     }
 
     template <class Fn>
-    void add_args_to_terminator(Inst* terminator, const Fn& fn) {
+    void add_args_to_terminator(Block* source, const Fn& fn) {
+      Inst* terminator = source->terminator();
       if (dynmatch(JumpInst, jump, terminator)) {
         std::vector<Value*> additional_args = fn(jump->block());
         lwir::Span<Value*> new_args = alloc_span<Value*>(jump->arg_count() + additional_args.size());
@@ -1239,7 +1240,7 @@ namespace metajit {
           std::vector<Value*> additional_args = fn(branch->name()); \
           if (!additional_args.empty()) { \
             Builder builder(_section); \
-            Block* jump_block = builder.build_block_before(branch->name()); \
+            Block* jump_block = builder.build_block_after(source); \
             jump_block->set_name(SIZE_MAX); \
             builder.move_to_end(jump_block); \
             builder.build_jump(branch->name(), additional_args); \
@@ -5974,7 +5975,7 @@ namespace metajit {
           inst = next_inst;
         }
 
-        _builder.add_args_to_terminator(_builder.block()->terminator(), [&](Block* block) {
+        _builder.add_args_to_terminator(_builder.block(), [&](Block* block) {
           std::vector<Value*> args;
           if (_closures.is_frontier(block)) {
             ReentryClosures::Frontier& frontier = _closures.frontier(block);
@@ -6323,8 +6324,8 @@ namespace metajit {
         }
         block->set_args(args);
 
-        _builder.add_args_to_terminator(block->terminator(), [&](Block* block) {
-          BlockData& target_data = _blocks[block];
+        _builder.add_args_to_terminator(block, [&](Block* target) {
+          BlockData& target_data = _blocks[target];
           std::vector<Value*> args;
           for (auto& [alloca, arg] : target_data.args) {
             args.push_back(data.values_at_exit[_alloca_index[alloca]]);
