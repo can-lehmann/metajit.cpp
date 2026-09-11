@@ -278,5 +278,44 @@ int main(int argc, char** argv) {
     check_no_allocas(section);
   });
 
+  for (bool reload : {false, true}) {
+    suite.opt_test(reload ? "chain_loop_mem2reg_side_exit_removed_load" :
+                           "chain_loop_mem2reg_side_exit_hoisted_load").run([reload](Builder& builder, TestData& data) {
+      Value* limit = data.input(RandomRange(Type::Int32, 1, 10));
+      Value* counter = builder.build_alloca(Type::Int32);
+      builder.build_store(counter, builder.build_const(Type::Int32, 0), -1, 0);
+      Block* header = builder.build_block();
+      Block* backedge = builder.build_block();
+      Block* failure = builder.build_block();
+      builder.build_jump(header);
+
+      builder.move_to_end(header);
+      Value* count = builder.build_load(counter, Type::Int32, LoadFlags::InBounds, -1, 0);
+      builder.build_store(counter, builder.build_add(count, builder.build_const(Type::Int32, 1)), -1, 0);
+      Value* captured = reload ? builder.build_load(counter, Type::Int32, LoadFlags::InBounds, -1, 0) : count;
+      builder.build_branch(builder.build_lt_u(count, limit), backedge, failure);
+
+      builder.move_to_end(backedge);
+      builder.build_jump(header);
+
+      builder.move_to_end(failure);
+      data.output(captured);
+      data.output(builder.build_load(counter, Type::Int32, LoadFlags::InBounds, -1, 0));
+    }, [](Section* section) {
+      OrderBlocks::run(section, BlockOrdering::Natural);
+      Block* preheader = section->entry();
+      Block* header = dynamic_cast<JumpInst*>(preheader->terminator())->block();
+      Block* backedge = dynamic_cast<BranchInst*>(header->terminator())->true_block();
+      Chain chain;
+      chain.add(header);
+      chain.add(backedge);
+      Loop loop(section, header, backedge);
+      loop.set_preheader(preheader);
+      loop.set_chain(&chain);
+      ChainLoopMem2Reg::run(&loop);
+      DeadCodeElim::run(section);
+    });
+  }
+
   return suite.finish();
 }

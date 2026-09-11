@@ -1165,5 +1165,26 @@ b1:
     delete section;
   });
 
+  suite.test("trace_builder_guard_excludes_failure_from_chain").run([]() {
+    for (bool expected : {false, true}) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      TraceBuilder builder(&section);
+      Chain chain;
+      builder.set_chain(&chain);
+      Block* entry = builder.build_block(std::vector<Type>{Type::Bool});
+      builder.move_to_end(entry);
+      builder.build_guard(entry->arg(0), expected);
+      Block* success = builder.block();
+      builder.build_exit();
+
+      unittest_assert(!section.verify(std::cout));
+      unittest_assert(chain.size() == 2);
+      unittest_assert(chain.front() == entry);
+      unittest_assert(chain.back() == success);
+    }
+  });
+
   return suite.finish();
 }

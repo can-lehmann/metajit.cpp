@@ -2306,7 +2306,7 @@ namespace metajit {
 
       _guards[value] = expected;
 
-      Block* failure = build_block();
+      Block* failure = Builder::build_block();
       Block* success = build_block();
 
       Block* a = success;
@@ -4375,6 +4375,15 @@ namespace metajit {
         Value* value = current_values[-arg_groups[it]];
         assert(value);
         extent_jump->set_arg(it, value);
+      }
+
+      for (Block* block : *loop->section()) {
+        if (block == loop->preheader()) {
+          continue;
+        }
+        for (Inst* inst : *block) {
+          inst->substitute_args(substs);
+        }
       }
     }
   };
