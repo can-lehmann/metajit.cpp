@@ -414,5 +414,110 @@ int main(int argc, char** argv) {
     });
   });
 
+  suite.reentry_test("branch_join_direct_edge").run([](Builder& builder) {
+    Value* result = builder.entry_arg(0);
+    Value* cond = builder.build_load(result, Type::Bool, LoadFlags::None, AliasingGroup(0), 0);
+    Value* value = builder.build_load(result, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+
+    Block* arm = builder.build_block();
+    Block* join = builder.build_block();
+    Inst* branch = builder.build_branch(cond, arm, join);
+
+    builder.move_to_end(arm);
+    Inst* jump = builder.build_jump(join);
+
+    builder.move_to_end(join);
+    builder.build_store(result, value, AliasingGroup(0), 0);
+    builder.build_exit();
+
+    return std::vector<TestCase>({
+      TestCase {
+        .reentry_point = branch,
+        .closure = {
+          { cond, Bits::constant(true) },
+          { value, Bits::constant(Type::Int32, 42) }
+        },
+        .expected = 42
+      },
+      TestCase {
+        .reentry_point = branch,
+        .closure = {
+          { cond, Bits::constant(false) },
+          { value, Bits::constant(Type::Int32, 123) }
+        },
+        .expected = 123
+      },
+      TestCase {
+        .reentry_point = jump,
+        .closure = {
+          { value, Bits::constant(Type::Int32, 456) }
+        },
+        .expected = 456
+      }
+    });
+  });
+
+  suite.reentry_test("branch_join_two_frontier_targets").run([](Builder& builder) {
+    Value* result = builder.entry_arg(0);
+    Value* cond = builder.build_load(result, Type::Bool, LoadFlags::None, AliasingGroup(0), 0);
+    Value* value = builder.build_load(result, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+
+    Block* left = builder.build_block();
+    Block* right = builder.build_block();
+    Block* first_join = builder.build_block();
+    Block* second_join = builder.build_block();
+    builder.build_branch(cond, left, right);
+
+    builder.move_to_end(left);
+    Inst* left_branch = builder.build_branch(cond, first_join, second_join);
+
+    builder.move_to_end(right);
+    Inst* right_branch = builder.build_branch(cond, first_join, second_join);
+
+    builder.move_to_end(first_join);
+    builder.build_store(result, value, AliasingGroup(0), 0);
+    builder.build_exit();
+
+    builder.move_to_end(second_join);
+    Value* incremented = builder.build_add(value, builder.build_const(Type::Int32, 1));
+    builder.build_store(result, incremented, AliasingGroup(0), 0);
+    builder.build_exit();
+
+    return std::vector<TestCase>({
+      TestCase {
+        .reentry_point = left_branch,
+        .closure = {
+          { cond, Bits::constant(true) },
+          { value, Bits::constant(Type::Int32, 42) }
+        },
+        .expected = 42
+      },
+      TestCase {
+        .reentry_point = left_branch,
+        .closure = {
+          { cond, Bits::constant(false) },
+          { value, Bits::constant(Type::Int32, 123) }
+        },
+        .expected = 124
+      },
+      TestCase {
+        .reentry_point = right_branch,
+        .closure = {
+          { cond, Bits::constant(true) },
+          { value, Bits::constant(Type::Int32, 456) }
+        },
+        .expected = 456
+      },
+      TestCase {
+        .reentry_point = right_branch,
+        .closure = {
+          { cond, Bits::constant(false) },
+          { value, Bits::constant(Type::Int32, 789) }
+        },
+        .expected = 790
+      }
+    });
+  });
+
   return suite.finish();
 }

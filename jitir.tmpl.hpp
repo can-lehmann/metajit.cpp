@@ -5866,6 +5866,36 @@ namespace metajit {
     std::unordered_map<Inst*, Block*> _entry_blocks;
     std::unordered_map<Block*, std::map<Value*, Value*>> _substs_at_entry;
 
+    void pass_frontier_args(JumpInst* jump, const std::map<Value*, Value*>& substs) {
+      if (!_closures.is_frontier(jump->block())) {
+        return;
+      }
+      ReentryClosures::Frontier& frontier = _closures.frontier(jump->block());
+      lwir::Span<Value*> jump_args = _builder.alloc_span<Value*>(jump->args().size() + frontier.values.size());
+      for (size_t i = 0; i < jump->args().size(); i++) {
+        jump_args[i] = jump->arg(i);
+      }
+      for (size_t i = 0; i < frontier.values.size(); i++) {
+        Value* value = frontier.values[i];
+        if (substs.find(value) != substs.end()) {
+          value = substs.at(value);
+        }
+        jump_args[jump->args().size() + i] = value;
+      }
+      jump->set_args(jump_args);
+    }
+
+    Block* split_frontier_edge(Block* target, Block* before, const std::map<Value*, Value*>& substs) {
+      if (!_closures.is_frontier(target) || _closures.frontier(target).values.empty()) {
+        return target;
+      }
+      Builder builder(_section);
+      Block* edge = builder.build_block_before(before);
+      builder.move_to_end(edge);
+      pass_frontier_args(builder.build_jump(target), substs);
+      return edge;
+    }
+
     void slice_blocks() {
       _substs_at_entry.emplace(
         _section->entry(),
@@ -5932,29 +5962,6 @@ namespace metajit {
           inst = next_inst;
         }
 
-        if (dynmatch(JumpInst, jump, _builder.block()->terminator())) {
-          if (_closures.is_frontier(jump->block())) {
-            ReentryClosures::Frontier& frontier = _closures.frontier(jump->block());
-
-            lwir::Span<Value*> jump_args = _builder.alloc_span<Value*>(jump->args().size() + frontier.values.size());
-            for (size_t i = 0; i < jump->args().size(); i++) {
-              jump_args[i] = jump->arg(i);
-            }
-            for (size_t i = 0; i < frontier.values.size(); i++) {
-              Value* value = frontier.values[i];
-              if (substs.find(value) != substs.end()) {
-                value = substs.at(value);
-              }
-              jump_args[jump->args().size() + i] = value;
-            }
-            jump->set_args(jump_args);
-          }
-        } else {
-          for (Block* succ : _builder.block()->successors()) {
-            assert(!_closures.is_frontier(succ) && "Unimplemented terminator for passing frontier args");
-          }
-        }
-
         for (Block* succ : _builder.block()->successors()) {
           if (!_closures.is_frontier(succ)) {
             if (_substs_at_entry.find(succ) == _substs_at_entry.end()) {
@@ -5962,6 +5969,17 @@ namespace metajit {
             } else {
               assert(_substs_at_entry[succ] == substs && "Invariant broken. Re-convergence from different closures requires a frontier.");
             }
+          }
+        }
+
+        if (dynmatch(JumpInst, jump, _builder.block()->terminator())) {
+          pass_frontier_args(jump, substs);
+        } else if (dynmatch(BranchInst, branch, _builder.block()->terminator())) {
+          branch->set_true_block(split_frontier_edge(branch->true_block(), next_block, substs));
+          branch->set_false_block(split_frontier_edge(branch->false_block(), next_block, substs));
+        } else {
+          for (Block* succ : _builder.block()->successors()) {
+            assert(!_closures.is_frontier(succ) && "Unimplemented terminator for passing frontier args");
           }
         }
 
