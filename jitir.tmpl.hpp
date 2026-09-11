@@ -39,90 +39,6 @@ using float32_t = float;
 using float64_t = double;
 
 namespace metajit {
-  class ArenaAllocator {
-  private:
-    struct Chunk {
-      Chunk* next = nullptr;
-      uint8_t data[0];
-    };
-
-    static constexpr size_t CHUNK_SIZE = 1024 * 1024; // 1 MiB
-    static constexpr size_t USABLE_SIZE = CHUNK_SIZE - sizeof(Chunk);
-
-    Chunk* _first = nullptr;
-    Chunk* _current = nullptr;
-
-    size_t _left = 0;
-    uint8_t* _ptr = nullptr;
-
-    inline size_t align_pad(void* ptr, size_t align) {
-      size_t delta = (uintptr_t) ptr % align;
-      return delta ? align - delta : 0;
-    }
-  public:
-    ArenaAllocator() {
-      _first = (Chunk*) malloc(CHUNK_SIZE);
-      new (_first) Chunk();
-      _current = _first;
-    }
-
-    ~ArenaAllocator() {
-      Chunk* chunk = _first;
-      while (chunk) {
-        Chunk* next = chunk->next;
-        free(chunk);
-        chunk = next;
-      }
-    }
-
-    void* alloc(size_t size, size_t align) {
-      assert(size <= USABLE_SIZE);
-
-      size_t align_padding = align_pad(_ptr, align);
-
-      if (__builtin_expect(_left - align_padding < size, 0)) {
-        if (_current->next) {
-          _current = _current->next;
-        } else {
-          Chunk* chunk = (Chunk*) malloc(CHUNK_SIZE);
-          new (chunk) Chunk();
-          _current->next = chunk;
-          _current = chunk;  
-        }
-        _left = USABLE_SIZE;
-        _ptr = _current->data;
-        align_padding = align_pad(_ptr, align);
-      }
-
-      _ptr += align_padding;
-      _left -= align_padding;
-      void* ptr = (void*) _ptr;
-      _ptr += size;
-      _left -= size; 
-      return ptr;
-    }
-
-    template <class T>
-    T* alloc() {
-      return (T*) alloc(sizeof(T), alignof(T));
-    }
-
-    void dealloc_all() {
-      _current = _first;
-      _ptr = _first->data;
-      _left = USABLE_SIZE;
-    }
-
-    void zero_all() {
-      Chunk* chunk = _first;
-      while (chunk) {
-        std::memset(chunk->data, 0, USABLE_SIZE);
-        chunk = chunk->next;
-      }
-      dealloc_all();
-    }
-  };
-
   // WARNING: Does not deallocate, only use for testing
   class MallocAllocator {
   public:
@@ -134,7 +50,7 @@ namespace metajit {
     }
   };
 
-  using Allocator = ArenaAllocator;
+  using Allocator = lwir::ArenaAllocator;
 
   class Timer {
   private:
@@ -668,8 +584,10 @@ namespace metajit {
   struct InfoWriter {
   public:
     using InstFn = std::function<void(std::ostream&, Inst*)>;
+    using BlockFn = std::function<void(std::ostream&, Block*)>;
 
     InstFn inst = nullptr;
+    BlockFn block = nullptr;
 
     InfoWriter() {}
     InfoWriter(const InstFn& _inst): inst(_inst) {}
@@ -748,6 +666,10 @@ namespace metajit {
 
     void write(PrettyStream& stream, InfoWriter* info_writer = nullptr) {
       write_header(stream);
+      if (info_writer && info_writer->block) {
+        stream << " ; ";
+        info_writer->block(stream, this);
+      }
       stream << '\n';
       for (Inst* inst : _insts) {
         stream << "  ";
@@ -4325,96 +4247,6 @@ namespace metajit {
     }
   };
 
-  class CommonSubexprElim: public Pass<CommonSubexprElim> {
-  private:
-    struct Lookup {
-      Value* value = nullptr;
-
-      Lookup(Value* _value): value(_value) {}
-
-      bool operator==(const Lookup& other) const {
-        return value->equals(other.value);
-      }
-    };
-
-    struct LookupHash {
-      size_t operator()(const Lookup& lookup) const {
-        return lookup.value->hash();
-      }
-    };
-  public:
-    CommonSubexprElim(Section* section): Pass(section) {
-      assert(section->ordering() >= BlockOrdering::Dominator);
-
-      std::unordered_map<Value*, Value*> substs;
-      std::unordered_map<Lookup, Const*, LookupHash> consts;
-      for (Block* block : *section) {
-        std::unordered_map<Lookup, Value*, LookupHash> canon;
-        std::unordered_map<AliasingGroup, std::vector<LoadInst*>> valid_loads;
-
-        for (auto inst_it = block->begin(); inst_it != block->end(); ) {
-          Inst* inst = *inst_it;
-
-          for (size_t it = 0; it < inst->arg_count(); it++) {
-            Value* arg = inst->arg(it);
-            if (substs.find(arg) != substs.end()) {
-              inst->set_arg(it, substs.at(arg));
-            } else if (dynmatch(Const, constant, arg)) {
-              Lookup lookup(constant);
-              if (consts.find(lookup) != consts.end()) {
-                inst->set_arg(it, consts.at(lookup));
-                substs[constant] = consts.at(lookup);
-              } else {
-                consts[lookup] = constant;
-              }
-            }
-          }
-
-          if (dynmatch(StoreInst, store, inst)) {
-            std::vector<LoadInst*> remaining_loads;
-            for (LoadInst* load : valid_loads[store->aliasing()]) {
-              if (could_alias(load, store)) {
-                assert(canon.find(Lookup(load)) != canon.end());
-                canon.erase(Lookup(load));
-              } else {
-                remaining_loads.push_back(load);
-              }
-            }
-            valid_loads[store->aliasing()] = remaining_loads;
-          } else if (dynamic_cast<CallInst*>(inst)) {
-            // Calls can invalidate any cached memory-derived value.
-            for (auto& [group, loads] : valid_loads) {
-              for (LoadInst* load : loads) {
-                canon.erase(Lookup(load));
-              }
-            }
-            valid_loads.clear();
-          }
-
-          if (inst->has_side_effect() ||
-              inst->is_terminator() ||
-              dynamic_cast<CommentInst*>(inst) ||
-              dynamic_cast<AllocaInst*>(inst)) {
-            inst_it++;
-            continue;
-          }
-          
-          Lookup lookup(inst);
-          if (canon.find(lookup) == canon.end()) {
-            canon[lookup] = inst;
-            if (dynmatch(LoadInst, load, inst)) {
-              valid_loads[load->aliasing()].push_back(load);
-            }
-            inst_it++;
-          } else {
-            substs[inst] = canon.at(lookup);
-            inst_it = inst_it.erase();
-          }
-        }
-      }
-    }
-  };
-
   class Loop {
   private:
     Section* _section = nullptr;
@@ -5246,6 +5078,14 @@ namespace metajit {
       return block->successors();
     }
 
+    std::vector<Block*> blocks() {
+      std::vector<Block*> result;
+      for (Block* block : *_section) {
+        result.push_back(block);
+      }
+      return result;
+    }
+
     DominatorTree(Section* section):
         lwir::DominatorTreeBase<DominatorTree, Block, BlockMap>(block_count(section)),
         _section(section) {
@@ -5282,6 +5122,112 @@ namespace metajit {
         throw std::runtime_error("Failed to open file for writing: " + path);
       }
       write_dot(file);
+    }
+  };
+
+  class CommonSubexprElim: public Pass<CommonSubexprElim> {
+  private:
+    struct Lookup {
+      Value* value = nullptr;
+
+      Lookup(Value* _value): value(_value) {}
+
+      bool operator==(const Lookup& other) const {
+        return value->equals(other.value);
+      }
+    };
+
+    struct LookupHash {
+      size_t operator()(const Lookup& lookup) const {
+        return lookup.value->hash();
+      }
+    };
+
+    using Canon = std::unordered_map<Lookup, Value*, LookupHash>;
+    using ValidLoads = std::unordered_map<AliasingGroup, std::vector<LoadInst*>>;
+  public:
+    CommonSubexprElim(Section* section): Pass(section) {
+      assert(section->ordering() >= BlockOrdering::Dominator);
+
+      DominatorTree dt(section);
+
+      std::unordered_map<Value*, Value*> substs;
+      std::unordered_map<Lookup, Const*, LookupHash> consts;
+      BlockMap<Canon> canon_at_exit(section->block_count());
+
+      for (Block* block : *section) {
+        Block* idom = dt.idom(block);
+        Canon canon = idom ? canon_at_exit[idom] : Canon();
+        ValidLoads valid_loads;
+
+        for (auto inst_it = block->begin(); inst_it != block->end(); ) {
+          Inst* inst = *inst_it;
+
+          for (size_t it = 0; it < inst->arg_count(); it++) {
+            Value* arg = inst->arg(it);
+            if (substs.find(arg) != substs.end()) {
+              inst->set_arg(it, substs.at(arg));
+            } else if (dynmatch(Const, constant, arg)) {
+              Lookup lookup(constant);
+              if (consts.find(lookup) != consts.end()) {
+                inst->set_arg(it, consts.at(lookup));
+                substs[constant] = consts.at(lookup);
+              } else {
+                consts[lookup] = constant;
+              }
+            }
+          }
+
+          if (dynmatch(StoreInst, store, inst)) {
+            std::vector<LoadInst*> remaining_loads;
+            for (LoadInst* load : valid_loads[store->aliasing()]) {
+              if (could_alias(load, store)) {
+                assert(canon.find(Lookup(load)) != canon.end());
+                canon.erase(Lookup(load));
+              } else {
+                remaining_loads.push_back(load);
+              }
+            }
+            valid_loads[store->aliasing()] = remaining_loads;
+          } else if (dynamic_cast<CallInst*>(inst)) {
+            // Calls can invalidate any cached memory-derived value.
+            for (auto& [group, loads] : valid_loads) {
+              for (LoadInst* load : loads) {
+                canon.erase(Lookup(load));
+              }
+            }
+            valid_loads.clear();
+          }
+
+          if (inst->has_side_effect() ||
+              inst->is_terminator() ||
+              dynamic_cast<CommentInst*>(inst) ||
+              dynamic_cast<AllocaInst*>(inst)) {
+            inst_it++;
+            continue;
+          }
+
+          Lookup lookup(inst);
+          if (canon.find(lookup) == canon.end()) {
+            canon[lookup] = inst;
+            if (dynmatch(LoadInst, load, inst)) {
+              valid_loads[load->aliasing()].push_back(load);
+            }
+            inst_it++;
+          } else {
+            substs[inst] = canon.at(lookup);
+            inst_it = inst_it.erase();
+          }
+        }
+
+        for (auto& [group, loads] : valid_loads) {
+          for (LoadInst* load : loads) {
+            canon.erase(Lookup(load));
+          }
+        }
+
+        canon_at_exit[block] = std::move(canon);
+      }
     }
   };
 
@@ -5616,10 +5562,15 @@ namespace metajit {
         size += type_size(value->type());
       }
     };
+
+    struct Frontier {
+      std::vector<NamedValue*> values;
+    };
   private:
     Section* _section;
     BindingTimeGroups _binding_time_groups;
     std::unordered_map<Inst*, Closure> _closures;
+    std::unordered_map<Block*, Frontier> _frontiers;
 
     void find_reentry_points() {
       _closures.emplace(*_section->entry()->begin(), Closure());
@@ -5669,7 +5620,7 @@ namespace metajit {
       }
     }
 
-    void populate_closures() {
+    void populate_closures_and_frontiers() {
       std::vector<std::set<NamedValue*>> live_before_block(_section->block_count());
       for (Block* block : _section->rev_range()) {
         std::set<NamedValue*> live;
@@ -5703,6 +5654,12 @@ namespace metajit {
 
         live_before_block[block->name()] = live;
       }
+
+      for (auto& [block, frontier] : _frontiers) {
+        for (NamedValue* value : live_before_block[block->name()]) {
+          frontier.values.push_back(value);
+        }
+      }
     }
 
     void set_ids() {
@@ -5710,6 +5667,34 @@ namespace metajit {
       for (auto& [inst, closure] : _closures) {
         if (!closure.reuse) {
           closure.id = id++;
+        }
+      }
+    }
+
+    void find_frontiers() {
+      std::unordered_map<Block*, std::set<Block*>> dom_frontiers;
+      dom_frontiers = DominatorTree(_section).frontiers();
+
+      std::queue<Block*> open;
+
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          if (_closures.find(inst) != _closures.end()) {
+            open.push(block);
+            break;
+          }
+        }
+      }
+
+      while (!open.empty()) {
+        Block* block = open.front();
+        open.pop();
+
+        for (Block* frontier : dom_frontiers[block]) {
+          if (_frontiers.find(frontier) == _frontiers.end()) {
+            _frontiers.emplace(frontier, Frontier());
+            open.push(frontier);
+          }
         }
       }
     }
@@ -5722,8 +5707,9 @@ namespace metajit {
 
       find_reentry_points();
       find_closure_reuse();
-      populate_closures();
       set_ids();
+      find_frontiers();
+      populate_closures_and_frontiers();
     }
 
     ReentryClosures(Section* section, const std::set<Inst*>& reentry_points):
@@ -5736,8 +5722,9 @@ namespace metajit {
         _closures.emplace(inst, Closure());
       }
 
-      populate_closures();
       set_ids();
+      find_frontiers();
+      populate_closures_and_frontiers();
     }
 
     auto begin() const { return _closures.begin(); }
@@ -5752,6 +5739,15 @@ namespace metajit {
       return _closures.at(inst);
     }
 
+    bool is_frontier(Block* block) const {
+      return _frontiers.find(block) != _frontiers.end();
+    }
+
+    Frontier& frontier(Block* block) {
+      assert(is_frontier(block));
+      return _frontiers.at(block);
+    }
+
     size_t max_size() const {
       size_t max = 0;
       for (const auto& [inst, closure] : _closures) {
@@ -5763,7 +5759,8 @@ namespace metajit {
     }
 
     void write(std::ostream& stream) const {
-      InfoWriter info_writer([&](std::ostream& stream, Inst* inst) {
+      InfoWriter info_writer;
+      info_writer.inst = [&](std::ostream& stream, Inst* inst) {
         if (_closures.find(inst) != _closures.end()) {
           const Closure& closure = _closures.at(inst);
           if (closure.reuse) {
@@ -5781,7 +5778,21 @@ namespace metajit {
             }
           }
         }
-      });
+      };
+      info_writer.block = [&](std::ostream& stream, Block* block) {
+        if (_frontiers.find(block) != _frontiers.end()) {
+          const Frontier& frontier = _frontiers.at(block);
+          stream << "Frontier capturing ";
+          bool is_first = true;
+          for (NamedValue* value : frontier.values) {
+            if (!is_first) {
+              stream << ", ";
+            }
+            value->write_arg(stream);
+            is_first = false;
+          }
+        }
+      };
       _section->write(stream, &info_writer);
     }
   };
@@ -5874,7 +5885,19 @@ namespace metajit {
       while (block) {
         Block* next_block = block->next();
         
-        std::map<Value*, Value*> substs = _substs_at_entry.at(block);
+        std::map<Value*, Value*> substs;
+        if (_closures.is_frontier(block)) {
+          ReentryClosures::Frontier& frontier = _closures.frontier(block);
+          std::vector<Arg*> args;
+          for (NamedValue* value : frontier.values) {
+            Arg* arg = _builder.alloc_arg(value->type(), args.size() + block->args().size());
+            substs.emplace(value, arg);
+            args.push_back(arg);
+          }
+          _builder.add_args_to_block(block, args);
+        } else {
+          substs = _substs_at_entry.at(block);
+        }
 
         Inst* inst = *block->begin();
         while (inst && !_closures.has(inst)) {
@@ -5918,11 +5941,36 @@ namespace metajit {
           inst = next_inst;
         }
 
+        if (dynmatch(JumpInst, jump, _builder.block()->terminator())) {
+          if (_closures.is_frontier(jump->block())) {
+            ReentryClosures::Frontier& frontier = _closures.frontier(jump->block());
+
+            lwir::Span<Value*> jump_args = _builder.alloc_span<Value*>(jump->args().size() + frontier.values.size());
+            for (size_t i = 0; i < jump->args().size(); i++) {
+              jump_args[i] = jump->arg(i);
+            }
+            for (size_t i = 0; i < frontier.values.size(); i++) {
+              Value* value = frontier.values[i];
+              if (substs.find(value) != substs.end()) {
+                value = substs.at(value);
+              }
+              jump_args[jump->args().size() + i] = value;
+            }
+            jump->set_args(jump_args);
+          }
+        } else {
+          for (Block* succ : _builder.block()->successors()) {
+            assert(!_closures.is_frontier(succ) && "Unimplemented terminator for passing frontier args");
+          }
+        }
+
         for (Block* succ : _builder.block()->successors()) {
-          if (_substs_at_entry.find(succ) == _substs_at_entry.end()) {
-            _substs_at_entry.emplace(succ, substs);
-          } else {
-            assert(_substs_at_entry[succ] == substs && "Re-convergence from different closures is currently not supported.");
+          if (!_closures.is_frontier(succ)) {
+            if (_substs_at_entry.find(succ) == _substs_at_entry.end()) {
+              _substs_at_entry.emplace(succ, substs);
+            } else {
+              assert(_substs_at_entry[succ] == substs && "Invariant broken. Re-convergence from different closures requires a frontier.");
+            }
           }
         }
 

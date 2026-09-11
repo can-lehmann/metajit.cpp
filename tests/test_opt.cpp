@@ -938,6 +938,233 @@ b0(%0: Ptr):
     delete section;
   });
 
+  suite.test("cse merges across dominator chain").run([]() {
+    Context context;
+    Allocator allocator;
+    Section* section = new Section(context, allocator);
+    Builder builder(section);
+    Block* b0 = builder.build_block({Type::Int64, Type::Int64, Type::Ptr});
+    builder.move_to_end(b0);
+    Value* a = b0->arg(0);
+    Value* b = b0->arg(1);
+    Value* ptr = b0->arg(2);
+    builder.build_add(a, b);
+    Block* b1 = builder.build_block();
+    builder.build_jump(b1);
+    builder.move_to_end(b1);
+    Block* b2 = builder.build_block();
+    builder.build_jump(b2);
+    builder.move_to_end(b2);
+    Value* sum2 = builder.build_add(a, b);
+    builder.build_store(ptr, sum2, AliasingGroup(0), 0);
+    builder.build_exit();
+    section->set_ordering(BlockOrdering::Dominator);
+    check_cse(R"(section {
+b0(%0: Int64, %1: Int64, %2: Ptr):
+  %3 = Add %0, %1
+  Jump block=b1
+b1:
+  Jump block=b2
+b2:
+  Store %2, %3, aliasing=0, offset=0
+  Exit
+}
+)", section);
+    delete section;
+  });
+
+  suite.test("cse does not merge across sibling branches").run([]() {
+    Context context;
+    Allocator allocator;
+    Section* section = new Section(context, allocator);
+    Builder builder(section);
+    Block* b0 = builder.build_block({Type::Int64, Type::Int64, Type::Bool, Type::Ptr});
+    builder.move_to_end(b0);
+    Value* a = b0->arg(0);
+    Value* b = b0->arg(1);
+    Value* cond = b0->arg(2);
+    Value* ptr = b0->arg(3);
+    Block* b1 = builder.build_block();
+    Block* b2 = builder.build_block();
+    Block* b3 = builder.build_block();
+    builder.build_branch(cond, b1, b2);
+
+    builder.move_to_end(b1);
+    Value* sum1 = builder.build_add(a, b);
+    builder.build_store(ptr, sum1, AliasingGroup(0), 0);
+    builder.build_jump(b3);
+
+    builder.move_to_end(b2);
+    Value* sum2 = builder.build_add(a, b);
+    builder.build_store(ptr, sum2, AliasingGroup(0), 8);
+    builder.build_jump(b3);
+
+    builder.move_to_end(b3);
+    builder.build_exit();
+    section->set_ordering(BlockOrdering::Dominator);
+    check_cse(R"(section {
+b0(%0: Int64, %1: Int64, %2: Bool, %3: Ptr):
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  %5 = Add %0, %1
+  Store %3, %5, aliasing=0, offset=0
+  Jump block=b3
+b2:
+  %8 = Add %0, %1
+  Store %3, %8, aliasing=0, offset=8
+  Jump block=b3
+b3:
+  Exit
+}
+)", section);
+    delete section;
+  });
+
+  suite.test("cse does not merge loads across block boundary").run([]() {
+    Context context;
+    Allocator allocator;
+    Section* section = new Section(context, allocator);
+    Builder builder(section);
+    Block* b0 = builder.build_block({Type::Bool, Type::Ptr});
+    builder.move_to_end(b0);
+    Value* cond = b0->arg(0);
+    Value* out = b0->arg(1);
+    Value* size = builder.build_const(Type::Int64, 8);
+    Value* alloca = builder.build_alloca(size, 8);
+    builder.build_store(alloca, builder.build_const(Type::Int64, 1), AliasingGroup(0), 0);
+    Value* l0 = builder.build_load(alloca, Type::Int64, {}, AliasingGroup(0), 0);
+
+    Block* b1 = builder.build_block();
+    Block* b2 = builder.build_block();
+    Block* b3 = builder.build_block();
+    builder.build_branch(cond, b1, b2);
+
+    builder.move_to_end(b1);
+    builder.build_store(alloca, builder.build_const(Type::Int64, 2), AliasingGroup(0), 0);
+    Value* l1 = builder.build_load(alloca, Type::Int64, {}, AliasingGroup(0), 0);
+    builder.build_store(out, l1, AliasingGroup(0), 0);
+    builder.build_jump(b3);
+
+    builder.move_to_end(b2);
+    Value* l2 = builder.build_load(alloca, Type::Int64, {}, AliasingGroup(0), 0);
+    builder.build_store(out, l2, AliasingGroup(0), 0);
+    builder.build_jump(b3);
+
+    builder.move_to_end(b3);
+    builder.build_exit();
+    (void) l0;
+    section->set_ordering(BlockOrdering::Dominator);
+    check_cse(R"(section {
+b0(%0: Bool, %1: Ptr):
+  %2 = Alloca 8:Int64, align=8
+  Store %2, 1:Int64, aliasing=0, offset=0
+  %4 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
+  Branch %0, true_block=b1, false_block=b2
+b1:
+  Store %2, 2:Int64, aliasing=0, offset=0
+  %7 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
+  Store %1, %7, aliasing=0, offset=0
+  Jump block=b3
+b2:
+  %10 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
+  Store %1, %10, aliasing=0, offset=0
+  Jump block=b3
+b3:
+  Exit
+}
+)", section);
+    delete section;
+  });
+
+  suite.test("cse does not merge loads across block boundary after call").run([]() {
+    Context context;
+    Allocator allocator;
+    Section* section = new Section(context, allocator);
+    Builder builder(section);
+    Block* b0 = builder.build_block({Type::Bool, Type::Ptr});
+    builder.move_to_end(b0);
+    Value* cond = b0->arg(0);
+    Value* out = b0->arg(1);
+    Value* size = builder.build_const(Type::Int64, 8);
+    Value* alloca = builder.build_alloca(size, 8);
+    builder.build_store(alloca, builder.build_const(Type::Int64, 1), AliasingGroup(0), 0);
+    Value* l0 = builder.build_load(alloca, Type::Int64, {}, AliasingGroup(0), 0);
+    Value* callee = section->context().build_symbol(Type::Ptr, "cse_call_invalidation_target");
+
+    Block* b1 = builder.build_block();
+    Block* b2 = builder.build_block();
+    Block* b3 = builder.build_block();
+    builder.build_branch(cond, b1, b2);
+
+    builder.move_to_end(b1);
+    builder.build_call(callee, Type::Void, std::vector<Value*>{}, CallConv::Default);
+    Value* l1 = builder.build_load(alloca, Type::Int64, {}, AliasingGroup(0), 0);
+    builder.build_store(out, l1, AliasingGroup(0), 0);
+    builder.build_jump(b3);
+
+    builder.move_to_end(b2);
+    Value* l2 = builder.build_load(alloca, Type::Int64, {}, AliasingGroup(0), 0);
+    builder.build_store(out, l2, AliasingGroup(0), 0);
+    builder.build_jump(b3);
+
+    builder.move_to_end(b3);
+    builder.build_exit();
+    (void) l0;
+    section->set_ordering(BlockOrdering::Dominator);
+    check_cse(R"(section {
+b0(%0: Bool, %1: Ptr):
+  %2 = Alloca 8:Int64, align=8
+  Store %2, 1:Int64, aliasing=0, offset=0
+  %4 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
+  Branch %0, true_block=b1, false_block=b2
+b1:
+  Call @cse_call_invalidation_target:Ptr, type=Void, call_conv=Default, flags={}
+  %7 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
+  Store %1, %7, aliasing=0, offset=0
+  Jump block=b3
+b2:
+  %10 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
+  Store %1, %10, aliasing=0, offset=0
+  Jump block=b3
+b3:
+  Exit
+}
+)", section);
+    delete section;
+  });
+
+  suite.test("cse does not merge a load reused unmodified across a block boundary").run([]() {
+    Context context;
+    Allocator allocator;
+    Section* section = new Section(context, allocator);
+    Builder builder(section);
+    Block* b0 = builder.build_block({Type::Ptr});
+    builder.move_to_end(b0);
+    Value* ptr = b0->arg(0);
+    Value* l0 = builder.build_load(ptr, Type::Int64, {}, AliasingGroup(0), 0);
+
+    Block* b1 = builder.build_block();
+    builder.build_jump(b1);
+
+    builder.move_to_end(b1);
+    Value* l1 = builder.build_load(ptr, Type::Int64, {}, AliasingGroup(0), 0);
+    builder.build_store(ptr, l1, AliasingGroup(0), 8);
+    builder.build_exit();
+    (void) l0;
+    section->set_ordering(BlockOrdering::Dominator);
+    check_cse(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  Jump block=b1
+b1:
+  %3 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  Store %0, %3, aliasing=0, offset=8
+  Exit
+}
+)", section);
+    delete section;
+  });
+
   suite.test("trace_builder_guard_excludes_failure_from_chain").run([]() {
     for (bool expected : {false, true}) {
       Context context;

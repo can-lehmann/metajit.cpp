@@ -651,6 +651,10 @@ namespace metajit {
         return _builder.build_const(
           Type::Ptr, (uint64_t)(void*) constant
         );
+      } else if (dynmatch(Symbol, symbol, value)) {
+        return _builder.build_const(
+          Type::Ptr, (uint64_t)(void*) symbol
+        );
       } else if (value->is_named()) {
         Value* built = _built.at((NamedValue*) value);
         assert(built);
