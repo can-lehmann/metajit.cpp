@@ -90,6 +90,15 @@ int main(int argc, char** argv) {
       data.output(builder.build_const(Type::Int32, 456));
       builder.build_exit();
     });
+
+    suite.gen_ext_test("promote_twice").run([](Builder& builder, TraceTestData& data) {
+      Value* x = data.input(RandomRange(Type::Int32, 0, 3));
+      x = builder.build_promote(x);
+      data.output(x);
+      Value* y = data.input(RandomRange(Type::Int32, 0, 3));
+      y = builder.build_promote(y);
+      data.output(y);
+    });
     
   }
 
