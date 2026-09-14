@@ -5551,6 +5551,17 @@ namespace metajit {
     BindingTimeGroups* _binding_time_groups;
     std::unordered_map<Inst*, Closure> _closures;
     std::unordered_map<Block*, Frontier> _frontiers;
+    std::unordered_set<NamedValue*> _captured;
+
+    void collect_captured() {
+      for (const auto& [inst, closure] : _closures) {
+        if (!closure.reuse) {
+          for (const Capture& capture : closure.captures) {
+            _captured.insert(capture.value);
+          }
+        }
+      }
+    }
 
     void find_reentry_points() {
       _closures.emplace(*_section->entry()->begin(), Closure());
@@ -5691,12 +5702,13 @@ namespace metajit {
       set_ids();
       find_frontiers();
       populate_closures_and_frontiers();
+      collect_captured();
     }
 
     ReentryClosures(Section* section,
                     const std::set<Inst*>& reentry_points):
         _section(section) {
-      
+
       assert(section->ordering() >= BlockOrdering::Topological);
 
       for (Inst* inst : reentry_points) {
@@ -5706,11 +5718,12 @@ namespace metajit {
       set_ids();
       find_frontiers();
       populate_closures_and_frontiers();
+      collect_captured();
     }
 
     ReentryClosures(const ReentryClosures& reentry_closures, Clone& clone):
         _section(clone.cloned_section()) {
-      
+
       assert(reentry_closures._section == clone.section());
 
       for (const auto& [inst, closure] : reentry_closures._closures) {
@@ -5722,6 +5735,8 @@ namespace metajit {
       for (const auto& [block, frontier] : reentry_closures._frontiers) {
         _frontiers.emplace(clone.at(block), frontier.to_cloned(clone));
       }
+
+      collect_captured();
     }
 
     auto begin() const { return _closures.begin(); }
@@ -5729,6 +5744,10 @@ namespace metajit {
 
     bool has(Inst* inst) const {
       return _closures.find(inst) != _closures.end();
+    }
+
+    bool is_captured(NamedValue* value) const {
+      return _captured.find(value) != _captured.end();
     }
 
     Closure& at(Inst* inst) {

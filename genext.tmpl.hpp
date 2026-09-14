@@ -440,7 +440,8 @@ namespace metajit {
       }
     }
   public:
-    TraceCapabilities(Section* section, BindingTimeGroups& constness):
+    TraceCapabilities(Section* section, BindingTimeGroups& constness,
+                       const ReentryClosures* reentry_closures = nullptr):
         _section(section),
         _binding_time_groups(constness),
         _can_trace_inst(section),
@@ -454,7 +455,8 @@ namespace metajit {
               inst->is_terminator() ||
               dynamic_cast<PromoteInst*>(inst) ||
               dynamic_cast<AssumeConstInst*>(inst) ||
-              dynamic_cast<CommentInst*>(inst)) {
+              dynamic_cast<CommentInst*>(inst) ||
+              (reentry_closures && reentry_closures->is_captured(inst))) {
             _can_trace_inst[inst] = true;
             _can_trace_const[inst] = true;
           }
@@ -1071,7 +1073,9 @@ namespace metajit {
         }
 
         always_used[inst] = false;
-        if (inst->has_side_effect() || dynamic_cast<CommentInst*>(inst)) {
+        if (inst->has_side_effect() ||
+            dynamic_cast<CommentInst*>(inst) ||
+            (_reentry_closures && _reentry_closures->is_captured(inst))) {
           always_used[inst] = true;
         } else {
           for (Uses::Use use : _uses.at(inst)) {
@@ -1169,7 +1173,7 @@ namespace metajit {
         _builder(genext_section),
         _uses(section),
         _binding_time_groups(section),
-        _trace_capabilities(section, _binding_time_groups) {
+        _trace_capabilities(section, _binding_time_groups, reentry_closures) {
 
       section->autoname();
       _blocks.init(section);
