@@ -1016,15 +1016,17 @@ namespace metajit {
       Inst* inst = block->terminator();
       assert(inst);
       if (dynmatch(BranchInst, branch, inst)) {
-        emit_build_guard_begin(branch->arg(0));
-        if (_reentry_closures) {
-          emit_branch(emit_arg(branch->arg(0)), [&]() {
-            emit_closure(_reentry_closures->reusing_at(*branch->false_block()->begin()));
-          }, [&]() {
-            emit_closure(_reentry_closures->reusing_at(*branch->true_block()->begin()));
-          });
+        if (!_binding_time_groups.is_static(branch->cond())) {
+          emit_build_guard_begin(branch->arg(0));
+          if (_reentry_closures) {
+            emit_branch(emit_arg(branch->arg(0)), [&]() {
+              emit_closure(_reentry_closures->reusing_at(*branch->false_block()->begin()));
+            }, [&]() {
+              emit_closure(_reentry_closures->reusing_at(*branch->true_block()->begin()));
+            });
+          }
+          _builder.build_call(_syms.build_guard_end, Type::Void, {_jitir_builder});
         }
-        _builder.build_call(_syms.build_guard_end, Type::Void, {_jitir_builder});
       } else if (dynmatch(JumpInst, jump, inst)) {
         std::vector<Value*> args;
         for (Value* arg : jump->args()) {

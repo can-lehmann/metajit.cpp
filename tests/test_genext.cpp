@@ -91,6 +91,23 @@ int main(int argc, char** argv) {
       builder.build_exit();
     });
 
+    suite.gen_ext_test("static_branch_guard").run([](Builder& builder, TraceTestData& data) {
+      Value* cond = data.static_input(RandomRange(Type::Bool));
+
+      Block* true_block = builder.build_block();
+      Block* false_block = builder.build_block();
+
+      builder.build_branch(cond, true_block, false_block);
+
+      builder.move_to_end(true_block);
+      data.output(builder.build_const(Type::Int32, 123));
+      builder.build_exit();
+
+      builder.move_to_end(false_block);
+      data.output(builder.build_const(Type::Int32, 456));
+      builder.build_exit();
+    });
+
     suite.gen_ext_test("promote_twice").run([](Builder& builder, TraceTestData& data) {
       Value* x = data.input(RandomRange(Type::Int32, 0, 3));
       x = builder.build_promote(x);
