@@ -108,6 +108,17 @@ int main(int argc, char** argv) {
       builder.build_exit();
     });
 
+    suite.gen_ext_test("static_promote_guard").run([](Builder& builder, TraceTestData& data) {
+      Value* x = data.static_input(RandomRange(Type::Int32));
+
+      Block* cont_block = builder.build_block({Type::Int32});
+      builder.build_jump(cont_block, {x});
+
+      builder.move_to_end(cont_block);
+      Value* promoted = builder.build_promote(cont_block->arg(0));
+      data.output(promoted);
+    });
+
     suite.gen_ext_test("promote_twice").run([](Builder& builder, TraceTestData& data) {
       Value* x = data.input(RandomRange(Type::Int32, 0, 3));
       x = builder.build_promote(x);

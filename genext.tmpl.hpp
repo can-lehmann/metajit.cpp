@@ -774,7 +774,7 @@ namespace metajit {
         Type::Ptr,
         [&]() -> Value* {
           if (dynmatch(PromoteInst, promote, inst)) {
-            if (is_int_or_bool(promote->type())) {
+            if (is_int_or_bool(promote->type()) && !_binding_time_groups.is_static(promote->arg(0))) {
               return emit_branch(
                 is_const(promote->arg(0)),
                 Type::Ptr,
