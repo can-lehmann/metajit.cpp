@@ -67,6 +67,13 @@ int main(int argc, char** argv) {
       Value* result = builder.build_add_ptr(ptr, offset);
       data.output(result);
     });
+
+    suite.gen_ext_test("promote_guard_abort").run([](Builder& builder, TraceTestData& data) {
+      Value* x = data.input(RandomRange(Type::Int32));
+      x = builder.build_promote(x);
+      data.output(x);
+    });
+    
   }
 
   return suite.finish();
