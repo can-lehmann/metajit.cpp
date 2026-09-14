@@ -422,7 +422,7 @@ namespace metajit {
   private:
     Section* _section;
     Section* _genext_section;
-    ReentryClosures& _reentry_closures;
+    ReentryClosures* _reentry_closures;
     Config _config;
 
     Builder _builder;
@@ -483,8 +483,8 @@ namespace metajit {
 
 
     void emit_branch(Value* cond,
-                     const std::function<Value*()>& emit_then,
-                     const std::function<Value*()>& emit_else) {
+                     const std::function<void()>& emit_then,
+                     const std::function<void()>& emit_else) {
       if (dynmatch(Const, constant, cond)) {
         if (constant->value()) {
           emit_then();
@@ -783,7 +783,9 @@ namespace metajit {
                 },
                 [&]() -> Value* {
                   Value* built_const = emit_build_guard_begin(promote->arg(0));
-                  emit_closure(_reentry_closures.reusing_at(promote));
+                  if (_reentry_closures) {
+                    emit_closure(_reentry_closures->reusing_at(promote));
+                  }
                   _builder.build_call(_syms.build_guard_end, Type::Void, {_jitir_builder});
                   return built_const;
                 }
@@ -1015,13 +1017,13 @@ namespace metajit {
       assert(inst);
       if (dynmatch(BranchInst, branch, inst)) {
         emit_build_guard_begin(branch->arg(0));
-        emit_branch(emit_arg(branch->arg(0)), [&]() {
-          emit_closure(_reentry_closures.reusing_at(*branch->false_block()->begin()));
-          return nullptr;
-        }, [&]() {
-          emit_closure(_reentry_closures.reusing_at(*branch->true_block()->begin()));
-          return nullptr;
-        });
+        if (_reentry_closures) {
+          emit_branch(emit_arg(branch->arg(0)), [&]() {
+            emit_closure(_reentry_closures->reusing_at(*branch->false_block()->begin()));
+          }, [&]() {
+            emit_closure(_reentry_closures->reusing_at(*branch->true_block()->begin()));
+          });
+        }
         _builder.build_call(_syms.build_guard_end, Type::Void, {_jitir_builder});
       } else if (dynmatch(JumpInst, jump, inst)) {
         std::vector<Value*> args;
@@ -1038,8 +1040,8 @@ namespace metajit {
   public:
     CreateGenExt(Section* section,
                  Section* genext_section,
-                 ReentryClosures& reentry_closures,
-                 const Config& config = Config()):
+                 const Config& config = Config(),
+                 ReentryClosures* reentry_closures = nullptr):
         Pass(section),
         _section(section),
         _genext_section(genext_section),

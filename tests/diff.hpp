@@ -809,7 +809,7 @@ namespace metajit {
 
       // Generate the generating extension
       Section* genext_section = new Section(genext_context, genext_allocator);
-      CreateGenExt::run(section, genext_section, reentry_closures, genext_config);
+      CreateGenExt::run(section, genext_section, genext_config, &reentry_closures);
 
       if (genext_section->verify(std::cout)) {
         std::ostringstream stream;
