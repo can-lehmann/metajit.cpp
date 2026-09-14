@@ -675,6 +675,31 @@ namespace metajit {
       _is_const[load] = is_const_load;
     }
 
+    Value* emit_build_guard(Value* value, Value* expected) {
+      Value* expected_const = _builder.build_call(
+        _syms.build_const_fast, Type::Ptr,
+        {
+          _jitir_builder,
+          _builder.build_const(Type::Int32, (uint64_t)expected->type()),
+          _builder.build_resize_u(expected, Type::Int64)
+        }
+      );
+
+      Value* success_built = _builder.build_call(_syms.build_eq, Type::Ptr, {
+        _jitir_builder,
+        value,
+        expected_const
+      });
+
+      _builder.build_call(_syms.build_guard_begin, Type::Void, {_jitir_builder, success_built});
+
+
+
+      _builder.build_call(_syms.build_guard_end, Type::Void, {_jitir_builder});
+
+      return expected_const;
+    }
+
     Value* emit_build_inst(Inst* inst) {
       if (_config.comments &&
           !dynamic_cast<CommentInst*>(inst)) {
@@ -701,29 +726,7 @@ namespace metajit {
                   return emit_built_arg(promote->arg(0));
                 },
                 [&]() -> Value* {
-                  Value* built_const = _builder.build_call(
-                    _syms.build_const_fast, Type::Ptr,
-                    {
-                      _jitir_builder,
-                      _builder.build_const(Type::Int32, (uint64_t)inst->type()),
-                      _builder.build_resize_u(emit_arg(inst), Type::Int64)
-                    }
-                  );
-
-                  _builder.build_call(_syms.build_guard, Type::Void, {
-                    _jitir_builder,
-                    _builder.build_call(
-                      _syms.build_eq, Type::Ptr,
-                      {
-                        _jitir_builder,
-                        emit_built_arg(promote->arg(0)),
-                        built_const
-                      }
-                    ),
-                    _builder.build_const(Type::Int32, 1)
-                  });
-
-                  return built_const;
+                  return emit_build_guard(emit_built_arg(promote->arg(0)), emit_arg(inst));
                 }
               );
             } else {
@@ -952,11 +955,10 @@ namespace metajit {
       Inst* inst = block->terminator();
       assert(inst);
       if (dynmatch(BranchInst, branch, inst)) {
-        _builder.build_call(_syms.build_guard, Type::Void, {
-          _jitir_builder,
+        emit_build_guard(
           emit_built_arg(branch->arg(0)),
-          _builder.build_resize_u(emit_arg(branch->arg(0)), Type::Int32)
-        });
+          branch->arg(0)
+        );
       } else if (dynmatch(JumpInst, jump, inst)) {
         std::vector<Value*> args;
         for (Value* arg : jump->args()) {

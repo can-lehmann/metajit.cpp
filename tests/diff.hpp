@@ -881,7 +881,7 @@ namespace metajit {
         Allocator trace_allocator;
         Section* trace_section = new Section(trace_context, trace_allocator);
         TraceBuilder trace_builder(trace_section);
-        std::vector<Type> args = {Type::Ptr};
+        std::vector<Type> args = {Type::Ptr, Type::Ptr};
         trace_builder.move_to_end(trace_builder.build_block(args));
 
         if (record_replay) {
@@ -917,6 +917,7 @@ namespace metajit {
         // Now test the trace with random dynamic inputs
         uint8_t* original_data = new uint8_t[data.data_size()]();
         uint8_t* trace_data = new uint8_t[data.data_size()]();
+        uint8_t* reentry_data = new uint8_t[4]();
 
         for (size_t dynamic_sample = 0; dynamic_sample < dynamic_sample_count; dynamic_sample++) {
           // Generate random values for all inputs (including static ones)
@@ -939,7 +940,8 @@ namespace metajit {
 
           // Run traced section
           Interpreter trace_interp(trace_section, {
-            Interpreter::Bits::constant(trace_data)
+            Interpreter::Bits::constant(trace_data),
+            Interpreter::Bits::constant(reentry_data)
           });
           Interpreter::Event trace_event = trace_interp.run();
 

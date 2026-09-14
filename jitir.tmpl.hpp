@@ -2309,46 +2309,24 @@ namespace metajit {
       return block;
     }
 
-    void build_guard(Value* value, bool expected) {
+    Block* _guard_success = nullptr;
+
+    void build_guard_begin(Value* value) {
       assert(value->type() == Type::Bool);
+      assert(!_guard_success);
 
-      if (XorInst* xor_inst = is_not(value)) {
-        value = xor_inst->arg(0);
-        expected = !expected;
-      }
-
-      std::optional<bool> known_value;
-      if (dynmatch(Const, constant, value)) {
-        known_value = constant->value() & 1;
-      } else if (_guards.find(value) != _guards.end()) {
-        known_value = _guards[value];
-      }
-
-      if (known_value.has_value()) {
-        if (known_value.value() == expected) {
-          return; // Always true
-        } else {
-          // Always false
-          assert(false && "Unreachable code due to guard");
-        }
-      }
-
-      _guards[value] = expected;
-
+      _guard_success = Builder::build_block();
       Block* failure = Builder::build_block();
-      Block* success = build_block();
-
-      Block* a = success;
-      Block* b = failure;
-      if (!expected) {
-        std::swap(a, b);
-      }
-      build_branch(value, a, b);
+      fold_branch(value, _guard_success, failure);
       
       move_to_end(failure);
+    }
+
+    void build_guard_end() {
       build_exit();
 
-      move_to_end(success);
+      move_to_end(_guard_success);
+      _guard_success = nullptr;
     }
 
     void init_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {

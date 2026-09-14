@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
     suite.set_record_replay(record_replay);
 
     suite.gen_ext_test("add_promoted").run([](Builder& builder, TraceTestData& data) {
-      Value* x = data.static_input(RandomRange(Type::Int32));  // promoted/frozen
+      Value* x = data.static_input(RandomRange(Type::Int32));  // promoted
       Value* y = data.input(RandomRange(Type::Int32));         // dynamic
       Value* result = builder.build_add(x, y);
       data.output(result);
@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
     suite.gen_ext_test("bug_promote_ptr").run([](Builder& builder, TraceTestData& data) {
       // This test should trigger the bug where Promote on a pointer type
       // generates invalid LLVM IR (zext ptr instead of ptrtoint)
-      Value* ptr = data.static_input(RandomRange(Type::Ptr));  // frozen pointer
+      Value* ptr = data.static_input(RandomRange(Type::Ptr));  // promoted pointer
       Value* offset = data.input(RandomRange(Type::Int64));    // dynamic offset
       Value* result = builder.build_add_ptr(ptr, offset);
       data.output(result);
