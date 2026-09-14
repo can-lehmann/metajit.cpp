@@ -5762,7 +5762,7 @@ namespace metajit {
     }
 
     void set_ids() {
-      uint32_t id = 0;
+      uint32_t id = 1;
       for (auto& [inst, closure] : _closures) {
         if (!closure.reuse) {
           closure.id = id++;
@@ -5977,7 +5977,7 @@ namespace metajit {
         while (inst) {
           Inst* next_inst = inst->next();
 
-          if (_closures.has(inst)) {
+          if (_closures.has(inst) && !_closures.at(inst).reuse) {
             ReentryClosures::Closure& closure = _closures.at(inst);
 
             std::vector<Arg*> args;

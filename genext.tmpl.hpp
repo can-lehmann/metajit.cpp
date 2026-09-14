@@ -698,6 +698,35 @@ namespace metajit {
       return expected_const;
     }
 
+    void emit_closure(ReentryClosures::Closure& closure) {
+      Value* closure_arg = _builder.build_call(_syms.entry_arg, Type::Ptr, {
+        _jitir_builder,
+        _builder.build_const(Type::Int64, _section->entry()->args().size())
+      });
+
+      _builder.build_call(_syms.build_store, Type::Ptr, {
+        _jitir_builder,
+        closure_arg,
+        _builder.build_call(_syms.build_const_fast, Type::Ptr, {
+          _jitir_builder,
+          _builder.build_const(Type::Int32, (uint64_t) Type::Int32),
+          _builder.build_const(Type::Int64, closure.id),
+        }),
+        _builder.build_const(Type::Int32, 0),
+        _builder.build_const(Type::Int64, 0)
+      });
+
+      for (ReentryClosures::Capture& capture : closure.captures) {
+        _builder.build_call(_syms.build_store, Type::Ptr, {
+          _jitir_builder,
+          closure_arg,
+          emit_built_arg(capture.value),
+          _builder.build_const(Type::Int32, 0),
+          _builder.build_const(Type::Int64, capture.offset)
+        });
+      }
+    }
+
     Value* emit_build_inst(Inst* inst) {
       if (_config.comments &&
           !dynamic_cast<CommentInst*>(inst)) {
@@ -725,35 +754,7 @@ namespace metajit {
                 },
                 [&]() -> Value* {
                   Value* built_const = emit_build_guard_begin(promote->arg(0));
-                  ReentryClosures::Closure& closure = _reentry_closures.reusing_at(promote);
-
-                  Value* closure_arg = _builder.build_call(_syms.entry_arg, Type::Ptr, {
-                    _jitir_builder,
-                    _builder.build_const(Type::Int64, _section->entry()->args().size())
-                  });
-
-                  _builder.build_call(_syms.build_store, Type::Ptr, {
-                    _jitir_builder,
-                    closure_arg,
-                    _builder.build_call(_syms.build_const_fast, Type::Ptr, {
-                      _jitir_builder,
-                      _builder.build_const(Type::Int32, (uint64_t) Type::Int32),
-                      _builder.build_const(Type::Int64, closure.id),
-                    }),
-                    _builder.build_const(Type::Int32, 0),
-                    _builder.build_const(Type::Int64, 0)
-                  });
-
-                  for (ReentryClosures::Capture& capture : closure.captures) {
-                    _builder.build_call(_syms.build_store, Type::Ptr, {
-                      _jitir_builder,
-                      closure_arg,
-                      emit_built_arg(capture.value),
-                      _builder.build_const(Type::Int32, 0),
-                      _builder.build_const(Type::Int64, capture.offset)
-                    });
-                  }
-
+                  emit_closure(_reentry_closures.reusing_at(promote));
                   _builder.build_call(_syms.build_guard_end, Type::Void, {_jitir_builder});
                   return built_const;
                 }
@@ -985,6 +986,13 @@ namespace metajit {
       assert(inst);
       if (dynmatch(BranchInst, branch, inst)) {
         emit_build_guard_begin(branch->arg(0));
+        emit_branch(emit_arg(branch->arg(0)), Type::Void, [&]() -> Value* {
+          emit_closure(_reentry_closures.reusing_at(*branch->false_block()->begin()));
+          return nullptr;
+        }, [&]() -> Value* {
+          emit_closure(_reentry_closures.reusing_at(*branch->true_block()->begin()));
+          return nullptr;
+        });
         _builder.build_call(_syms.build_guard_end, Type::Void, {_jitir_builder});
       } else if (dynmatch(JumpInst, jump, inst)) {
         std::vector<Value*> args;

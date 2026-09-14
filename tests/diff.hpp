@@ -818,14 +818,18 @@ namespace metajit {
       SimplifyCFG::run(genext_section);
       DeadCodeElim::run(genext_section);
 
-      section->write(std::cerr);
-      genext_section->write(std::cerr);
-
       // Generate reentry section
       Section* reentry_section = new Section(genext_context, genext_allocator);
       Clone reentry_clone(section, reentry_section);
       ReentryClosures reentry_closures_clone(reentry_closures, reentry_clone);
       SliceReentryClosures::run(reentry_section, reentry_closures_clone);
+
+      std::cerr << "section = ";
+      reentry_closures.write(std::cerr);
+      std::cerr << "reentry = ";
+      reentry_section->write(std::cerr);
+      std::cerr << "genext = ";
+      genext_section->write(std::cerr);
 
       llvm::LLVMContext llvm_context;
       std::unique_ptr<llvm::Module> genext_module = std::make_unique<llvm::Module>("genext_module", llvm_context);
@@ -904,6 +908,12 @@ namespace metajit {
           genext_func(static_data, &trace_builder);
         }
 
+        trace_builder.build_store(
+          trace_builder.entry_arg(1),
+          trace_builder.build_const(Type::Int32, 0),
+          AliasingGroup(0),
+          0
+        );
         trace_builder.build_exit();
 
         if (!output_path.empty()) {
@@ -954,10 +964,14 @@ namespace metajit {
           });
           Interpreter::Event trace_event = trace_interp.run();
 
-          // Run reentry
-          Interpreter reentry_interp(reentry_section, {
-            Interpreter::Bits::constant(reentry_data)
-          });
+          uint32_t reentry_id = *(uint32_t*) reentry_data;
+
+          if (reentry_id) {
+            // Run reentry
+            Interpreter reentry_interp(reentry_section, {
+              Interpreter::Bits::constant(reentry_data)
+            });
+          }
 
           if (original_event != Interpreter::Event::Exit) {
             throw unittest::AssertionError(
@@ -990,6 +1004,13 @@ namespace metajit {
               stream << "Trace:\n";
               trace_section->write(stream);
               stream << "\n";
+              
+              if (reentry_id) {
+                stream << "Reentry " << reentry_id << "\n";
+              } else {
+                stream << "No reentry\n";
+              }
+
               stream << "Inputs:\n";
               data.write_inputs(stream, original_data);
               stream << "Original Output:\n";
