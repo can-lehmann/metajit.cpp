@@ -407,6 +407,125 @@ namespace metajit {
     }
   };
 
+  class TraceCapabilities {
+  private:
+    Section* _section;
+    BindingTimeGroups& _binding_time_groups;
+    NameMap<bool> _can_trace_inst;
+    NameMap<bool> _can_trace_const;
+
+    void used_by(NamedValue* value, NamedValue* by) {
+      if (_can_trace_inst.at(by)) {
+        if (_binding_time_groups.at(by) != _binding_time_groups.at(value) ||
+            (is_int_or_bool(value->type()) && !is_int_or_bool(by->type()))) {
+          _can_trace_const[value] = true;
+        }
+        if (!_binding_time_groups.is_static(value) ||
+            !is_int_or_bool(value->type())) {
+          _can_trace_inst[value] = true;
+        }
+      }
+
+      // Args cannot generate new constants, so all arguments need to be const traceable
+      if (dynmatch(Arg, arg, by)) {
+        if (_can_trace_const.at(by)) {
+          _can_trace_const[value] = true;
+        }
+      }
+
+      if (dynamic_cast<PromoteInst*>(by) ||
+          (dynamic_cast<AssumeConstInst*>(by) && !is_int_or_bool(value->type()))) {
+        _can_trace_inst[value] = true;
+        _can_trace_const[value] = true;
+      }
+    }
+  public:
+    TraceCapabilities(Section* section, BindingTimeGroups& constness,
+                       const ReentryClosures* reentry_closures = nullptr):
+        _section(section),
+        _binding_time_groups(constness),
+        _can_trace_inst(section),
+        _can_trace_const(section) {
+
+      assert(_section->ordering() >= BlockOrdering::Dominator);
+
+      for (Block* block : section->rev_range()) {
+        for (Inst* inst : block->rev_range()) {
+          if (inst->has_side_effect() ||
+              inst->is_terminator() ||
+              dynamic_cast<PromoteInst*>(inst) ||
+              dynamic_cast<AssumeConstInst*>(inst) ||
+              dynamic_cast<CommentInst*>(inst) ||
+              (reentry_closures && reentry_closures->is_captured(inst))) {
+            _can_trace_inst[inst] = true;
+            _can_trace_const[inst] = true;
+          }
+
+          if (dynmatch(JumpInst, jump, inst)) {
+            // Jump arguments are passed to block arguments
+            for (Arg* block_arg : jump->block()->args()) {
+              Value* arg = jump->arg(block_arg->index());
+              if (arg->is_named()) {
+                used_by((NamedValue*) arg, block_arg);
+              }
+            }
+          } else {
+            for (Value* arg : inst->args()) {
+              if (arg->is_named()) {
+                used_by((NamedValue*) arg, inst);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    bool can_trace_const(NamedValue* value) const {
+      return _can_trace_const[value];
+    }
+
+    bool can_trace_inst(NamedValue* value) const {
+      return _can_trace_inst[value];
+    }
+
+    bool any(NamedValue* value) const {
+      return can_trace_const(value) || can_trace_inst(value);
+    }
+
+    size_t count_trace_const() const {
+      size_t count = 0;
+      for (size_t name = 0; name < _section->name_count(); name++) {
+        if (_can_trace_const.at_name(name)) {
+          count++;
+        }
+      }
+      return count;
+    }
+
+    size_t count_trace_inst() const {
+      size_t count = 0;
+      for (size_t name = 0; name < _section->name_count(); name++) {
+        if (_can_trace_inst.at_name(name)) {
+          count++;
+        }
+      }
+      return count;
+    }
+
+    void write(std::ostream& stream) {
+      InfoWriter info_writer([&](std::ostream& stream, Inst* inst) {
+        if (can_trace_const(inst)) {
+          stream << "trace_const ";
+        }
+        if (can_trace_inst(inst)) {
+          stream << "trace_inst ";
+        }
+        stream << "group=" << _binding_time_groups.at(inst);
+      });
+      _section->write(stream, &info_writer);
+    }
+  };
+
   /* ${build_build_inst} */
 
   class CreateGenExt: public Pass<CreateGenExt> {
@@ -954,7 +1073,9 @@ namespace metajit {
         }
 
         always_used[inst] = false;
-        if (inst->has_side_effect() || dynamic_cast<CommentInst*>(inst)) {
+        if (inst->has_side_effect() ||
+            dynamic_cast<CommentInst*>(inst) ||
+            (_reentry_closures && _reentry_closures->is_captured(inst))) {
           always_used[inst] = true;
         } else {
           for (Uses::Use use : _uses.at(inst)) {
@@ -1052,7 +1173,7 @@ namespace metajit {
         _builder(genext_section),
         _uses(section),
         _binding_time_groups(section),
-        _trace_capabilities(section, _binding_time_groups) {
+        _trace_capabilities(section, _binding_time_groups, reentry_closures) {
 
       section->autoname();
       _blocks.init(section);
