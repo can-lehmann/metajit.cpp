@@ -119,6 +119,15 @@ int main(int argc, char** argv) {
       data.output(promoted);
     });
 
+    suite.gen_ext_test("bug_reentry_captures_dead_value").run([](Builder& builder, TraceTestData& data) {
+      Value* x = data.input(RandomRange(Type::Int32));
+      data.keep(builder.build_const(Type::Int32, 0));
+      Value* cond = data.static_input(RandomRange(Type::Bool));
+      data.keep(cond);
+      Value* result = builder.build_select(cond, builder.build_const(Type::Int32, 0), x);
+      data.output(result);
+    });
+
     suite.gen_ext_test("promote_twice").run([](Builder& builder, TraceTestData& data) {
       Value* x = data.input(RandomRange(Type::Int32, 0, 3));
       x = builder.build_promote(x);
