@@ -987,6 +987,9 @@ namespace metajit {
             if (!is_equal) {
               std::ostringstream stream;
               stream << "Static sample: " << static_sample << ", Dynamic sample: " << dynamic_sample << "\n";
+              stream << "Trace:\n";
+              trace_section->write(stream);
+              stream << "\n";
               stream << "Inputs:\n";
               data.write_inputs(stream, original_data);
               stream << "Original Output:\n";

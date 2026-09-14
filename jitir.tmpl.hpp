@@ -2315,8 +2315,8 @@ namespace metajit {
       assert(value->type() == Type::Bool);
       assert(!_guard_success);
 
-      _guard_success = Builder::build_block();
       Block* failure = Builder::build_block();
+      _guard_success = Builder::build_block();
       fold_branch(value, _guard_success, failure);
       
       move_to_end(failure);
@@ -5632,7 +5632,7 @@ namespace metajit {
       Inst* reuse = nullptr;
       std::vector<Capture> captures;
       uint32_t id = 0;
-      size_t size = 4;
+      size_t size = sizeof(uint32_t);
 
       void add(NamedValue* value) {
         if (size % type_size(value->type())) {
@@ -5853,6 +5853,14 @@ namespace metajit {
     Closure& at(Inst* inst) {
       assert(has(inst));
       return _closures.at(inst);
+    }
+
+    Closure& reusing_at(Inst* inst) {
+      if (at(inst).reuse) {
+        return at(at(inst).reuse);
+      } else {
+        return at(inst);
+      }
     }
 
     bool is_frontier(Block* block) const {
