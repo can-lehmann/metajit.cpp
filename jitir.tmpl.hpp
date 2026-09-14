@@ -2070,8 +2070,8 @@ namespace metajit {
 
     std::unordered_map<AliasingGroup, GroupState> _memory;
     ExpandingVector<Value*> _exact_memory;
-
-    std::unordered_map<Value*, bool> _guards;
+    
+    Block* _guard_success = nullptr;
 
     bool could_alias(LoadInst* load, Value* ptr, Type type, AliasingGroup aliasing, uint64_t offset) {
       if (load->aliasing() != aliasing) {
@@ -2308,8 +2308,6 @@ namespace metajit {
       }
       return block;
     }
-
-    Block* _guard_success = nullptr;
 
     void build_guard_begin(Value* value) {
       assert(value->type() == Type::Bool);
