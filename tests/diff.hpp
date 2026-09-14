@@ -786,6 +786,8 @@ namespace metajit {
         section->write(stream);
       }
 
+      assert(!section->verify(std::cout));
+
       Context genext_context;
       Allocator genext_allocator;
 
@@ -808,6 +810,17 @@ namespace metajit {
       // Generate the generating extension
       Section* genext_section = new Section(genext_context, genext_allocator);
       CreateGenExt::run(section, genext_section, reentry_closures, genext_config);
+
+      if (genext_section->verify(std::cout)) {
+        std::ostringstream stream;
+        genext_section->write(stream);
+        throw unittest::AssertionError(
+          "Generating extension verification failed",
+          __LINE__,
+          __FILE__,
+          stream.str()
+        );
+      }
 
       Simplify::run(genext_section, 10);
       SimplifyCFG::run(genext_section);
@@ -957,22 +970,6 @@ namespace metajit {
           });
           Interpreter::Event original_event = original_interp.run();
 
-          // Run traced section
-          Interpreter trace_interp(trace_section, {
-            Interpreter::Bits::constant(trace_data),
-            Interpreter::Bits::constant(reentry_data)
-          });
-          Interpreter::Event trace_event = trace_interp.run();
-
-          uint32_t reentry_id = *(uint32_t*) reentry_data;
-
-          if (reentry_id) {
-            // Run reentry
-            Interpreter reentry_interp(reentry_section, {
-              Interpreter::Bits::constant(reentry_data)
-            });
-          }
-
           if (original_event != Interpreter::Event::Exit) {
             throw unittest::AssertionError(
               "Original interpreter did not exit cleanly",
@@ -981,12 +978,37 @@ namespace metajit {
             );
           }
 
+          // Run traced section
+          Interpreter trace_interp(trace_section, {
+            Interpreter::Bits::constant(trace_data),
+            Interpreter::Bits::constant(reentry_data)
+          });
+          Interpreter::Event trace_event = trace_interp.run();
+
           if (trace_event != Interpreter::Event::Exit) {
             throw unittest::AssertionError(
               "Trace interpreter did not exit cleanly",
               __LINE__,
               __FILE__
             );
+          }
+
+          uint32_t reentry_id = *(uint32_t*) reentry_data;
+
+          if (reentry_id) {
+            // Run reentry
+            Interpreter reentry_interp(reentry_section, {
+              Interpreter::Bits::constant(reentry_data)
+            });
+            Interpreter::Event reentry_event = reentry_interp.run();
+
+            if (reentry_event != Interpreter::Event::Exit) {
+              throw unittest::AssertionError(
+                "Reentry interpreter did not exit cleanly",
+                __LINE__,
+                __FILE__
+              );
+            }
           }
 
           // Compare outputs

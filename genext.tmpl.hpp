@@ -481,6 +481,35 @@ namespace metajit {
       return cont_block->args().at(0);
     }
 
+
+    void emit_branch(Value* cond,
+                     const std::function<Value*()>& emit_then,
+                     const std::function<Value*()>& emit_else) {
+      if (dynmatch(Const, constant, cond)) {
+        if (constant->value()) {
+          emit_then();
+        } else {
+          emit_else();
+        }
+        return;
+      }
+      Block* then_block = _builder.build_block_after(_builder.block());
+      Block* else_block = _builder.build_block_after(then_block);
+      Block* cont_block = _builder.build_block_after(else_block);
+
+      _builder.build_branch(cond, then_block, else_block);
+
+      _builder.move_to_end(then_block);
+      emit_then();
+      _builder.build_jump(cont_block);
+
+      _builder.move_to_end(else_block);
+      emit_else();
+      _builder.build_jump(cont_block);
+
+      _builder.move_to_end(cont_block);
+    }
+
     Value* emit_inst(Inst* inst) {
       if (_config.record.has_value()) {
         if (dynmatch(LoadInst, load, inst)) {
@@ -986,10 +1015,10 @@ namespace metajit {
       assert(inst);
       if (dynmatch(BranchInst, branch, inst)) {
         emit_build_guard_begin(branch->arg(0));
-        emit_branch(emit_arg(branch->arg(0)), Type::Void, [&]() -> Value* {
+        emit_branch(emit_arg(branch->arg(0)), [&]() {
           emit_closure(_reentry_closures.reusing_at(*branch->false_block()->begin()));
           return nullptr;
-        }, [&]() -> Value* {
+        }, [&]() {
           emit_closure(_reentry_closures.reusing_at(*branch->true_block()->begin()));
           return nullptr;
         });

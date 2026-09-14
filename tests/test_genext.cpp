@@ -73,6 +73,23 @@ int main(int argc, char** argv) {
       x = builder.build_promote(x);
       data.output(x);
     });
+
+    suite.gen_ext_test("branch_guard").run([](Builder& builder, TraceTestData& data) {
+      Value* x = data.input(RandomRange(Type::Bool));
+
+      Block* true_block = builder.build_block();
+      Block* false_block = builder.build_block();
+
+      builder.build_branch(x, true_block, false_block);
+
+      builder.move_to_end(true_block);
+      data.output(builder.build_const(Type::Int32, 123));
+      builder.build_exit();
+
+      builder.move_to_end(false_block);
+      data.output(builder.build_const(Type::Int32, 456));
+      builder.build_exit();
+    });
     
   }
 
