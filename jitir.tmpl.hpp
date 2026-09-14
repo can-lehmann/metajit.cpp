@@ -2316,7 +2316,7 @@ namespace metajit {
       assert(!_guard_success);
 
       Block* failure = Builder::build_block();
-      _guard_success = Builder::build_block();
+      _guard_success = build_block();
       fold_branch(value, _guard_success, failure);
       
       move_to_end(failure);

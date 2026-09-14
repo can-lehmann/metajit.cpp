@@ -1175,7 +1175,9 @@ b1:
       builder.set_chain(&chain);
       Block* entry = builder.build_block(std::vector<Type>{Type::Bool});
       builder.move_to_end(entry);
-      builder.build_guard(entry->arg(0), expected);
+      Value* cond = expected ? entry->arg(0) : builder.build_xor(entry->arg(0), builder.build_const(Type::Bool, 1));
+      builder.build_guard_begin(cond);
+      builder.build_guard_end();
       Block* success = builder.block();
       builder.build_exit();
 
