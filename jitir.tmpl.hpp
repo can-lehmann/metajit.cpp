@@ -5532,6 +5532,79 @@ namespace metajit {
     }
   };
 
+
+  class Clone: public Pass<Clone> {
+  private:
+    Section* _section;
+    Section* _cloned_section;
+    Builder _builder;
+
+    BlockMap<Block*> _blocks;
+    NameMap<Value*> _values;
+
+    static Value* clone_arg(Value* value, Builder& builder, const NameMap<Value*>& values) {
+      if (value->is_named()) {
+        return values.at((NamedValue*) value);
+      } else if (dynmatch(Const, constant, value)) {
+        return builder.build_const(constant->type(), constant->value());
+      } else if (dynmatch(Poison, poison, value)) {
+        return builder.build_poison(poison->type());
+      } else if (dynmatch(Symbol, symbol, value)) {
+        return builder.build_symbol(
+          symbol->type(),
+          std::string(symbol->symbol().data(), symbol->symbol().size())
+        );
+      } else {
+        assert(false);
+        return nullptr;
+      }
+    }
+  public:
+    Clone(Section* section, Section* cloned_section):
+        Pass<Clone>(section),
+        _section(section),
+        _cloned_section(cloned_section),
+        _builder(cloned_section),
+        _blocks(section),
+        _values(section) {
+      
+      assert(section->ordering() >= BlockOrdering::Dominator);
+
+      _cloned_section->set_ordering(_section->ordering());
+
+      for (Block* block : *_section) {
+        Block* cloned = _builder.build_block(block->args().size());
+        for (Arg* arg : block->args()) {
+          Arg* cloned_arg = _builder.alloc_arg(arg->type(), arg->index());
+          cloned->set_arg(arg->index(), cloned_arg);
+          _values[arg] = cloned_arg;
+        }
+        _blocks[block] = cloned;
+      }
+
+      for (Block* block : *_section) {
+        _builder.move_to_end(_blocks[block]);
+
+        for (Inst* inst : *block) {
+          _values[inst] = clone(inst, _builder, _blocks, _values);
+        }
+      }
+    }
+
+    static Inst* clone(Inst* inst,
+                       Builder& builder,
+                       const BlockMap<Block*>& blocks,
+                       const NameMap<Value*>& values) {
+      /* ${clone} */
+    }
+
+    Section* section() const { return _section; }
+    Section* cloned_section() const { return _cloned_section; }
+
+    Value* at(NamedValue* value) const { return _values.at(value); }
+    Block* at(Block* block) const { return _blocks.at(block); }
+  };
+
   inline Value* unwrap_binding(Value* value) {
     while (true) {
       if (dynmatch(PromoteInst, promote, value)) {
@@ -5568,14 +5641,33 @@ namespace metajit {
         captures.emplace_back(value, size);
         size += type_size(value->type());
       }
+
+      Closure to_cloned(const Clone& clone) const {
+        Closure result;
+        result.reuse = reuse ? dynamic_cast<Inst*>(clone.at(reuse)) : nullptr;
+        for (const Capture& capture : captures) {
+          result.captures.emplace_back((NamedValue*) clone.at(capture.value), capture.offset);
+        }
+        result.id = id;
+        result.size = size;
+        return result;
+      }
     };
 
     struct Frontier {
       std::vector<NamedValue*> values;
+
+      Frontier to_cloned(const Clone& clone) const {
+        Frontier result;
+        for (NamedValue* value : values) {
+          result.values.push_back((NamedValue*) clone.at(value));
+        }
+        return result;
+      }
     };
   private:
     Section* _section;
-    BindingTimeGroups _binding_time_groups;
+    BindingTimeGroups* _binding_time_groups;
     std::unordered_map<Inst*, Closure> _closures;
     std::unordered_map<Block*, Frontier> _frontiers;
 
@@ -5584,12 +5676,12 @@ namespace metajit {
       for (Block* block : *_section) {
         for (Inst* inst : *block) {
           if (dynmatch(BranchInst, branch, inst)) {
-            if (!_binding_time_groups.is_static(branch->cond())) {
+            if (!(_binding_time_groups->is_static(branch->cond()))) {
               _closures.emplace(*branch->true_block()->begin(), Closure());
               _closures.emplace(*branch->false_block()->begin(), Closure());
             }
           } else if (dynmatch(PromoteInst, promote, inst)) {
-            if (!_binding_time_groups.is_static(promote->arg(0))) {
+            if (!(_binding_time_groups->is_static(promote->arg(0)))) {
               _closures.emplace(promote, Closure());
             }
           }
@@ -5706,9 +5798,10 @@ namespace metajit {
       }
     }
   public:
-    ReentryClosures(Section* section):
+    ReentryClosures(Section* section,
+                    BindingTimeGroups& binding_time_groups):
         _section(section),
-        _binding_time_groups(section) {
+        _binding_time_groups(&binding_time_groups) {
       
       assert(section->ordering() >= BlockOrdering::Topological);
 
@@ -5719,9 +5812,9 @@ namespace metajit {
       populate_closures_and_frontiers();
     }
 
-    ReentryClosures(Section* section, const std::set<Inst*>& reentry_points):
-        _section(section),
-        _binding_time_groups(section) {
+    ReentryClosures(Section* section,
+                    const std::set<Inst*>& reentry_points):
+        _section(section) {
       
       assert(section->ordering() >= BlockOrdering::Topological);
 
@@ -5732,6 +5825,22 @@ namespace metajit {
       set_ids();
       find_frontiers();
       populate_closures_and_frontiers();
+    }
+
+    ReentryClosures(const ReentryClosures& reentry_closures, Clone& clone):
+        _section(clone.cloned_section()) {
+      
+      assert(reentry_closures._section == clone.section());
+
+      for (const auto& [inst, closure] : reentry_closures._closures) {
+        Inst* cloned_inst = dynamic_cast<Inst*>(clone.at(inst));
+        assert(cloned_inst);
+        _closures.emplace(cloned_inst, closure.to_cloned(clone));
+      }
+
+      for (const auto& [block, frontier] : reentry_closures._frontiers) {
+        _frontiers.emplace(clone.at(block), frontier.to_cloned(clone));
+      }
     }
 
     auto begin() const { return _closures.begin(); }
@@ -5763,6 +5872,10 @@ namespace metajit {
         }
       }
       return max;
+    }
+
+    ReentryClosures to_cloned(Clone& clone) const {
+      return ReentryClosures(*this, clone);
     }
 
     void write(std::ostream& stream) const {
@@ -5801,72 +5914,6 @@ namespace metajit {
         }
       };
       _section->write(stream, &info_writer);
-    }
-  };
-
-  class Clone: public Pass<Clone> {
-  private:
-    Section* _section;
-    Section* _cloned_section;
-    Builder _builder;
-
-    BlockMap<Block*> _blocks;
-    NameMap<Value*> _values;
-
-    static Value* clone_arg(Value* value, Builder& builder, const NameMap<Value*>& values) {
-      if (value->is_named()) {
-        return values.at((NamedValue*) value);
-      } else if (dynmatch(Const, constant, value)) {
-        return builder.build_const(constant->type(), constant->value());
-      } else if (dynmatch(Poison, poison, value)) {
-        return builder.build_poison(poison->type());
-      } else if (dynmatch(Symbol, symbol, value)) {
-        return builder.build_symbol(
-          symbol->type(),
-          std::string(symbol->symbol().data(), symbol->symbol().size())
-        );
-      } else {
-        assert(false);
-        return nullptr;
-      }
-    }
-  public:
-    Clone(Section* section, Section* cloned_section):
-        Pass<Clone>(section),
-        _section(section),
-        _cloned_section(cloned_section),
-        _builder(cloned_section),
-        _blocks(section),
-        _values(section) {
-      
-      assert(section->ordering() >= BlockOrdering::Dominator);
-
-      _cloned_section->set_ordering(_section->ordering());
-
-      for (Block* block : *_section) {
-        Block* cloned = _builder.build_block(block->args().size());
-        for (Arg* arg : block->args()) {
-          Arg* cloned_arg = _builder.alloc_arg(arg->type(), arg->index());
-          cloned->set_arg(arg->index(), cloned_arg);
-          _values[arg] = cloned_arg;
-        }
-        _blocks[block] = cloned;
-      }
-
-      for (Block* block : *_section) {
-        _builder.move_to_end(_blocks[block]);
-
-        for (Inst* inst : *block) {
-          _values[inst] = clone(inst, _builder, _blocks, _values);
-        }
-      }
-    }
-
-    static Inst* clone(Inst* inst,
-                       Builder& builder,
-                       const BlockMap<Block*>& blocks,
-                       const NameMap<Value*>& values) {
-      /* ${clone} */
     }
   };
 

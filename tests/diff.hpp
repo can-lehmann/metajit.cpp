@@ -789,7 +789,8 @@ namespace metajit {
       Context genext_context;
       Allocator genext_allocator;
 
-      ReentryClosures reentry_closures(section);
+      BindingTimeGroups binding_time_groups(section);
+      ReentryClosures reentry_closures(section, binding_time_groups);
       
       CreateGenExt::Config genext_config;
 
@@ -822,8 +823,9 @@ namespace metajit {
 
       // Generate reentry section
       Section* reentry_section = new Section(genext_context, genext_allocator);
-      Clone::run(section, reentry_section);
-      SliceReentryClosures::run(reentry_section, reentry_closures);
+      Clone reentry_clone(section, reentry_section);
+      ReentryClosures reentry_closures_clone(reentry_closures, reentry_clone);
+      SliceReentryClosures::run(reentry_section, reentry_closures_clone);
 
       llvm::LLVMContext llvm_context;
       std::unique_ptr<llvm::Module> genext_module = std::make_unique<llvm::Module>("genext_module", llvm_context);
