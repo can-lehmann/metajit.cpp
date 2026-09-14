@@ -422,6 +422,7 @@ namespace metajit {
   private:
     Section* _section;
     Section* _genext_section;
+    ReentryClosures& _reentry_closures;
     Config _config;
 
     Builder _builder;
@@ -972,10 +973,14 @@ namespace metajit {
       _values[inst] = emit_inst(inst);
     }
   public:
-    CreateGenExt(Section* section, Section* genext_section, const Config& config = Config()):
+    CreateGenExt(Section* section,
+                 Section* genext_section,
+                 ReentryClosures& reentry_closures,
+                 const Config& config = Config()):
         Pass(section),
         _section(section),
         _genext_section(genext_section),
+        _reentry_closures(reentry_closures),
         _config(config),
         _builder(genext_section),
         _uses(section),

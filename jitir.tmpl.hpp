@@ -2774,8 +2774,8 @@ namespace metajit {
     }
 
     template <class... Args>
-    static void run(Args... args) {
-      Self self(args...);
+    static void run(Args&&... args) {
+      Self self(std::forward<Args>(args)...);
     }
   };
 
@@ -5558,7 +5558,7 @@ namespace metajit {
     struct Closure {
       Inst* reuse = nullptr;
       std::vector<Capture> captures;
-      size_t id = 0;
+      uint32_t id = 0;
       size_t size = 4;
 
       void add(NamedValue* value) {
@@ -5670,7 +5670,7 @@ namespace metajit {
     }
 
     void set_ids() {
-      size_t id = 0;
+      uint32_t id = 0;
       for (auto& [inst, closure] : _closures) {
         if (!closure.reuse) {
           closure.id = id++;
@@ -6045,11 +6045,6 @@ namespace metajit {
       slice_blocks();
       build_dispatcher();
     }
-
-    // TODO: Remove? Requires template magic
-    static void run(Section* section, ReentryClosures& closures) {
-      SliceReentryClosures src(section, closures);
-    };
   };
 
   class Mem2Reg: public Pass<Mem2Reg> {

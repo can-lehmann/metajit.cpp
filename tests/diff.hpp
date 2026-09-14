@@ -788,6 +788,8 @@ namespace metajit {
 
       Context genext_context;
       Allocator genext_allocator;
+
+      ReentryClosures reentry_closures(section);
       
       CreateGenExt::Config genext_config;
 
@@ -804,7 +806,7 @@ namespace metajit {
 
       // Generate the generating extension
       Section* genext_section = new Section(genext_context, genext_allocator);
-      CreateGenExt::run(section, genext_section, genext_config);
+      CreateGenExt::run(section, genext_section, reentry_closures, genext_config);
 
       Simplify::run(genext_section, 10);
       SimplifyCFG::run(genext_section);
@@ -817,6 +819,11 @@ namespace metajit {
 
       section->write(std::cerr);
       genext_section->write(std::cerr);
+
+      // Generate reentry section
+      Section* reentry_section = new Section(genext_context, genext_allocator);
+      Clone::run(section, reentry_section);
+      SliceReentryClosures::run(reentry_section, reentry_closures);
 
       llvm::LLVMContext llvm_context;
       std::unique_ptr<llvm::Module> genext_module = std::make_unique<llvm::Module>("genext_module", llvm_context);
@@ -917,7 +924,7 @@ namespace metajit {
         // Now test the trace with random dynamic inputs
         uint8_t* original_data = new uint8_t[data.data_size()]();
         uint8_t* trace_data = new uint8_t[data.data_size()]();
-        uint8_t* reentry_data = new uint8_t[4]();
+        uint8_t* reentry_data = new uint8_t[reentry_closures.max_size()]();
 
         for (size_t dynamic_sample = 0; dynamic_sample < dynamic_sample_count; dynamic_sample++) {
           // Generate random values for all inputs (including static ones)
@@ -944,6 +951,11 @@ namespace metajit {
             Interpreter::Bits::constant(reentry_data)
           });
           Interpreter::Event trace_event = trace_interp.run();
+
+          // Run reentry
+          Interpreter reentry_interp(reentry_section, {
+            Interpreter::Bits::constant(reentry_data)
+          });
 
           if (original_event != Interpreter::Event::Exit) {
             throw unittest::AssertionError(
@@ -992,6 +1004,7 @@ namespace metajit {
 
         delete[] original_data;
         delete[] trace_data;
+        delete[] reentry_data;
         delete trace_section;
       }
 
