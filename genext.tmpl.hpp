@@ -422,6 +422,7 @@ namespace metajit {
   private:
     Section* _section;
     Section* _genext_section;
+    ReentryClosures& _reentry_closures;
     Config _config;
 
     Builder _builder;
@@ -478,6 +479,35 @@ namespace metajit {
 
       _builder.move_to_end(cont_block);
       return cont_block->args().at(0);
+    }
+
+
+    void emit_branch(Value* cond,
+                     const std::function<Value*()>& emit_then,
+                     const std::function<Value*()>& emit_else) {
+      if (dynmatch(Const, constant, cond)) {
+        if (constant->value()) {
+          emit_then();
+        } else {
+          emit_else();
+        }
+        return;
+      }
+      Block* then_block = _builder.build_block_after(_builder.block());
+      Block* else_block = _builder.build_block_after(then_block);
+      Block* cont_block = _builder.build_block_after(else_block);
+
+      _builder.build_branch(cond, then_block, else_block);
+
+      _builder.move_to_end(then_block);
+      emit_then();
+      _builder.build_jump(cont_block);
+
+      _builder.move_to_end(else_block);
+      emit_else();
+      _builder.build_jump(cont_block);
+
+      _builder.move_to_end(cont_block);
     }
 
     Value* emit_inst(Inst* inst) {
@@ -675,6 +705,57 @@ namespace metajit {
       _is_const[load] = is_const_load;
     }
 
+    Value* emit_build_guard_begin(Value* value) {
+      Value* expected = emit_arg(value);
+      Value* expected_const = _builder.build_call(
+        _syms.build_const_fast, Type::Ptr,
+        {
+          _jitir_builder,
+          _builder.build_const(Type::Int32, (uint64_t)expected->type()),
+          _builder.build_resize_u(expected, Type::Int64)
+        }
+      );
+
+      Value* success_built = _builder.build_call(_syms.build_eq, Type::Ptr, {
+        _jitir_builder,
+        emit_built_arg(value),
+        expected_const
+      });
+
+      _builder.build_call(_syms.build_guard_begin, Type::Void, {_jitir_builder, success_built});
+
+      return expected_const;
+    }
+
+    void emit_closure(ReentryClosures::Closure& closure) {
+      Value* closure_arg = _builder.build_call(_syms.entry_arg, Type::Ptr, {
+        _jitir_builder,
+        _builder.build_const(Type::Int64, _section->entry()->args().size())
+      });
+
+      _builder.build_call(_syms.build_store, Type::Ptr, {
+        _jitir_builder,
+        closure_arg,
+        _builder.build_call(_syms.build_const_fast, Type::Ptr, {
+          _jitir_builder,
+          _builder.build_const(Type::Int32, (uint64_t) Type::Int32),
+          _builder.build_const(Type::Int64, closure.id),
+        }),
+        _builder.build_const(Type::Int32, 0),
+        _builder.build_const(Type::Int64, 0)
+      });
+
+      for (ReentryClosures::Capture& capture : closure.captures) {
+        _builder.build_call(_syms.build_store, Type::Ptr, {
+          _jitir_builder,
+          closure_arg,
+          emit_built_arg(capture.value),
+          _builder.build_const(Type::Int32, 0),
+          _builder.build_const(Type::Int64, capture.offset)
+        });
+      }
+    }
+
     Value* emit_build_inst(Inst* inst) {
       if (_config.comments &&
           !dynamic_cast<CommentInst*>(inst)) {
@@ -701,28 +782,9 @@ namespace metajit {
                   return emit_built_arg(promote->arg(0));
                 },
                 [&]() -> Value* {
-                  Value* built_const = _builder.build_call(
-                    _syms.build_const_fast, Type::Ptr,
-                    {
-                      _jitir_builder,
-                      _builder.build_const(Type::Int32, (uint64_t)inst->type()),
-                      _builder.build_resize_u(emit_arg(inst), Type::Int64)
-                    }
-                  );
-
-                  _builder.build_call(_syms.build_guard, Type::Void, {
-                    _jitir_builder,
-                    _builder.build_call(
-                      _syms.build_eq, Type::Ptr,
-                      {
-                        _jitir_builder,
-                        emit_built_arg(promote->arg(0)),
-                        built_const
-                      }
-                    ),
-                    _builder.build_const(Type::Int32, 1)
-                  });
-
+                  Value* built_const = emit_build_guard_begin(promote->arg(0));
+                  emit_closure(_reentry_closures.reusing_at(promote));
+                  _builder.build_call(_syms.build_guard_end, Type::Void, {_jitir_builder});
                   return built_const;
                 }
               );
@@ -952,11 +1014,15 @@ namespace metajit {
       Inst* inst = block->terminator();
       assert(inst);
       if (dynmatch(BranchInst, branch, inst)) {
-        _builder.build_call(_syms.build_guard, Type::Void, {
-          _jitir_builder,
-          emit_built_arg(branch->arg(0)),
-          _builder.build_resize_u(emit_arg(branch->arg(0)), Type::Int32)
+        emit_build_guard_begin(branch->arg(0));
+        emit_branch(emit_arg(branch->arg(0)), [&]() {
+          emit_closure(_reentry_closures.reusing_at(*branch->false_block()->begin()));
+          return nullptr;
+        }, [&]() {
+          emit_closure(_reentry_closures.reusing_at(*branch->true_block()->begin()));
+          return nullptr;
         });
+        _builder.build_call(_syms.build_guard_end, Type::Void, {_jitir_builder});
       } else if (dynmatch(JumpInst, jump, inst)) {
         std::vector<Value*> args;
         for (Value* arg : jump->args()) {
@@ -970,10 +1036,14 @@ namespace metajit {
       _values[inst] = emit_inst(inst);
     }
   public:
-    CreateGenExt(Section* section, Section* genext_section, const Config& config = Config()):
+    CreateGenExt(Section* section,
+                 Section* genext_section,
+                 ReentryClosures& reentry_closures,
+                 const Config& config = Config()):
         Pass(section),
         _section(section),
         _genext_section(genext_section),
+        _reentry_closures(reentry_closures),
         _config(config),
         _builder(genext_section),
         _uses(section),

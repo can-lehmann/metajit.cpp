@@ -2070,8 +2070,8 @@ namespace metajit {
 
     std::unordered_map<AliasingGroup, GroupState> _memory;
     ExpandingVector<Value*> _exact_memory;
-
-    std::unordered_map<Value*, bool> _guards;
+    
+    Block* _guard_success = nullptr;
 
     bool could_alias(LoadInst* load, Value* ptr, Type type, AliasingGroup aliasing, uint64_t offset) {
       if (load->aliasing() != aliasing) {
@@ -2309,46 +2309,22 @@ namespace metajit {
       return block;
     }
 
-    void build_guard(Value* value, bool expected) {
+    void build_guard_begin(Value* value) {
       assert(value->type() == Type::Bool);
-
-      if (XorInst* xor_inst = is_not(value)) {
-        value = xor_inst->arg(0);
-        expected = !expected;
-      }
-
-      std::optional<bool> known_value;
-      if (dynmatch(Const, constant, value)) {
-        known_value = constant->value() & 1;
-      } else if (_guards.find(value) != _guards.end()) {
-        known_value = _guards[value];
-      }
-
-      if (known_value.has_value()) {
-        if (known_value.value() == expected) {
-          return; // Always true
-        } else {
-          // Always false
-          assert(false && "Unreachable code due to guard");
-        }
-      }
-
-      _guards[value] = expected;
+      assert(!_guard_success);
 
       Block* failure = Builder::build_block();
-      Block* success = build_block();
-
-      Block* a = success;
-      Block* b = failure;
-      if (!expected) {
-        std::swap(a, b);
-      }
-      build_branch(value, a, b);
+      _guard_success = build_block();
+      fold_branch(value, _guard_success, failure);
       
       move_to_end(failure);
+    }
+
+    void build_guard_end() {
       build_exit();
 
-      move_to_end(success);
+      move_to_end(_guard_success);
+      _guard_success = nullptr;
     }
 
     void init_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
@@ -2796,8 +2772,8 @@ namespace metajit {
     }
 
     template <class... Args>
-    static void run(Args... args) {
-      Self self(args...);
+    static void run(Args&&... args) {
+      Self self(std::forward<Args>(args)...);
     }
   };
 
@@ -5554,6 +5530,79 @@ namespace metajit {
     }
   };
 
+
+  class Clone: public Pass<Clone> {
+  private:
+    Section* _section;
+    Section* _cloned_section;
+    Builder _builder;
+
+    BlockMap<Block*> _blocks;
+    NameMap<Value*> _values;
+
+    static Value* clone_arg(Value* value, Builder& builder, const NameMap<Value*>& values) {
+      if (value->is_named()) {
+        return values.at((NamedValue*) value);
+      } else if (dynmatch(Const, constant, value)) {
+        return builder.build_const(constant->type(), constant->value());
+      } else if (dynmatch(Poison, poison, value)) {
+        return builder.build_poison(poison->type());
+      } else if (dynmatch(Symbol, symbol, value)) {
+        return builder.build_symbol(
+          symbol->type(),
+          std::string(symbol->symbol().data(), symbol->symbol().size())
+        );
+      } else {
+        assert(false);
+        return nullptr;
+      }
+    }
+  public:
+    Clone(Section* section, Section* cloned_section):
+        Pass<Clone>(section),
+        _section(section),
+        _cloned_section(cloned_section),
+        _builder(cloned_section),
+        _blocks(section),
+        _values(section) {
+      
+      assert(section->ordering() >= BlockOrdering::Dominator);
+
+      _cloned_section->set_ordering(_section->ordering());
+
+      for (Block* block : *_section) {
+        Block* cloned = _builder.build_block(block->args().size());
+        for (Arg* arg : block->args()) {
+          Arg* cloned_arg = _builder.alloc_arg(arg->type(), arg->index());
+          cloned->set_arg(arg->index(), cloned_arg);
+          _values[arg] = cloned_arg;
+        }
+        _blocks[block] = cloned;
+      }
+
+      for (Block* block : *_section) {
+        _builder.move_to_end(_blocks[block]);
+
+        for (Inst* inst : *block) {
+          _values[inst] = clone(inst, _builder, _blocks, _values);
+        }
+      }
+    }
+
+    static Inst* clone(Inst* inst,
+                       Builder& builder,
+                       const BlockMap<Block*>& blocks,
+                       const NameMap<Value*>& values) {
+      /* ${clone} */
+    }
+
+    Section* section() const { return _section; }
+    Section* cloned_section() const { return _cloned_section; }
+
+    Value* at(NamedValue* value) const { return _values.at(value); }
+    Block* at(Block* block) const { return _blocks.at(block); }
+  };
+
   inline Value* unwrap_binding(Value* value) {
     while (true) {
       if (dynmatch(PromoteInst, promote, value)) {
@@ -5580,8 +5629,8 @@ namespace metajit {
     struct Closure {
       Inst* reuse = nullptr;
       std::vector<Capture> captures;
-      size_t id = 0;
-      size_t size = 4;
+      uint32_t id = 0;
+      size_t size = sizeof(uint32_t);
 
       void add(NamedValue* value) {
         if (size % type_size(value->type())) {
@@ -5590,14 +5639,33 @@ namespace metajit {
         captures.emplace_back(value, size);
         size += type_size(value->type());
       }
+
+      Closure to_cloned(const Clone& clone) const {
+        Closure result;
+        result.reuse = reuse ? dynamic_cast<Inst*>(clone.at(reuse)) : nullptr;
+        for (const Capture& capture : captures) {
+          result.captures.emplace_back((NamedValue*) clone.at(capture.value), capture.offset);
+        }
+        result.id = id;
+        result.size = size;
+        return result;
+      }
     };
 
     struct Frontier {
       std::vector<NamedValue*> values;
+
+      Frontier to_cloned(const Clone& clone) const {
+        Frontier result;
+        for (NamedValue* value : values) {
+          result.values.push_back((NamedValue*) clone.at(value));
+        }
+        return result;
+      }
     };
   private:
     Section* _section;
-    BindingTimeGroups _binding_time_groups;
+    BindingTimeGroups* _binding_time_groups;
     std::unordered_map<Inst*, Closure> _closures;
     std::unordered_map<Block*, Frontier> _frontiers;
 
@@ -5606,12 +5674,12 @@ namespace metajit {
       for (Block* block : *_section) {
         for (Inst* inst : *block) {
           if (dynmatch(BranchInst, branch, inst)) {
-            if (!_binding_time_groups.is_static(branch->cond())) {
+            if (!(_binding_time_groups->is_static(branch->cond()))) {
               _closures.emplace(*branch->true_block()->begin(), Closure());
               _closures.emplace(*branch->false_block()->begin(), Closure());
             }
           } else if (dynmatch(PromoteInst, promote, inst)) {
-            if (!_binding_time_groups.is_static(promote->arg(0))) {
+            if (!(_binding_time_groups->is_static(promote->arg(0)))) {
               _closures.emplace(promote, Closure());
             }
           }
@@ -5692,7 +5760,7 @@ namespace metajit {
     }
 
     void set_ids() {
-      size_t id = 0;
+      uint32_t id = 1;
       for (auto& [inst, closure] : _closures) {
         if (!closure.reuse) {
           closure.id = id++;
@@ -5728,9 +5796,10 @@ namespace metajit {
       }
     }
   public:
-    ReentryClosures(Section* section):
+    ReentryClosures(Section* section,
+                    BindingTimeGroups& binding_time_groups):
         _section(section),
-        _binding_time_groups(section) {
+        _binding_time_groups(&binding_time_groups) {
       
       assert(section->ordering() >= BlockOrdering::Topological);
 
@@ -5741,9 +5810,9 @@ namespace metajit {
       populate_closures_and_frontiers();
     }
 
-    ReentryClosures(Section* section, const std::set<Inst*>& reentry_points):
-        _section(section),
-        _binding_time_groups(section) {
+    ReentryClosures(Section* section,
+                    const std::set<Inst*>& reentry_points):
+        _section(section) {
       
       assert(section->ordering() >= BlockOrdering::Topological);
 
@@ -5756,6 +5825,22 @@ namespace metajit {
       populate_closures_and_frontiers();
     }
 
+    ReentryClosures(const ReentryClosures& reentry_closures, Clone& clone):
+        _section(clone.cloned_section()) {
+      
+      assert(reentry_closures._section == clone.section());
+
+      for (const auto& [inst, closure] : reentry_closures._closures) {
+        Inst* cloned_inst = dynamic_cast<Inst*>(clone.at(inst));
+        assert(cloned_inst);
+        _closures.emplace(cloned_inst, closure.to_cloned(clone));
+      }
+
+      for (const auto& [block, frontier] : reentry_closures._frontiers) {
+        _frontiers.emplace(clone.at(block), frontier.to_cloned(clone));
+      }
+    }
+
     auto begin() const { return _closures.begin(); }
     auto end() const { return _closures.end(); }
 
@@ -5766,6 +5851,14 @@ namespace metajit {
     Closure& at(Inst* inst) {
       assert(has(inst));
       return _closures.at(inst);
+    }
+
+    Closure& reusing_at(Inst* inst) {
+      if (at(inst).reuse) {
+        return at(at(inst).reuse);
+      } else {
+        return at(inst);
+      }
     }
 
     bool is_frontier(Block* block) const {
@@ -5785,6 +5878,10 @@ namespace metajit {
         }
       }
       return max;
+    }
+
+    ReentryClosures to_cloned(Clone& clone) const {
+      return ReentryClosures(*this, clone);
     }
 
     void write(std::ostream& stream) const {
@@ -5823,72 +5920,6 @@ namespace metajit {
         }
       };
       _section->write(stream, &info_writer);
-    }
-  };
-
-  class Clone: public Pass<Clone> {
-  private:
-    Section* _section;
-    Section* _cloned_section;
-    Builder _builder;
-
-    BlockMap<Block*> _blocks;
-    NameMap<Value*> _values;
-
-    static Value* clone_arg(Value* value, Builder& builder, const NameMap<Value*>& values) {
-      if (value->is_named()) {
-        return values.at((NamedValue*) value);
-      } else if (dynmatch(Const, constant, value)) {
-        return builder.build_const(constant->type(), constant->value());
-      } else if (dynmatch(Poison, poison, value)) {
-        return builder.build_poison(poison->type());
-      } else if (dynmatch(Symbol, symbol, value)) {
-        return builder.build_symbol(
-          symbol->type(),
-          std::string(symbol->symbol().data(), symbol->symbol().size())
-        );
-      } else {
-        assert(false);
-        return nullptr;
-      }
-    }
-  public:
-    Clone(Section* section, Section* cloned_section):
-        Pass<Clone>(section),
-        _section(section),
-        _cloned_section(cloned_section),
-        _builder(cloned_section),
-        _blocks(section),
-        _values(section) {
-      
-      assert(section->ordering() >= BlockOrdering::Dominator);
-
-      _cloned_section->set_ordering(_section->ordering());
-
-      for (Block* block : *_section) {
-        Block* cloned = _builder.build_block(block->args().size());
-        for (Arg* arg : block->args()) {
-          Arg* cloned_arg = _builder.alloc_arg(arg->type(), arg->index());
-          cloned->set_arg(arg->index(), cloned_arg);
-          _values[arg] = cloned_arg;
-        }
-        _blocks[block] = cloned;
-      }
-
-      for (Block* block : *_section) {
-        _builder.move_to_end(_blocks[block]);
-
-        for (Inst* inst : *block) {
-          _values[inst] = clone(inst, _builder, _blocks, _values);
-        }
-      }
-    }
-
-    static Inst* clone(Inst* inst,
-                       Builder& builder,
-                       const BlockMap<Block*>& blocks,
-                       const NameMap<Value*>& values) {
-      /* ${clone} */
     }
   };
 
@@ -5944,7 +5975,7 @@ namespace metajit {
         while (inst) {
           Inst* next_inst = inst->next();
 
-          if (_closures.has(inst)) {
+          if (_closures.has(inst) && !_closures.at(inst).reuse) {
             ReentryClosures::Closure& closure = _closures.at(inst);
 
             std::vector<Arg*> args;
@@ -6067,11 +6098,6 @@ namespace metajit {
       slice_blocks();
       build_dispatcher();
     }
-
-    // TODO: Remove? Requires template magic
-    static void run(Section* section, ReentryClosures& closures) {
-      SliceReentryClosures src(section, closures);
-    };
   };
 
   class Mem2Reg: public Pass<Mem2Reg> {

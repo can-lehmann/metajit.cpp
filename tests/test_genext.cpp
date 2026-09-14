@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
     suite.set_record_replay(record_replay);
 
     suite.gen_ext_test("add_promoted").run([](Builder& builder, TraceTestData& data) {
-      Value* x = data.static_input(RandomRange(Type::Int32));  // promoted/frozen
+      Value* x = data.static_input(RandomRange(Type::Int32));  // promoted
       Value* y = data.input(RandomRange(Type::Int32));         // dynamic
       Value* result = builder.build_add(x, y);
       data.output(result);
@@ -62,11 +62,44 @@ int main(int argc, char** argv) {
     suite.gen_ext_test("bug_promote_ptr").run([](Builder& builder, TraceTestData& data) {
       // This test should trigger the bug where Promote on a pointer type
       // generates invalid LLVM IR (zext ptr instead of ptrtoint)
-      Value* ptr = data.static_input(RandomRange(Type::Ptr));  // frozen pointer
+      Value* ptr = data.static_input(RandomRange(Type::Ptr));  // promoted pointer
       Value* offset = data.input(RandomRange(Type::Int64));    // dynamic offset
       Value* result = builder.build_add_ptr(ptr, offset);
       data.output(result);
     });
+
+    suite.gen_ext_test("promote_guard_abort").run([](Builder& builder, TraceTestData& data) {
+      Value* x = data.input(RandomRange(Type::Int32));
+      x = builder.build_promote(x);
+      data.output(x);
+    });
+
+    suite.gen_ext_test("branch_guard").run([](Builder& builder, TraceTestData& data) {
+      Value* x = data.input(RandomRange(Type::Bool));
+
+      Block* true_block = builder.build_block();
+      Block* false_block = builder.build_block();
+
+      builder.build_branch(x, true_block, false_block);
+
+      builder.move_to_end(true_block);
+      data.output(builder.build_const(Type::Int32, 123));
+      builder.build_exit();
+
+      builder.move_to_end(false_block);
+      data.output(builder.build_const(Type::Int32, 456));
+      builder.build_exit();
+    });
+
+    suite.gen_ext_test("promote_twice").run([](Builder& builder, TraceTestData& data) {
+      Value* x = data.input(RandomRange(Type::Int32, 0, 3));
+      x = builder.build_promote(x);
+      data.output(x);
+      Value* y = data.input(RandomRange(Type::Int32, 0, 3));
+      y = builder.build_promote(y);
+      data.output(y);
+    });
+    
   }
 
   return suite.finish();
