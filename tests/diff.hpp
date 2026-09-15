@@ -1003,8 +1003,6 @@ namespace metajit {
             );
           }
 
-          // Run traced section, invoking the reentry function directly
-          // whenever the trace bails out of a guard
           trace_func(trace_data, reentry_data);
 
           uint32_t reentry_id = *(uint32_t*) reentry_data;

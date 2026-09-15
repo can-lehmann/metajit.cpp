@@ -1219,16 +1219,13 @@ namespace metajit {
       }
       _builder.move_to_end(_builder.build_block(entry_arg_types));
 
-      size_t builder_index = _section->entry()->args().size();
-      size_t next_arg_index = builder_index + 1;
-      _jitir_builder = _genext_section->entry()->arg(builder_index);
+      size_t next_arg_index = _section->entry()->args().size();
+      _jitir_builder = _genext_section->entry()->arg(next_arg_index++);
       if (_config.record.has_value()) {
-        _tape_ptr = _genext_section->entry()->arg(next_arg_index);
-        next_arg_index++;
+        _tape_ptr = _genext_section->entry()->arg(next_arg_index++);
       }
       if (_reentry_closures) {
-        _reentry_fn = _genext_section->entry()->arg(next_arg_index);
-        next_arg_index++;
+        _reentry_fn = _genext_section->entry()->arg(next_arg_index++);
       }
 
       for (Block* block : *section) {
