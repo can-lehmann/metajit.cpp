@@ -632,6 +632,10 @@ namespace metajit {
       return true;
     }
 
+    bool is_sext_imm32(Const* constant) {
+      return is_sext_imm32(constant->type(), constant->value());
+    }
+
     Reg vreg(Value* value) {
       if (dynmatch(Const, constant, value)) {
         Reg reg = vreg();
@@ -642,7 +646,7 @@ namespace metajit {
           case Type::Int32: _builder.mov32_imm(reg, constant->value()); break;
           case Type::Int64:
           case Type::Ptr:
-            if (is_sext_imm32(constant->type(), constant->value())) {
+            if (is_sext_imm32(constant)) {
               _builder.mov64_imm(reg, constant->value());
             } else {
               _builder.mov64_imm64(reg, constant->value());
