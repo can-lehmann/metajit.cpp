@@ -851,6 +851,10 @@ namespace metajit {
       if (record_replay) {
         LLVMCodeGen::run(record_section, genext_module.get(), "record_func");
       }
+      LLVMCodeGen::run(reentry_section, genext_module.get(), "reentry_func");
+      if (llvm::Function* reentry_func_llvm = genext_module->getFunction("reentry_func")) {
+        reentry_func_llvm->setCallingConv(llvm::CallingConv::PreserveNone);
+      }
 
       if (!output_path.empty()) {
         std::error_code error_code;
@@ -880,10 +884,10 @@ namespace metajit {
         std::make_unique<llvm::LLVMContext>()
       )));
 
-      using GenExtFunc = void(*)(uint8_t*, void*);
+      using GenExtFunc = void(*)(uint8_t*, void*, void*);
 
       using RecordFunc = void(*)(uint8_t*, uint8_t**);
-      using ReplayGenExtFunc = void(*)(uint8_t*, void*, uint8_t**);
+      using ReplayGenExtFunc = void(*)(uint8_t*, void*, uint8_t**, void*);
 
       GenExtFunc genext_func = nullptr;
       RecordFunc record_func = nullptr;
@@ -894,6 +898,8 @@ namespace metajit {
       } else {
         genext_func = ExitOnErr(jit->lookup("genext_func")).toPtr<GenExtFunc>();
       }
+
+      void* reentry_func = ExitOnErr(jit->lookup("reentry_func")).toPtr<void*>();
 
       uint8_t* static_data = new uint8_t[data.data_size()]();
       uint8_t* tape = new uint8_t[std::max((size_t) 1, max_write_size) * 1024]();
@@ -914,11 +920,11 @@ namespace metajit {
           uint8_t* record_tape_ptr = tape;
           record_func(static_data, &record_tape_ptr);
           uint8_t* replay_tape_ptr = tape;
-          replay_genext_func(static_data, &trace_builder, &replay_tape_ptr);
+          replay_genext_func(static_data, &trace_builder, &replay_tape_ptr, reentry_func);
           unittest_assert(record_tape_ptr == replay_tape_ptr);
           unittest_assert((record_tape_ptr - tape) <= max_write_size);
         } else {
-          genext_func(static_data, &trace_builder);
+          genext_func(static_data, &trace_builder, reentry_func);
         }
 
         trace_builder.build_store(
@@ -945,6 +951,25 @@ namespace metajit {
             stream.str()
           );
         }
+
+        llvm::LLVMContext trace_llvm_context;
+        std::unique_ptr<llvm::Module> trace_module = std::make_unique<llvm::Module>("trace_module", trace_llvm_context);
+        std::string trace_func_name = "trace_func_" + std::to_string(static_sample);
+        LLVMCodeGen::run(trace_section, trace_module.get(), trace_func_name);
+
+        if (llvm::verifyModule(*trace_module, &llvm::errs())) {
+          throw std::runtime_error("Generated trace LLVM IR module verification failed");
+        }
+
+        LLVMCodeGen::optimize_llvm(*trace_module, llvm::OptimizationLevel::O3);
+
+        ExitOnErr(jit->addIRModule(llvm::orc::ThreadSafeModule(
+          std::move(trace_module),
+          std::make_unique<llvm::LLVMContext>()
+        )));
+
+        using TraceFunc = void(*)(uint8_t*, uint8_t*);
+        TraceFunc trace_func = ExitOnErr(jit->lookup(trace_func_name)).toPtr<TraceFunc>();
 
         // Now test the trace with random dynamic inputs
         uint8_t* original_data = new uint8_t[data.data_size()]();
@@ -978,38 +1003,9 @@ namespace metajit {
             );
           }
 
-          // Run traced section
-          Interpreter trace_interp(trace_section, {
-            Interpreter::Bits::constant(trace_data),
-            Interpreter::Bits::constant(reentry_data)
-          });
-          Interpreter::Event trace_event = trace_interp.run();
-
-          if (trace_event != Interpreter::Event::Exit) {
-            throw unittest::AssertionError(
-              "Trace interpreter did not exit cleanly",
-              __LINE__,
-              __FILE__
-            );
-          }
+          trace_func(trace_data, reentry_data);
 
           uint32_t reentry_id = *(uint32_t*) reentry_data;
-
-          if (reentry_id) {
-            // Run reentry
-            Interpreter reentry_interp(reentry_section, {
-              Interpreter::Bits::constant(reentry_data)
-            });
-            Interpreter::Event reentry_event = reentry_interp.run();
-
-            if (reentry_event != Interpreter::Event::Exit) {
-              throw unittest::AssertionError(
-                "Reentry interpreter did not exit cleanly",
-                __LINE__,
-                __FILE__
-              );
-            }
-          }
 
           // Compare outputs
           for (const TestData::Output& output : data.outputs()) {
