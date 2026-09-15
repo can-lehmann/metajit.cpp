@@ -1420,13 +1420,16 @@ namespace metajit {
 
       void touch(Reg preg) {
         assert(preg.is_physical());
+        if (is_disabled(preg)) {
+          return;
+        }
         _lru[preg.id()] = _lru_count++;
       }
 
       void free(Reg preg) {
         assert(preg.is_physical());
         _regs[preg.id()] = Reg();
-        _free |= (1 << preg.id());
+        _free |= (1 << preg.id()) & _max_free;
       }
 
       bool is_free(Reg preg) const {
@@ -1673,6 +1676,7 @@ namespace metajit {
 
       for (Arg* arg : _section->entry()->args()) {
         VRegInfo& info = _vreg_info[vreg(arg).id()];
+        info.interval.incl(0);
         assert(info.fixed.is_physical() && "Entry arguments must be in fixed registers");
         initial_state[info.fixed.id()] = vreg(arg);
       }

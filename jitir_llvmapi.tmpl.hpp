@@ -22,7 +22,8 @@ namespace metajit {
     /* ${llvmapi_defs} */
     llvm::FunctionCallee build_const;
     llvm::FunctionCallee build_const_fast;
-    llvm::FunctionCallee build_guard;
+    llvm::FunctionCallee build_guard_begin;
+    llvm::FunctionCallee build_guard_end;
     llvm::FunctionCallee entry_arg;
     llvm::FunctionCallee is_const_inst;
     llvm::FunctionCallee set_arg;
@@ -44,14 +45,24 @@ namespace metajit {
       build_const = module->getOrInsertFunction("jitir_build_const", build_const_type);
       build_const_fast = module->getOrInsertFunction("jitir_build_const_fast", build_const_type);
 
-      build_guard = module->getOrInsertFunction(
-        "jitir_build_guard",
+      build_guard_begin = module->getOrInsertFunction(
+        "jitir_build_guard_begin",
         llvm::FunctionType::get(
           llvm::Type::getVoidTy(context),
           std::vector<llvm::Type*>({
             llvm::PointerType::get(context, 0),
-            llvm::PointerType::get(context, 0),
-            llvm::Type::getInt32Ty(context)
+            llvm::PointerType::get(context, 0)
+          }),
+          false
+        )
+      );
+
+      build_guard_end = module->getOrInsertFunction(
+        "jitir_build_guard_end",
+        llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          std::vector<llvm::Type*>({
+            llvm::PointerType::get(context, 0)
           }),
           false
         )
@@ -106,11 +117,15 @@ namespace metajit {
       return (void*) builder.build_const_fast((Type) type, value);
     }
 
-    void jitir_build_guard(void* builder_ptr, void* value_ptr, uint32_t expected) {
+    void jitir_build_guard_begin(void* builder_ptr, void* value_ptr) {
       TraceBuilder& builder = *(TraceBuilder*)builder_ptr;
       Value* value = (Value*)value_ptr;
-      assert(expected <= 1); // Bool
-      builder.build_guard(value, expected);
+      builder.build_guard_begin(value);
+    }
+
+    void jitir_build_guard_end(void* builder_ptr) {
+      TraceBuilder& builder = *(TraceBuilder*)builder_ptr;
+      builder.build_guard_end();
     }
 
     void* jitir_entry_arg(void* builder_ptr, uint64_t index) {
@@ -148,7 +163,8 @@ namespace metajit {
 
     map_symbol(jitir_build_const)
     map_symbol(jitir_build_const_fast)
-    map_symbol(jitir_build_guard)
+    map_symbol(jitir_build_guard_begin)
+    map_symbol(jitir_build_guard_end)
     map_symbol(jitir_entry_arg)
     map_symbol(jitir_is_const_inst)
     map_symbol(jitir_set_arg)

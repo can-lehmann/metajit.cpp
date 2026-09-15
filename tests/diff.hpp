@@ -786,8 +786,13 @@ namespace metajit {
         section->write(stream);
       }
 
+      assert(!section->verify(std::cout));
+
       Context genext_context;
       Allocator genext_allocator;
+
+      BindingTimeGroups binding_time_groups(section);
+      ReentryClosures reentry_closures(section, binding_time_groups);
       
       CreateGenExt::Config genext_config;
 
@@ -804,7 +809,18 @@ namespace metajit {
 
       // Generate the generating extension
       Section* genext_section = new Section(genext_context, genext_allocator);
-      CreateGenExt::run(section, genext_section, genext_config);
+      CreateGenExt::run(section, genext_section, genext_config, &reentry_closures);
+
+      if (genext_section->verify(std::cout)) {
+        std::ostringstream stream;
+        genext_section->write(stream);
+        throw unittest::AssertionError(
+          "Generating extension verification failed",
+          __LINE__,
+          __FILE__,
+          stream.str()
+        );
+      }
 
       Simplify::run(genext_section, 10);
       SimplifyCFG::run(genext_section);
@@ -815,7 +831,17 @@ namespace metajit {
       SimplifyCFG::run(genext_section);
       DeadCodeElim::run(genext_section);
 
-      section->write(std::cerr);
+      // Generate reentry section
+      Section* reentry_section = new Section(genext_context, genext_allocator);
+      Clone reentry_clone(section, reentry_section);
+      ReentryClosures reentry_closures_clone(reentry_closures, reentry_clone);
+      SliceReentryClosures::run(reentry_section, reentry_closures_clone);
+
+      std::cerr << "section = ";
+      reentry_closures.write(std::cerr);
+      std::cerr << "reentry = ";
+      reentry_section->write(std::cerr);
+      std::cerr << "genext = ";
       genext_section->write(std::cerr);
 
       llvm::LLVMContext llvm_context;
@@ -881,7 +907,7 @@ namespace metajit {
         Allocator trace_allocator;
         Section* trace_section = new Section(trace_context, trace_allocator);
         TraceBuilder trace_builder(trace_section);
-        std::vector<Type> args = {Type::Ptr};
+        std::vector<Type> args = {Type::Ptr, Type::Ptr};
         trace_builder.move_to_end(trace_builder.build_block(args));
 
         if (record_replay) {
@@ -895,6 +921,12 @@ namespace metajit {
           genext_func(static_data, &trace_builder);
         }
 
+        trace_builder.build_store(
+          trace_builder.entry_arg(1),
+          trace_builder.build_const(Type::Int32, 0),
+          AliasingGroup(0),
+          0
+        );
         trace_builder.build_exit();
 
         if (!output_path.empty()) {
@@ -917,6 +949,7 @@ namespace metajit {
         // Now test the trace with random dynamic inputs
         uint8_t* original_data = new uint8_t[data.data_size()]();
         uint8_t* trace_data = new uint8_t[data.data_size()]();
+        uint8_t* reentry_data = new uint8_t[reentry_closures.max_size()]();
 
         for (size_t dynamic_sample = 0; dynamic_sample < dynamic_sample_count; dynamic_sample++) {
           // Generate random values for all inputs (including static ones)
@@ -937,12 +970,6 @@ namespace metajit {
           });
           Interpreter::Event original_event = original_interp.run();
 
-          // Run traced section
-          Interpreter trace_interp(trace_section, {
-            Interpreter::Bits::constant(trace_data)
-          });
-          Interpreter::Event trace_event = trace_interp.run();
-
           if (original_event != Interpreter::Event::Exit) {
             throw unittest::AssertionError(
               "Original interpreter did not exit cleanly",
@@ -951,12 +978,37 @@ namespace metajit {
             );
           }
 
+          // Run traced section
+          Interpreter trace_interp(trace_section, {
+            Interpreter::Bits::constant(trace_data),
+            Interpreter::Bits::constant(reentry_data)
+          });
+          Interpreter::Event trace_event = trace_interp.run();
+
           if (trace_event != Interpreter::Event::Exit) {
             throw unittest::AssertionError(
               "Trace interpreter did not exit cleanly",
               __LINE__,
               __FILE__
             );
+          }
+
+          uint32_t reentry_id = *(uint32_t*) reentry_data;
+
+          if (reentry_id) {
+            // Run reentry
+            Interpreter reentry_interp(reentry_section, {
+              Interpreter::Bits::constant(reentry_data)
+            });
+            Interpreter::Event reentry_event = reentry_interp.run();
+
+            if (reentry_event != Interpreter::Event::Exit) {
+              throw unittest::AssertionError(
+                "Reentry interpreter did not exit cleanly",
+                __LINE__,
+                __FILE__
+              );
+            }
           }
 
           // Compare outputs
@@ -971,6 +1023,16 @@ namespace metajit {
             if (!is_equal) {
               std::ostringstream stream;
               stream << "Static sample: " << static_sample << ", Dynamic sample: " << dynamic_sample << "\n";
+              stream << "Trace:\n";
+              trace_section->write(stream);
+              stream << "\n";
+              
+              if (reentry_id) {
+                stream << "Reentry " << reentry_id << "\n";
+              } else {
+                stream << "No reentry\n";
+              }
+
               stream << "Inputs:\n";
               data.write_inputs(stream, original_data);
               stream << "Original Output:\n";
@@ -990,6 +1052,7 @@ namespace metajit {
 
         delete[] original_data;
         delete[] trace_data;
+        delete[] reentry_data;
         delete trace_section;
       }
 

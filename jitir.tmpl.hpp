@@ -39,90 +39,6 @@ using float32_t = float;
 using float64_t = double;
 
 namespace metajit {
-  class ArenaAllocator {
-  private:
-    struct Chunk {
-      Chunk* next = nullptr;
-      uint8_t data[0];
-    };
-
-    static constexpr size_t CHUNK_SIZE = 1024 * 1024; // 1 MiB
-    static constexpr size_t USABLE_SIZE = CHUNK_SIZE - sizeof(Chunk);
-
-    Chunk* _first = nullptr;
-    Chunk* _current = nullptr;
-
-    size_t _left = 0;
-    uint8_t* _ptr = nullptr;
-
-    inline size_t align_pad(void* ptr, size_t align) {
-      size_t delta = (uintptr_t) ptr % align;
-      return delta ? align - delta : 0;
-    }
-  public:
-    ArenaAllocator() {
-      _first = (Chunk*) malloc(CHUNK_SIZE);
-      new (_first) Chunk();
-      _current = _first;
-    }
-
-    ~ArenaAllocator() {
-      Chunk* chunk = _first;
-      while (chunk) {
-        Chunk* next = chunk->next;
-        free(chunk);
-        chunk = next;
-      }
-    }
-
-    void* alloc(size_t size, size_t align) {
-      assert(size <= USABLE_SIZE);
-
-      size_t align_padding = align_pad(_ptr, align);
-
-      if (__builtin_expect(_left - align_padding < size, 0)) {
-        if (_current->next) {
-          _current = _current->next;
-        } else {
-          Chunk* chunk = (Chunk*) malloc(CHUNK_SIZE);
-          new (chunk) Chunk();
-          _current->next = chunk;
-          _current = chunk;  
-        }
-        _left = USABLE_SIZE;
-        _ptr = _current->data;
-        align_padding = align_pad(_ptr, align);
-      }
-
-      _ptr += align_padding;
-      _left -= align_padding;
-      void* ptr = (void*) _ptr;
-      _ptr += size;
-      _left -= size; 
-      return ptr;
-    }
-
-    template <class T>
-    T* alloc() {
-      return (T*) alloc(sizeof(T), alignof(T));
-    }
-
-    void dealloc_all() {
-      _current = _first;
-      _ptr = _first->data;
-      _left = USABLE_SIZE;
-    }
-
-    void zero_all() {
-      Chunk* chunk = _first;
-      while (chunk) {
-        std::memset(chunk->data, 0, USABLE_SIZE);
-        chunk = chunk->next;
-      }
-      dealloc_all();
-    }
-  };
-
   // WARNING: Does not deallocate, only use for testing
   class MallocAllocator {
   public:
@@ -134,7 +50,7 @@ namespace metajit {
     }
   };
 
-  using Allocator = ArenaAllocator;
+  using Allocator = lwir::ArenaAllocator;
 
   class Timer {
   private:
@@ -668,8 +584,10 @@ namespace metajit {
   struct InfoWriter {
   public:
     using InstFn = std::function<void(std::ostream&, Inst*)>;
+    using BlockFn = std::function<void(std::ostream&, Block*)>;
 
     InstFn inst = nullptr;
+    BlockFn block = nullptr;
 
     InfoWriter() {}
     InfoWriter(const InstFn& _inst): inst(_inst) {}
@@ -748,6 +666,10 @@ namespace metajit {
 
     void write(PrettyStream& stream, InfoWriter* info_writer = nullptr) {
       write_header(stream);
+      if (info_writer && info_writer->block) {
+        stream << " ; ";
+        info_writer->block(stream, this);
+      }
       stream << '\n';
       for (Inst* inst : _insts) {
         stream << "  ";
@@ -810,69 +732,20 @@ namespace metajit {
     }
   };
 
-
-  template <class Self>
-  class BaseFlags {
-  protected:
-    uint32_t _flags = 0;
+  template <class Self, class T = uint32_t>
+  class BaseFlags: public lwir::BaseFlags<Self, T> {
   public:
-    BaseFlags(uint32_t flags = 0): _flags(flags) {}
-
-    explicit operator uint32_t() const {
-      return _flags;
-    }
-
-    explicit operator uint64_t() const {
-      return _flags;
-    }
-
-    bool has(Self flag) const {
-      return (_flags & flag._flags) != 0;
-    }
-
-    bool operator==(const Self& other) const {
-      return _flags == other._flags;
-    }
-
-    bool operator!=(const Self& other) const {
-      return !(*this == other);
-    }
-
-    Self operator|(const Self& other) const {
-      return Self(_flags | other._flags);
-    }
-
-    Self& operator|=(const Self& other) {
-      _flags |= other._flags;
-      return (Self&) *this;
-    }
+    using lwir::BaseFlags<Self, T>::BaseFlags;
 
     void write(PrettyStream& stream) const {
       stream << "{";
       bool is_first = true;
-      for (size_t it = 0; it < Self::COUNT; it++) {
-        uint32_t bit = 1 << it;
-        if (_flags & bit) {
-          if (!is_first) { stream << ", "; }
-          is_first = false;
-          stream << Highlight::Constant << Self::NAMES[it] << Highlight::None;
-        }
+      for (const char* name : this->names()) {
+        if (!is_first) { stream << ", "; }
+        is_first = false;
+        stream << Highlight::Constant << name << Highlight::None;
       }
       stream << "}";
-    }
-
-    void write_json(std::ostream& stream) const {
-      stream << "[";
-      bool is_first = true;
-      for (size_t it = 0; it < Self::COUNT; it++) {
-        uint32_t bit = 1 << it;
-        if (_flags & bit) {
-          if (!is_first) { stream << ", "; }
-          is_first = false;
-          stream << "\"" << Self::NAMES[it] << "\"";
-        }
-      }
-      stream << "]";
     }
   };
 
@@ -1351,6 +1224,35 @@ namespace metajit {
       std::copy(block->args().begin(), block->args().end(), new_args.begin());
       std::copy(args.begin(), args.end(), new_args.begin() + block->args().size());
       block->set_args(new_args);
+    }
+
+    template <class Fn>
+    void add_args_to_terminator(Block* source, const Fn& fn) {
+      Inst* terminator = source->terminator();
+      if (dynmatch(JumpInst, jump, terminator)) {
+        std::vector<Value*> additional_args = fn(jump->block());
+        lwir::Span<Value*> new_args = alloc_span<Value*>(jump->arg_count() + additional_args.size());
+        std::copy(jump->args().begin(), jump->args().end(), new_args.begin());
+        std::copy(additional_args.begin(), additional_args.end(), new_args.begin() + jump->arg_count());
+        jump->set_args(new_args);
+      } else if (dynmatch(BranchInst, branch, terminator)) {
+        #define succ(name) { \
+          std::vector<Value*> additional_args = fn(branch->name()); \
+          if (!additional_args.empty()) { \
+            Builder builder(_section); \
+            Block* jump_block = builder.build_block_after(source); \
+            jump_block->set_name(SIZE_MAX); \
+            builder.move_to_end(jump_block); \
+            builder.build_jump(branch->name(), additional_args); \
+            branch->set_##name(jump_block); \
+          } \
+        }
+
+        succ(true_block)
+        succ(false_block)
+
+        #undef succ
+      }
     }
 
     // Folding
@@ -2168,8 +2070,8 @@ namespace metajit {
 
     std::unordered_map<AliasingGroup, GroupState> _memory;
     ExpandingVector<Value*> _exact_memory;
-
-    std::unordered_map<Value*, bool> _guards;
+    
+    Block* _guard_success = nullptr;
 
     bool could_alias(LoadInst* load, Value* ptr, Type type, AliasingGroup aliasing, uint64_t offset) {
       if (load->aliasing() != aliasing) {
@@ -2407,46 +2309,22 @@ namespace metajit {
       return block;
     }
 
-    void build_guard(Value* value, bool expected) {
+    void build_guard_begin(Value* value) {
       assert(value->type() == Type::Bool);
+      assert(!_guard_success);
 
-      if (XorInst* xor_inst = is_not(value)) {
-        value = xor_inst->arg(0);
-        expected = !expected;
-      }
-
-      std::optional<bool> known_value;
-      if (dynmatch(Const, constant, value)) {
-        known_value = constant->value() & 1;
-      } else if (_guards.find(value) != _guards.end()) {
-        known_value = _guards[value];
-      }
-
-      if (known_value.has_value()) {
-        if (known_value.value() == expected) {
-          return; // Always true
-        } else {
-          // Always false
-          assert(false && "Unreachable code due to guard");
-        }
-      }
-
-      _guards[value] = expected;
-
-      Block* failure = build_block();
-      Block* success = build_block();
-
-      Block* a = success;
-      Block* b = failure;
-      if (!expected) {
-        std::swap(a, b);
-      }
-      build_branch(value, a, b);
+      Block* failure = Builder::build_block();
+      _guard_success = build_block();
+      fold_branch(value, _guard_success, failure);
       
       move_to_end(failure);
+    }
+
+    void build_guard_end() {
       build_exit();
 
-      move_to_end(success);
+      move_to_end(_guard_success);
+      _guard_success = nullptr;
     }
 
     void init_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
@@ -2894,8 +2772,8 @@ namespace metajit {
     }
 
     template <class... Args>
-    static void run(Args... args) {
-      Self self(args...);
+    static void run(Args&&... args) {
+      Self self(std::forward<Args>(args)...);
     }
   };
 
@@ -4374,96 +4252,6 @@ namespace metajit {
     }
   };
 
-  class CommonSubexprElim: public Pass<CommonSubexprElim> {
-  private:
-    struct Lookup {
-      Value* value = nullptr;
-
-      Lookup(Value* _value): value(_value) {}
-
-      bool operator==(const Lookup& other) const {
-        return value->equals(other.value);
-      }
-    };
-
-    struct LookupHash {
-      size_t operator()(const Lookup& lookup) const {
-        return lookup.value->hash();
-      }
-    };
-  public:
-    CommonSubexprElim(Section* section): Pass(section) {
-      assert(section->ordering() >= BlockOrdering::Dominator);
-
-      std::unordered_map<Value*, Value*> substs;
-      std::unordered_map<Lookup, Const*, LookupHash> consts;
-      for (Block* block : *section) {
-        std::unordered_map<Lookup, Value*, LookupHash> canon;
-        std::unordered_map<AliasingGroup, std::vector<LoadInst*>> valid_loads;
-
-        for (auto inst_it = block->begin(); inst_it != block->end(); ) {
-          Inst* inst = *inst_it;
-
-          for (size_t it = 0; it < inst->arg_count(); it++) {
-            Value* arg = inst->arg(it);
-            if (substs.find(arg) != substs.end()) {
-              inst->set_arg(it, substs.at(arg));
-            } else if (dynmatch(Const, constant, arg)) {
-              Lookup lookup(constant);
-              if (consts.find(lookup) != consts.end()) {
-                inst->set_arg(it, consts.at(lookup));
-                substs[constant] = consts.at(lookup);
-              } else {
-                consts[lookup] = constant;
-              }
-            }
-          }
-
-          if (dynmatch(StoreInst, store, inst)) {
-            std::vector<LoadInst*> remaining_loads;
-            for (LoadInst* load : valid_loads[store->aliasing()]) {
-              if (could_alias(load, store)) {
-                assert(canon.find(Lookup(load)) != canon.end());
-                canon.erase(Lookup(load));
-              } else {
-                remaining_loads.push_back(load);
-              }
-            }
-            valid_loads[store->aliasing()] = remaining_loads;
-          } else if (dynamic_cast<CallInst*>(inst)) {
-            // Calls can invalidate any cached memory-derived value.
-            for (auto& [group, loads] : valid_loads) {
-              for (LoadInst* load : loads) {
-                canon.erase(Lookup(load));
-              }
-            }
-            valid_loads.clear();
-          }
-
-          if (inst->has_side_effect() ||
-              inst->is_terminator() ||
-              dynamic_cast<CommentInst*>(inst) ||
-              dynamic_cast<AllocaInst*>(inst)) {
-            inst_it++;
-            continue;
-          }
-          
-          Lookup lookup(inst);
-          if (canon.find(lookup) == canon.end()) {
-            canon[lookup] = inst;
-            if (dynmatch(LoadInst, load, inst)) {
-              valid_loads[load->aliasing()].push_back(load);
-            }
-            inst_it++;
-          } else {
-            substs[inst] = canon.at(lookup);
-            inst_it = inst_it.erase();
-          }
-        }
-      }
-    }
-  };
-
   class Loop {
   private:
     Section* _section = nullptr;
@@ -4593,6 +4381,15 @@ namespace metajit {
         assert(value);
         extent_jump->set_arg(it, value);
       }
+
+      for (Block* block : *loop->section()) {
+        if (block == loop->preheader()) {
+          continue;
+        }
+        for (Inst* inst : *block) {
+          inst->substitute_args(substs);
+        }
+      }
     }
   };
 
@@ -4708,7 +4505,7 @@ namespace metajit {
       }
     }
 
-    #ifndef NDEBUG
+    #ifdef METAJIT_SLOW_ASSERTS
     void verify_incoming() {
       std::vector<std::vector<Block*>> expected(incoming.size());
       _compute_incoming(expected);
@@ -5001,7 +4798,7 @@ namespace metajit {
           }
           break;
         }
-        #ifndef NDEBUG
+        #ifdef METAJIT_SLOW_ASSERTS
         verify_incoming();
         #endif
       }
@@ -5156,123 +4953,6 @@ namespace metajit {
     }
   };
 
-  class TraceCapabilities {
-  private:
-    Section* _section;
-    BindingTimeGroups& _binding_time_groups;
-    NameMap<bool> _can_trace_inst;
-    NameMap<bool> _can_trace_const;
-
-    void used_by(NamedValue* value, NamedValue* by) {
-      if (_can_trace_inst.at(by)) {
-        if (_binding_time_groups.at(by) != _binding_time_groups.at(value) ||
-            (is_int_or_bool(value->type()) && !is_int_or_bool(by->type()))) {
-          _can_trace_const[value] = true;
-        }
-        if (!_binding_time_groups.is_static(value) ||
-            !is_int_or_bool(value->type())) {
-          _can_trace_inst[value] = true;
-        }
-      }
-
-      // Args cannot generate new constants, so all arguments need to be const traceable
-      if (dynmatch(Arg, arg, by)) {
-        if (_can_trace_const.at(by)) {
-          _can_trace_const[value] = true;
-        }
-      }
-
-      if (dynamic_cast<PromoteInst*>(by) ||
-          (dynamic_cast<AssumeConstInst*>(by) && !is_int_or_bool(value->type()))) {
-        _can_trace_inst[value] = true;
-        _can_trace_const[value] = true;
-      }
-    }
-  public:
-    TraceCapabilities(Section* section, BindingTimeGroups& constness):
-        _section(section),
-        _binding_time_groups(constness),
-        _can_trace_inst(section),
-        _can_trace_const(section) {
-    
-      assert(_section->ordering() >= BlockOrdering::Dominator);
-
-      for (Block* block : section->rev_range()) {
-        for (Inst* inst : block->rev_range()) {
-          if (inst->has_side_effect() ||
-              inst->is_terminator() ||
-              dynamic_cast<PromoteInst*>(inst) ||
-              dynamic_cast<AssumeConstInst*>(inst) ||
-              dynamic_cast<CommentInst*>(inst)) {
-            _can_trace_inst[inst] = true;
-            _can_trace_const[inst] = true;
-          }
-
-          if (dynmatch(JumpInst, jump, inst)) {
-            // Jump arguments are passed to block arguments
-            for (Arg* block_arg : jump->block()->args()) {
-              Value* arg = jump->arg(block_arg->index());
-              if (arg->is_named()) {
-                used_by((NamedValue*) arg, block_arg);
-              }
-            }
-          } else {
-            for (Value* arg : inst->args()) {
-              if (arg->is_named()) {
-                used_by((NamedValue*) arg, inst);
-              }
-            }
-          }
-        }
-      }
-    }
-
-    bool can_trace_const(NamedValue* value) const {
-      return _can_trace_const[value];
-    }
-
-    bool can_trace_inst(NamedValue* value) const {
-      return _can_trace_inst[value];
-    }
-
-    bool any(NamedValue* value) const {
-      return can_trace_const(value) || can_trace_inst(value);
-    }
-
-    size_t count_trace_const() const {
-      size_t count = 0;
-      for (size_t name = 0; name < _section->name_count(); name++) {
-        if (_can_trace_const.at_name(name)) {
-          count++;
-        }
-      }
-      return count;
-    }
-
-    size_t count_trace_inst() const {
-      size_t count = 0;
-      for (size_t name = 0; name < _section->name_count(); name++) {
-        if (_can_trace_inst.at_name(name)) {
-          count++;
-        }
-      }
-      return count;
-    }
-
-    void write(std::ostream& stream) {
-      InfoWriter info_writer([&](std::ostream& stream, Inst* inst) {
-        if (can_trace_const(inst)) {
-          stream << "trace_const ";
-        }
-        if (can_trace_inst(inst)) {
-          stream << "trace_inst ";
-        }
-        stream << "group=" << _binding_time_groups.at(inst);
-      });
-      _section->write(stream, &info_writer);
-    }
-  };
-
   class DominatorTree: public lwir::DominatorTreeBase<DominatorTree, Block, BlockMap> {
   private:
     Section* _section;
@@ -5284,6 +4964,14 @@ namespace metajit {
   public:
     std::vector<Block*> successors(Block* block) {
       return block->successors();
+    }
+
+    std::vector<Block*> blocks() {
+      std::vector<Block*> result;
+      for (Block* block : *_section) {
+        result.push_back(block);
+      }
+      return result;
     }
 
     DominatorTree(Section* section):
@@ -5370,6 +5058,112 @@ namespace metajit {
     };
 
     Children children() { return Children(*this); }
+  };
+
+  class CommonSubexprElim: public Pass<CommonSubexprElim> {
+  private:
+    struct Lookup {
+      Value* value = nullptr;
+
+      Lookup(Value* _value): value(_value) {}
+
+      bool operator==(const Lookup& other) const {
+        return value->equals(other.value);
+      }
+    };
+
+    struct LookupHash {
+      size_t operator()(const Lookup& lookup) const {
+        return lookup.value->hash();
+      }
+    };
+
+    using Canon = std::unordered_map<Lookup, Value*, LookupHash>;
+    using ValidLoads = std::unordered_map<AliasingGroup, std::vector<LoadInst*>>;
+  public:
+    CommonSubexprElim(Section* section): Pass(section) {
+      assert(section->ordering() >= BlockOrdering::Dominator);
+
+      DominatorTree dt(section);
+
+      std::unordered_map<Value*, Value*> substs;
+      std::unordered_map<Lookup, Const*, LookupHash> consts;
+      BlockMap<Canon> canon_at_exit(section->block_count());
+
+      for (Block* block : *section) {
+        Block* idom = dt.idom(block);
+        Canon canon = idom ? canon_at_exit[idom] : Canon();
+        ValidLoads valid_loads;
+
+        for (auto inst_it = block->begin(); inst_it != block->end(); ) {
+          Inst* inst = *inst_it;
+
+          for (size_t it = 0; it < inst->arg_count(); it++) {
+            Value* arg = inst->arg(it);
+            if (substs.find(arg) != substs.end()) {
+              inst->set_arg(it, substs.at(arg));
+            } else if (dynmatch(Const, constant, arg)) {
+              Lookup lookup(constant);
+              if (consts.find(lookup) != consts.end()) {
+                inst->set_arg(it, consts.at(lookup));
+                substs[constant] = consts.at(lookup);
+              } else {
+                consts[lookup] = constant;
+              }
+            }
+          }
+
+          if (dynmatch(StoreInst, store, inst)) {
+            std::vector<LoadInst*> remaining_loads;
+            for (LoadInst* load : valid_loads[store->aliasing()]) {
+              if (could_alias(load, store)) {
+                assert(canon.find(Lookup(load)) != canon.end());
+                canon.erase(Lookup(load));
+              } else {
+                remaining_loads.push_back(load);
+              }
+            }
+            valid_loads[store->aliasing()] = remaining_loads;
+          } else if (dynamic_cast<CallInst*>(inst)) {
+            // Calls can invalidate any cached memory-derived value.
+            for (auto& [group, loads] : valid_loads) {
+              for (LoadInst* load : loads) {
+                canon.erase(Lookup(load));
+              }
+            }
+            valid_loads.clear();
+          }
+
+          if (inst->has_side_effect() ||
+              inst->is_terminator() ||
+              dynamic_cast<CommentInst*>(inst) ||
+              dynamic_cast<AllocaInst*>(inst)) {
+            inst_it++;
+            continue;
+          }
+
+          Lookup lookup(inst);
+          if (canon.find(lookup) == canon.end()) {
+            canon[lookup] = inst;
+            if (dynmatch(LoadInst, load, inst)) {
+              valid_loads[load->aliasing()].push_back(load);
+            }
+            inst_it++;
+          } else {
+            substs[inst] = canon.at(lookup);
+            inst_it = inst_it.erase();
+          }
+        }
+
+        for (auto& [group, loads] : valid_loads) {
+          for (LoadInst* load : loads) {
+            canon.erase(Lookup(load));
+          }
+        }
+
+        canon_at_exit[block] = std::move(canon);
+      }
+    }
   };
 
   class OrderBlocks: public Pass<OrderBlocks> {
@@ -5666,212 +5460,6 @@ namespace metajit {
     }
   };
 
-  inline Value* unwrap_binding(Value* value) {
-    while (true) {
-      if (dynmatch(PromoteInst, promote, value)) {
-        value = promote->arg(0);
-      } else if (dynmatch(AssumeConstInst, assume_const, value)) {
-        value = assume_const->arg(0);
-      } else {
-        break;
-      }
-    }
-    return value;
-  }
-
-  class ReentryClosures {
-  public:
-    struct Capture {
-      NamedValue* value = nullptr;
-      size_t offset = 0;
-
-      Capture() {}
-      Capture(NamedValue* value, size_t offset): value(value), offset(offset) {}
-    };
-
-    struct Closure {
-      Inst* reuse = nullptr;
-      std::vector<Capture> captures;
-      size_t id = 0;
-      size_t size = 4;
-
-      void add(NamedValue* value) {
-        if (size % type_size(value->type())) {
-          size += type_size(value->type()) - size % type_size(value->type());
-        }
-        captures.emplace_back(value, size);
-        size += type_size(value->type());
-      }
-    };
-  private:
-    Section* _section;
-    BindingTimeGroups _binding_time_groups;
-    std::unordered_map<Inst*, Closure> _closures;
-
-    void find_reentry_points() {
-      _closures.emplace(*_section->entry()->begin(), Closure());
-      for (Block* block : *_section) {
-        for (Inst* inst : *block) {
-          if (dynmatch(BranchInst, branch, inst)) {
-            if (!_binding_time_groups.is_static(branch->cond())) {
-              _closures.emplace(*branch->true_block()->begin(), Closure());
-              _closures.emplace(*branch->false_block()->begin(), Closure());
-            }
-          } else if (dynmatch(PromoteInst, promote, inst)) {
-            if (!_binding_time_groups.is_static(promote->arg(0))) {
-              _closures.emplace(promote, Closure());
-            }
-          }
-        }
-      }
-    }
-
-    void find_closure_reuse() {
-      std::vector<std::optional<Inst*>> reusable_reentry_points(_section->block_count(), std::nullopt);
-      for (Block* block : *_section) {
-        Inst* reuse = nullptr;
-        if (reusable_reentry_points[block->name()].has_value()) {
-          reuse = reusable_reentry_points[block->name()].value();
-        }
-        for (Inst* inst : *block) {
-          if (_closures.find(inst) != _closures.end()) {
-            if (reuse) {
-              _closures[inst].reuse = reuse;
-            } else {
-              reuse = inst;
-            }
-          }
-          if (inst->has_side_effect()) {
-            reuse = nullptr;
-          }
-        }
-
-        for (Block* succ : block->successors()) {
-          if (reusable_reentry_points[succ->name()].has_value()) {
-            if (reusable_reentry_points[succ->name()].value()) {
-              reusable_reentry_points[succ->name()] = reuse;
-            }
-          }
-        }
-      }
-    }
-
-    void populate_closures() {
-      std::vector<std::set<NamedValue*>> live_before_block(_section->block_count());
-      for (Block* block : _section->rev_range()) {
-        std::set<NamedValue*> live;
-        for (Block* succ : block->successors()) {
-          for (NamedValue* value : live_before_block[succ->name()]) {
-            live.insert(value);
-          }
-        }
-
-        for (Inst* inst : block->rev_range()) {
-          live.erase(inst);
-          for (Value* arg : inst->args()) {
-            if (arg->is_named()) {
-              live.insert((NamedValue*) arg);
-            }
-          }
-
-          if (_closures.find(inst) != _closures.end()) {
-            Closure& closure = _closures.at(inst);
-            if (!closure.reuse) {
-              for (NamedValue* value : live) {
-                closure.add(value);
-              }
-            }
-          }
-        }
-
-        for (Arg* arg : block->args()) {
-          live.erase(arg);
-        }
-
-        live_before_block[block->name()] = live;
-      }
-    }
-
-    void set_ids() {
-      size_t id = 0;
-      for (auto& [inst, closure] : _closures) {
-        if (!closure.reuse) {
-          closure.id = id++;
-        }
-      }
-    }
-  public:
-    ReentryClosures(Section* section):
-        _section(section),
-        _binding_time_groups(section) {
-      
-      assert(section->ordering() >= BlockOrdering::Topological);
-
-      find_reentry_points();
-      find_closure_reuse();
-      populate_closures();
-      set_ids();
-    }
-
-    ReentryClosures(Section* section, const std::set<Inst*>& reentry_points):
-        _section(section),
-        _binding_time_groups(section) {
-      
-      assert(section->ordering() >= BlockOrdering::Topological);
-
-      for (Inst* inst : reentry_points) {
-        _closures.emplace(inst, Closure());
-      }
-
-      populate_closures();
-      set_ids();
-    }
-
-    auto begin() const { return _closures.begin(); }
-    auto end() const { return _closures.end(); }
-
-    bool has(Inst* inst) const {
-      return _closures.find(inst) != _closures.end();
-    }
-
-    Closure& at(Inst* inst) {
-      assert(has(inst));
-      return _closures.at(inst);
-    }
-
-    size_t max_size() const {
-      size_t max = 0;
-      for (const auto& [inst, closure] : _closures) {
-        if (!closure.reuse && closure.size > max) {
-          max = closure.size;
-        }
-      }
-      return max;
-    }
-
-    void write(std::ostream& stream) const {
-      InfoWriter info_writer([&](std::ostream& stream, Inst* inst) {
-        if (_closures.find(inst) != _closures.end()) {
-          const Closure& closure = _closures.at(inst);
-          if (closure.reuse) {
-            stream << "Reuse closure of ";
-            closure.reuse->write_arg(stream);
-          } else {
-            stream << "Closure of size " << closure.size << " capturing ";
-            bool is_first = true;
-            for (const auto& capture : closure.captures) {
-              if (!is_first) {
-                stream << ", ";
-              }
-              capture.value->write_arg(stream);
-              is_first = false;
-            }
-          }
-        }
-      });
-      _section->write(stream, &info_writer);
-    }
-  };
 
   class Clone: public Pass<Clone> {
   private:
@@ -5889,6 +5477,11 @@ namespace metajit {
         return builder.build_const(constant->type(), constant->value());
       } else if (dynmatch(Poison, poison, value)) {
         return builder.build_poison(poison->type());
+      } else if (dynmatch(Symbol, symbol, value)) {
+        return builder.build_symbol(
+          symbol->type(),
+          std::string(symbol->symbol().data(), symbol->symbol().size())
+        );
       } else {
         assert(false);
         return nullptr;
@@ -5932,6 +5525,351 @@ namespace metajit {
                        const NameMap<Value*>& values) {
       /* ${clone} */
     }
+
+    Section* section() const { return _section; }
+    Section* cloned_section() const { return _cloned_section; }
+
+    Value* at(NamedValue* value) const { return _values.at(value); }
+    Block* at(Block* block) const { return _blocks.at(block); }
+  };
+
+  inline Value* unwrap_binding(Value* value) {
+    while (true) {
+      if (dynmatch(PromoteInst, promote, value)) {
+        value = promote->arg(0);
+      } else if (dynmatch(AssumeConstInst, assume_const, value)) {
+        value = assume_const->arg(0);
+      } else {
+        break;
+      }
+    }
+    return value;
+  }
+
+  class ReentryClosures {
+  public:
+    struct Capture {
+      NamedValue* value = nullptr;
+      size_t offset = 0;
+
+      Capture() {}
+      Capture(NamedValue* value, size_t offset): value(value), offset(offset) {}
+    };
+
+    struct Closure {
+      Inst* reuse = nullptr;
+      std::vector<Capture> captures;
+      uint32_t id = 0;
+      size_t size = sizeof(uint32_t);
+
+      void add(NamedValue* value) {
+        if (size % type_size(value->type())) {
+          size += type_size(value->type()) - size % type_size(value->type());
+        }
+        captures.emplace_back(value, size);
+        size += type_size(value->type());
+      }
+
+      Closure to_cloned(const Clone& clone) const {
+        Closure result;
+        result.reuse = reuse ? dynamic_cast<Inst*>(clone.at(reuse)) : nullptr;
+        for (const Capture& capture : captures) {
+          result.captures.emplace_back((NamedValue*) clone.at(capture.value), capture.offset);
+        }
+        result.id = id;
+        result.size = size;
+        return result;
+      }
+    };
+
+    struct Frontier {
+      std::vector<NamedValue*> values;
+
+      Frontier to_cloned(const Clone& clone) const {
+        Frontier result;
+        for (NamedValue* value : values) {
+          result.values.push_back((NamedValue*) clone.at(value));
+        }
+        return result;
+      }
+    };
+  private:
+    Section* _section;
+    BindingTimeGroups* _binding_time_groups;
+    std::unordered_map<Inst*, Closure> _closures;
+    std::unordered_map<Block*, Frontier> _frontiers;
+    std::unordered_set<NamedValue*> _captured;
+
+    void collect_captured() {
+      for (const auto& [inst, closure] : _closures) {
+        if (!closure.reuse) {
+          for (const Capture& capture : closure.captures) {
+            _captured.insert(capture.value);
+          }
+        }
+      }
+    }
+
+    void find_reentry_points() {
+      _closures.emplace(*_section->entry()->begin(), Closure());
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(BranchInst, branch, inst)) {
+            if (!(_binding_time_groups->is_static(branch->cond()))) {
+              _closures.emplace(*branch->true_block()->begin(), Closure());
+              _closures.emplace(*branch->false_block()->begin(), Closure());
+            }
+          } else if (dynmatch(PromoteInst, promote, inst)) {
+            if (!(_binding_time_groups->is_static(promote->arg(0)))) {
+              _closures.emplace(promote, Closure());
+            }
+          }
+        }
+      }
+    }
+
+    void find_closure_reuse() {
+      std::vector<std::optional<Inst*>> reusable_reentry_points(_section->block_count(), std::nullopt);
+      for (Block* block : *_section) {
+        Inst* reuse = nullptr;
+        if (reusable_reentry_points[block->name()].has_value()) {
+          reuse = reusable_reentry_points[block->name()].value();
+        }
+        for (Inst* inst : *block) {
+          if (_closures.find(inst) != _closures.end()) {
+            if (reuse) {
+              _closures[inst].reuse = reuse;
+            } else {
+              reuse = inst;
+            }
+          }
+          if (inst->has_side_effect()) {
+            reuse = nullptr;
+          }
+        }
+
+        for (Block* succ : block->successors()) {
+          if (reusable_reentry_points[succ->name()].has_value()) {
+            if (reusable_reentry_points[succ->name()].value()) {
+              reusable_reentry_points[succ->name()] = reuse;
+            }
+          }
+        }
+      }
+    }
+
+    void populate_closures_and_frontiers() {
+      std::vector<std::set<NamedValue*>> live_before_block(_section->block_count());
+      for (Block* block : _section->rev_range()) {
+        std::set<NamedValue*> live;
+        for (Block* succ : block->successors()) {
+          for (NamedValue* value : live_before_block[succ->name()]) {
+            live.insert(value);
+          }
+        }
+
+        for (Inst* inst : block->rev_range()) {
+          live.erase(inst);
+          for (Value* arg : inst->args()) {
+            if (arg->is_named()) {
+              live.insert((NamedValue*) arg);
+            }
+          }
+
+          if (_closures.find(inst) != _closures.end()) {
+            Closure& closure = _closures.at(inst);
+            if (!closure.reuse) {
+              for (NamedValue* value : live) {
+                closure.add(value);
+              }
+            }
+          }
+        }
+
+        for (Arg* arg : block->args()) {
+          live.erase(arg);
+        }
+
+        live_before_block[block->name()] = live;
+      }
+
+      for (auto& [block, frontier] : _frontiers) {
+        for (NamedValue* value : live_before_block[block->name()]) {
+          frontier.values.push_back(value);
+        }
+      }
+    }
+
+    void set_ids() {
+      uint32_t id = 1;
+      for (auto& [inst, closure] : _closures) {
+        if (!closure.reuse) {
+          closure.id = id++;
+        }
+      }
+    }
+
+    void find_frontiers() {
+      std::unordered_map<Block*, std::set<Block*>> dom_frontiers;
+      dom_frontiers = DominatorTree(_section).frontiers();
+
+      std::queue<Block*> open;
+
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          if (_closures.find(inst) != _closures.end()) {
+            open.push(block);
+            break;
+          }
+        }
+      }
+
+      while (!open.empty()) {
+        Block* block = open.front();
+        open.pop();
+
+        for (Block* frontier : dom_frontiers[block]) {
+          if (_frontiers.find(frontier) == _frontiers.end()) {
+            _frontiers.emplace(frontier, Frontier());
+            open.push(frontier);
+          }
+        }
+      }
+    }
+  public:
+    ReentryClosures(Section* section,
+                    BindingTimeGroups& binding_time_groups):
+        _section(section),
+        _binding_time_groups(&binding_time_groups) {
+      
+      assert(section->ordering() >= BlockOrdering::Topological);
+
+      find_reentry_points();
+      find_closure_reuse();
+      set_ids();
+      find_frontiers();
+      populate_closures_and_frontiers();
+      collect_captured();
+    }
+
+    ReentryClosures(Section* section,
+                    const std::set<Inst*>& reentry_points):
+        _section(section) {
+
+      assert(section->ordering() >= BlockOrdering::Topological);
+
+      for (Inst* inst : reentry_points) {
+        _closures.emplace(inst, Closure());
+      }
+
+      set_ids();
+      find_frontiers();
+      populate_closures_and_frontiers();
+      collect_captured();
+    }
+
+    ReentryClosures(const ReentryClosures& reentry_closures, Clone& clone):
+        _section(clone.cloned_section()) {
+
+      assert(reentry_closures._section == clone.section());
+
+      for (const auto& [inst, closure] : reentry_closures._closures) {
+        Inst* cloned_inst = dynamic_cast<Inst*>(clone.at(inst));
+        assert(cloned_inst);
+        _closures.emplace(cloned_inst, closure.to_cloned(clone));
+      }
+
+      for (const auto& [block, frontier] : reentry_closures._frontiers) {
+        _frontiers.emplace(clone.at(block), frontier.to_cloned(clone));
+      }
+
+      collect_captured();
+    }
+
+    auto begin() const { return _closures.begin(); }
+    auto end() const { return _closures.end(); }
+
+    bool has(Inst* inst) const {
+      return _closures.find(inst) != _closures.end();
+    }
+
+    bool is_captured(NamedValue* value) const {
+      return _captured.find(value) != _captured.end();
+    }
+
+    Closure& at(Inst* inst) {
+      assert(has(inst));
+      return _closures.at(inst);
+    }
+
+    Closure& reusing_at(Inst* inst) {
+      if (at(inst).reuse) {
+        return at(at(inst).reuse);
+      } else {
+        return at(inst);
+      }
+    }
+
+    bool is_frontier(Block* block) const {
+      return _frontiers.find(block) != _frontiers.end();
+    }
+
+    Frontier& frontier(Block* block) {
+      assert(is_frontier(block));
+      return _frontiers.at(block);
+    }
+
+    size_t max_size() const {
+      size_t max = 0;
+      for (const auto& [inst, closure] : _closures) {
+        if (!closure.reuse && closure.size > max) {
+          max = closure.size;
+        }
+      }
+      return max;
+    }
+
+    ReentryClosures to_cloned(Clone& clone) const {
+      return ReentryClosures(*this, clone);
+    }
+
+    void write(std::ostream& stream) const {
+      InfoWriter info_writer;
+      info_writer.inst = [&](std::ostream& stream, Inst* inst) {
+        if (_closures.find(inst) != _closures.end()) {
+          const Closure& closure = _closures.at(inst);
+          if (closure.reuse) {
+            stream << "Reuse closure of ";
+            closure.reuse->write_arg(stream);
+          } else {
+            stream << "Closure of size " << closure.size << " capturing ";
+            bool is_first = true;
+            for (const auto& capture : closure.captures) {
+              if (!is_first) {
+                stream << ", ";
+              }
+              capture.value->write_arg(stream);
+              is_first = false;
+            }
+          }
+        }
+      };
+      info_writer.block = [&](std::ostream& stream, Block* block) {
+        if (_frontiers.find(block) != _frontiers.end()) {
+          const Frontier& frontier = _frontiers.at(block);
+          stream << "Frontier capturing ";
+          bool is_first = true;
+          for (NamedValue* value : frontier.values) {
+            if (!is_first) {
+              stream << ", ";
+            }
+            value->write_arg(stream);
+            is_first = false;
+          }
+        }
+      };
+      _section->write(stream, &info_writer);
+    }
   };
 
   // Adds a closure argument to the given section which is used to pick up execution from
@@ -5955,8 +5893,25 @@ namespace metajit {
       Block* block = _section->entry();
       while (block) {
         Block* next_block = block->next();
+
+        if (block->name() == SIZE_MAX) {
+          block = next_block;
+          continue;
+        }
         
-        std::map<Value*, Value*> substs = _substs_at_entry.at(block);
+        std::map<Value*, Value*> substs;
+        if (_closures.is_frontier(block)) {
+          ReentryClosures::Frontier& frontier = _closures.frontier(block);
+          std::vector<Arg*> args;
+          for (NamedValue* value : frontier.values) {
+            Arg* arg = _builder.alloc_arg(value->type(), args.size() + block->args().size());
+            substs.emplace(value, arg);
+            args.push_back(arg);
+          }
+          _builder.add_args_to_block(block, args);
+        } else {
+          substs = _substs_at_entry.at(block);
+        }
 
         Inst* inst = *block->begin();
         while (inst && !_closures.has(inst)) {
@@ -5969,7 +5924,7 @@ namespace metajit {
         while (inst) {
           Inst* next_inst = inst->next();
 
-          if (_closures.has(inst)) {
+          if (_closures.has(inst) && !_closures.at(inst).reuse) {
             ReentryClosures::Closure& closure = _closures.at(inst);
 
             std::vector<Arg*> args;
@@ -6000,11 +5955,28 @@ namespace metajit {
           inst = next_inst;
         }
 
+        _builder.add_args_to_terminator(_builder.block(), [&](Block* block) {
+          std::vector<Value*> args;
+          if (_closures.is_frontier(block)) {
+            ReentryClosures::Frontier& frontier = _closures.frontier(block);
+            for (Value* value : frontier.values) {
+              if (substs.find(value) != substs.end()) {
+                args.push_back(substs.at(value));
+              } else {
+                args.push_back(value);
+              }
+            }
+          }
+          return args;
+        });
+
         for (Block* succ : _builder.block()->successors()) {
-          if (_substs_at_entry.find(succ) == _substs_at_entry.end()) {
-            _substs_at_entry.emplace(succ, substs);
-          } else {
-            assert(_substs_at_entry[succ] == substs && "Re-convergence from different closures is currently not supported.");
+          if (!_closures.is_frontier(succ)) {
+            if (_substs_at_entry.find(succ) == _substs_at_entry.end()) {
+              _substs_at_entry.emplace(succ, substs);
+            } else {
+              assert(_substs_at_entry[succ] == substs && "Invariant broken. Re-convergence from different closures requires a frontier.");
+            }
           }
         }
 
@@ -6075,11 +6047,6 @@ namespace metajit {
       slice_blocks();
       build_dispatcher();
     }
-
-    // TODO: Remove? Requires template magic
-    static void run(Section* section, ReentryClosures& closures) {
-      SliceReentryClosures src(section, closures);
-    };
   };
 
   class Mem2Reg: public Pass<Mem2Reg> {
@@ -6332,37 +6299,14 @@ namespace metajit {
         }
         block->set_args(args);
 
-        if (dynmatch(JumpInst, jump, block->terminator())) {
-          BlockData& target_data = _blocks[jump->block()];
-          lwir::Span<Value*> args = _builder.alloc_span<Value*>(jump->args().size() + target_data.args.size()).zeroed();
-          for (size_t i = 0; i < jump->args().size(); i++) {
-            args[i] = jump->arg(i);
-          }
+        _builder.add_args_to_terminator(block, [&](Block* target) {
+          BlockData& target_data = _blocks[target];
+          std::vector<Value*> args;
           for (auto& [alloca, arg] : target_data.args) {
-            assert(args[arg->index()] == nullptr);
-            args[arg->index()] = data.values_at_exit[_alloca_index[alloca]];
+            args.push_back(data.values_at_exit[_alloca_index[alloca]]);
           }
-          jump->set_args(args);
-        } else if (dynmatch(BranchInst, branch, block->terminator())) {
-          #define edge(name) { \
-            BlockData& edge_data = _blocks[branch->name##_block()]; \
-            if (edge_data.args.size() != 0) { \
-              Block* jump_block = _builder.build_block_after(block); \
-              jump_block->set_name(SIZE_MAX); \
-              _builder.move_to_end(jump_block); \
-              JumpInst* jump = _builder.build_jump(edge_data.args.size(), branch->name##_block()); \
-              for (auto& [alloca, arg] : edge_data.args) { \
-                jump->set_arg(arg->index(), data.values_at_exit[_alloca_index[alloca]]); \
-              } \
-              branch->set_##name##_block(jump_block); \
-            } \
-          }
-          
-          edge(true)
-          edge(false)
-
-          #undef edge
-        }
+          return args;
+        });
       }
 
       for (AllocaInst* alloca : _lowerable_allocas) {
@@ -6381,4 +6325,3 @@ namespace metajit {
     }
   };
 }
-
