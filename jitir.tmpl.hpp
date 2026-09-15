@@ -5292,6 +5292,8 @@ namespace metajit {
       build(section->entry());
     }
 
+    Section* section() const { return _section; }
+
     void write_dot(std::ostream& stream, bool non_tree_edges = true) {
       stream << "digraph {\n";
       for (Block* block : *_section) {
@@ -5323,6 +5325,51 @@ namespace metajit {
       }
       write_dot(file);
     }
+
+    class Children {
+    private:
+      DominatorTree& _domtree;
+      BlockMap<size_t> _start;
+      BlockMap<Block*> _children;
+    public:
+      Children(DominatorTree& domtree): _domtree(domtree) {
+        _start.init(domtree.section());
+        _children.init(domtree.section());
+
+        for (Block* block : *domtree.section()) {
+          Block* idom = domtree.idom(block);
+          if (idom) {
+            _start[idom]++;
+          }
+        }
+
+        BlockMap<size_t> end(domtree.section());
+        size_t offset = 0;
+        for (Block* block : *domtree.section()) {
+          size_t count = _start[block];
+          _start[block] = offset;
+          end[block] = offset;
+          offset += count;
+        }
+
+        for (Block* block : *domtree.section()) {
+          Block* idom = domtree.idom(block);
+          if (idom) {
+            _children[end[idom]++] = block;
+          }
+        }
+      }
+
+      DominatorTree& domtree() const { return _domtree; }
+
+      lwir::Span<Block*> at(Block* block) {
+        size_t start = _start[block];
+        size_t end = (block->name() + 1 >= _start.size()) ? _children.size() : _start.at_name(block->name() + 1);
+        return lwir::Span<Block*>(&_children[start], end - start);
+      }
+    };
+
+    Children children() { return Children(*this); }
   };
 
   class OrderBlocks: public Pass<OrderBlocks> {
