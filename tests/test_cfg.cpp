@@ -24,6 +24,21 @@ int main(int argc, char** argv) {
 
   DiffTestSuite suite("tests/output/test_cfg", argc, argv);
 
+  suite.diff_test("entry_argument_spilled_before_first_use").aot(false).run([](Builder& builder, TestData& data) {
+    std::vector<Value*> values;
+    for (size_t index = 0; index < 32; index++) {
+      values.push_back(builder.build_add(
+        builder.build_const(Type::Int64, index + 1),
+        builder.build_const(Type::Int64, index + 2)
+      ));
+    }
+    Value* input = data.input(Type::Int64);
+    for (Value* value : values) {
+      data.output(value);
+    }
+    data.output(input);
+  });
+
   suite.diff_test("branch").run([](Builder& builder, TestData& data) {
     Block* a = builder.build_block();
     Block* b = builder.build_block();

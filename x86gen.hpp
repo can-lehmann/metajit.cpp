@@ -1676,6 +1676,7 @@ namespace metajit {
 
       for (Arg* arg : _section->entry()->args()) {
         VRegInfo& info = _vreg_info[vreg(arg).id()];
+        info.interval.incl(0);
         assert(info.fixed.is_physical() && "Entry arguments must be in fixed registers");
         initial_state[info.fixed.id()] = vreg(arg);
       }
