@@ -557,6 +557,7 @@ namespace metajit {
     BlockMap<Block*> _blocks;
     Value* _jitir_builder = nullptr;
     Value* _tape_ptr = nullptr;
+    Value* _reentry_fn = nullptr;
 
     GenExtSymbols _syms;
 
@@ -871,6 +872,27 @@ namespace metajit {
           emit_built_arg(capture.value),
           _builder.build_const(Type::Int32, 0),
           _builder.build_const(Type::Int64, capture.offset)
+        });
+      }
+
+      if (_reentry_closures) {
+        Value* reentry_fn_const = _builder.build_call(_syms.build_const_fast, Type::Ptr, {
+          _jitir_builder,
+          _builder.build_const(Type::Int32, (uint64_t) Type::Ptr),
+          _builder.build_ptr_to_int(_reentry_fn, Type::Int64)
+        });
+        Value* call = _builder.build_call(_syms.build_call, Type::Ptr, {
+          _jitir_builder,
+          reentry_fn_const,
+          _builder.build_const(Type::Int64, 1),
+          _builder.build_const(Type::Int32, (uint64_t) Type::Void),
+          _builder.build_const(Type::Int32, (uint64_t) CallConv::PreserveNone),
+          _builder.build_const(Type::Int32, (uint64_t) CallFlags())
+        });
+        _builder.build_call(_syms.set_arg, Type::Void, {
+          call,
+          _builder.build_const(Type::Int64, 1),
+          closure_arg
         });
       }
     }
@@ -1192,12 +1214,21 @@ namespace metajit {
       if (_config.record.has_value()) {
         entry_arg_types.push_back(Type::Ptr);
       }
+      if (_reentry_closures) {
+        entry_arg_types.push_back(Type::Ptr);
+      }
       _builder.move_to_end(_builder.build_block(entry_arg_types));
 
       size_t builder_index = _section->entry()->args().size();
+      size_t next_arg_index = builder_index + 1;
       _jitir_builder = _genext_section->entry()->arg(builder_index);
       if (_config.record.has_value()) {
-        _tape_ptr = _genext_section->entry()->arg(builder_index + 1);
+        _tape_ptr = _genext_section->entry()->arg(next_arg_index);
+        next_arg_index++;
+      }
+      if (_reentry_closures) {
+        _reentry_fn = _genext_section->entry()->arg(next_arg_index);
+        next_arg_index++;
       }
 
       for (Block* block : *section) {

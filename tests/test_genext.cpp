@@ -128,6 +128,16 @@ int main(int argc, char** argv) {
       data.output(result);
     });
 
+    suite.gen_ext_test("bug_reentry_captures_alloca").run([](Builder& builder, TraceTestData& data) {
+      Value* x = data.input(RandomRange(Type::Int32));
+      Value* ptr = builder.build_alloca(Type::Int32);
+      builder.build_store(ptr, x, AliasingGroup(-1), 0);
+      Value* cond = data.static_input(RandomRange(Type::Bool));
+      data.keep(cond);
+      Value* loaded = builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(-1), 0);
+      data.output(loaded);
+    });
+
     suite.gen_ext_test("promote_twice").run([](Builder& builder, TraceTestData& data) {
       Value* x = data.input(RandomRange(Type::Int32, 0, 3));
       x = builder.build_promote(x);
