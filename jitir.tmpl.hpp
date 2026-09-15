@@ -5019,6 +5019,7 @@ namespace metajit {
       DominatorTree& _domtree;
       BlockMap<size_t> _start;
       BlockMap<Block*> _children;
+      size_t _count = 0;
     public:
       Children(DominatorTree& domtree): _domtree(domtree) {
         _start.init(domtree.section());
@@ -5039,6 +5040,7 @@ namespace metajit {
           end[block] = offset;
           offset += count;
         }
+        _count = offset;
 
         for (Block* block : *domtree.section()) {
           Block* idom = domtree.idom(block);
@@ -5052,9 +5054,50 @@ namespace metajit {
 
       lwir::Span<Block*> at(Block* block) {
         size_t start = _start[block];
-        size_t end = (block->name() + 1 >= _start.size()) ? _children.size() : _start.at_name(block->name() + 1);
+        size_t end = (block->name() + 1 >= _start.size()) ? _count : _start.at_name(block->name() + 1);
         return lwir::Span<Block*>(&_children.at_name(start), end - start);
       }
+
+      enum class Event { Open, Close };
+
+      class iterator {
+      private:
+        Children* _children = nullptr;
+        std::vector<std::pair<Event, Block*>> _stack;
+      public:
+        iterator() {}
+
+        iterator(Children* children, Block* root): _children(children) {
+          _stack.push_back({Event::Open, root});
+        }
+
+        std::pair<Event, Block*> operator*() const { return _stack.back(); }
+
+        iterator& operator++() {
+          if (_stack.empty()) {
+            return *this;
+          }
+
+          auto [event, block] = _stack.back();
+          _stack.pop_back();
+
+          if (event == Event::Open) {
+            _stack.push_back({Event::Close, block});
+            lwir::Span<Block*> children = _children->at(block);
+            for (size_t it = children.size(); it-- > 0; ) {
+              _stack.push_back({Event::Open, children[it]});
+            }
+          }
+
+          return *this;
+        }
+
+        bool operator==(const iterator& other) const { return _stack == other._stack; }
+        bool operator!=(const iterator& other) const { return !(*this == other); }
+      };
+
+      iterator begin() { return iterator(this, _domtree.section()->entry()); }
+      iterator end() { return iterator(); }
     };
 
     Children children() { return Children(*this); }
@@ -5082,16 +5125,19 @@ namespace metajit {
     using ValidLoads = std::unordered_map<AliasingGroup, std::vector<LoadInst*>>;
   public:
     CommonSubexprElim(Section* section): Pass(section) {
-      assert(section->ordering() >= BlockOrdering::Dominator);
-
-      DominatorTree dt(section);
+      DominatorTree domtree(section);
+      DominatorTree::Children children = domtree.children();
 
       std::unordered_map<Value*, Value*> substs;
       std::unordered_map<Lookup, Const*, LookupHash> consts;
       BlockMap<Canon> canon_at_exit(section->block_count());
 
-      for (Block* block : *section) {
-        Block* idom = dt.idom(block);
+      for (auto [event, block] : children) {
+        if (event == DominatorTree::Children::Event::Close) {
+          continue;
+        }
+
+        Block* idom = domtree.idom(block);
         Canon canon = idom ? canon_at_exit[idom] : Canon();
         ValidLoads valid_loads;
 
