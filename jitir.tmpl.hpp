@@ -4980,6 +4980,8 @@ namespace metajit {
       build(section->entry());
     }
 
+    Section* section() const { return _section; }
+
     void write_dot(std::ostream& stream, bool non_tree_edges = true) {
       stream << "digraph {\n";
       for (Block* block : *_section) {
@@ -5011,6 +5013,94 @@ namespace metajit {
       }
       write_dot(file);
     }
+
+    class Children {
+    private:
+      DominatorTree& _domtree;
+      BlockMap<size_t> _start;
+      BlockMap<Block*> _children;
+      size_t _count = 0;
+    public:
+      Children(DominatorTree& domtree): _domtree(domtree) {
+        _start.init(domtree.section());
+        _children.init(domtree.section());
+
+        for (Block* block : *domtree.section()) {
+          Block* idom = domtree.idom(block);
+          if (idom) {
+            _start[idom]++;
+          }
+        }
+
+        BlockMap<size_t> end(domtree.section());
+        size_t offset = 0;
+        for (Block* block : *domtree.section()) {
+          size_t count = _start[block];
+          _start[block] = offset;
+          end[block] = offset;
+          offset += count;
+        }
+        _count = offset;
+
+        for (Block* block : *domtree.section()) {
+          Block* idom = domtree.idom(block);
+          if (idom) {
+            _children.at_name(end[idom]++) = block;
+          }
+        }
+      }
+
+      DominatorTree& domtree() const { return _domtree; }
+
+      lwir::Span<Block*> at(Block* block) {
+        size_t start = _start[block];
+        size_t end = (block->name() + 1 >= _start.size()) ? _count : _start.at_name(block->name() + 1);
+        return lwir::Span<Block*>(&_children.at_name(start), end - start);
+      }
+
+      enum class Event { Open, Close };
+
+      class iterator {
+      private:
+        Children* _children = nullptr;
+        std::vector<std::pair<Event, Block*>> _stack;
+      public:
+        iterator() {}
+
+        iterator(Children* children, Block* root): _children(children) {
+          _stack.push_back({Event::Open, root});
+        }
+
+        std::pair<Event, Block*> operator*() const { return _stack.back(); }
+
+        iterator& operator++() {
+          if (_stack.empty()) {
+            return *this;
+          }
+
+          auto [event, block] = _stack.back();
+          _stack.pop_back();
+
+          if (event == Event::Open) {
+            _stack.push_back({Event::Close, block});
+            lwir::Span<Block*> children = _children->at(block);
+            for (size_t it = children.size(); it-- > 0; ) {
+              _stack.push_back({Event::Open, children[it]});
+            }
+          }
+
+          return *this;
+        }
+
+        bool operator==(const iterator& other) const { return _stack == other._stack; }
+        bool operator!=(const iterator& other) const { return !(*this == other); }
+      };
+
+      iterator begin() { return iterator(this, _domtree.section()->entry()); }
+      iterator end() { return iterator(); }
+    };
+
+    Children children() { return Children(*this); }
   };
 
   class CommonSubexprElim: public Pass<CommonSubexprElim> {
@@ -5033,19 +5123,53 @@ namespace metajit {
 
     using Canon = std::unordered_map<Lookup, Value*, LookupHash>;
     using ValidLoads = std::unordered_map<AliasingGroup, std::vector<LoadInst*>>;
+
+    struct CanonUndo {
+      Lookup lookup;
+      Value* old_value;
+    };
+
+    static void canon_insert(Canon& canon, std::vector<CanonUndo>& undo, const Lookup& lookup, Value* value) {
+      Value* old_value = (canon.find(lookup) != canon.end()) ? canon.at(lookup) : nullptr;
+      undo.push_back({lookup, old_value});
+      canon[lookup] = value;
+    }
+
+    static void canon_erase(Canon& canon, std::vector<CanonUndo>& undo, const Lookup& lookup) {
+      if (canon.find(lookup) != canon.end()) {
+        undo.push_back({lookup, canon.at(lookup)});
+        canon.erase(lookup);
+      }
+    }
   public:
     CommonSubexprElim(Section* section): Pass(section) {
-      assert(section->ordering() >= BlockOrdering::Dominator);
-
-      DominatorTree dt(section);
+      DominatorTree domtree(section);
+      DominatorTree::Children children = domtree.children();
 
       std::unordered_map<Value*, Value*> substs;
       std::unordered_map<Lookup, Const*, LookupHash> consts;
-      BlockMap<Canon> canon_at_exit(section->block_count());
 
-      for (Block* block : *section) {
-        Block* idom = dt.idom(block);
-        Canon canon = idom ? canon_at_exit[idom] : Canon();
+      Canon canon;
+      std::vector<CanonUndo> undo;
+      std::vector<size_t> marks;
+
+      for (auto [event, block] : children) {
+        if (event == DominatorTree::Children::Event::Close) {
+          size_t mark = marks.back();
+          marks.pop_back();
+          while (undo.size() > mark) {
+            CanonUndo entry = undo.back();
+            undo.pop_back();
+            if (entry.old_value) {
+              canon[entry.lookup] = entry.old_value;
+            } else {
+              canon.erase(entry.lookup);
+            }
+          }
+          continue;
+        }
+
+        marks.push_back(undo.size());
         ValidLoads valid_loads;
 
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
@@ -5071,7 +5195,7 @@ namespace metajit {
             for (LoadInst* load : valid_loads[store->aliasing()]) {
               if (could_alias(load, store)) {
                 assert(canon.find(Lookup(load)) != canon.end());
-                canon.erase(Lookup(load));
+                canon_erase(canon, undo, Lookup(load));
               } else {
                 remaining_loads.push_back(load);
               }
@@ -5081,7 +5205,7 @@ namespace metajit {
             // Calls can invalidate any cached memory-derived value.
             for (auto& [group, loads] : valid_loads) {
               for (LoadInst* load : loads) {
-                canon.erase(Lookup(load));
+                canon_erase(canon, undo, Lookup(load));
               }
             }
             valid_loads.clear();
@@ -5097,7 +5221,7 @@ namespace metajit {
 
           Lookup lookup(inst);
           if (canon.find(lookup) == canon.end()) {
-            canon[lookup] = inst;
+            canon_insert(canon, undo, lookup, inst);
             if (dynmatch(LoadInst, load, inst)) {
               valid_loads[load->aliasing()].push_back(load);
             }
@@ -5110,11 +5234,9 @@ namespace metajit {
 
         for (auto& [group, loads] : valid_loads) {
           for (LoadInst* load : loads) {
-            canon.erase(Lookup(load));
+            canon_erase(canon, undo, Lookup(load));
           }
         }
-
-        canon_at_exit[block] = std::move(canon);
       }
     }
   };
