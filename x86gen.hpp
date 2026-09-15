@@ -500,6 +500,23 @@ namespace metajit {
     }
   };
 
+  class SymbolMap {
+  private:
+    std::unordered_map<std::string, uint64_t> _values;
+  public:
+    void add(const std::string& name, uint64_t addr) {
+      _values[name] = addr;
+    }
+
+    void add(const std::string& name, void* addr) {
+      add(name, (uint64_t)(uintptr_t) addr);
+    }
+
+    uint64_t at(const std::string& name) const {
+      return _values.at(name);
+    }
+  };
+
   class X86CodeGen: public Pass<X86CodeGen> {
   public:
     enum class Mode {
@@ -551,6 +568,7 @@ namespace metajit {
     Section* _section;
     Allocator& _allocator;
     Mode _mode;
+    const SymbolMap& _symbols;
 
     std::vector<X86Block*> _blocks;
     X86InstBuilder _builder;
@@ -607,13 +625,15 @@ namespace metajit {
       return vreg;
     }
 
-    bool is_sext_imm32(Const* constant) {
-      if (type_size(constant->type()) == 8) {
-        uint64_t value = constant->value();
+    bool is_sext_imm32(Type type, uint64_t value) {
+      if (type_size(type) == 8) {
         return (value >> 31) == 0 || (value >> 31) == 0x1fffffffULL;
-      } else {
-        return true;
       }
+      return true;
+    }
+
+    bool is_sext_imm32(Const* constant) {
+      return is_sext_imm32(constant->type(), constant->value());
     }
 
     Reg vreg(Value* value) {
@@ -646,6 +666,16 @@ namespace metajit {
           break;
           default:
             assert(false && "Unsupported constant type");
+        }
+        return reg;
+      } else if (dynmatch(Symbol, symbol, value)) {
+        Reg reg = vreg();
+        std::string name(symbol->symbol().data(), symbol->symbol().size());
+        uint64_t value = _symbols.at(name);
+        if (is_sext_imm32(symbol->type(), value)) {
+          _builder.mov64_imm(reg, value);
+        } else {
+          _builder.mov64_imm64(reg, value);
         }
         return reg;
       } else if (value->is_named()) {
@@ -2206,10 +2236,14 @@ namespace metajit {
       #undef with_timer
     }
   public:
-    X86CodeGen(Section* section, const std::vector<Reg>& input_pregs, Mode mode = Mode::JIT):
+    X86CodeGen(Section* section,
+               const std::vector<Reg>& input_pregs,
+               Mode mode = Mode::JIT,
+               const SymbolMap& symbols = SymbolMap()):
         Pass(section),
         _section(section),
         _mode(mode),
+        _symbols(symbols),
         _allocator(section->allocator()),
         _builder(section->allocator(), nullptr) {
 
@@ -2220,13 +2254,15 @@ namespace metajit {
     X86CodeGen(Section* section,
                Allocator& allocator,
                const std::vector<Reg>& input_pregs,
-               Mode mode = Mode::JIT):
+               Mode mode = Mode::JIT,
+               const SymbolMap& symbols = SymbolMap()):
         Pass(section),
         _section(section),
         _allocator(allocator),
         _mode(mode),
+        _symbols(symbols),
         _builder(allocator, nullptr) {
-      
+
       assert(_section->ordering() >= BlockOrdering::Natural);
       run(input_pregs);
     }
