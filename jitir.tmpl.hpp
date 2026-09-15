@@ -5355,7 +5355,7 @@ namespace metajit {
         for (Block* block : *domtree.section()) {
           Block* idom = domtree.idom(block);
           if (idom) {
-            _children[end[idom]++] = block;
+            _children.at_name(end[idom]++) = block;
           }
         }
       }
@@ -5365,7 +5365,7 @@ namespace metajit {
       lwir::Span<Block*> at(Block* block) {
         size_t start = _start[block];
         size_t end = (block->name() + 1 >= _start.size()) ? _children.size() : _start.at_name(block->name() + 1);
-        return lwir::Span<Block*>(&_children[start], end - start);
+        return lwir::Span<Block*>(&_children.at_name(start), end - start);
       }
     };
 
