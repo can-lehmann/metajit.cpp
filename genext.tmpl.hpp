@@ -1096,6 +1096,7 @@ namespace metajit {
 
         always_used[inst] = false;
         if (inst->has_side_effect() ||
+            dynamic_cast<PromoteInst*>(inst) ||
             dynamic_cast<CommentInst*>(inst) ||
             (_reentry_closures && _reentry_closures->is_captured(inst))) {
           always_used[inst] = true;
