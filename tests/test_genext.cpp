@@ -17,6 +17,12 @@
 using namespace metajit;
 using namespace metajit::test;
 
+void promoted_arithmetic_guard(Builder& builder, TraceTestData& data) {
+  Value* value = data.input(RandomRange(Type::Int32));
+  Value* promoted = builder.build_promote(value);
+  data.output(builder.build_add(promoted, builder.build_const(Type::Int32, 4)));
+}
+
 int main(int argc, char** argv) {
   LLVMCodeGen::initilize_llvm_jit();
 
@@ -24,6 +30,8 @@ int main(int argc, char** argv) {
 
   for (bool record_replay : {false, true}) {
     suite.set_record_replay(record_replay);
+
+    suite.gen_ext_test("promoted_arithmetic_guard").run(promoted_arithmetic_guard);
 
     suite.gen_ext_test("add_promoted").run([](Builder& builder, TraceTestData& data) {
       Value* x = data.static_input(RandomRange(Type::Int32));  // promoted
