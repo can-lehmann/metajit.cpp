@@ -104,6 +104,8 @@ void test_select(DiffTestSuite& suite) {
   select_type(Int16)
   select_type(Int32)
   select_type(Int64)
+  select_type(Float32)
+  select_type(Float64)
 }
 
 void test_resize(DiffTestSuite& suite) {

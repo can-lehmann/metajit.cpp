@@ -849,8 +849,17 @@ namespace metajit {
           default: assert(false && "Unsupported pointer conversion type");
         }
       } else if (dynmatch(SelectInst, select, inst)) {
-        _builder.mov64(vreg(inst), vreg(select->arg(2)));
-        build_cmov(vreg(inst), select->cond(), vreg(select->arg(1)));
+        if (reg_class(select->type()) == RegClass::Float) {
+          Reg res = vreg();
+          Reg then = vreg();
+          _builder.movq_to_int(res, vreg(select->arg(2)));
+          _builder.movq_to_int(then, vreg(select->arg(1)));
+          build_cmov(res, select->cond(), then);
+          _builder.movq(vreg(inst), res);
+        } else {
+          _builder.mov64(vreg(inst), vreg(select->arg(2)));
+          build_cmov(vreg(inst), select->cond(), vreg(select->arg(1)));
+        }
       } else if (dynmatch(ResizeUInst, resize_u, inst)) {
         if (resize_u->arg(0)->type() == Type::Bool) {
           _builder.mov64(vreg(inst), vreg(resize_u->arg(0)));
