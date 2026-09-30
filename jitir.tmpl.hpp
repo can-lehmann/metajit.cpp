@@ -5272,24 +5272,28 @@ namespace metajit {
 
     // Natural ordering: topological sort ignoring backedges
     void dfs_natural(Block* block) {
-      if (_visited.find(block) != _visited.end()) {
-        return;
-      }
+      struct Frame {
+        Block* block;
+        std::vector<Block*> successors;
+      };
+      std::vector<Frame> stack;
       _visited.insert(block);
-
-      // visit successors in reverse order to maintain stable block numbering
-      std::vector<Block*> succs = block->successors();
-      for (auto it = succs.rbegin(); it != succs.rend(); ++it) {
-        Block* succ = *it;
-        // a backedge is where the successor dominates the source block
-        if (!_dt.dominates(succ, block)) {
-          dfs_natural(succ);
+      stack.push_back({block, block->successors()});
+      while (!stack.empty()) {
+        Frame& frame = stack.back();
+        if (frame.successors.empty()) {
+          _ordered.push_back(frame.block);
+          stack.pop_back();
         } else {
-          _seen_loop = true;
+          Block* succ = frame.successors.back();
+          frame.successors.pop_back();
+          if (_dt.dominates(succ, frame.block)) {
+            _seen_loop = true;
+          } else if (_visited.insert(succ).second) {
+            stack.push_back({succ, succ->successors()});
+          }
         }
       }
-
-      _ordered.push_back(block);
     }
 
     void order_natural() {
