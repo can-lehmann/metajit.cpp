@@ -40,8 +40,7 @@ int main(int argc, char** argv) {
   });
 
   for (Type type : {Type::Float32, Type::Float64}) {
-    std::string suffix = type == Type::Float32 ? "float32" : "float64";
-    suite.diff_test("float_block_argument_" + suffix).run([type](Builder& builder, TestData& data) {
+    suite.diff_test(std::string("float_block_argument_") + to_string(type)).run([type](Builder& builder, TestData& data) {
       Block* a = builder.build_block();
       Block* b = builder.build_block();
       Block* cont = builder.build_block({type});
@@ -56,7 +55,7 @@ int main(int argc, char** argv) {
       builder.move_to_end(cont);
       data.output(builder.build_add_f(cont->arg(0), cont->arg(0)));
     });
-    suite.diff_test("float_swap_loop_" + suffix).run([type](Builder& builder, TestData& data) {
+    suite.diff_test(std::string("float_swap_loop_") + to_string(type)).run([type](Builder& builder, TestData& data) {
       Block* header = builder.build_block({Type::Int64, type, type});
       Block* body = builder.build_block();
       Block* end = builder.build_block();

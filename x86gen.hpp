@@ -29,8 +29,6 @@ namespace metajit {
     enum class Kind {
       Invalid, Virtual, Physical
     };
-
-    enum class Class { GP, FP };
   private:
     Kind _kind = Kind::Invalid;
     size_t _id = 0;
@@ -40,17 +38,6 @@ namespace metajit {
 
     static constexpr Reg phys(size_t id) {
       return Reg(Kind::Physical, id);
-    }
-
-    static constexpr Reg xmm(size_t id) { return phys(16 + id); }
-
-    Class reg_class() const {
-      assert(is_physical());
-      return _id < 16 ? Class::GP : Class::FP;
-    }
-
-    static constexpr uint32_t mask(Class reg_class) {
-      return reg_class == Class::GP ? 0xffff : 0xffff0000;
     }
 
     static constexpr Reg X86_RAX() { return phys(0); }
@@ -113,7 +100,7 @@ namespace metajit {
           stream << "v" << _id;
         break;
         case Kind::Physical:
-          stream << (_id < 16 ? "p" : "xmm") << (_id < 16 ? _id : _id - 16);
+          stream << "p" << _id;
         break;
       }
     }
@@ -543,6 +530,17 @@ namespace metajit {
       Timer peephole;
     };
   private:
+    enum class RegClass { GP, FP };
+
+    static RegClass reg_class(Reg preg) {
+      assert(preg.is_physical());
+      return preg.id() < 16 ? RegClass::GP : RegClass::FP;
+    }
+
+    static constexpr uint32_t reg_mask(RegClass reg_class) {
+      return reg_class == RegClass::GP ? 0xffff : 0xffff0000;
+    }
+
     struct Interval {
       size_t min = 0;
       size_t max = 0;
@@ -572,7 +570,7 @@ namespace metajit {
     };
 
     struct VRegInfo {
-      Reg::Class reg_class = Reg::Class::GP;
+      RegClass reg_class = RegClass::GP;
       Reg fixed;
       Interval interval;
       Reg current_reg;
@@ -626,11 +624,11 @@ namespace metajit {
       }
     }
 
-    static Reg::Class reg_class(Type type) {
-      return type == Type::Float32 || type == Type::Float64 ? Reg::Class::FP : Reg::Class::GP;
+    static RegClass reg_class(Type type) {
+      return type == Type::Float32 || type == Type::Float64 ? RegClass::FP : RegClass::GP;
     }
 
-    Reg vreg(Reg::Class reg_class = Reg::Class::GP) {
+    Reg vreg(RegClass reg_class = RegClass::GP) {
       size_t id = _vreg_info.size();
       _vreg_info.emplace_back();
       _vreg_info.back().reg_class = reg_class;
@@ -640,7 +638,7 @@ namespace metajit {
     Reg fix_to_preg(Reg vreg, Reg preg) {
       assert(vreg.is_virtual());
       VRegInfo& info = _vreg_info[vreg.id()];
-      assert(info.reg_class == preg.reg_class());
+      assert(info.reg_class == reg_class(preg));
       info.fixed = preg;
       return vreg;
     }
@@ -710,11 +708,11 @@ namespace metajit {
       }
     }
 
-    void copy(Reg dst, Reg src) {
-      Reg::Class dst_class = dst.is_virtual() ? _vreg_info[dst.id()].reg_class : dst.reg_class();
-      Reg::Class src_class = src.is_virtual() ? _vreg_info[src.id()].reg_class : src.reg_class();
+    void move(Reg dst, Reg src) {
+      RegClass dst_class = dst.is_virtual() ? _vreg_info[dst.id()].reg_class : reg_class(dst);
+      RegClass src_class = src.is_virtual() ? _vreg_info[src.id()].reg_class : reg_class(src);
       assert(dst_class == src_class);
-      if (dst_class == Reg::Class::FP) {
+      if (dst_class == RegClass::FP) {
         _builder.movsd(dst, src);
       } else {
         _builder.mov64(dst, src);
@@ -806,11 +804,11 @@ namespace metajit {
 
     void isel(Inst* inst, Block* block) {
       if (dynmatch(FreezeInst, freeze, inst)) {
-        copy(vreg(inst), vreg(freeze->arg(0)));
+        move(vreg(inst), vreg(freeze->arg(0)));
       } else if (dynmatch(PromoteInst, promote, inst)) {
-        copy(vreg(inst), vreg(promote->arg(0)));
+        move(vreg(inst), vreg(promote->arg(0)));
       } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
-        copy(vreg(inst), vreg(assume_const->arg(0)));
+        move(vreg(inst), vreg(assume_const->arg(0)));
       } else if (dynmatch(PtrToIntInst, ptr_to_int, inst)) {
         switch (type_size(ptr_to_int->type())) {
           case 1: _builder.movzx8to64(vreg(inst), vreg(ptr_to_int->arg(0))); break;
@@ -1307,10 +1305,10 @@ namespace metajit {
         lwir::Span<Reg> copies = _builder.alloc_regs(jump->block()->args().size());
         for (Arg* arg : jump->block()->args()) {
           copies[arg->index()] = vreg(reg_class(arg->type()));
-          copy(copies[arg->index()], vreg(jump->arg(arg->index())));
+          move(copies[arg->index()], vreg(jump->arg(arg->index())));
         }
         for (Arg* arg : jump->block()->args()) {
-          copy(vreg(arg), copies[arg->index()]);
+          move(vreg(arg), copies[arg->index()]);
         }
         _builder.jmp(_blocks[jump->block()->name()]);
       } else if (dynmatch(ExitInst, exit, inst)) {
@@ -1511,8 +1509,8 @@ namespace metajit {
         return (_max_free & (1u << preg.id())) == 0;
       }
 
-      Reg get_free_reg(Reg::Class reg_class) {
-        uint32_t free = _free & Reg::mask(reg_class);
+      Reg get_free_reg(RegClass reg_class) {
+        uint32_t free = _free & reg_mask(reg_class);
         if (free == 0) {
           return Reg();
         } else {
@@ -1520,11 +1518,11 @@ namespace metajit {
         }
       }
 
-      Reg get_lru(Reg::Class reg_class) {
+      Reg get_lru(RegClass reg_class) {
         size_t min_index = 0;
         size_t min_value = ~size_t(0);
-        for (size_t it = reg_class == Reg::Class::GP ? 0 : 16;
-             it < (reg_class == Reg::Class::GP ? 16 : 32); it++) {
+        for (uint32_t mask = reg_mask(reg_class); mask != 0; mask &= mask - 1) {
+          size_t it = __builtin_ctz(mask);
           if (_lru[it] < min_value) {
             min_value = _lru[it];
             min_index = it;
@@ -1599,7 +1597,7 @@ namespace metajit {
         Reg free_reg = reg_file.get_free_reg(info.reg_class);
         if (allow_spill_to_reg && free_reg.is_physical()) {
           // No need to spill, just move to free reg
-          copy(free_reg, preg);
+          move(free_reg, preg);
           reg_file.free(preg);
           info.current_reg = free_reg;
           reg_file.set(free_reg, vreg);
@@ -1608,7 +1606,7 @@ namespace metajit {
             info.stack_offset = _stack_offset_alloc.alloc();
           }
           X86Inst::Mem mem(Reg::X86_RSP(), (int32_t) info.stack_offset);
-          if (info.reg_class == Reg::Class::FP) {
+          if (info.reg_class == RegClass::FP) {
             _builder.movsd_mem(mem, preg);
           } else {
             _builder.mov64_mem(mem, preg);
@@ -1624,12 +1622,12 @@ namespace metajit {
       VRegInfo& info = _vreg_info[vreg.id()];
       if (info.current_reg.is_physical()) {
         // No need to unspill, just move from current reg
-        copy(preg, info.current_reg);
+        move(preg, info.current_reg);
         reg_file.free(info.current_reg);
       } else {
         assert(info.stack_offset != ~size_t(0));
         X86Inst::Mem mem(Reg::X86_RSP(), (int32_t) info.stack_offset);
-        if (info.reg_class == Reg::Class::FP) {
+        if (info.reg_class == RegClass::FP) {
           _builder.movsd(preg, mem);
         } else {
           _builder.mov64(preg, mem);
@@ -2092,7 +2090,7 @@ namespace metajit {
         Reg reg = order.at(it);
         assert(reg.is_virtual());
 
-        uint32_t free_mask = Reg::mask(_vreg_info[reg.id()].reg_class);
+        uint32_t free_mask = reg_mask(_vreg_info[reg.id()].reg_class);
         free_mask &= ~(1u << Reg::X86_RSP().id());
         free_mask &= ~(1u << Reg::X86_RBP().id());
         for (Reg conflict : conflicts.at(reg.id())) {

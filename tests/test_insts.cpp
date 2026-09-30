@@ -463,8 +463,7 @@ uint64_t test_call_clobber_xmm() {
 
 void test_binop_f(DiffTestSuite& suite) {
   for (Type type : {Type::Float32, Type::Float64}) {
-    std::string suffix = type == Type::Float32 ? "float32" : "float64";
-    suite.diff_test("float_spills_" + suffix).aot(false).run([type](Builder& builder, TestData& data) {
+    suite.diff_test(std::string("float_spills_") + to_string(type)).aot(false).run([type](Builder& builder, TestData& data) {
       std::vector<Value*> values;
       for (size_t index = 0; index < 24; index++) {
         values.push_back(data.input(type));
@@ -475,7 +474,7 @@ void test_binop_f(DiffTestSuite& suite) {
       }
       data.output(integer);
     });
-    suite.diff_test("float_across_call_" + suffix).aot(false).interpreter(false).run([type](Builder& builder, TestData& data) {
+    suite.diff_test(std::string("float_across_call_") + to_string(type)).aot(false).interpreter(false).run([type](Builder& builder, TestData& data) {
       std::vector<Value*> values;
       for (size_t index = 0; index < 16; index++) {
         values.push_back(data.input(type));
@@ -486,7 +485,7 @@ void test_binop_f(DiffTestSuite& suite) {
         data.output(value);
       }
     });
-    suite.diff_test("mixed_register_classes_" + suffix).run([type](Builder& builder, TestData& data) {
+    suite.diff_test(std::string("mixed_register_classes_") + to_string(type)).run([type](Builder& builder, TestData& data) {
       std::vector<Value*> floats;
       std::vector<Value*> integers;
       for (size_t index = 0; index < 10; index++) {
