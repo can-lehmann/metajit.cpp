@@ -795,8 +795,8 @@ namespace metajit {
       if (is_float(a->type())) {
         Reg bits_a = vreg();
         Reg bits_b = vreg();
-        _builder.movq_to_int(bits_a, vreg(a));
-        _builder.movq_to_int(bits_b, vreg(b));
+        _builder.movq_to_gp(bits_a, vreg(a));
+        _builder.movq_to_gp(bits_b, vreg(b));
         if (a->type() == Type::Float32) {
           _builder.cmp32(bits_a, bits_b);
         } else {
@@ -870,8 +870,8 @@ namespace metajit {
         if (is_float(select->type())) {
           Reg res = vreg();
           Reg then = vreg();
-          _builder.movq_to_int(res, vreg(select->arg(2)));
-          _builder.movq_to_int(then, vreg(select->arg(1)));
+          _builder.movq_to_gp(res, vreg(select->arg(2)));
+          _builder.movq_to_gp(then, vreg(select->arg(1)));
           build_cmov(res, select->cond(), then);
           _builder.movq(vreg(inst), res);
         } else {
@@ -2362,7 +2362,7 @@ namespace metajit {
           if (is_float(arg->type())) {
             _builder.movq(vreg(arg), input);
           } else {
-            _builder.movq_to_int(vreg(arg), input);
+            _builder.movq_to_gp(vreg(arg), input);
           }
         }
       }
