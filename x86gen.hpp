@@ -450,7 +450,7 @@ namespace metajit {
     lwir::Span<const Reg> _arg_regs;
     lwir::Span<const Reg> _preserved_regs;
     Reg _ret_reg;
-    Reg _fp_ret_reg = Reg::X86_XMM(0);
+    Reg _fp_ret_reg;
 
     static constexpr Reg preserve_none_arg_regs[] = {
       Reg::X86_R12(), Reg::X86_R13(), Reg::X86_R14(), Reg::X86_R15(),
@@ -481,11 +481,13 @@ namespace metajit {
           _arg_regs = lwir::Span<const Reg>(preserve_none_arg_regs, sizeof(preserve_none_arg_regs) / sizeof(preserve_none_arg_regs[0]));
           _preserved_regs = lwir::Span<const Reg>(preserve_none_preserved_regs, sizeof(preserve_none_preserved_regs) / sizeof(preserve_none_preserved_regs[0]));
           _ret_reg = Reg::X86_RAX();
+          _fp_ret_reg = Reg::X86_XMM(0);
         break;
         case CallConv::Default:
           _arg_regs = lwir::Span<const Reg>(default_arg_regs, sizeof(default_arg_regs) / sizeof(default_arg_regs[0]));
           _preserved_regs = lwir::Span<const Reg>(default_preserved_regs, sizeof(default_preserved_regs) / sizeof(default_preserved_regs[0]));
           _ret_reg = Reg::X86_RAX();
+          _fp_ret_reg = Reg::X86_XMM(0);
         break;
         default:
           assert(false && "Unsupported calling convention");
@@ -1800,10 +1802,11 @@ namespace metajit {
       std::fill(initial_state, initial_state + reg_file.size(), Reg());
 
       for (Arg* arg : _section->entry()->args()) {
-        VRegInfo& info = _vreg_info[vreg(arg).id()];
+        Reg input = Reg::virt(arg->index());
+        VRegInfo& info = _vreg_info[input.id()];
         info.interval.incl(0);
         assert(info.fixed.is_physical() && "Entry arguments must be in fixed registers");
-        initial_state[info.fixed.id()] = vreg(arg);
+        initial_state[info.fixed.id()] = input;
       }
       _blocks[0]->set_regalloc(initial_state);
 
@@ -2319,7 +2322,13 @@ namespace metajit {
       _vregs.init(_section);
 
       for (Arg* arg : _section->entry()->args()) {
-        fix_to_preg(vreg(arg), input_pregs[arg->index()]);
+        Reg preg = input_pregs[arg->index()];
+        _vregs[arg] = fix_to_preg(vreg(reg_class(preg)), preg);
+      }
+      for (Arg* arg : _section->entry()->args()) {
+        if (!(reg_class(arg->type()) == reg_class(input_pregs[arg->index()]))) {
+          _vregs[arg] = vreg(reg_class(arg->type()));
+        }
       }
 
       // We create one extra block for pseudo_use instructions after loops
@@ -2332,6 +2341,17 @@ namespace metajit {
 
       memory_deps();
       with_timer(isel, isel());
+      _builder.move_to_begin(_blocks[0]);
+      for (Arg* arg : _section->entry()->args()) {
+        Reg input = Reg::virt(arg->index());
+        if (!(input == vreg(arg))) {
+          if (reg_class(arg->type()) == RegClass::X86_FLOAT()) {
+            _builder.movq(vreg(arg), input);
+          } else {
+            _builder.movq_to_int(vreg(arg), input);
+          }
+        }
+      }
       autoname_insts();
 
       if (_mode == Mode::JIT) {

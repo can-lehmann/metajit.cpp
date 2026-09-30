@@ -24,6 +24,30 @@ int main(int argc, char** argv) {
 
   DiffTestSuite suite("tests/output/test_cfg", argc, argv);
 
+  for (Type type : {Type::Float32, Type::Float64}) {
+    suite.test(std::string("float_entry_argument_") + to_string(type)).run([type]() {
+      for (auto mode : {X86CodeGen::Mode::JIT, X86CodeGen::Mode::AOT}) {
+        Context context;
+        Allocator allocator;
+        Section* section = new Section(context, allocator);
+        Builder builder(section);
+        Block* entry = builder.build_block({type, Type::Ptr});
+        builder.move_to_end(entry);
+        builder.build_store(entry->arg(1), entry->arg(0), AliasingGroup(0), 0);
+        builder.build_exit();
+        section->autoname();
+        section->set_ordering(BlockOrdering::Natural);
+
+        X86CodeGen codegen(section, {Reg::X86_R12(), Reg::X86_R13()}, mode);
+        using Func = void(* [[clang::preserve_none]])(uint64_t, uint64_t*);
+        uint64_t result = 0;
+        ((Func) codegen.deploy())(0x12345678, &result);
+        unittest_assert(result == 0x12345678);
+        delete section;
+      }
+    });
+  }
+
   suite.diff_test("entry_argument_spilled_before_first_use").aot(false).run([](Builder& builder, TestData& data) {
     std::vector<Value*> values;
     for (size_t index = 0; index < 32; index++) {
