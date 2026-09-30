@@ -24,7 +24,18 @@
 #include "jitir.hpp"
 
 namespace metajit {
-  enum class RegClass { Int, Float };
+  class RegClass {
+    uint32_t _mask;
+  public:
+    constexpr explicit RegClass(uint32_t mask = 0): _mask(mask) {}
+
+    static constexpr RegClass X86_INT() { return RegClass(0xffff); }
+    static constexpr RegClass X86_FLOAT() { return RegClass(0xffff0000); }
+
+    constexpr uint32_t mask() const { return _mask; }
+
+    constexpr bool operator==(RegClass other) const { return _mask == other._mask; }
+  };
 
   class Reg {
   public:
@@ -481,18 +492,18 @@ namespace metajit {
       }
     }
 
-    lwir::Span<const Reg> args(RegClass reg_class = RegClass::Int) const {
-      if (reg_class == RegClass::Float) {
+    lwir::Span<const Reg> args(RegClass reg_class = RegClass::X86_INT()) const {
+      if (reg_class == RegClass::X86_FLOAT()) {
         return lwir::Span<const Reg>(fp_arg_regs, sizeof(fp_arg_regs) / sizeof(fp_arg_regs[0]));
       }
       return _arg_regs;
     }
     const lwir::Span<const Reg>& preserved() const { return _preserved_regs; }
     
-    Reg arg(size_t index, RegClass reg_class = RegClass::Int) const { return args(reg_class).at(index); }
+    Reg arg(size_t index, RegClass reg_class = RegClass::X86_INT()) const { return args(reg_class).at(index); }
     Reg preserved(size_t index) const { return _preserved_regs.at(index); }
-    Reg ret(RegClass reg_class = RegClass::Int) const {
-      if (reg_class == RegClass::Float) {
+    Reg ret(RegClass reg_class = RegClass::X86_INT()) const {
+      if (reg_class == RegClass::X86_FLOAT()) {
         return _fp_ret_reg;
       } else {
         return _ret_reg;
@@ -544,25 +555,17 @@ namespace metajit {
     static RegClass reg_class(Reg preg) {
       assert(preg.is_physical());
       if (preg.id() < Reg::X86_XMM(0).id()) {
-        return RegClass::Int;
+        return RegClass::X86_INT();
       } else {
-        return RegClass::Float;
+        return RegClass::X86_FLOAT();
       }
     }
 
     static RegClass reg_class(Type type) {
       if (type == Type::Float32 || type == Type::Float64) {
-        return RegClass::Float;
+        return RegClass::X86_FLOAT();
       } else {
-        return RegClass::Int;
-      }
-    }
-
-    static constexpr uint32_t reg_mask(RegClass reg_class) {
-      if (reg_class == RegClass::Int) {
-        return 0xffff;
-      } else {
-        return 0xffff0000;
+        return RegClass::X86_INT();
       }
     }
 
@@ -595,7 +598,7 @@ namespace metajit {
     };
 
     struct VRegInfo {
-      RegClass reg_class = RegClass::Int;
+      RegClass reg_class = RegClass::X86_INT();
       Reg fixed;
       Interval interval;
       Reg current_reg;
@@ -649,7 +652,7 @@ namespace metajit {
       }
     }
 
-    Reg vreg(RegClass reg_class = RegClass::Int) {
+    Reg vreg(RegClass reg_class = RegClass::X86_INT()) {
       size_t id = _vreg_info.size();
       _vreg_info.emplace_back();
       _vreg_info.back().reg_class = reg_class;
@@ -743,7 +746,7 @@ namespace metajit {
         src_class = reg_class(src);
       }
       assert(dst_class == src_class);
-      if (dst_class == RegClass::Float) {
+      if (dst_class == RegClass::X86_FLOAT()) {
         _builder.movsd(dst, src);
       } else {
         _builder.mov64(dst, src);
@@ -849,7 +852,7 @@ namespace metajit {
           default: assert(false && "Unsupported pointer conversion type");
         }
       } else if (dynmatch(SelectInst, select, inst)) {
-        if (reg_class(select->type()) == RegClass::Float) {
+        if (reg_class(select->type()) == RegClass::X86_FLOAT()) {
           Reg res = vreg();
           Reg then = vreg();
           _builder.movq_to_int(res, vreg(select->arg(2)));
@@ -1284,7 +1287,7 @@ namespace metajit {
         for (size_t it = 1; it < call->args().size(); it++) {
           RegClass arg_class = reg_class(call->arg(it)->type());
           size_t index;
-          if (arg_class == RegClass::Float) {
+          if (arg_class == RegClass::X86_FLOAT()) {
             index = fp_count++;
           } else {
             index = gp_count++;
@@ -1560,7 +1563,7 @@ namespace metajit {
       }
 
       Reg get_free_reg(RegClass reg_class) {
-        uint32_t free = _free & reg_mask(reg_class);
+        uint32_t free = _free & reg_class.mask();
         if (free == 0) {
           return Reg();
         } else {
@@ -1571,7 +1574,7 @@ namespace metajit {
       Reg get_lru(RegClass reg_class) {
         size_t min_index = 0;
         size_t min_value = ~size_t(0);
-        for (uint32_t mask = reg_mask(reg_class); mask != 0; mask &= mask - 1) {
+        for (uint32_t mask = reg_class.mask(); mask != 0; mask &= mask - 1) {
           size_t it = __builtin_ctz(mask);
           if (_lru[it] < min_value) {
             min_value = _lru[it];
@@ -1656,7 +1659,7 @@ namespace metajit {
             info.stack_offset = _stack_offset_alloc.alloc();
           }
           X86Inst::Mem mem(Reg::X86_RSP(), (int32_t) info.stack_offset);
-          if (info.reg_class == RegClass::Float) {
+          if (info.reg_class == RegClass::X86_FLOAT()) {
             _builder.movsd_mem(mem, preg);
           } else {
             _builder.mov64_mem(mem, preg);
@@ -1677,7 +1680,7 @@ namespace metajit {
       } else {
         assert(info.stack_offset != ~size_t(0));
         X86Inst::Mem mem(Reg::X86_RSP(), (int32_t) info.stack_offset);
-        if (info.reg_class == RegClass::Float) {
+        if (info.reg_class == RegClass::X86_FLOAT()) {
           _builder.movsd(preg, mem);
         } else {
           _builder.mov64(preg, mem);
@@ -2142,7 +2145,7 @@ namespace metajit {
         Reg reg = order.at(it);
         assert(reg.is_virtual());
 
-        uint32_t free_mask = reg_mask(_vreg_info[reg.id()].reg_class);
+        uint32_t free_mask = _vreg_info[reg.id()].reg_class.mask();
         free_mask &= ~(1u << Reg::X86_RSP().id());
         free_mask &= ~(1u << Reg::X86_RBP().id());
         for (Reg conflict : conflicts.at(reg.id())) {

@@ -253,21 +253,15 @@ void test_assume_const(DiffTestSuite& suite) {
 }
 
 void test_alloca(DiffTestSuite& suite) {
-  suite.diff_test("alloca_store_load_Int32").run([](Builder& builder, TestData& data) {
-    Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 4), 4);
-    Value* val = data.input(Type::Int32);
-    builder.build_store(ptr, val, AliasingGroup(0), 0);
-    Value* loaded = builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
-    data.output(loaded);
-  });
-
-  suite.diff_test("alloca_store_load_Int64").run([](Builder& builder, TestData& data) {
-    Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
-    Value* val = data.input(Type::Int64);
-    builder.build_store(ptr, val, AliasingGroup(0), 0);
-    Value* loaded = builder.build_load(ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), 0);
-    data.output(loaded);
-  });
+  for (Type type : {Type::Int32, Type::Int64, Type::Float32, Type::Float64}) {
+    suite.diff_test(std::string("alloca_store_load_") + to_string(type)).run([=](Builder& builder, TestData& data) {
+      Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, type_size(type)), type_size(type));
+      Value* val = data.input(type);
+      builder.build_store(ptr, val, AliasingGroup(0), 0);
+      Value* loaded = builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), 0);
+      data.output(loaded);
+    });
+  }
 
   suite.diff_test("alloca_multiple_stores").run([](Builder& builder, TestData& data) {
     Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
@@ -287,31 +281,6 @@ void test_alloca(DiffTestSuite& suite) {
     Value* loaded = builder.build_load(ptr_off, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
     data.output(loaded);
   });
-}
-
-void test_load_store_f(DiffTestSuite& suite) {
-  for (Type type : {Type::Float32, Type::Float64}) {
-    Type bits_type;
-    if (type == Type::Float32) {
-      bits_type = Type::Int32;
-    } else {
-      bits_type = Type::Int64;
-    }
-    std::string name = std::string("load_store_") + to_string(type);
-
-    suite.diff_test(name + "_roundtrip").run([=](Builder& builder, TestData& data) {
-      Value* value = data.input(type);
-      Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
-
-      builder.build_store(ptr, builder.build_const(Type::Int64, ~uint64_t(0)), AliasingGroup(0), 0);
-      builder.build_store(ptr, value, AliasingGroup(0), 0);
-      data.output(builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), 0));
-      data.output(builder.build_load(ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
-
-      builder.build_store(ptr, builder.build_const(type, 1), AliasingGroup(0), 0);
-      data.output(builder.build_load(ptr, bits_type, LoadFlags::None, AliasingGroup(0), 0));
-    });
-  }
 }
 
 void test_call(DiffTestSuite& suite) {
@@ -671,7 +640,6 @@ int main(int argc, char** argv) {
   test_freeze(suite);
   test_assume_const(suite);
   test_alloca(suite);
-  test_load_store_f(suite);
   test_call(suite);
   test_call_fp<float>(suite, Type::Float32);
   test_call_fp<double>(suite, Type::Float64);
