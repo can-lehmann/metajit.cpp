@@ -615,6 +615,7 @@ namespace metajit {
     NameMap<void*> _memory_deps;
 
     NameMap<Reg> _vregs;
+    lwir::Span<Reg> _input_vregs;
     std::vector<VRegInfo> _vreg_info;
 
     #ifdef METAJIT_STATS
@@ -1594,6 +1595,7 @@ namespace metajit {
             min_index = it;
           }
         }
+        assert(min_value != ~size_t(0));
         return Reg::phys(min_index);
       }
 
@@ -1813,7 +1815,7 @@ namespace metajit {
       std::fill(initial_state, initial_state + reg_file.size(), Reg());
 
       for (Arg* arg : _section->entry()->args()) {
-        Reg input = Reg::virt(arg->index());
+        Reg input = _input_vregs.at(arg->index());
         VRegInfo& info = _vreg_info[input.id()];
         info.interval.incl(0);
         assert(info.fixed.is_physical() && "Entry arguments must be in fixed registers");
@@ -2331,13 +2333,14 @@ namespace metajit {
 
       _memory_deps.init(_section);
       _vregs.init(_section);
+      _input_vregs = _builder.alloc_regs(_section->entry()->args().size());
 
       for (Arg* arg : _section->entry()->args()) {
         Reg preg = input_pregs[arg->index()];
-        _vregs[arg] = fix_to_preg(vreg(reg_class(preg)), preg);
-      }
-      for (Arg* arg : _section->entry()->args()) {
-        if (!(reg_class(arg->type()) == reg_class(input_pregs[arg->index()]))) {
+        Reg input = fix_to_preg(vreg(reg_class(preg)), preg);
+        _input_vregs[arg->index()] = input;
+        _vregs[arg] = input;
+        if (!(reg_class(arg->type()) == reg_class(preg))) {
           _vregs[arg] = vreg(arg->type());
         }
       }
@@ -2354,7 +2357,7 @@ namespace metajit {
       with_timer(isel, isel());
       _builder.move_to_begin(_blocks[0]);
       for (Arg* arg : _section->entry()->args()) {
-        Reg input = Reg::virt(arg->index());
+        Reg input = _input_vregs.at(arg->index());
         if (!(input == vreg(arg))) {
           if (is_float(arg->type())) {
             _builder.movq(vreg(arg), input);

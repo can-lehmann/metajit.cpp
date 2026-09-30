@@ -24,8 +24,8 @@ int main(int argc, char** argv) {
 
   DiffTestSuite suite("tests/output/test_cfg", argc, argv);
 
-  for (Type type : {Type::Float32, Type::Float64}) {
-    suite.test(std::string("float_entry_argument_") + to_string(type)).run([type]() {
+  for (Type type : {Type::Float32, Type::Float64, Type::Int32, Type::Int64}) {
+    suite.test(std::string("entry_argument_") + to_string(type)).run([type]() {
       for (auto mode : {X86CodeGen::Mode::JIT, X86CodeGen::Mode::AOT}) {
         Context context;
         Allocator allocator;
@@ -38,11 +38,18 @@ int main(int argc, char** argv) {
         section->autoname();
         section->set_ordering(BlockOrdering::Natural);
 
-        X86CodeGen codegen(section, {Reg::X86_R12(), Reg::X86_R13()}, mode);
-        using Func = void(* [[clang::preserve_none]])(uint64_t, uint64_t*);
+        uint64_t bits = 0x123456789abcdef0;
         uint64_t result = 0;
-        ((Func) codegen.deploy())(0x12345678, &result);
-        unittest_assert(result == 0x12345678);
+        if (is_float(type)) {
+          X86CodeGen codegen(section, {Reg::X86_R12(), Reg::X86_R13()}, mode);
+          using Func = void(* [[clang::preserve_none]])(uint64_t, uint64_t*);
+          ((Func) codegen.deploy())(bits, &result);
+        } else {
+          X86CodeGen codegen(section, {Reg::X86_XMM(0), Reg::X86_R12()}, mode);
+          using Func = void(* [[clang::preserve_none]])(double, uint64_t*);
+          ((Func) codegen.deploy())(bit_cast<double>(bits), &result);
+        }
+        unittest_assert(result == (bits & type_mask(type)));
         delete section;
       }
     });
