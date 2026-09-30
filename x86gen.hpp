@@ -454,6 +454,11 @@ namespace metajit {
       Reg::X86_RBX(), Reg::X86_RBP(), Reg::X86_R12(), Reg::X86_R13(),
       Reg::X86_R14(), Reg::X86_R15()
     };
+
+    static constexpr Reg fp_arg_regs[] = {
+      Reg::phys(16), Reg::phys(17), Reg::phys(18), Reg::phys(19),
+      Reg::phys(20), Reg::phys(21), Reg::phys(22), Reg::phys(23)
+    };
   public:
     CallConvInfo(CallConv call_conv) {
       switch (call_conv) {
@@ -472,27 +477,25 @@ namespace metajit {
       }
     }
 
-    const lwir::Span<const Reg>& args() const { return _arg_regs; }
+    lwir::Span<const Reg> args(Type type = Type::Int64) const {
+      if (type == Type::Float32 || type == Type::Float64) {
+        return lwir::Span<const Reg>(fp_arg_regs, sizeof(fp_arg_regs) / sizeof(fp_arg_regs[0]));
+      }
+      return _arg_regs;
+    }
     const lwir::Span<const Reg>& preserved() const { return _preserved_regs; }
     
-    Reg arg(size_t index) const { return _arg_regs.at(index); }
+    Reg arg(size_t index, Type type = Type::Int64) const { return args(type).at(index); }
     Reg preserved(size_t index) const { return _preserved_regs.at(index); }
-    Reg ret() const { return _ret_reg; }
+    Reg ret(Type type = Type::Int64) const {
+      return type == Type::Float32 || type == Type::Float64 ? Reg::phys(16) : _ret_reg;
+    }
 
     // TODO: Optimize
 
     bool is_preserved(Reg reg) const {
       for (Reg preserved_reg : _preserved_regs) {
         if (reg == preserved_reg) {
-          return true;
-        }
-      }
-      return false;
-    }
-
-    bool is_arg(Reg reg, size_t arg_count) const {
-      for (size_t it = 0; it < arg_count && it < _arg_regs.size(); it++) {
-        if (reg == _arg_regs.at(it)) {
           return true;
         }
       }
@@ -1237,22 +1240,26 @@ namespace metajit {
         CallConvInfo info(call->call_conv());
 
         assert(call->arg_count() >= 1);
-        assert(call->arg_count() - 1 <= info.args().size() && "Call with too many register arguments");
 
         lwir::Span<Reg> args = _builder.alloc_regs(call->args().size() - 1);
+        size_t gp_count = 0;
+        size_t fp_count = 0;
         for (size_t it = 1; it < call->args().size(); it++) {
-          Reg arg_reg = fix_to_preg(vreg(), info.arg(it - 1));
-          _builder.mov64(arg_reg, vreg(call->arg(it)));
+          Type type = call->arg(it)->type();
+          size_t index = reg_class(type) == RegClass::FP ? fp_count++ : gp_count++;
+          assert(index < info.args(type).size() && "Call with too many register arguments");
+          Reg arg_reg = fix_to_preg(vreg(reg_class(type)), info.arg(index, type));
+          move(arg_reg, vreg(call->arg(it)));
           args[it - 1] = arg_reg;
         }
 
-        Reg ret_reg = fix_to_preg(vreg(), info.ret());
+        Reg ret_reg = fix_to_preg(vreg(reg_class(call->type())), info.ret(call->type()));
         Reg callee_reg = fix_to_preg(vreg(), Reg::X86_R10());
         _builder.mov64(callee_reg, vreg(call->callee()));
         _builder.call(callee_reg, ret_reg, call->call_conv(), args);
 
         if (call->type() != Type::Void) {
-          _builder.mov64(vreg(call), ret_reg);
+          move(vreg(call), ret_reg);
         }
 
         _stack_offset_alloc.require_call_alignment();
@@ -1794,7 +1801,7 @@ namespace metajit {
               Reg preg = Reg::phys(it);
               if (!reg_file.is_free(preg) &&
                   !info.is_preserved(preg) &&
-                  !info.is_arg(preg, data->args.size()) &&
+                  std::find(data->args.begin(), data->args.end(), reg_file[preg]) == data->args.end() &&
                   reg_file[preg] != std::get<Reg>(inst->rm())) {
                 spill(reg_file, preg, false);
               }
@@ -1816,8 +1823,10 @@ namespace metajit {
               }
             }
 
-            reg_file.set(info.ret(), data->ret);
-            reg_file.touch(info.ret());
+            VRegInfo& ret_info = _vreg_info[data->ret.id()];
+            ret_info.current_reg = ret_info.fixed;
+            reg_file.set(ret_info.fixed, data->ret);
+            reg_file.touch(ret_info.fixed);
 
             it++;
             continue;

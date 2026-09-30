@@ -55,6 +55,7 @@ int main(int argc, char** argv) {
       builder.move_to_end(cont);
       data.output(builder.build_add_f(cont->arg(0), cont->arg(0)));
     });
+
     suite.diff_test(std::string("float_swap_loop_") + to_string(type)).run([type](Builder& builder, TestData& data) {
       Block* header = builder.build_block({Type::Int64, type, type});
       Block* body = builder.build_block();
