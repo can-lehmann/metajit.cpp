@@ -44,8 +44,21 @@ void test_binop(DiffTestSuite& suite) {
   binop(xor, true)
 
   binop(eq, false)
+  binop_type(eq, Float32)
+  binop_type(eq, Float64)
   binop(lt_u, false)
   binop(lt_s, false)
+
+  for (Type type : {Type::Float32, Type::Float64}) {
+    suite.diff_test(std::string("eq_bits_") + to_string(type)).run([type](Builder& builder, TestData& data) {
+      Value* zero = data.input(RandomRange(type, 0, 0));
+      uint64_t sign = uint64_t(1) << (type_size(type) * 8 - 1);
+      Value* negative_zero = data.input(RandomRange(type, sign, sign));
+      Value* nan = data.input(RandomRange(type, type_mask(type), type_mask(type)));
+      data.output(builder.build_eq(zero, negative_zero));
+      data.output(builder.build_eq(nan, nan));
+    });
+  }
 }
 
 void test_shift(DiffTestSuite& suite) {

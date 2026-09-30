@@ -256,9 +256,10 @@ namespace metajit {
         return call_inst;
       } else if (dynmatch(EqInst, eq, inst)) {
         if (is_float(eq->arg(0)->type())) {
-          return _builder.CreateFCmpUEQ(
-            emit_arg(eq->arg(0)),
-            emit_arg(eq->arg(1))
+          llvm::Type* bits_type = _builder.getIntNTy(type_size(eq->arg(0)->type()) * 8);
+          return _builder.CreateICmpEQ(
+            _builder.CreateBitCast(emit_arg(eq->arg(0)), bits_type),
+            _builder.CreateBitCast(emit_arg(eq->arg(1)), bits_type)
           );
         } else {
           return _builder.CreateICmpEQ(

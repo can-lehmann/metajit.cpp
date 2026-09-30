@@ -564,7 +564,7 @@ namespace metajit {
     }
 
     static RegClass reg_class(Type type) {
-      if (type == Type::Float32 || type == Type::Float64) {
+      if (is_float(type)) {
         return RegClass::X86_FLOAT();
       } else {
         return RegClass::X86_INT();
@@ -792,6 +792,19 @@ namespace metajit {
     }
 
     void build_cmp(Value* a, Value* b) {
+      if (is_float(a->type())) {
+        Reg bits_a = vreg();
+        Reg bits_b = vreg();
+        _builder.movq_to_int(bits_a, vreg(a));
+        _builder.movq_to_int(bits_b, vreg(b));
+        if (a->type() == Type::Float32) {
+          _builder.cmp32(bits_a, bits_b);
+        } else {
+          _builder.cmp64(bits_a, bits_b);
+        }
+        return;
+      }
+
       if (dynmatch(Const, constant_b, b)) {
         if (is_sext_imm32(constant_b)) {
           switch (type_size(a->type())) {
@@ -854,7 +867,7 @@ namespace metajit {
           default: assert(false && "Unsupported pointer conversion type");
         }
       } else if (dynmatch(SelectInst, select, inst)) {
-        if (reg_class(select->type()) == RegClass::X86_FLOAT()) {
+        if (is_float(select->type())) {
           Reg res = vreg();
           Reg then = vreg();
           _builder.movq_to_int(res, vreg(select->arg(2)));
@@ -2345,7 +2358,7 @@ namespace metajit {
       for (Arg* arg : _section->entry()->args()) {
         Reg input = Reg::virt(arg->index());
         if (!(input == vreg(arg))) {
-          if (reg_class(arg->type()) == RegClass::X86_FLOAT()) {
+          if (is_float(arg->type())) {
             _builder.movq(vreg(arg), input);
           } else {
             _builder.movq_to_int(vreg(arg), input);
