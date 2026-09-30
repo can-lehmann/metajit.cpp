@@ -494,15 +494,12 @@ namespace metajit {
       }
     }
 
-    lwir::Span<const Reg> args(RegClass reg_class = RegClass::X86_INT()) const {
-      if (reg_class == RegClass::X86_FLOAT()) {
-        return lwir::Span<const Reg>(fp_arg_regs, sizeof(fp_arg_regs) / sizeof(fp_arg_regs[0]));
-      }
-      return _arg_regs;
+    Reg int_arg(size_t index) const { return _arg_regs.at(index); }
+    Reg float_arg(size_t index) const {
+      return lwir::Span<const Reg>(fp_arg_regs, sizeof(fp_arg_regs) / sizeof(fp_arg_regs[0])).at(index);
     }
     const lwir::Span<const Reg>& preserved() const { return _preserved_regs; }
     
-    Reg arg(size_t index, RegClass reg_class = RegClass::X86_INT()) const { return args(reg_class).at(index); }
     Reg preserved(size_t index) const { return _preserved_regs.at(index); }
     Reg ret(RegClass reg_class = RegClass::X86_INT()) const {
       if (reg_class == RegClass::X86_FLOAT()) {
@@ -661,6 +658,8 @@ namespace metajit {
       return Reg::virt(id);
     }
 
+    Reg vreg(Type type) { return vreg(reg_class(type)); }
+
     Reg fix_to_preg(Reg vreg, Reg preg) {
       assert(vreg.is_virtual());
       VRegInfo& info = _vreg_info[vreg.id()];
@@ -682,7 +681,7 @@ namespace metajit {
 
     Reg vreg(Value* value) {
       if (dynmatch(Const, constant, value)) {
-        Reg reg = vreg(reg_class(value->type()));
+        Reg reg = vreg(value->type());
         switch (constant->type()) {
           case Type::Bool:
           case Type::Int8: _builder.mov8_imm(reg, constant->value()); break;
@@ -725,7 +724,7 @@ namespace metajit {
       } else if (value->is_named()) {
         NamedValue* named = (NamedValue*) value;
         if (_vregs.at(named).is_invalid()) {
-          _vregs[named] = vreg(reg_class(value->type()));
+          _vregs[named] = vreg(value->type());
         }
         return _vregs.at(named);
       } else {
@@ -1297,24 +1296,23 @@ namespace metajit {
         assert(call->arg_count() >= 1);
 
         lwir::Span<Reg> args = _builder.alloc_regs(call->args().size() - 1);
-        size_t int_arg_count = 0;
-        size_t float_arg_count = 0;
+        size_t int_index = 0;
+        size_t float_index = 0;
         for (size_t it = 1; it < call->args().size(); it++) {
-          RegClass arg_class = reg_class(call->arg(it)->type());
-          size_t index;
-          if (arg_class == RegClass::X86_FLOAT()) {
-            index = float_arg_count++;
+          Type type = call->arg(it)->type();
+          Reg preg;
+          if (is_float(type)) {
+            preg = info.float_arg(float_index++);
           } else {
-            index = int_arg_count++;
+            preg = info.int_arg(int_index++);
           }
-          assert(index < info.args(arg_class).size() && "Call with too many register arguments");
-          Reg arg_reg = fix_to_preg(vreg(arg_class), info.arg(index, arg_class));
+          Reg arg_reg = fix_to_preg(vreg(type), preg);
           move(arg_reg, vreg(call->arg(it)));
           args[it - 1] = arg_reg;
         }
 
         RegClass ret_class = reg_class(call->type());
-        Reg ret_reg = fix_to_preg(vreg(ret_class), info.ret(ret_class));
+        Reg ret_reg = fix_to_preg(vreg(call->type()), info.ret(ret_class));
         Reg callee_reg = fix_to_preg(vreg(), Reg::X86_R10());
         _builder.mov64(callee_reg, vreg(call->callee()));
         _builder.call(callee_reg, ret_reg, call->call_conv(), args);
@@ -1372,7 +1370,7 @@ namespace metajit {
       } else if (dynmatch(JumpInst, jump, inst)) {
         lwir::Span<Reg> copies = _builder.alloc_regs(jump->block()->args().size());
         for (Arg* arg : jump->block()->args()) {
-          copies[arg->index()] = vreg(reg_class(arg->type()));
+          copies[arg->index()] = vreg(arg->type());
           move(copies[arg->index()], vreg(jump->arg(arg->index())));
         }
         for (Arg* arg : jump->block()->args()) {
@@ -2340,7 +2338,7 @@ namespace metajit {
       }
       for (Arg* arg : _section->entry()->args()) {
         if (!(reg_class(arg->type()) == reg_class(input_pregs[arg->index()]))) {
-          _vregs[arg] = vreg(reg_class(arg->type()));
+          _vregs[arg] = vreg(arg->type());
         }
       }
 
