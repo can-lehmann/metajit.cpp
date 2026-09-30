@@ -4153,6 +4153,9 @@ namespace metajit {
           }
 
           if (dynmatch(AndInst, and_inst, inst)) {
+            if (and_inst->arg(0) == and_inst->arg(1)) {
+              return and_inst->arg(0);
+            }
             KnownBits::Bits a = known_bits.at(and_inst->arg(0));
             KnownBits::Bits b = known_bits.at(and_inst->arg(1));
 
@@ -4180,6 +4183,9 @@ namespace metajit {
               break;
             }
           } else if (dynmatch(OrInst, or_inst, inst)) {
+            if (or_inst->arg(0) == or_inst->arg(1)) {
+              return or_inst->arg(0);
+            }
             KnownBits::Bits a = known_bits.at(or_inst->arg(0));
             KnownBits::Bits b = known_bits.at(or_inst->arg(1));
 
