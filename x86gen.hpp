@@ -1720,7 +1720,8 @@ namespace metajit {
       }
       _blocks[0]->set_regalloc(initial_state);
 
-      for (X86Block* block : _blocks) {
+      for (size_t block_index = 0; block_index < _blocks.size(); block_index++) {
+        X86Block* block = _blocks[block_index];
         if (block->regalloc()) {
           load_state(reg_file, block->regalloc());
         }
@@ -1848,8 +1849,21 @@ namespace metajit {
           if (std::holds_alternative<X86Block*>(inst->imm())) {
             X86Block* target = std::get<X86Block*>(inst->imm());
             if (target->regalloc()) {
+              if (inst->kind() != X86Inst::Kind::Jmp) {
+                X86Block* edge = _builder.build_block();
+                edge->set_name(block->name());
+                Reg* state = (Reg*) _allocator.alloc(sizeof(Reg) * reg_file.size(), alignof(Reg));
+                for (size_t it = 0; it < reg_file.size(); it++) {
+                  state[it] = reg_file[Reg::phys(it)];
+                }
+                edge->set_regalloc(state);
+                _builder.move_before(edge, nullptr);
+                _builder.jmp(target)->set_name(inst->name());
+                _blocks.insert(_blocks.begin() + block_index + 1, edge);
+                inst->set_imm(edge);
+                continue;
+              }
               // Restore regalloc state
-              assert(inst->kind() == X86Inst::Kind::Jmp); // Merges may only be unconditional jumps
               if (target->name() < block->name()) {
                 // Backedge
                 assert(target->loop());
@@ -1904,6 +1918,10 @@ namespace metajit {
             }
           }
         }
+      }
+
+      for (size_t it = 0; it < _blocks.size(); it++) {
+        _blocks[it]->set_name(it);
       }
 
       #ifdef METAJIT_DEBUG
