@@ -780,6 +780,14 @@ namespace metajit {
         _builder.mov64(vreg(inst), vreg(promote->arg(0)));
       } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
         _builder.mov64(vreg(inst), vreg(assume_const->arg(0)));
+      } else if (dynmatch(PtrToIntInst, ptr_to_int, inst)) {
+        switch (type_size(ptr_to_int->type())) {
+          case 1: _builder.movzx8to64(vreg(inst), vreg(ptr_to_int->arg(0))); break;
+          case 2: _builder.movzx16to64(vreg(inst), vreg(ptr_to_int->arg(0))); break;
+          case 4: _builder.mov32(vreg(inst), vreg(ptr_to_int->arg(0))); break;
+          case 8: _builder.mov64(vreg(inst), vreg(ptr_to_int->arg(0))); break;
+          default: assert(false && "Unsupported pointer conversion type");
+        }
       } else if (dynmatch(SelectInst, select, inst)) {
         _builder.mov64(vreg(inst), vreg(select->arg(2)));
         build_cmov(vreg(inst), select->cond(), vreg(select->arg(1)));

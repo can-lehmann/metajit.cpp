@@ -524,6 +524,32 @@ void test_convert_f(DiffTestSuite& suite) {
   #undef float_to_int_s_type
 }
 
+template<Type result_type>
+void ptr_to_int_outputs(Builder& builder, TestData& data, RandomRange range) {
+  Value* result = builder.build_ptr_to_int(data.input(range), result_type);
+  data.output(result);
+  if (result_type != Type::Int64) {
+    data.output(builder.build_resize_u(result, Type::Int64));
+  }
+}
+
+template<Type result_type>
+void ptr_to_int_inputs(Builder& builder, TestData& data) {
+  ptr_to_int_outputs<result_type>(builder, data, RandomRange(Type::Ptr));
+  for (uint64_t bits : {0ULL, 0x80ULL, 0x8000ULL, 0x80000000ULL,
+                        0x8000000000000000ULL, 0xffffffffffffffffULL,
+                        0xfedcba9876543280ULL}) {
+    ptr_to_int_outputs<result_type>(builder, data, RandomRange(Type::Ptr, bits, bits));
+  }
+}
+
+void test_ptr_to_int(DiffTestSuite& suite) {
+  suite.diff_test("ptr_to_int_Int8").run(ptr_to_int_inputs<Type::Int8>);
+  suite.diff_test("ptr_to_int_Int16").run(ptr_to_int_inputs<Type::Int16>);
+  suite.diff_test("ptr_to_int_Int32").run(ptr_to_int_inputs<Type::Int32>);
+  suite.diff_test("ptr_to_int_Int64").run(ptr_to_int_inputs<Type::Int64>);
+}
+
 void test_popcount(DiffTestSuite& suite) {
   #define popcount_type(type) \
     suite.diff_test("popcount_" #type).run([](Builder& builder, TestData& data) { \
@@ -552,6 +578,7 @@ int main(int argc, char** argv) {
   test_call(suite);
   test_binop_f(suite);
   test_convert_f(suite);
+  test_ptr_to_int(suite);
   test_popcount(suite);
 
   return suite.finish();
