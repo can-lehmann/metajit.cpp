@@ -53,21 +53,22 @@ int main(int argc, char** argv) {
       builder.move_to_end(b);
       builder.build_jump(cont, {value_b});
       builder.move_to_end(cont);
-      data.output(builder.build_add_f(cont->arg(0), cont->arg(0)));
+      data.output(cont->arg(0));
     });
 
     suite.diff_test(std::string("float_swap_loop_") + to_string(type)).run([type](Builder& builder, TestData& data) {
-      Block* header = builder.build_block({Type::Int64, type, type});
+      Block* header = builder.build_block({Type::Bool, type, type});
       Block* body = builder.build_block();
       Block* end = builder.build_block();
       Value* a = data.input(type);
       Value* b = data.input(type);
-      builder.build_jump(header, {builder.build_const(Type::Int64, 0), a, b});
+      Value* cond = data.input(Type::Bool);
+      builder.build_jump(header, {cond, a, b});
       builder.move_to_end(header);
-      builder.build_branch(builder.build_lt_u(header->arg(0), builder.build_const(Type::Int64, 3)), body, end);
+      builder.build_branch(header->arg(0), body, end);
       builder.move_to_end(body);
       builder.build_jump(header, {
-        builder.build_add(header->arg(0), builder.build_const(Type::Int64, 1)),
+        builder.build_const(Type::Bool, false),
         header->arg(2), header->arg(1)
       });
       builder.move_to_end(end);

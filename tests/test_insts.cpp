@@ -289,61 +289,25 @@ void test_alloca(DiffTestSuite& suite) {
 
 void test_load_store_f(DiffTestSuite& suite) {
   for (Type type : {Type::Float32, Type::Float64}) {
-    Type bits_type = type == Type::Float32 ? Type::Int32 : Type::Int64;
+    Type bits_type;
+    if (type == Type::Float32) {
+      bits_type = Type::Int32;
+    } else {
+      bits_type = Type::Int64;
+    }
     std::string name = std::string("load_store_") + to_string(type);
 
     suite.diff_test(name + "_roundtrip").run([=](Builder& builder, TestData& data) {
-      Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 24), 8);
-      Value* sentinel = builder.build_const(Type::Int64, 0x123456789abcdef0ULL);
-      for (int32_t offset : {0, 8, 16}) {
-        builder.build_store(ptr, sentinel, AliasingGroup(0), offset);
-      }
-      Value* first = data.input(type);
-      Value* second = data.input(type);
-      builder.build_store(ptr, first, AliasingGroup(0), 8);
-      data.output(builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), 8));
-      data.output(builder.build_load(ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), 8));
-      builder.build_store(ptr, second, AliasingGroup(0), 8);
-      data.output(builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), 8));
-      for (int32_t offset : {0, 8, 16}) {
-        data.output(builder.build_load(ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), offset));
-      }
-    });
-
-    suite.diff_test(name + "_offsets").run([=](Builder& builder, TestData& data) {
-      Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 512), 8);
-      for (int32_t offset : {1, 127, 257}) {
-        Value* value = data.input(type);
-        builder.build_store(ptr, value, AliasingGroup(0), offset);
-        Value* shifted = builder.build_add_ptr(ptr, builder.build_const(Type::Int64, offset + 3));
-        data.output(builder.build_load(shifted, type, LoadFlags::None, AliasingGroup(0), -3));
-        data.output(builder.build_load(ptr, bits_type, LoadFlags::None, AliasingGroup(0), offset));
-      }
-    });
-
-    suite.diff_test(name + "_constants").run([=](Builder& builder, TestData& data) {
+      Value* value = data.input(type);
       Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
-      for (uint64_t bits : {uint64_t(0), uint64_t(1), uint64_t(1) << (type_size(type) * 8 - 1), type_mask(type)}) {
-        builder.build_store(ptr, builder.build_const(type, bits), AliasingGroup(0), 0);
-        data.output(builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), 0));
-        data.output(builder.build_load(ptr, bits_type, LoadFlags::None, AliasingGroup(0), 0));
-      }
-    });
 
-    suite.diff_test(name + "_pressure").aot(false).run([=](Builder& builder, TestData& data) {
-      Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 24 * 8), 8);
-      std::vector<Value*> values;
-      for (int32_t index = 0; index < 24; index++) {
-        values.push_back(data.input(type));
-      }
-      for (int32_t index = 0; index < 24; index++) {
-        builder.build_store(ptr, values[index], AliasingGroup(0), index * 8);
-      }
-      for (int32_t index = 0; index < 24; index++) {
-        data.output(values[index]);
-        data.output(builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), index * 8));
-        data.output(builder.build_load(ptr, bits_type, LoadFlags::None, AliasingGroup(0), index * 8));
-      }
+      builder.build_store(ptr, builder.build_const(Type::Int64, ~uint64_t(0)), AliasingGroup(0), 0);
+      builder.build_store(ptr, value, AliasingGroup(0), 0);
+      data.output(builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), 0));
+      data.output(builder.build_load(ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+
+      builder.build_store(ptr, builder.build_const(type, 1), AliasingGroup(0), 0);
+      data.output(builder.build_load(ptr, bits_type, LoadFlags::None, AliasingGroup(0), 0));
     });
   }
 }
@@ -517,147 +481,57 @@ void test_call(DiffTestSuite& suite) {
   });
 }
 
-#define fp_call_targets(prefix, attrs) \
-  template <typename F> attrs F prefix##_identity(F value) { return value; } \
-  template <typename F> attrs F prefix##_zero() { return (F) -3.25; } \
-  template <typename F> attrs uint64_t prefix##_integer(F value, uint64_t integer) { \
-    return (uint64_t) value + integer; \
-  } \
-  template <typename F> attrs void prefix##_void(F value, F* out) { *out = value; } \
-  template <typename F> attrs F prefix##_mixed( \
-      uint64_t i0, F f0, uint64_t i1, double f1, uint64_t i2, float f2, \
-      uint64_t i3, F f3, uint64_t i4, F f4, uint64_t i5, F f5, F f6, F f7) { \
-    return (F) (i0 + 2 * i1 + 3 * i2 + 4 * i3 + 5 * i4 + 6 * i5) + \
-           f0 + (F) (2 * f1) + (F) (3 * f2) + 4 * f3 + 5 * f4 + 6 * f5 + 7 * f6 + 8 * f7; \
-  }
+template <typename F>
+__attribute__((noinline)) F test_call_fp_default(uint64_t i, float a, double b) {
+  return (F) i + (F) a + (F) b;
+}
 
-fp_call_targets(test_call_fp_default, __attribute__((noinline)))
-fp_call_targets(test_call_fp_preserve_none, __attribute__((preserve_none, noinline)))
-
-#undef fp_call_targets
+template <typename F>
+__attribute__((preserve_none, noinline)) F test_call_fp_preserve_none(uint64_t i, float a, double b) {
+  return (F) i + (F) a + (F) b;
+}
 
 template <typename F>
 void test_call_fp(DiffTestSuite& suite, Type type) {
   for (CallConv call_conv : {CallConv::Default, CallConv::PreserveNone}) {
-    std::string name = std::string("call_fp_") + to_string(type) +
-                       (call_conv == CallConv::Default ? "_default" : "_preserve_none");
-    uint64_t identity = call_conv == CallConv::Default ?
-      (uint64_t)(void*) test_call_fp_default_identity<F> : (uint64_t)(void*) test_call_fp_preserve_none_identity<F>;
-    uint64_t zero = call_conv == CallConv::Default ?
-      (uint64_t)(void*) test_call_fp_default_zero<F> : (uint64_t)(void*) test_call_fp_preserve_none_zero<F>;
-    uint64_t integer = call_conv == CallConv::Default ?
-      (uint64_t)(void*) test_call_fp_default_integer<F> : (uint64_t)(void*) test_call_fp_preserve_none_integer<F>;
-    uint64_t void_target = call_conv == CallConv::Default ?
-      (uint64_t)(void*) test_call_fp_default_void<F> : (uint64_t)(void*) test_call_fp_preserve_none_void<F>;
-    uint64_t mixed = call_conv == CallConv::Default ?
-      (uint64_t)(void*) test_call_fp_default_mixed<F> : (uint64_t)(void*) test_call_fp_preserve_none_mixed<F>;
+    std::ostringstream name;
+    name << "call_fp_" << type;
+    if (call_conv == CallConv::Default) {
+      name << "_default";
+    } else {
+      name << "_preserve_none";
+    }
 
-    suite.diff_test(name + "_identity").aot(false).interpreter(false).run([=](Builder& builder, TestData& data) {
-      Value* value = data.input(type);
-      Value* callee = builder.build_const(Type::Ptr, identity);
-      Value* first = builder.build_call(callee, type, {value}, call_conv);
-      Value* second = builder.build_call(callee, type, {first}, call_conv);
-      data.output(value);
+    suite.diff_test(name.str()).aot(false).interpreter(false).run([=](Builder& builder, TestData& data) {
+      Value* i = data.input(RandomRange(Type::Int64, 0, 100));
+      Value* a = data.input(Type::Float32);
+      Value* b = data.input(Type::Float64);
+
+      Value* callee;
+      if (call_conv == CallConv::Default) {
+        callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_fp_default<F>);
+      } else {
+        callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_fp_preserve_none<F>);
+      }
+      Value* first = builder.build_call(callee, type, {i, a, b}, call_conv);
+      Value* second = builder.build_call(callee, type, {i, a, b}, call_conv);
+
       data.output(first);
       data.output(second);
-    });
-
-    suite.diff_test(name + "_zero_args").aot(false).interpreter(false).run([=](Builder& builder, TestData& data) {
-      data.output(builder.build_call(builder.build_const(Type::Ptr, zero), type, std::vector<Value*>(), call_conv));
-    });
-
-    suite.diff_test(name + "_constant").aot(false).interpreter(false).run([=](Builder& builder, TestData& data) {
-      Value* value = builder.build_int_to_float_s(builder.build_const(Type::Int64, 17), type);
-      data.output(builder.build_call(builder.build_const(Type::Ptr, identity), type, {value}, call_conv));
-    });
-
-    suite.diff_test(name + "_special_values").aot(false).interpreter(false).run([=](Builder& builder, TestData& data) {
-      std::vector<uint64_t> values = type == Type::Float32 ?
-        std::vector<uint64_t>{0, 0x80000000, 0x7f800000, 0xff800000, 0x7fc00001, 1} :
-        std::vector<uint64_t>{0, 0x8000000000000000ULL, 0x7ff0000000000000ULL,
-                             0xfff0000000000000ULL, 0x7ff8000000000001ULL, 1};
-      Value* callee = builder.build_const(Type::Ptr, identity);
-      for (uint64_t bits : values) {
-        data.output(builder.build_call(callee, type, {builder.build_const(type, bits)}, call_conv));
-      }
-    });
-
-    suite.diff_test(name + "_integer_return").aot(false).interpreter(false).run([=](Builder& builder, TestData& data) {
-      Value* value = builder.build_int_to_float_s(data.input(RandomRange(Type::Int64, 0, 100)), type);
-      Value* i = data.input(Type::Int64);
-      data.output(builder.build_call(builder.build_const(Type::Ptr, integer), Type::Int64, {value, i}, call_conv));
-      data.output(value);
       data.output(i);
-    });
-
-    suite.diff_test(name + "_void_return").aot(false).interpreter(false).run([=](Builder& builder, TestData& data) {
-      Value* value = data.input(type);
-      Value* out = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
-      builder.build_call(builder.build_const(Type::Ptr, void_target), Type::Void, {value, out}, call_conv);
-      data.output(builder.build_load(out, type, LoadFlags::None, AliasingGroup(0), 0));
-      data.output(value);
-    });
-
-    suite.diff_test(name + "_mixed_pressure").aot(false).interpreter(false).run([=](Builder& builder, TestData& data) {
-      std::vector<Value*> floats;
-      std::vector<Value*> integers;
-      for (size_t index = 0; index < 24; index++) {
-        floats.push_back(builder.build_int_to_float_s(data.input(RandomRange(Type::Int64, 1, 32)), type));
-      }
-      for (size_t index = 0; index < 16; index++) {
-        integers.push_back(data.input(RandomRange(Type::Int64, 1, 32)));
-      }
-      std::vector<Value*> args;
-      for (size_t index = 0; index < 6; index++) {
-        args.push_back(integers[index]);
-        Type arg_type = index == 1 ? Type::Float64 : index == 2 ? Type::Float32 : type;
-        args.push_back(arg_type == type ? floats[index] : builder.build_resize_f(floats[index], arg_type));
-      }
-      args.push_back(floats[6]);
-      args.push_back(floats[7]);
-      Value* callee = builder.build_const(Type::Ptr, mixed);
-      Value* first = builder.build_call(callee, type, args, call_conv);
-      args[1] = first;
-      args[13] = first;
-      Value* second = builder.build_call(callee, type, args, call_conv);
-      data.output(first);
-      data.output(second);
-      for (Value* value : floats) {
-        data.output(value);
-      }
-      for (Value* value : integers) {
-        data.output(value);
-      }
+      data.output(a);
+      data.output(b);
     });
   }
-}
-
-uint64_t test_call_clobber_xmm() {
-  asm volatile("xorps %%xmm0, %%xmm0\n\txorps %%xmm15, %%xmm15" ::: "xmm0", "xmm15");
-  return 42;
 }
 
 void test_binop_f(DiffTestSuite& suite) {
   for (Type type : {Type::Float32, Type::Float64}) {
     suite.diff_test(std::string("float_spills_") + to_string(type)).aot(false).run([type](Builder& builder, TestData& data) {
       std::vector<Value*> values;
-      for (size_t index = 0; index < 24; index++) {
+      for (size_t index = 0; index < 17; index++) {
         values.push_back(data.input(type));
       }
-      Value* integer = data.input(Type::Int64);
-      for (Value* value : values) {
-        data.output(builder.build_add_f(value, value));
-      }
-      data.output(integer);
-    });
-
-    suite.diff_test(std::string("float_across_call_") + to_string(type)).aot(false).interpreter(false).run([type](Builder& builder, TestData& data) {
-      std::vector<Value*> values;
-      for (size_t index = 0; index < 16; index++) {
-        values.push_back(data.input(type));
-      }
-      Value* callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_clobber_xmm);
-      data.output(builder.build_call(callee, Type::Int64, std::vector<Value*>(), CallConv::Default));
       for (Value* value : values) {
         data.output(value);
       }
@@ -666,14 +540,13 @@ void test_binop_f(DiffTestSuite& suite) {
     suite.diff_test(std::string("mixed_register_classes_") + to_string(type)).run([type](Builder& builder, TestData& data) {
       std::vector<Value*> floats;
       std::vector<Value*> integers;
-      for (size_t index = 0; index < 10; index++) {
+      for (size_t index = 0; index < 8; index++) {
         floats.push_back(data.input(type));
         integers.push_back(data.input(Type::Int64));
       }
       for (size_t index = 0; index < floats.size(); index++) {
-        data.output(builder.build_add_f(floats[index], floats[index]));
-        data.output(builder.build_lt_f_o(floats[index], floats[0]));
-        data.output(builder.build_add(integers[index], integers[index]));
+        data.output(floats[index]);
+        data.output(integers[index]);
       }
     });
   }

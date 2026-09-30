@@ -24,6 +24,8 @@
 #include "jitir.hpp"
 
 namespace metajit {
+  enum class RegClass { Int, Float };
+
   class Reg {
   public:
     enum class Kind {
@@ -437,6 +439,7 @@ namespace metajit {
     lwir::Span<const Reg> _arg_regs;
     lwir::Span<const Reg> _preserved_regs;
     Reg _ret_reg;
+    Reg _fp_ret_reg = Reg::X86_XMM(0);
 
     static constexpr Reg preserve_none_arg_regs[] = {
       Reg::X86_R12(), Reg::X86_R13(), Reg::X86_R14(), Reg::X86_R15(),
@@ -478,18 +481,22 @@ namespace metajit {
       }
     }
 
-    lwir::Span<const Reg> args(Type type = Type::Int64) const {
-      if (type == Type::Float32 || type == Type::Float64) {
+    lwir::Span<const Reg> args(RegClass reg_class = RegClass::Int) const {
+      if (reg_class == RegClass::Float) {
         return lwir::Span<const Reg>(fp_arg_regs, sizeof(fp_arg_regs) / sizeof(fp_arg_regs[0]));
       }
       return _arg_regs;
     }
     const lwir::Span<const Reg>& preserved() const { return _preserved_regs; }
     
-    Reg arg(size_t index, Type type = Type::Int64) const { return args(type).at(index); }
+    Reg arg(size_t index, RegClass reg_class = RegClass::Int) const { return args(reg_class).at(index); }
     Reg preserved(size_t index) const { return _preserved_regs.at(index); }
-    Reg ret(Type type = Type::Int64) const {
-      return type == Type::Float32 || type == Type::Float64 ? Reg::X86_XMM(0) : _ret_reg;
+    Reg ret(RegClass reg_class = RegClass::Int) const {
+      if (reg_class == RegClass::Float) {
+        return _fp_ret_reg;
+      } else {
+        return _ret_reg;
+      }
     }
 
     // TODO: Optimize
@@ -534,15 +541,29 @@ namespace metajit {
       Timer peephole;
     };
   private:
-    enum class RegClass { GP, FP };
-
     static RegClass reg_class(Reg preg) {
       assert(preg.is_physical());
-      return preg.id() < Reg::X86_XMM(0).id() ? RegClass::GP : RegClass::FP;
+      if (preg.id() < Reg::X86_XMM(0).id()) {
+        return RegClass::Int;
+      } else {
+        return RegClass::Float;
+      }
+    }
+
+    static RegClass reg_class(Type type) {
+      if (type == Type::Float32 || type == Type::Float64) {
+        return RegClass::Float;
+      } else {
+        return RegClass::Int;
+      }
     }
 
     static constexpr uint32_t reg_mask(RegClass reg_class) {
-      return reg_class == RegClass::GP ? 0xffff : 0xffff0000;
+      if (reg_class == RegClass::Int) {
+        return 0xffff;
+      } else {
+        return 0xffff0000;
+      }
     }
 
     struct Interval {
@@ -574,7 +595,7 @@ namespace metajit {
     };
 
     struct VRegInfo {
-      RegClass reg_class = RegClass::GP;
+      RegClass reg_class = RegClass::Int;
       Reg fixed;
       Interval interval;
       Reg current_reg;
@@ -628,11 +649,7 @@ namespace metajit {
       }
     }
 
-    static RegClass reg_class(Type type) {
-      return type == Type::Float32 || type == Type::Float64 ? RegClass::FP : RegClass::GP;
-    }
-
-    Reg vreg(RegClass reg_class = RegClass::GP) {
+    Reg vreg(RegClass reg_class = RegClass::Int) {
       size_t id = _vreg_info.size();
       _vreg_info.emplace_back();
       _vreg_info.back().reg_class = reg_class;
@@ -713,10 +730,20 @@ namespace metajit {
     }
 
     void move(Reg dst, Reg src) {
-      RegClass dst_class = dst.is_virtual() ? _vreg_info[dst.id()].reg_class : reg_class(dst);
-      RegClass src_class = src.is_virtual() ? _vreg_info[src.id()].reg_class : reg_class(src);
+      RegClass dst_class;
+      if (dst.is_virtual()) {
+        dst_class = _vreg_info[dst.id()].reg_class;
+      } else {
+        dst_class = reg_class(dst);
+      }
+      RegClass src_class;
+      if (src.is_virtual()) {
+        src_class = _vreg_info[src.id()].reg_class;
+      } else {
+        src_class = reg_class(src);
+      }
       assert(dst_class == src_class);
-      if (dst_class == RegClass::FP) {
+      if (dst_class == RegClass::Float) {
         _builder.movsd(dst, src);
       } else {
         _builder.mov64(dst, src);
@@ -1246,15 +1273,21 @@ namespace metajit {
         size_t gp_count = 0;
         size_t fp_count = 0;
         for (size_t it = 1; it < call->args().size(); it++) {
-          Type type = call->arg(it)->type();
-          size_t index = reg_class(type) == RegClass::FP ? fp_count++ : gp_count++;
-          assert(index < info.args(type).size() && "Call with too many register arguments");
-          Reg arg_reg = fix_to_preg(vreg(reg_class(type)), info.arg(index, type));
+          RegClass arg_class = reg_class(call->arg(it)->type());
+          size_t index;
+          if (arg_class == RegClass::Float) {
+            index = fp_count++;
+          } else {
+            index = gp_count++;
+          }
+          assert(index < info.args(arg_class).size() && "Call with too many register arguments");
+          Reg arg_reg = fix_to_preg(vreg(arg_class), info.arg(index, arg_class));
           move(arg_reg, vreg(call->arg(it)));
           args[it - 1] = arg_reg;
         }
 
-        Reg ret_reg = fix_to_preg(vreg(reg_class(call->type())), info.ret(call->type()));
+        RegClass ret_class = reg_class(call->type());
+        Reg ret_reg = fix_to_preg(vreg(ret_class), info.ret(ret_class));
         Reg callee_reg = fix_to_preg(vreg(), Reg::X86_R10());
         _builder.mov64(callee_reg, vreg(call->callee()));
         _builder.call(callee_reg, ret_reg, call->call_conv(), args);
@@ -1614,7 +1647,7 @@ namespace metajit {
             info.stack_offset = _stack_offset_alloc.alloc();
           }
           X86Inst::Mem mem(Reg::X86_RSP(), (int32_t) info.stack_offset);
-          if (info.reg_class == RegClass::FP) {
+          if (info.reg_class == RegClass::Float) {
             _builder.movsd_mem(mem, preg);
           } else {
             _builder.mov64_mem(mem, preg);
@@ -1635,7 +1668,7 @@ namespace metajit {
       } else {
         assert(info.stack_offset != ~size_t(0));
         X86Inst::Mem mem(Reg::X86_RSP(), (int32_t) info.stack_offset);
-        if (info.reg_class == RegClass::FP) {
+        if (info.reg_class == RegClass::Float) {
           _builder.movsd(preg, mem);
         } else {
           _builder.mov64(preg, mem);
