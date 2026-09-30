@@ -56,6 +56,7 @@ namespace metajit {
     static constexpr Reg X86_R13() { return phys(13); }
     static constexpr Reg X86_R14() { return phys(14); }
     static constexpr Reg X86_R15() { return phys(15); }
+    static constexpr Reg X86_XMM(size_t index) { return phys(16 + index); }
 
     static constexpr Reg virt(size_t id) {
       return Reg(Kind::Virtual, id);
@@ -456,8 +457,8 @@ namespace metajit {
     };
 
     static constexpr Reg fp_arg_regs[] = {
-      Reg::phys(16), Reg::phys(17), Reg::phys(18), Reg::phys(19),
-      Reg::phys(20), Reg::phys(21), Reg::phys(22), Reg::phys(23)
+      Reg::X86_XMM(0), Reg::X86_XMM(1), Reg::X86_XMM(2), Reg::X86_XMM(3),
+      Reg::X86_XMM(4), Reg::X86_XMM(5), Reg::X86_XMM(6), Reg::X86_XMM(7)
     };
   public:
     CallConvInfo(CallConv call_conv) {
@@ -488,7 +489,7 @@ namespace metajit {
     Reg arg(size_t index, Type type = Type::Int64) const { return args(type).at(index); }
     Reg preserved(size_t index) const { return _preserved_regs.at(index); }
     Reg ret(Type type = Type::Int64) const {
-      return type == Type::Float32 || type == Type::Float64 ? Reg::phys(16) : _ret_reg;
+      return type == Type::Float32 || type == Type::Float64 ? Reg::X86_XMM(0) : _ret_reg;
     }
 
     // TODO: Optimize
@@ -537,7 +538,7 @@ namespace metajit {
 
     static RegClass reg_class(Reg preg) {
       assert(preg.is_physical());
-      return preg.id() < 16 ? RegClass::GP : RegClass::FP;
+      return preg.id() < Reg::X86_XMM(0).id() ? RegClass::GP : RegClass::FP;
     }
 
     static constexpr uint32_t reg_mask(RegClass reg_class) {

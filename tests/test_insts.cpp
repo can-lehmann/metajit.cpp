@@ -287,6 +287,67 @@ void test_alloca(DiffTestSuite& suite) {
   });
 }
 
+void test_load_store_f(DiffTestSuite& suite) {
+  for (Type type : {Type::Float32, Type::Float64}) {
+    Type bits_type = type == Type::Float32 ? Type::Int32 : Type::Int64;
+    std::string name = std::string("load_store_") + to_string(type);
+
+    suite.diff_test(name + "_roundtrip").run([=](Builder& builder, TestData& data) {
+      Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 24), 8);
+      Value* sentinel = builder.build_const(Type::Int64, 0x123456789abcdef0ULL);
+      for (int32_t offset : {0, 8, 16}) {
+        builder.build_store(ptr, sentinel, AliasingGroup(0), offset);
+      }
+      Value* first = data.input(type);
+      Value* second = data.input(type);
+      builder.build_store(ptr, first, AliasingGroup(0), 8);
+      data.output(builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), 8));
+      data.output(builder.build_load(ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), 8));
+      builder.build_store(ptr, second, AliasingGroup(0), 8);
+      data.output(builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), 8));
+      for (int32_t offset : {0, 8, 16}) {
+        data.output(builder.build_load(ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), offset));
+      }
+    });
+
+    suite.diff_test(name + "_offsets").run([=](Builder& builder, TestData& data) {
+      Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 512), 8);
+      for (int32_t offset : {1, 127, 257}) {
+        Value* value = data.input(type);
+        builder.build_store(ptr, value, AliasingGroup(0), offset);
+        Value* shifted = builder.build_add_ptr(ptr, builder.build_const(Type::Int64, offset + 3));
+        data.output(builder.build_load(shifted, type, LoadFlags::None, AliasingGroup(0), -3));
+        data.output(builder.build_load(ptr, bits_type, LoadFlags::None, AliasingGroup(0), offset));
+      }
+    });
+
+    suite.diff_test(name + "_constants").run([=](Builder& builder, TestData& data) {
+      Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
+      for (uint64_t bits : {uint64_t(0), uint64_t(1), uint64_t(1) << (type_size(type) * 8 - 1), type_mask(type)}) {
+        builder.build_store(ptr, builder.build_const(type, bits), AliasingGroup(0), 0);
+        data.output(builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), 0));
+        data.output(builder.build_load(ptr, bits_type, LoadFlags::None, AliasingGroup(0), 0));
+      }
+    });
+
+    suite.diff_test(name + "_pressure").aot(false).run([=](Builder& builder, TestData& data) {
+      Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 24 * 8), 8);
+      std::vector<Value*> values;
+      for (int32_t index = 0; index < 24; index++) {
+        values.push_back(data.input(type));
+      }
+      for (int32_t index = 0; index < 24; index++) {
+        builder.build_store(ptr, values[index], AliasingGroup(0), index * 8);
+      }
+      for (int32_t index = 0; index < 24; index++) {
+        data.output(values[index]);
+        data.output(builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), index * 8));
+        data.output(builder.build_load(ptr, bits_type, LoadFlags::None, AliasingGroup(0), index * 8));
+      }
+    });
+  }
+}
+
 void test_call(DiffTestSuite& suite) {
   suite.diff_test("call_preserve_none").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* a = data.input(Type::Int64);
@@ -735,6 +796,7 @@ int main(int argc, char** argv) {
   test_freeze(suite);
   test_assume_const(suite);
   test_alloca(suite);
+  test_load_store_f(suite);
   test_call(suite);
   test_call_fp<float>(suite, Type::Float32);
   test_call_fp<double>(suite, Type::Float64);
