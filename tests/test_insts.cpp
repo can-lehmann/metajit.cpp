@@ -44,8 +44,21 @@ void test_binop(DiffTestSuite& suite) {
   binop(xor, true)
 
   binop(eq, false)
+  binop_type(eq, Float32)
+  binop_type(eq, Float64)
   binop(lt_u, false)
   binop(lt_s, false)
+
+  for (Type type : {Type::Float32, Type::Float64}) {
+    suite.diff_test(std::string("eq_bits_") + to_string(type)).run([type](Builder& builder, TestData& data) {
+      Value* zero = data.input(RandomRange(type, 0, 0));
+      uint64_t sign = uint64_t(1) << (type_size(type) * 8 - 1);
+      Value* negative_zero = data.input(RandomRange(type, sign, sign));
+      Value* nan = data.input(RandomRange(type, type_mask(type), type_mask(type)));
+      data.output(builder.build_eq(zero, negative_zero));
+      data.output(builder.build_eq(nan, nan));
+    });
+  }
 }
 
 void test_shift(DiffTestSuite& suite) {
@@ -104,6 +117,8 @@ void test_select(DiffTestSuite& suite) {
   select_type(Int16)
   select_type(Int32)
   select_type(Int64)
+  select_type(Float32)
+  select_type(Float64)
 }
 
 void test_resize(DiffTestSuite& suite) {
@@ -251,21 +266,15 @@ void test_assume_const(DiffTestSuite& suite) {
 }
 
 void test_alloca(DiffTestSuite& suite) {
-  suite.diff_test("alloca_store_load_Int32").run([](Builder& builder, TestData& data) {
-    Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 4), 4);
-    Value* val = data.input(Type::Int32);
-    builder.build_store(ptr, val, AliasingGroup(0), 0);
-    Value* loaded = builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
-    data.output(loaded);
-  });
-
-  suite.diff_test("alloca_store_load_Int64").run([](Builder& builder, TestData& data) {
-    Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
-    Value* val = data.input(Type::Int64);
-    builder.build_store(ptr, val, AliasingGroup(0), 0);
-    Value* loaded = builder.build_load(ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), 0);
-    data.output(loaded);
-  });
+  for (Type type : {Type::Int32, Type::Int64, Type::Float32, Type::Float64}) {
+    suite.diff_test(std::string("alloca_store_load_") + to_string(type)).run([=](Builder& builder, TestData& data) {
+      Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, type_size(type)), type_size(type));
+      Value* val = data.input(type);
+      builder.build_store(ptr, val, AliasingGroup(0), 0);
+      Value* loaded = builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), 0);
+      data.output(loaded);
+    });
+  }
 
   suite.diff_test("alloca_multiple_stores").run([](Builder& builder, TestData& data) {
     Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
@@ -456,7 +465,76 @@ void test_call(DiffTestSuite& suite) {
   });
 }
 
+template <typename F>
+__attribute__((noinline)) F test_call_fp_default(uint64_t i, float a, double b) {
+  return (F) i + (F) a + (F) b;
+}
+
+template <typename F>
+__attribute__((preserve_none, noinline)) F test_call_fp_preserve_none(uint64_t i, float a, double b) {
+  return (F) i + (F) a + (F) b;
+}
+
+template <typename F>
+void test_call_fp(DiffTestSuite& suite, Type type) {
+  for (CallConv call_conv : {CallConv::Default, CallConv::PreserveNone}) {
+    std::ostringstream name;
+    name << "call_fp_" << type;
+    if (call_conv == CallConv::Default) {
+      name << "_default";
+    } else {
+      name << "_preserve_none";
+    }
+
+    suite.diff_test(name.str()).aot(false).interpreter(false).run([=](Builder& builder, TestData& data) {
+      Value* i = data.input(RandomRange(Type::Int64, 0, 100));
+      Value* a = data.input(Type::Float32);
+      Value* b = data.input(Type::Float64);
+
+      Value* callee;
+      if (call_conv == CallConv::Default) {
+        callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_fp_default<F>);
+      } else {
+        callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_fp_preserve_none<F>);
+      }
+      Value* first = builder.build_call(callee, type, {i, a, b}, call_conv);
+      Value* second = builder.build_call(callee, type, {i, a, b}, call_conv);
+
+      data.output(first);
+      data.output(second);
+      data.output(i);
+      data.output(a);
+      data.output(b);
+    });
+  }
+}
+
 void test_binop_f(DiffTestSuite& suite) {
+  for (Type type : {Type::Float32, Type::Float64}) {
+    suite.diff_test(std::string("float_spills_") + to_string(type)).aot(false).run([type](Builder& builder, TestData& data) {
+      std::vector<Value*> values;
+      for (size_t index = 0; index < 17; index++) {
+        values.push_back(data.input(type));
+      }
+      for (Value* value : values) {
+        data.output(value);
+      }
+    });
+
+    suite.diff_test(std::string("mixed_register_classes_") + to_string(type)).run([type](Builder& builder, TestData& data) {
+      std::vector<Value*> floats;
+      std::vector<Value*> integers;
+      for (size_t index = 0; index < 8; index++) {
+        floats.push_back(data.input(type));
+        integers.push_back(data.input(Type::Int64));
+      }
+      for (size_t index = 0; index < floats.size(); index++) {
+        data.output(floats[index]);
+        data.output(integers[index]);
+      }
+    });
+  }
+
   #define binop_f_type(name, type) \
     suite.diff_test(#name "_" #type).run([](Builder& builder, TestData& data) { \
       data.output(builder.build_##name(data.input(Type::type), data.input(Type::type))); \
@@ -576,6 +654,8 @@ int main(int argc, char** argv) {
   test_assume_const(suite);
   test_alloca(suite);
   test_call(suite);
+  test_call_fp<float>(suite, Type::Float32);
+  test_call_fp<double>(suite, Type::Float64);
   test_binop_f(suite);
   test_convert_f(suite);
   test_ptr_to_int(suite);

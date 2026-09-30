@@ -222,15 +222,21 @@ namespace metajit {
   };
 }
 
+namespace metajit {
+  inline const char* to_string(Type type) {
+    static const char* names[] = {
+      "Void",
+      "Bool",
+      "Int8", "Int16", "Int32", "Int64",
+      "Float32", "Float64",
+      "Ptr"
+    };
+    return names[(size_t) type];
+  }
+}
+
 std::ostream& operator<<(std::ostream& stream, metajit::Type type) {
-  static const char* names[] = {
-    "Void",
-    "Bool",
-    "Int8", "Int16", "Int32", "Int64",
-    "Float32", "Float64",
-    "Ptr"
-  };
-  stream << names[(size_t) type];
+  stream << metajit::to_string(type);
   return stream;
 }
 
