@@ -195,7 +195,7 @@ rev_binop_x86_inst(MovSDMem, movsd_mem, mov_mem_usedef, true, { byte(0xf2); rex_
 binop_x86_inst(MovD, movd, mov_usedef, false, { byte(0x66); rex_opt(); byte(0x0f); byte(0x6e); modrm(); })
 binop_x86_inst(MovQ, movq, mov_usedef, true, { byte(0x66); rex_w(); byte(0x0f); byte(0x6e); modrm(); })
 
-binop_x86_inst(UComISS, ucomiss, binop_usedef, false, { byte(0x0f); byte(0x2e); modrm(); })
+binop_x86_inst(UComISS, ucomiss, binop_usedef, false, { rex_opt(); byte(0x0f); byte(0x2e); modrm(); })
 binop_x86_inst(UComISD, ucomisd, binop_usedef, true, { byte(0x66); rex_opt(); byte(0x0f); byte(0x2e); modrm(); })
 
 binop_x86_inst(CvtSS2SD, cvtss2sd, mov_usedef, true, { byte(0xf3); rex_opt(); byte(0x0f); byte(0x5a); modrm(); })

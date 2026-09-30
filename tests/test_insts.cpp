@@ -456,7 +456,51 @@ void test_call(DiffTestSuite& suite) {
   });
 }
 
+uint64_t test_call_clobber_xmm() {
+  asm volatile("xorps %%xmm0, %%xmm0\n\txorps %%xmm15, %%xmm15" ::: "xmm0", "xmm15");
+  return 42;
+}
+
 void test_binop_f(DiffTestSuite& suite) {
+  for (Type type : {Type::Float32, Type::Float64}) {
+    std::string suffix = type == Type::Float32 ? "float32" : "float64";
+    suite.diff_test("float_spills_" + suffix).aot(false).run([type](Builder& builder, TestData& data) {
+      std::vector<Value*> values;
+      for (size_t index = 0; index < 24; index++) {
+        values.push_back(data.input(type));
+      }
+      Value* integer = data.input(Type::Int64);
+      for (Value* value : values) {
+        data.output(builder.build_add_f(value, value));
+      }
+      data.output(integer);
+    });
+    suite.diff_test("float_across_call_" + suffix).aot(false).interpreter(false).run([type](Builder& builder, TestData& data) {
+      std::vector<Value*> values;
+      for (size_t index = 0; index < 16; index++) {
+        values.push_back(data.input(type));
+      }
+      Value* callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_clobber_xmm);
+      data.output(builder.build_call(callee, Type::Int64, std::vector<Value*>(), CallConv::Default));
+      for (Value* value : values) {
+        data.output(value);
+      }
+    });
+    suite.diff_test("mixed_register_classes_" + suffix).run([type](Builder& builder, TestData& data) {
+      std::vector<Value*> floats;
+      std::vector<Value*> integers;
+      for (size_t index = 0; index < 10; index++) {
+        floats.push_back(data.input(type));
+        integers.push_back(data.input(Type::Int64));
+      }
+      for (size_t index = 0; index < floats.size(); index++) {
+        data.output(builder.build_add_f(floats[index], floats[index]));
+        data.output(builder.build_lt_f_o(floats[index], floats[0]));
+        data.output(builder.build_add(integers[index], integers[index]));
+      }
+    });
+  }
+
   #define binop_f_type(name, type) \
     suite.diff_test(#name "_" #type).run([](Builder& builder, TestData& data) { \
       data.output(builder.build_##name(data.input(Type::type), data.input(Type::type))); \

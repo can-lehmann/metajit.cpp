@@ -29,6 +29,8 @@ namespace metajit {
     enum class Kind {
       Invalid, Virtual, Physical
     };
+
+    enum class Class { GP, FP };
   private:
     Kind _kind = Kind::Invalid;
     size_t _id = 0;
@@ -38,6 +40,17 @@ namespace metajit {
 
     static constexpr Reg phys(size_t id) {
       return Reg(Kind::Physical, id);
+    }
+
+    static constexpr Reg xmm(size_t id) { return phys(16 + id); }
+
+    Class reg_class() const {
+      assert(is_physical());
+      return _id < 16 ? Class::GP : Class::FP;
+    }
+
+    static constexpr uint32_t mask(Class reg_class) {
+      return reg_class == Class::GP ? 0xffff : 0xffff0000;
     }
 
     static constexpr Reg X86_RAX() { return phys(0); }
@@ -100,7 +113,7 @@ namespace metajit {
           stream << "v" << _id;
         break;
         case Kind::Physical:
-          stream << "p" << _id;
+          stream << (_id < 16 ? "p" : "xmm") << (_id < 16 ? _id : _id - 16);
         break;
       }
     }
@@ -559,6 +572,7 @@ namespace metajit {
     };
 
     struct VRegInfo {
+      Reg::Class reg_class = Reg::Class::GP;
       Reg fixed;
       Interval interval;
       Reg current_reg;
@@ -612,15 +626,21 @@ namespace metajit {
       }
     }
 
-    Reg vreg() {
+    static Reg::Class reg_class(Type type) {
+      return type == Type::Float32 || type == Type::Float64 ? Reg::Class::FP : Reg::Class::GP;
+    }
+
+    Reg vreg(Reg::Class reg_class = Reg::Class::GP) {
       size_t id = _vreg_info.size();
       _vreg_info.emplace_back();
+      _vreg_info.back().reg_class = reg_class;
       return Reg::virt(id);
     }
 
     Reg fix_to_preg(Reg vreg, Reg preg) {
       assert(vreg.is_virtual());
       VRegInfo& info = _vreg_info[vreg.id()];
+      assert(info.reg_class == preg.reg_class());
       info.fixed = preg;
       return vreg;
     }
@@ -638,7 +658,7 @@ namespace metajit {
 
     Reg vreg(Value* value) {
       if (dynmatch(Const, constant, value)) {
-        Reg reg = vreg();
+        Reg reg = vreg(reg_class(value->type()));
         switch (constant->type()) {
           case Type::Bool:
           case Type::Int8: _builder.mov8_imm(reg, constant->value()); break;
@@ -681,12 +701,23 @@ namespace metajit {
       } else if (value->is_named()) {
         NamedValue* named = (NamedValue*) value;
         if (_vregs.at(named).is_invalid()) {
-          _vregs[named] = vreg();
+          _vregs[named] = vreg(reg_class(value->type()));
         }
         return _vregs.at(named);
       } else {
         assert(false && "Unknown value");
         return Reg();
+      }
+    }
+
+    void copy(Reg dst, Reg src) {
+      Reg::Class dst_class = dst.is_virtual() ? _vreg_info[dst.id()].reg_class : dst.reg_class();
+      Reg::Class src_class = src.is_virtual() ? _vreg_info[src.id()].reg_class : src.reg_class();
+      assert(dst_class == src_class);
+      if (dst_class == Reg::Class::FP) {
+        _builder.movsd(dst, src);
+      } else {
+        _builder.mov64(dst, src);
       }
     }
 
@@ -775,11 +806,11 @@ namespace metajit {
 
     void isel(Inst* inst, Block* block) {
       if (dynmatch(FreezeInst, freeze, inst)) {
-        _builder.mov64(vreg(inst), vreg(freeze->arg(0)));
+        copy(vreg(inst), vreg(freeze->arg(0)));
       } else if (dynmatch(PromoteInst, promote, inst)) {
-        _builder.mov64(vreg(inst), vreg(promote->arg(0)));
+        copy(vreg(inst), vreg(promote->arg(0)));
       } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
-        _builder.mov64(vreg(inst), vreg(assume_const->arg(0)));
+        copy(vreg(inst), vreg(assume_const->arg(0)));
       } else if (dynmatch(PtrToIntInst, ptr_to_int, inst)) {
         switch (type_size(ptr_to_int->type())) {
           case 1: _builder.movzx8to64(vreg(inst), vreg(ptr_to_int->arg(0))); break;
@@ -1275,11 +1306,11 @@ namespace metajit {
       } else if (dynmatch(JumpInst, jump, inst)) {
         lwir::Span<Reg> copies = _builder.alloc_regs(jump->block()->args().size());
         for (Arg* arg : jump->block()->args()) {
-          copies[arg->index()] = vreg();
-          _builder.mov64(copies[arg->index()], vreg(jump->arg(arg->index())));
+          copies[arg->index()] = vreg(reg_class(arg->type()));
+          copy(copies[arg->index()], vreg(jump->arg(arg->index())));
         }
         for (Arg* arg : jump->block()->args()) {
-          _builder.mov64(vreg(arg), copies[arg->index()]);
+          copy(vreg(arg), copies[arg->index()]);
         }
         _builder.jmp(_blocks[jump->block()->name()]);
       } else if (dynmatch(ExitInst, exit, inst)) {
@@ -1419,15 +1450,15 @@ namespace metajit {
     class RegFileState {
     private:
       std::vector<Reg> _regs;
-      uint16_t _free = 0xffff;
-      uint16_t _max_free = 0xffff;
+      uint32_t _free = 0xffffffff;
+      uint32_t _max_free = 0xffffffff;
       
       std::vector<size_t> _lru;
       size_t _lru_count = 0;
     public:
       RegFileState() {
-        _regs.resize(16, Reg());
-        _lru.resize(16, 0);
+        _regs.resize(32, Reg());
+        _lru.resize(32, 0);
 
         disable(Reg::X86_RSP());
         disable(Reg::X86_RBP());
@@ -1441,7 +1472,7 @@ namespace metajit {
 
       void disable(Reg preg) {
         assert(preg.is_physical());
-        _max_free &= ~(1 << preg.id());
+        _max_free &= ~(1u << preg.id());
         _lru[preg.id()] = ~size_t(0);
       }
 
@@ -1453,7 +1484,7 @@ namespace metajit {
       void set(Reg preg, Reg vreg) {
         assert(preg.is_physical() && vreg.is_virtual());
         _regs[preg.id()] = vreg;
-        _free &= ~(1 << preg.id());
+        _free &= ~(1u << preg.id());
       }
 
       void touch(Reg preg) {
@@ -1467,31 +1498,33 @@ namespace metajit {
       void free(Reg preg) {
         assert(preg.is_physical());
         _regs[preg.id()] = Reg();
-        _free |= (1 << preg.id()) & _max_free;
+        _free |= (1u << preg.id()) & _max_free;
       }
 
       bool is_free(Reg preg) const {
         assert(preg.is_physical());
-        return (_free & (1 << preg.id())) != 0;
+        return (_free & (1u << preg.id())) != 0;
       }
 
       bool is_disabled(Reg preg) const {
         assert(preg.is_physical());
-        return (_max_free & (1 << preg.id())) == 0;
+        return (_max_free & (1u << preg.id())) == 0;
       }
 
-      Reg get_free_reg() {
-        if (_free == 0) {
+      Reg get_free_reg(Reg::Class reg_class) {
+        uint32_t free = _free & Reg::mask(reg_class);
+        if (free == 0) {
           return Reg();
         } else {
-          return Reg::phys(__builtin_ctz(_free));
+          return Reg::phys(__builtin_ctz(free));
         }
       }
 
-      Reg get_lru() {
+      Reg get_lru(Reg::Class reg_class) {
         size_t min_index = 0;
         size_t min_value = ~size_t(0);
-        for (size_t it = 0; it < _lru.size(); it++) {
+        for (size_t it = reg_class == Reg::Class::GP ? 0 : 16;
+             it < (reg_class == Reg::Class::GP ? 16 : 32); it++) {
           if (_lru[it] < min_value) {
             min_value = _lru[it];
             min_index = it;
@@ -1518,7 +1551,7 @@ namespace metajit {
         for (size_t it = 0; it < _regs.size(); it++) {
           _regs[it] = state[it];
           if (!_regs[it].is_invalid()) {
-            _free &= ~(1 << it);
+            _free &= ~(1u << it);
           }
         }
         assert_invariant();
@@ -1563,10 +1596,10 @@ namespace metajit {
       Reg vreg = reg_file[preg];
       if (vreg.is_virtual()) {
         VRegInfo& info = _vreg_info[vreg.id()];
-        Reg free_reg = reg_file.get_free_reg();
+        Reg free_reg = reg_file.get_free_reg(info.reg_class);
         if (allow_spill_to_reg && free_reg.is_physical()) {
           // No need to spill, just move to free reg
-          _builder.mov64(free_reg, preg);
+          copy(free_reg, preg);
           reg_file.free(preg);
           info.current_reg = free_reg;
           reg_file.set(free_reg, vreg);
@@ -1574,13 +1607,12 @@ namespace metajit {
           if (info.stack_offset == ~size_t(0)) {
             info.stack_offset = _stack_offset_alloc.alloc();
           }
-          _builder.mov64_mem(
-            X86Inst::Mem(
-              Reg::X86_RSP(),
-              (int32_t) info.stack_offset
-            ),
-            preg
-          );
+          X86Inst::Mem mem(Reg::X86_RSP(), (int32_t) info.stack_offset);
+          if (info.reg_class == Reg::Class::FP) {
+            _builder.movsd_mem(mem, preg);
+          } else {
+            _builder.mov64_mem(mem, preg);
+          }
           reg_file.free(preg);
           info.current_reg = Reg();
         }
@@ -1592,17 +1624,16 @@ namespace metajit {
       VRegInfo& info = _vreg_info[vreg.id()];
       if (info.current_reg.is_physical()) {
         // No need to unspill, just move from current reg
-        _builder.mov64(preg, info.current_reg);
+        copy(preg, info.current_reg);
         reg_file.free(info.current_reg);
       } else {
         assert(info.stack_offset != ~size_t(0));
-        _builder.mov64(
-          preg,
-          X86Inst::Mem(
-            Reg::X86_RSP(),
-            (int32_t) info.stack_offset
-          )
-        );
+        X86Inst::Mem mem(Reg::X86_RSP(), (int32_t) info.stack_offset);
+        if (info.reg_class == Reg::Class::FP) {
+          _builder.movsd(preg, mem);
+        } else {
+          _builder.mov64(preg, mem);
+        }
       }
       info.current_reg = preg;
       reg_file.set(preg, vreg);
@@ -1627,9 +1658,15 @@ namespace metajit {
       }
     }
 
+    static bool is_reg_mov(X86Inst* inst) {
+      return (inst->kind() == X86Inst::Kind::Mov64 ||
+              inst->kind() == X86Inst::Kind::MovSS ||
+              inst->kind() == X86Inst::Kind::MovSD) &&
+             std::holds_alternative<Reg>(inst->rm());
+    }
+
     bool is_foldable_mov(X86Inst* inst) {
-      if (inst->kind() == X86Inst::Kind::Mov64 &&
-          std::holds_alternative<Reg>(inst->rm())) {
+      if (is_reg_mov(inst)) {
         Reg src = std::get<Reg>(inst->rm());
         Reg dst = inst->reg();
         assert(src.is_virtual() && dst.is_virtual());
@@ -1674,8 +1711,7 @@ namespace metajit {
       // Since they are used for block arguments, the register may
       // be def-only even if the instruction is not the first in
       // the register's live interval.
-      if (inst->kind() == X86Inst::Kind::Mov64 &&
-          std::holds_alternative<Reg>(inst->rm())) {
+      if (is_reg_mov(inst)) {
         Reg src = std::get<Reg>(inst->rm());
         Reg dst = inst->reg();
         if (reg != src && reg == dst) {
@@ -1806,9 +1842,9 @@ namespace metajit {
             inst->visit_regs([&](Reg reg) {
               VRegInfo& info = _vreg_info[reg.id()];
               if (info.current_reg.is_invalid() && !info.fixed.is_physical()) {
-                Reg preg = reg_file.get_free_reg();
+                Reg preg = reg_file.get_free_reg(info.reg_class);
                 if (!preg.is_physical()) {
-                  preg = reg_file.get_lru();
+                  preg = reg_file.get_lru(info.reg_class);
                 }
                 spill_and_unspill(reg_file, preg, reg, is_def_only(reg, inst));
               }
@@ -1950,8 +1986,7 @@ namespace metajit {
             incoming[target->name()].insert(block);
           }
 
-          if (inst->kind() == X86Inst::Kind::Mov64 &&
-              std::holds_alternative<Reg>(inst->rm())) {
+          if (is_reg_mov(inst)) {
             Reg src = std::get<Reg>(inst->rm());
             Reg dst = inst->reg();
             if (src.is_virtual() && dst.is_virtual()) {
@@ -1981,7 +2016,7 @@ namespace metajit {
 
             for (Reg reg : live) {
               for (Reg other : live) {
-                if (reg != other) {
+                if (reg != other && _vreg_info[reg.id()].reg_class == _vreg_info[other.id()].reg_class) {
                   conflicts.at(reg.id()).insert(other);
                 }
               }
@@ -2057,14 +2092,14 @@ namespace metajit {
         Reg reg = order.at(it);
         assert(reg.is_virtual());
 
-        uint16_t free_mask = 0xffff;
-        free_mask &= ~(1 << Reg::X86_RSP().id());
-        free_mask &= ~(1 << Reg::X86_RBP().id());
+        uint32_t free_mask = Reg::mask(_vreg_info[reg.id()].reg_class);
+        free_mask &= ~(1u << Reg::X86_RSP().id());
+        free_mask &= ~(1u << Reg::X86_RBP().id());
         for (Reg conflict : conflicts.at(reg.id())) {
           if (std::holds_alternative<Reg>(assigned.at(conflict.id()))) {
             Reg assigned_reg = std::get<Reg>(assigned.at(conflict.id()));
             if (assigned_reg.is_physical()) {
-              free_mask &= ~(1 << assigned_reg.id());
+              free_mask &= ~(1u << assigned_reg.id());
             }
           }
         }
@@ -2093,19 +2128,19 @@ namespace metajit {
               if (std::holds_alternative<Reg>(assigned.at(merge_reg.id())) &&
                   std::get<Reg>(assigned.at(merge_reg.id())).is_physical()) {
                 Reg assigned_merge_reg = std::get<Reg>(assigned.at(merge_reg.id()));
-                if ((free_mask & (1 << assigned_merge_reg.id())) != 0) {
+                if ((free_mask & (1u << assigned_merge_reg.id())) != 0) {
                   assigned.at(reg.id()) = assigned_merge_reg;
                   merged = true;
                   break;
                 }
               } 
               
-              uint16_t merge_free_mask = free_mask;
+              uint32_t merge_free_mask = free_mask;
               for (Reg conflict : conflicts.at(merge_reg.id())) {
                 if (std::holds_alternative<Reg>(assigned.at(conflict.id()))) {
                   Reg assigned_conflict = std::get<Reg>(assigned.at(conflict.id()));
                   if (assigned_conflict.is_physical()) {
-                    merge_free_mask &= ~(1 << assigned_conflict.id());
+                    merge_free_mask &= ~(1u << assigned_conflict.id());
                   }
                 }
               }
@@ -2143,8 +2178,7 @@ namespace metajit {
               }
             });
 
-            if (inst->kind() == X86Inst::Kind::Mov64 &&
-                std::holds_alternative<Reg>(inst->rm())) {
+            if (is_reg_mov(inst)) {
               Reg src = std::get<Reg>(inst->rm());
               Reg dst = inst->reg();
               if (src == dst) {
@@ -2358,10 +2392,10 @@ namespace metajit {
 
       auto rex_opt = [&]() {
         bool need_rex = false;
-        if (reg.id() >= 8) {
+        if ((reg.id() & 15) >= 8) {
           need_rex = true;
         } else if (std::holds_alternative<Reg>(rm)) {
-          if (std::get<Reg>(rm).id() >= 8) {
+          if ((std::get<Reg>(rm).id() & 15) >= 8) {
             need_rex = true;
           }
         } else if (std::holds_alternative<X86Inst::Mem>(rm)) {

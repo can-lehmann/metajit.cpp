@@ -39,6 +39,43 @@ int main(int argc, char** argv) {
     data.output(input);
   });
 
+  for (Type type : {Type::Float32, Type::Float64}) {
+    std::string suffix = type == Type::Float32 ? "float32" : "float64";
+    suite.diff_test("float_block_argument_" + suffix).run([type](Builder& builder, TestData& data) {
+      Block* a = builder.build_block();
+      Block* b = builder.build_block();
+      Block* cont = builder.build_block({type});
+      Value* cond = data.input(Type::Bool);
+      Value* value_a = data.input(type);
+      Value* value_b = data.input(type);
+      builder.build_branch(cond, a, b);
+      builder.move_to_end(a);
+      builder.build_jump(cont, {value_a});
+      builder.move_to_end(b);
+      builder.build_jump(cont, {value_b});
+      builder.move_to_end(cont);
+      data.output(builder.build_add_f(cont->arg(0), cont->arg(0)));
+    });
+    suite.diff_test("float_swap_loop_" + suffix).run([type](Builder& builder, TestData& data) {
+      Block* header = builder.build_block({Type::Int64, type, type});
+      Block* body = builder.build_block();
+      Block* end = builder.build_block();
+      Value* a = data.input(type);
+      Value* b = data.input(type);
+      builder.build_jump(header, {builder.build_const(Type::Int64, 0), a, b});
+      builder.move_to_end(header);
+      builder.build_branch(builder.build_lt_u(header->arg(0), builder.build_const(Type::Int64, 3)), body, end);
+      builder.move_to_end(body);
+      builder.build_jump(header, {
+        builder.build_add(header->arg(0), builder.build_const(Type::Int64, 1)),
+        header->arg(2), header->arg(1)
+      });
+      builder.move_to_end(end);
+      data.output(header->arg(1));
+      data.output(header->arg(2));
+    });
+  }
+
   suite.diff_test("branch").run([](Builder& builder, TestData& data) {
     Block* a = builder.build_block();
     Block* b = builder.build_block();
