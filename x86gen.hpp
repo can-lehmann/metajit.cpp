@@ -1297,15 +1297,15 @@ namespace metajit {
         assert(call->arg_count() >= 1);
 
         lwir::Span<Reg> args = _builder.alloc_regs(call->args().size() - 1);
-        size_t gp_count = 0;
-        size_t fp_count = 0;
+        size_t int_arg_count = 0;
+        size_t float_arg_count = 0;
         for (size_t it = 1; it < call->args().size(); it++) {
           RegClass arg_class = reg_class(call->arg(it)->type());
           size_t index;
           if (arg_class == RegClass::X86_FLOAT()) {
-            index = fp_count++;
+            index = float_arg_count++;
           } else {
-            index = gp_count++;
+            index = int_arg_count++;
           }
           assert(index < info.args(arg_class).size() && "Call with too many register arguments");
           Reg arg_reg = fix_to_preg(vreg(arg_class), info.arg(index, arg_class));
