@@ -61,6 +61,71 @@ int main(int argc, char** argv) {
 
   });
 
+  suite.diff_test("critical_edge").aot(false).run([](Builder& builder, TestData& data) {
+    Block* a = builder.build_block();
+    Block* b = builder.build_block();
+    Block* other = builder.build_block();
+    Block* merge = builder.build_block();
+
+    Value* first_cond = data.input(Type::Bool);
+    Value* second_cond = data.input(Type::Bool);
+    std::vector<Value*> values;
+    for (size_t index = 0; index < 24; index++) {
+      values.push_back(data.input(Type::Int64));
+    }
+    builder.build_branch(first_cond, a, b);
+
+    builder.move_to_end(a);
+    builder.build_jump(merge);
+
+    builder.move_to_end(b);
+    for (Value* value : values) {
+      data.output(builder.build_add(value, builder.build_const(Type::Int64, 1)));
+    }
+    builder.build_branch(second_cond, merge, other);
+
+    builder.move_to_end(other);
+    data.output(builder.build_const(Type::Int64, 42));
+    builder.build_jump(merge);
+
+    builder.move_to_end(merge);
+    for (Value* value : values) {
+      data.output(value);
+    }
+  });
+
+  suite.diff_test("critical_backedge").aot(false).run([](Builder& builder, TestData& data) {
+    Block* header = builder.build_block();
+    Block* body = builder.build_block();
+    Block* end = builder.build_block();
+
+    Value* count = data.input(RandomRange(Type::Int64, 1, 8));
+    Value* counter = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
+    builder.build_store(counter, count, AliasingGroup(0), 0);
+    std::vector<Value*> values;
+    for (size_t index = 0; index < 24; index++) {
+      values.push_back(data.input(Type::Int64));
+    }
+    builder.build_jump(header);
+
+    builder.move_to_end(header);
+    Value* current = builder.build_load(counter, Type::Int64, LoadFlags::None, AliasingGroup(0), 0);
+    builder.build_jump(body);
+
+    builder.move_to_end(body);
+    Value* next = builder.build_sub(current, builder.build_const(Type::Int64, 1));
+    builder.build_store(counter, next, AliasingGroup(0), 0);
+    for (Value* value : values) {
+      data.output(builder.build_add(value, next));
+    }
+    builder.build_branch(builder.build_lt_u(builder.build_const(Type::Int64, 0), next), header, end);
+
+    builder.move_to_end(end);
+    for (Value* value : values) {
+      data.output(value);
+    }
+  });
+
   suite.diff_test("sum_to").run([](Builder& builder, TestData& data) {
     Block* loop_header = builder.build_block({Type::Int64, Type::Int64}); // (i, sum)
     Block* loop_body = builder.build_block();
