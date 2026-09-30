@@ -5287,10 +5287,10 @@ namespace metajit {
         } else {
           Block* succ = frame.successors.back();
           frame.successors.pop_back();
-          if (_dt.dominates(succ, frame.block)) {
-            _seen_loop = true;
-          } else if (_visited.insert(succ).second) {
+          if (_visited.insert(succ).second) {
             stack.push_back({succ, succ->successors()});
+          } else if (_dt.dominates(succ, frame.block)) {
+            _seen_loop = true;
           }
         }
       }
