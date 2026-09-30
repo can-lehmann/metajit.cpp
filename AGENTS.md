@@ -50,6 +50,7 @@ metajit.cpp uses a generating extension for tracing.
 ## Coding Guidelines
 
 - Do not add code comments.
+- Name feature branches `<author-first-name>-<short-description>`, using the author's first name followed by a dash and a short description with words separated by dashes.
 - Never edit the generated jitir.hpp and jitir_llvmapi.hpp files directly. Instead, edit the corresponding template files jitir.tmpl.hpp and jitir_llvmapi.tmpl.hpp. The instructions are specified in the jitir.py generator script.
 - Never edit any files in tests/output. They are just output files from the unit-tests used to debug failing test cases. They are also not golden tests; in fact they are .gitnored. 
 - metajit.cpp is a just in time compiler. This makes compile time a crucial metric to optimize for. Write performant compiler code and avoid allocations where possible.
