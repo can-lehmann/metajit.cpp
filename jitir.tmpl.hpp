@@ -4469,6 +4469,9 @@ public:
         incoming[jump->block()]++;
       }
     }
+    for (size_t index = 1; index < chain->size(); index++) {
+      assert(incoming[chain->at(index)] == 1);
+    }
     for (size_t index = 0; index < chain->size(); index++) {
       Block* block = chain->at(index);
       for (Inst* inst : *block) {
@@ -4530,13 +4533,11 @@ public:
         break;
       }
       Block* next = chain->at(index + 1);
-      if (incoming[next] == 1) {
-        if (dynmatch(BranchInst, branch, block->terminator())) {
-          if (branch->true_block() == next) {
-            propagate_backwards(branch->cond(), Bits::constant(true));
-          } else if (branch->false_block() == next) {
-            propagate_backwards(branch->cond(), Bits::constant(false));
-          }
+      if (dynmatch(BranchInst, branch, block->terminator())) {
+        if (branch->true_block() == next) {
+          propagate_backwards(branch->cond(), Bits::constant(true));
+        } else if (branch->false_block() == next) {
+          propagate_backwards(branch->cond(), Bits::constant(false));
         }
       }
     }

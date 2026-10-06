@@ -556,7 +556,7 @@ b4:
 )");
   });
 
-  suite.test("same_branch_targets").run([]() {
+  suite.test("chain_head_with_same_branch_targets").run([]() {
     const std::string ir = R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
@@ -566,10 +566,10 @@ b1:
   Exit
 }
 )";
-    check_trace_simplify(ir, {0, 1}, ir);
+    check_trace_simplify(ir, {1}, ir);
   });
 
-  suite.test("continuation_with_other_predecessor").run([]() {
+  suite.test("chain_head_with_other_predecessor").run([]() {
     const std::string ir = R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
@@ -581,7 +581,7 @@ b2:
   Exit
 }
 )";
-    check_trace_simplify(ir, {0, 2}, ir);
+    check_trace_simplify(ir, {2}, ir);
   });
 
   suite.test("nonadjacent_chain_blocks").run([]() {
@@ -592,22 +592,22 @@ b0(%0: Ptr):
 b1:
   Jump block=b3
 b2:
-  Jump block=b3
+  Exit
 b3:
   %5 = And %1, 0:Bool
   Store %0, %5, aliasing=0, offset=1
   Exit
 }
-)", {0, 3}, R"(section {
+)", {0, 1, 3}, R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   Branch %1, true_block=b1, false_block=b2
 b1:
   Jump block=b3
 b2:
-  Jump block=b3
+  Exit
 b3:
-  %5 = And %1, 0:Bool
+  %5 = And 1:Bool, 0:Bool
   Store %0, 0:Bool, aliasing=0, offset=1
   Exit
 }
