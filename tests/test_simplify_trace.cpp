@@ -71,6 +71,29 @@ int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
+  suite.test("freeze_preserves_output_relationship").run([]() {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* entry = builder.build_block({Type::Ptr});
+    builder.move_to_end(entry);
+    Value* a = builder.build_and(builder.build_poison(Type::Int8), builder.build_const(Type::Int8, 1));
+    Value* frozen = builder.build_freeze(a);
+    AndInst* masked = builder.build_and(frozen, builder.build_const(Type::Int8, 2));
+    StoreInst* frozen_store = builder.build_store(entry->arg(0), frozen, AliasingGroup(0), 0);
+    StoreInst* masked_store = builder.build_store(entry->arg(0), masked, AliasingGroup(0), 1);
+    builder.build_exit();
+    section.order_blocks(BlockOrdering::Dominator);
+    unittest_assert(!section.verify(std::cout));
+    Chain chain({entry});
+    SimplifyTrace::run(&section, &chain);
+    unittest_assert(!section.verify(std::cout));
+    unittest_assert(frozen_store->value() == frozen);
+    unittest_assert(masked_store->value() == masked);
+    unittest_assert(masked->arg(0) == frozen);
+  });
+
   suite.test("symbolic_pointer_guard").run([]() {
     const std::string ir = R"(section {
 b0(%0: Ptr):
