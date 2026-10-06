@@ -213,6 +213,84 @@ void test_usedbits_shr(unittest::Suite& suite) {
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
 
+  using ConcreteBits = Interpreter::Bits;
+  struct UsedBitsOperation {
+    const char* name;
+    ConcreteBits (ConcreteBits::*evaluate)(const ConcreteBits&) const;
+  };
+  for (UsedBitsOperation operation : {
+      UsedBitsOperation{"Shl", &ConcreteBits::shl},
+      UsedBitsOperation{"ShrU", &ConcreteBits::shr_u},
+      UsedBitsOperation{"ShrS", &ConcreteBits::shr_s},
+      UsedBitsOperation{"DivU", &ConcreteBits::div_u},
+      UsedBitsOperation{"DivS", &ConcreteBits::div_s},
+      UsedBitsOperation{"ModU", &ConcreteBits::mod_u},
+      UsedBitsOperation{"ModS", &ConcreteBits::mod_s}}) {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      suite.test(std::string("usedbits_preserves_defined_results_") + operation.name +
+                 "_Int" + std::to_string(type_width(type))).run([operation, type]() {
+        uint64_t width = type_width(type);
+        uint64_t sign = uint64_t(1) << (width - 1);
+        uint64_t mask = type_mask(type);
+        for (uint64_t demanded : {mask, uint64_t(1), sign, mask >> 1, uint64_t(0)}) {
+          Context context;
+          Allocator allocator;
+          std::string type_name = "Int" + std::to_string(width);
+          std::istringstream stream(
+            "section {\n"
+            "b0(%0: Ptr):\n"
+            "  %1 = Load %0, type=" + type_name + ", flags={}, aliasing=0, offset=0\n"
+            "  %2 = Load %0, type=" + type_name + ", flags={}, aliasing=0, offset=8\n"
+            "  %3 = " + operation.name + " %1, %2\n"
+            "  %4 = And %3, " + std::to_string(demanded) + ":" + type_name + "\n"
+            "  Store %0, %4, aliasing=0, offset=16\n"
+            "  Exit\n"
+            "}\n");
+          std::unique_ptr<Section> section(SectionReader<>::read_section(context, allocator, stream));
+          section->order_blocks(BlockOrdering::Dominator);
+          unittest_assert(!section->verify(std::cout));
+          auto inst = (*section->begin())->begin();
+          Value* lhs = *inst++;
+          Value* rhs = *inst++;
+          UsedBits used(section.get());
+          uint64_t lhs_used = used.at(lhs).used;
+          uint64_t rhs_used = used.at(rhs).used;
+          auto evaluate = [&](uint64_t a, uint64_t b) {
+            return (ConcreteBits::constant(type, a).*operation.evaluate)(ConcreteBits::constant(type, b));
+          };
+          auto check = [&](uint64_t a, uint64_t b, uint64_t extra_a, uint64_t extra_b) {
+            ConcreteBits original = evaluate(a, b);
+            if (original.is_poison) return;
+            uint64_t changed_a = ((a & lhs_used) | (extra_a & ~lhs_used)) & mask;
+            uint64_t changed_b = ((b & rhs_used) | (extra_b & ~rhs_used)) & mask;
+            ConcreteBits changed = evaluate(changed_a, changed_b);
+            if (changed.is_poison || ((original.value ^ changed.value) & demanded) != 0) {
+              std::cerr << operation.name << " " << type_name << " demanded=" << demanded
+                        << " operand masks=" << lhs_used << "," << rhs_used
+                        << " original=" << a << "," << b
+                        << " changed=" << changed_a << "," << changed_b << "\n";
+            }
+            unittest_assert(!changed.is_poison);
+            unittest_assert(((original.value ^ changed.value) & demanded) == 0);
+          };
+          std::vector<uint64_t> boundaries = {0, 1, 2, 7, width - 1, width, sign, sign + 1, mask};
+          for (uint64_t a : boundaries) {
+            for (uint64_t b : boundaries) {
+              for (uint64_t extra_a : boundaries) {
+                for (uint64_t extra_b : boundaries) {
+                  check(a, b, extra_a, extra_b);
+                }
+              }
+            }
+          }
+          for (size_t sample = 0; sample < 1000; sample++) {
+            check(rand64() & mask, rand64() & mask, rand64(), rand64());
+          }
+        }
+      });
+    }
+  }
+
   suite.test("comparison_result_types").run([]() {
     for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
       for (Bits a : {Bits(type, 0, 0), Bits(type, 1, 0), Bits::constant(type, 0)}) {

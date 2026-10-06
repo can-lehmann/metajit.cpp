@@ -4095,6 +4095,14 @@ namespace metajit {
             for (Value* arg : inst->args()) {
               use(arg, used);
             }
+          } else if (dynamic_cast<ShlInst*>(inst) ||
+                     dynamic_cast<DivUInst*>(inst) ||
+                     dynamic_cast<ModUInst*>(inst)) {
+            use(inst->arg(0), _values[inst].used ? type_mask(inst->type()) : 0);
+            use_all(inst->arg(1));
+          } else if (dynamic_cast<DivSInst*>(inst) ||
+                     dynamic_cast<ModSInst*>(inst)) {
+            use_all_args(inst);
           } else if (dynamic_cast<ShrUInst*>(inst) ||
                      dynamic_cast<ShrSInst*>(inst)) {
             if (dynmatch(Const, const_b, inst->arg(1))) {
