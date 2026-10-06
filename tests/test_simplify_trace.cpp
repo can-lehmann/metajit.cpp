@@ -21,7 +21,8 @@ using namespace metajit::test;
 
 void check_trace_simplify(const std::string& input,
                           std::initializer_list<size_t> chain_blocks,
-                          const std::string& expected) {
+                          const std::string& expected,
+                          bool check_execution = true) {
   Context context;
   Allocator allocator;
   std::istringstream stream(input);
@@ -60,13 +61,61 @@ void check_trace_simplify(const std::string& input,
   unittest_assert(ss.str() == expected);
 
   unittest_assert(!section->verify(std::cout));
-  check_opt_differential(&original, section.get(), data);
-  check_codegen_differential("", section.get(), data);
+  if (check_execution) {
+    check_opt_differential(&original, section.get(), data);
+    check_codegen_differential("", section.get(), data);
+  }
 }
 
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
   metajit::LLVMCodeGen::initilize_llvm_jit();
+
+  suite.test("symbolic_pointer_guard").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Eq %0, @target:Ptr
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  %3 = Eq %0, @other:Ptr
+  Store %0, %3, aliasing=0, offset=0
+  Exit
+b2:
+  Exit
+}
+)";
+    check_trace_simplify(ir, {0, 1}, ir, false);
+  });
+
+  suite.test("freeze_poison").run([]() {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* entry = builder.build_block({Type::Ptr});
+    builder.move_to_end(entry);
+    builder.build_freeze(builder.build_poison(Type::Bool));
+    builder.build_store(entry->arg(0), builder.build_const(Type::Bool, 0), AliasingGroup(0), 0);
+    builder.build_exit();
+    unittest_assert(!section.verify(std::cout));
+    Section original(context, allocator);
+    Clone::run(&section, &original);
+    Chain chain({entry});
+    SimplifyTrace::run(&section, &chain);
+    unittest_assert(!section.verify(std::cout));
+    std::stringstream result;
+    section.write(result);
+    unittest_assert(result.str() == R"(section {
+b0(%0: Ptr):
+  %1 = Freeze poison:Bool
+  Store %0, 0:Bool, aliasing=0, offset=0
+  Exit
+}
+)");
+    TestData data;
+    data.alloc_output(Type::Bool);
+    check_opt_differential(&original, &section, data);
+  });
 
   suite.test("const_prop_branch").run([]() {
     check_trace_simplify(R"(section {
