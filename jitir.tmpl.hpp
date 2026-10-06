@@ -4407,6 +4407,18 @@ private:
     _substs[inst] = value;
   }
 
+  void _substitute_args(Inst* inst) {
+    for (size_t arg_index = 0; arg_index < inst->arg_count(); arg_index++) {
+      Value* argument = inst->arg(arg_index);
+      if (argument->is_named()) {
+        Value* replacement = _substs[(NamedValue*) argument];
+        if (replacement) {
+          inst->set_arg(arg_index, replacement);
+        }
+      }
+    }
+  }
+
 public:
 
   SimplifyTrace(metajit::Section* section, metajit::Chain* chain):
@@ -4430,7 +4442,7 @@ public:
     for (size_t index = 0; index < chain->size(); index++) {
       Block* block = chain->at(index);
       for (Inst* inst : *block) {
-        inst->substitute_args(_substs);
+        _substitute_args(inst);
         if (inst->has_side_effect() ||
             inst->is_terminator() ||
             inst->type() == Type::Void ||

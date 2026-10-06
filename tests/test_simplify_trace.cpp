@@ -1089,5 +1089,35 @@ b2:
     check_trace_simplify(ir, {0, 1}, ir);
   });
 
+  suite.test("substitute_loop_arguments_after_guard").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  Jump %1, %1, block=b1
+b1(%3: Int8, %4: Int8):
+  %5 = Eq %3, 42:Int8
+  Branch %5, true_block=b2, false_block=b3
+b2:
+  Store %0, %3, aliasing=0, offset=1
+  Jump 0:Int8, %3, block=b1
+b3:
+  Exit
+}
+)", {1, 2}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  Jump %1, %1, block=b1
+b1(%3: Int8, %4: Int8):
+  %5 = Eq %3, 42:Int8
+  Branch %5, true_block=b2, false_block=b3
+b2:
+  Store %0, 42:Int8, aliasing=0, offset=1
+  Jump 0:Int8, 42:Int8, block=b1
+b3:
+  Exit
+}
+)");
+  });
+
   return suite.finish();
 }
