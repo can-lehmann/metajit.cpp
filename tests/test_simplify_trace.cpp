@@ -1655,6 +1655,110 @@ b0(%0: Ptr):
     check_trace_simplify(ir, {0}, ir);
   });
 
+  suite.test("contradictory_true_guard_stops_before_shift").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  %2 = Eq %1, 64:Int64
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  %4 = Eq %1, 0:Int64
+  Branch %4, true_block=b3, false_block=b2
+b2:
+  Exit
+b3:
+  %7 = ShrU 1:Int64, %1
+  Store %0, %7, aliasing=0, offset=8
+  Exit
+}
+)", {0, 1, 3}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  %2 = Eq %1, 64:Int64
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  %4 = Eq 64:Int64, 0:Int64
+  Branch 0:Bool, true_block=b3, false_block=b2
+b2:
+  Exit
+b3:
+  %7 = ShrU 1:Int64, %1
+  Store %0, %7, aliasing=0, offset=8
+  Exit
+}
+)");
+  });
+
+  suite.test("contradictory_false_guard_stops_before_division").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  %2 = Eq %1, 0:Int64
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  %4 = Eq %1, 0:Int64
+  Branch %4, true_block=b2, false_block=b3
+b2:
+  Exit
+b3:
+  %7 = DivU 1:Int64, %1
+  Store %0, %7, aliasing=0, offset=8
+  Exit
+}
+)", {0, 1, 3}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  %2 = Eq %1, 0:Int64
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  %4 = Eq 0:Int64, 0:Int64
+  Branch 1:Bool, true_block=b2, false_block=b3
+b2:
+  Exit
+b3:
+  %7 = DivU 1:Int64, %1
+  Store %0, %7, aliasing=0, offset=8
+  Exit
+}
+)");
+  });
+
+  suite.test("contradictory_pending_facts").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Xor %1, 1:Bool
+  %3 = And %1, %2
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = Or %1, 0:Bool
+  Store %0, %5, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)";
+    check_trace_simplify(ir, {0, 1}, ir);
+  });
+
+  suite.test("contradiction_while_enqueuing").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Xor %1, 1:Bool
+  %3 = And %2, %1
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = Or %1, 0:Bool
+  Store %0, %5, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)";
+    check_trace_simplify(ir, {0, 1}, ir);
+  });
+
   suite.test("deep_backwards_propagation").run([]() {
     Context context;
     Allocator allocator;

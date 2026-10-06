@@ -4405,6 +4405,7 @@ private:
     Bits bits;
   };
   std::vector<PendingFact> _pending;
+  bool _contradiction = false;
 
   void _add_subst(Inst* inst, Value* value) {
     _substs[inst] = value;
@@ -4547,9 +4548,13 @@ public:
       Block* next = chain->at(index + 1);
       if (dynmatch(BranchInst, branch, block->terminator())) {
         if (branch->true_block() == next) {
-          propagate_backwards(branch->cond(), Bits::constant(true));
+          if (!propagate_backwards(branch->cond(), Bits::constant(true))) {
+            return;
+          }
         } else if (branch->false_block() == next) {
-          propagate_backwards(branch->cond(), Bits::constant(false));
+          if (!propagate_backwards(branch->cond(), Bits::constant(false))) {
+            return;
+          }
         }
       }
     }
@@ -4566,30 +4571,46 @@ public:
     }
   }
 
-  void propagate_backwards(Value* value, const Bits& newinfo) {
+  bool propagate_backwards(Value* value, const Bits& newinfo) {
     _enqueue(value, newinfo);
-    while (!_pending.empty()) {
+    while (!_contradiction && !_pending.empty()) {
       PendingFact fact = _pending.back();
       _pending.pop_back();
       _propagate_one(fact.value, fact.bits);
     }
+    return !_contradiction;
   }
 
 private:
   void _enqueue(Value* value, const Bits& bits) {
+    if (_contradiction) {
+      return;
+    }
     Bits old_bits = Bits::at(_values, value);
     auto refined = old_bits.intersect(bits);
-    if (!refined.has_value() || refined.value() == old_bits) {
+    if (!refined.has_value()) {
+      _contradiction = true;
+      return;
+    }
+    if (refined.value() == old_bits) {
       return;
     }
     _pending.push_back({value, bits});
+  }
+
+  void _enqueue(Value* value, const std::optional<Bits>& bits) {
+    if (bits.has_value()) {
+      _enqueue(value, bits.value());
+    } else {
+      _contradiction = true;
+    }
   }
 
   void _propagate_one(Value* value, const Bits& newinfo) {
     Bits old_bits = Bits::at(_values, value);
     auto maybe_bits = old_bits.intersect(newinfo);
     if (!maybe_bits.has_value()) {
-      // trace guards contradict each other, can happen when fuzzing
+      _contradiction = true;
       return;
     }
     Bits bits = maybe_bits.value();
@@ -4612,10 +4633,8 @@ private:
         Bits arg0 = Bits::at(_values, eq->arg(0));
         Bits arg1 = Bits::at(_values, eq->arg(1));
         auto common = arg0.intersect(arg1);
-        if (common.has_value()) {
-          _enqueue(eq->arg(0), common.value());
-          _enqueue(eq->arg(1), common.value());
-        }
+        _enqueue(eq->arg(0), common);
+        _enqueue(eq->arg(1), common);
       } else if (bits.is_const() && eq->arg(0)->type() == Type::Bool) {
         Bits arg0 = Bits::at(_values, eq->arg(0));
         Bits arg1 = Bits::at(_values, eq->arg(1));
@@ -4628,22 +4647,14 @@ private:
       }
     } else if (dynmatch(AndInst, andinst, value)) {
       auto arg0 = bits.and_backwards(Bits::at(_values, andinst->arg(1)));
-      if (arg0.has_value()) {
-        _enqueue(andinst->arg(0), arg0.value());
-      }
+      _enqueue(andinst->arg(0), arg0);
       auto arg1 = bits.and_backwards(Bits::at(_values, andinst->arg(0)));
-      if (arg1.has_value()) {
-        _enqueue(andinst->arg(1), arg1.value());
-      }
+      _enqueue(andinst->arg(1), arg1);
     } else if (dynmatch(OrInst, orinst, value)) {
       auto arg0 = bits.or_backwards(Bits::at(_values, orinst->arg(1)));
-      if (arg0.has_value()) {
-        _enqueue(orinst->arg(0), arg0.value());
-      }
+      _enqueue(orinst->arg(0), arg0);
       auto arg1 = bits.or_backwards(Bits::at(_values, orinst->arg(0)));
-      if (arg1.has_value()) {
-        _enqueue(orinst->arg(1), arg1.value());
-      }
+      _enqueue(orinst->arg(1), arg1);
     } else if (dynmatch(SubInst, sub, value)) {
       Bits arg0 = bits + Bits::at(_values, sub->arg(1));
       _enqueue(sub->arg(0), arg0);
@@ -4664,17 +4675,13 @@ private:
       Bits arg1 = Bits::at(_values, shl->arg(1));
       if (arg1.is_const()) {
         auto arg0 = bits.shl_backwards(arg1.value);
-        if (arg0.has_value()) {
-          _enqueue(shl->arg(0), arg0.value());
-        }
+        _enqueue(shl->arg(0), arg0);
       }
     } else if (dynmatch(ShrUInst, shr, value)) {
       Bits arg1 = Bits::at(_values, shr->arg(1));
       if (arg1.is_const()) {
         auto arg0 = bits.shr_u_backwards(arg1.value);
-        if (arg0.has_value()) {
-          _enqueue(shr->arg(0), arg0.value());
-        }
+        _enqueue(shr->arg(0), arg0);
       }
     } else if (dynmatch(SelectInst, select, value)) {
       Bits cond = Bits::at(_values, select->cond());
