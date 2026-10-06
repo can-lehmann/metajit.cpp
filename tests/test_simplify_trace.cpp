@@ -1287,5 +1287,177 @@ b4:
 )");
   });
 
+  suite.test("backwards_eq_false_bool_0_right").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Eq %1, 0:Bool
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+}
+)", {0, 2}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Eq %1, 0:Bool
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Store %0, 1:Bool, aliasing=0, offset=1
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_eq_false_bool_0_left").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Eq 0:Bool, %1
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+}
+)", {0, 2}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Eq 0:Bool, %1
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Store %0, 1:Bool, aliasing=0, offset=1
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_eq_false_bool_1_right").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Eq %1, 1:Bool
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+}
+)", {0, 2}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Eq %1, 1:Bool
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Store %0, 0:Bool, aliasing=0, offset=1
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_eq_false_bool_1_left").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Eq 1:Bool, %1
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+}
+)", {0, 2}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Eq 1:Bool, %1
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Store %0, 0:Bool, aliasing=0, offset=1
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_eq_false_bool_guard_known_operand").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  %3 = Eq %1, %2
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Branch %3, true_block=b2, false_block=b3
+b2:
+  Exit
+b3:
+  Store %0, %1, aliasing=0, offset=2
+  Store %0, %2, aliasing=0, offset=3
+  Exit
+}
+)", {0, 1, 3}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  %3 = Eq %1, %2
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Branch %3, true_block=b2, false_block=b3
+b2:
+  Exit
+b3:
+  Store %0, 1:Bool, aliasing=0, offset=2
+  Store %0, 0:Bool, aliasing=0, offset=3
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_eq_false_bool_unknown_operands").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  %3 = Eq %1, %2
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Store %0, %1, aliasing=0, offset=2
+  Store %0, %2, aliasing=0, offset=3
+  Exit
+}
+)";
+    check_trace_simplify(ir, {0, 2}, ir);
+  });
+
+  suite.test("backwards_eq_false_integer_zero").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Eq %1, 0:Int8
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+}
+)";
+    check_trace_simplify(ir, {0, 2}, ir);
+  });
+
   return suite.finish();
 }

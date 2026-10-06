@@ -4552,6 +4552,15 @@ public:
           propagate_backwards(eq->arg(0), common.value());
           propagate_backwards(eq->arg(1), common.value());
         }
+      } else if (bits.is_const() && eq->arg(0)->type() == Type::Bool) {
+        Bits arg0 = Bits::at(_values, eq->arg(0));
+        Bits arg1 = Bits::at(_values, eq->arg(1));
+        if (arg0.is_const()) {
+          propagate_backwards(eq->arg(1), Bits::constant(!arg0.value));
+        }
+        if (arg1.is_const()) {
+          propagate_backwards(eq->arg(0), Bits::constant(!arg1.value));
+        }
       }
     } else if (dynmatch(AndInst, andinst, value)) {
       auto arg0 = bits.and_backwards(Bits::at(_values, andinst->arg(1)));
