@@ -238,6 +238,31 @@ b0(%0: Ptr):
 )", builder.section());
   });
 
+  for (bool nested_true : {false, true}) {
+    suite.diff_test(nested_true ? "fold_select_nested_true" : "fold_select_nested_false").run([nested_true](Builder& builder, TestData& data) {
+      Value* cond = data.input(Type::Bool);
+      Value* zero = builder.build_const(Type::Int8, 0);
+      Value* one = builder.build_const(Type::Int8, 1);
+      Value* two = builder.build_const(Type::Int8, 2);
+      Value* four = builder.build_const(Type::Int8, 4);
+      Value* inner = nested_true
+        ? builder.build_select(cond, four, one)
+        : builder.build_select(cond, one, four);
+      Value* middle = nested_true
+        ? builder.build_select(cond, inner, two)
+        : builder.build_select(cond, two, inner);
+      Value* result = nested_true
+        ? builder.fold_select(cond, middle, zero)
+        : builder.fold_select(cond, zero, middle);
+      auto* select = dynamic_cast<SelectInst*>(result);
+      unittest_assert(select);
+      unittest_assert(select->cond() == cond);
+      unittest_assert(select->arg(1) == (nested_true ? four : zero));
+      unittest_assert(select->arg(2) == (nested_true ? zero : four));
+      data.output(result);
+    });
+  }
+
   suite.diff_test("select_and_knownbits").run([](Builder& builder, TestData& data) {
 
     Value* cond = data.input(Type::Bool);
@@ -276,6 +301,29 @@ b0(%0: Ptr):
   Store %0, %3, aliasing=0, offset=2
 }
 )", builder.section());
+  });
+
+  suite.diff_test("fold_and_nested_constants").run([](Builder& builder, TestData& data) {
+    Value* input = data.input(Type::Int8);
+    Value* inner = builder.build_and(input, builder.build_const(Type::Int8, 0xf0));
+    for (uint64_t mask : {0x3c, 0x0f}) {
+      Value* constant = builder.build_const(Type::Int8, mask);
+      for (bool swapped : {false, true}) {
+        Value* result = swapped
+          ? builder.fold_and(constant, inner)
+          : builder.fold_and(inner, constant);
+        if (mask == 0x0f) {
+          auto* zero = dynamic_cast<Const*>(result);
+          unittest_assert(zero && zero->value() == 0);
+        } else {
+          auto* and_inst = dynamic_cast<AndInst*>(result);
+          unittest_assert(and_inst && and_inst->arg(0) == input);
+          auto* folded_mask = dynamic_cast<Const*>(and_inst->arg(1));
+          unittest_assert(folded_mask && folded_mask->value() == 0x30);
+        }
+        data.output(result);
+      }
+    }
   });
 
   suite.diff_test("or_idempotent").run([](Builder& builder, TestData& data) {
