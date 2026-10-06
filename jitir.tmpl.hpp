@@ -4437,15 +4437,27 @@ private:
     }
   }
 
+  Value* _resolve_subst(Value* value) {
+    Value* replacement = value;
+    while (replacement->is_named()) {
+      Value* next = _substs[(NamedValue*) replacement];
+      if (!next) {
+        break;
+      }
+      replacement = next;
+    }
+    while (value != replacement) {
+      Value*& next = _substs[(NamedValue*) value];
+      Value* old_next = next;
+      next = replacement;
+      value = old_next;
+    }
+    return replacement;
+  }
+
   void _substitute_args(Inst* inst) {
     for (size_t arg_index = 0; arg_index < inst->arg_count(); arg_index++) {
-      Value* argument = inst->arg(arg_index);
-      if (argument->is_named()) {
-        Value* replacement = _substs[(NamedValue*) argument];
-        if (replacement) {
-          inst->set_arg(arg_index, replacement);
-        }
-      }
+      inst->set_arg(arg_index, _resolve_subst(inst->arg(arg_index)));
     }
   }
 

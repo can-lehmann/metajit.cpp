@@ -1119,6 +1119,38 @@ b3:
 )");
   });
 
+  suite.test("substitute_alias_after_guard").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Select 1:Bool, %1, 0:Int8
+  %3 = Eq %1, 42:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = Add %2, 1:Int8
+  Store %0, %5, aliasing=0, offset=1
+  Store %0, %2, aliasing=0, offset=2
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Select 1:Bool, %1, 0:Int8
+  %3 = Eq %1, 42:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = Add 42:Int8, 1:Int8
+  Store %0, 43:Int8, aliasing=0, offset=1
+  Store %0, 42:Int8, aliasing=0, offset=2
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
   suite.test("backwards_select_known_true").run([]() {
     check_trace_simplify(R"(section {
 b0(%0: Ptr):
