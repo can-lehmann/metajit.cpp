@@ -3283,7 +3283,7 @@ namespace metajit {
       }
 
       std::optional<Bits> shl_backwards(size_t shift) const {
-        uint64_t valid_mask = (1 << shift) - 1;
+        uint64_t valid_mask = (uint64_t(1) << shift) - 1;
         if (value & valid_mask) {
           return {};
         }
