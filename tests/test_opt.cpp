@@ -64,6 +64,32 @@ void check_block_order(const std::string& expected, Section* section, BlockOrder
   unittest_assert(ss.str() == expected);
 }
 
+void test_and_or_idempotence_simplify(Builder& builder, TestData& data) {
+  Value* input = data.input(Type::Int32);
+  Value* value = data.input(Type::Int32);
+  Value* other = data.input(Type::Int32);
+  Value* masked = builder.fold_and(input, builder.build_const(Type::Int32, 1));
+  Value* condition = builder.fold_eq(masked, builder.build_const(Type::Int32, 2));
+  Value* selected = builder.fold_select(condition, other, value);
+  Value* and_result = builder.fold_and(value, selected);
+  Value* or_result = builder.fold_or(value, selected);
+  unittest_assert(selected != value); // check that folding couldn't do the optimization
+  unittest_assert(and_result != value);
+  unittest_assert(or_result != value);
+  data.output(and_result);
+  StoreInst* and_output = dynamic_cast<StoreInst*>(*builder.block()->rbegin());
+  unittest_assert(and_output);
+  data.output(or_result);
+  StoreInst* or_output = dynamic_cast<StoreInst*>(*builder.block()->rbegin());
+  unittest_assert(or_output);
+  builder.build_exit();
+
+  Simplify::run(builder.section(), 1);
+
+  unittest_assert(and_output->arg(1) == value);
+  unittest_assert(or_output->arg(1) == value);
+}
+
 void test_natural_order_deep_chain() {
   Context context;
   Allocator allocator;
@@ -378,6 +404,8 @@ b0(%0: Ptr):
 }
 )", builder.section());
   });
+
+  suite.diff_test("simplify removes idempotent And Or ops").run(test_and_or_idempotence_simplify);
 
   // tests for SimplifyCFG
   suite.diff_test("simplifycfg unreachable blocks").run([](Builder& builder, TestData& data) {
