@@ -222,15 +222,21 @@ namespace metajit {
   };
 }
 
+namespace metajit {
+  inline const char* to_string(Type type) {
+    static const char* names[] = {
+      "Void",
+      "Bool",
+      "Int8", "Int16", "Int32", "Int64",
+      "Float32", "Float64",
+      "Ptr"
+    };
+    return names[(size_t) type];
+  }
+}
+
 std::ostream& operator<<(std::ostream& stream, metajit::Type type) {
-  static const char* names[] = {
-    "Void",
-    "Bool",
-    "Int8", "Int16", "Int32", "Int64",
-    "Float32", "Float64",
-    "Ptr"
-  };
-  stream << names[(size_t) type];
+  stream << metajit::to_string(type);
   return stream;
 }
 
@@ -5278,24 +5284,28 @@ namespace metajit {
 
     // Natural ordering: topological sort ignoring backedges
     void dfs_natural(Block* block) {
-      if (_visited.find(block) != _visited.end()) {
-        return;
-      }
+      struct Frame {
+        Block* block;
+        std::vector<Block*> successors;
+      };
+      std::vector<Frame> stack;
       _visited.insert(block);
-
-      // visit successors in reverse order to maintain stable block numbering
-      std::vector<Block*> succs = block->successors();
-      for (auto it = succs.rbegin(); it != succs.rend(); ++it) {
-        Block* succ = *it;
-        // a backedge is where the successor dominates the source block
-        if (!_dt.dominates(succ, block)) {
-          dfs_natural(succ);
+      stack.push_back({block, block->successors()});
+      while (!stack.empty()) {
+        Frame& frame = stack.back();
+        if (frame.successors.empty()) {
+          _ordered.push_back(frame.block);
+          stack.pop_back();
         } else {
-          _seen_loop = true;
+          Block* succ = frame.successors.back();
+          frame.successors.pop_back();
+          if (_visited.insert(succ).second) {
+            stack.push_back({succ, succ->successors()});
+          } else if (_dt.dominates(succ, frame.block)) {
+            _seen_loop = true;
+          }
         }
       }
-
-      _ordered.push_back(block);
     }
 
     void order_natural() {

@@ -90,10 +90,47 @@ void test_and_or_idempotence_simplify(Builder& builder, TestData& data) {
   unittest_assert(or_output->arg(1) == value);
 }
 
+void test_natural_order_deep_chain() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  std::vector<Block*> blocks;
+  const size_t block_count = 100000;
+  blocks.reserve(block_count);
+  for (size_t index = 0; index < block_count; index++) {
+    blocks.push_back(builder.build_block());
+  }
+  for (size_t index = 0; index + 1 < block_count; index++) {
+    builder.move_to_end(blocks[index]);
+    builder.build_jump(blocks[index + 1]);
+  }
+  builder.move_to_end(blocks.back());
+  builder.build_exit();
+  for (size_t index = block_count; index-- > 1;) {
+    section.remove(blocks[index]);
+    section.add(blocks[index]);
+  }
+  section.set_ordering(BlockOrdering::None);
+
+  section.order_blocks(BlockOrdering::Natural);
+
+  size_t index = 0;
+  for (Block* block : section) {
+    unittest_assert(index < block_count);
+    unittest_assert(block == blocks[index]);
+    index++;
+  }
+  unittest_assert(index == block_count);
+  unittest_assert(section.ordering() == BlockOrdering::Topological);
+}
+
 int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
   DiffTestSuite suite("tests/output/test_opt", argc, argv);
+
+  suite.test("natural block order deep chain").run(test_natural_order_deep_chain);
 
   suite.diff_test("resize_resize_to_mask").run([](Builder& builder, TestData& data) {
 

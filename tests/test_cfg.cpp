@@ -24,6 +24,37 @@ int main(int argc, char** argv) {
 
   DiffTestSuite suite("tests/output/test_cfg", argc, argv);
 
+  for (Type type : {Type::Float32, Type::Float64, Type::Int32, Type::Int64}) {
+    suite.test(std::string("entry_argument_") + to_string(type)).run([type]() {
+      for (auto mode : {X86CodeGen::Mode::JIT, X86CodeGen::Mode::AOT}) {
+        Context context;
+        Allocator allocator;
+        Section* section = new Section(context, allocator);
+        Builder builder(section);
+        Block* entry = builder.build_block({type, Type::Ptr});
+        builder.move_to_end(entry);
+        builder.build_store(entry->arg(1), entry->arg(0), AliasingGroup(0), 0);
+        builder.build_exit();
+        section->autoname();
+        section->set_ordering(BlockOrdering::Natural);
+
+        uint64_t bits = 0x123456789abcdef0;
+        uint64_t result = 0;
+        if (is_float(type)) {
+          X86CodeGen codegen(section, {Reg::X86_R12(), Reg::X86_R13()}, mode);
+          using Func = void(* [[clang::preserve_none]])(uint64_t, uint64_t*);
+          ((Func) codegen.deploy())(bits, &result);
+        } else {
+          X86CodeGen codegen(section, {Reg::X86_XMM(0), Reg::X86_R12()}, mode);
+          using Func = void(* [[clang::preserve_none]])(double, uint64_t*);
+          ((Func) codegen.deploy())(bit_cast<double>(bits), &result);
+        }
+        unittest_assert(result == (bits & type_mask(type)));
+        delete section;
+      }
+    });
+  }
+
   suite.diff_test("entry_argument_spilled_before_first_use").aot(false).run([](Builder& builder, TestData& data) {
     std::vector<Value*> values;
     for (size_t index = 0; index < 32; index++) {
@@ -38,6 +69,44 @@ int main(int argc, char** argv) {
     }
     data.output(input);
   });
+
+  for (Type type : {Type::Float32, Type::Float64}) {
+    suite.diff_test(std::string("float_block_argument_") + to_string(type)).run([type](Builder& builder, TestData& data) {
+      Block* a = builder.build_block();
+      Block* b = builder.build_block();
+      Block* cont = builder.build_block({type});
+      Value* cond = data.input(Type::Bool);
+      Value* value_a = data.input(type);
+      Value* value_b = data.input(type);
+      builder.build_branch(cond, a, b);
+      builder.move_to_end(a);
+      builder.build_jump(cont, {value_a});
+      builder.move_to_end(b);
+      builder.build_jump(cont, {value_b});
+      builder.move_to_end(cont);
+      data.output(cont->arg(0));
+    });
+
+    suite.diff_test(std::string("float_swap_loop_") + to_string(type)).run([type](Builder& builder, TestData& data) {
+      Block* header = builder.build_block({Type::Bool, type, type});
+      Block* body = builder.build_block();
+      Block* end = builder.build_block();
+      Value* a = data.input(type);
+      Value* b = data.input(type);
+      Value* cond = data.input(Type::Bool);
+      builder.build_jump(header, {cond, a, b});
+      builder.move_to_end(header);
+      builder.build_branch(header->arg(0), body, end);
+      builder.move_to_end(body);
+      builder.build_jump(header, {
+        builder.build_const(Type::Bool, false),
+        header->arg(2), header->arg(1)
+      });
+      builder.move_to_end(end);
+      data.output(header->arg(1));
+      data.output(header->arg(2));
+    });
+  }
 
   suite.diff_test("branch").run([](Builder& builder, TestData& data) {
     Block* a = builder.build_block();
@@ -59,6 +128,71 @@ int main(int argc, char** argv) {
     builder.move_to_end(cont);
     data.output(cont->arg(0));
 
+  });
+
+  suite.diff_test("critical_edge").aot(false).run([](Builder& builder, TestData& data) {
+    Block* a = builder.build_block();
+    Block* b = builder.build_block();
+    Block* other = builder.build_block();
+    Block* merge = builder.build_block();
+
+    Value* first_cond = data.input(Type::Bool);
+    Value* second_cond = data.input(Type::Bool);
+    std::vector<Value*> values;
+    for (size_t index = 0; index < 24; index++) {
+      values.push_back(data.input(Type::Int64));
+    }
+    builder.build_branch(first_cond, a, b);
+
+    builder.move_to_end(a);
+    builder.build_jump(merge);
+
+    builder.move_to_end(b);
+    for (Value* value : values) {
+      data.output(builder.build_add(value, builder.build_const(Type::Int64, 1)));
+    }
+    builder.build_branch(second_cond, merge, other);
+
+    builder.move_to_end(other);
+    data.output(builder.build_const(Type::Int64, 42));
+    builder.build_jump(merge);
+
+    builder.move_to_end(merge);
+    for (Value* value : values) {
+      data.output(value);
+    }
+  });
+
+  suite.diff_test("critical_backedge").aot(false).run([](Builder& builder, TestData& data) {
+    Block* header = builder.build_block();
+    Block* body = builder.build_block();
+    Block* end = builder.build_block();
+
+    Value* count = data.input(RandomRange(Type::Int64, 1, 8));
+    Value* counter = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
+    builder.build_store(counter, count, AliasingGroup(0), 0);
+    std::vector<Value*> values;
+    for (size_t index = 0; index < 24; index++) {
+      values.push_back(data.input(Type::Int64));
+    }
+    builder.build_jump(header);
+
+    builder.move_to_end(header);
+    Value* current = builder.build_load(counter, Type::Int64, LoadFlags::None, AliasingGroup(0), 0);
+    builder.build_jump(body);
+
+    builder.move_to_end(body);
+    Value* next = builder.build_sub(current, builder.build_const(Type::Int64, 1));
+    builder.build_store(counter, next, AliasingGroup(0), 0);
+    for (Value* value : values) {
+      data.output(builder.build_add(value, next));
+    }
+    builder.build_branch(builder.build_lt_u(builder.build_const(Type::Int64, 0), next), header, end);
+
+    builder.move_to_end(end);
+    for (Value* value : values) {
+      data.output(value);
+    }
   });
 
   suite.diff_test("sum_to").run([](Builder& builder, TestData& data) {
