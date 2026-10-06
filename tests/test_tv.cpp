@@ -172,6 +172,82 @@ namespace metajit {
 using namespace metajit;
 using namespace metajit::test;
 
+void test_signed_divmod_poison(TVTestSuite& suite) {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    unsigned width = type_width(type);
+    uint64_t minimum = uint64_t(1) << (width - 1);
+    uint64_t minus_one = type_mask(type);
+    for (bool remainder : {false, true}) {
+      std::string prefix = std::string("signed_divmod_") + (remainder ? "mod_" : "div_") + std::to_string(width);
+      auto build = [=](Builder& builder, Value* a, Value* b) -> Value* {
+        return remainder ? (Value*) builder.build_mod_s(a, b) : (Value*) builder.build_div_s(a, b);
+      };
+      suite.tv_test(prefix + "_symbolic").run_valuestate({type, type},
+        [=](Builder& builder) {
+          return build(builder, builder.entry_arg(0), builder.entry_arg(1));
+        }, [=](z3::context& context, std::vector<tv::ValueState> args) {
+          z3::expr a = args[0].value();
+          z3::expr b = args[1].value();
+          tv::ValueState result(type, remainder ? z3::srem(a, b) : a / b);
+          result.set_poison(b == context.bv_val(0, width) ||
+            (a == context.bv_val(minimum, width) && b == context.bv_val(minus_one, width)));
+          return result;
+        });
+      suite.tv_test(prefix + "_zero_divisor").run_valuestate({type},
+        [=](Builder& builder) {
+          return build(builder, builder.entry_arg(0), builder.build_const(type, 0));
+        }, [=](z3::context& context, std::vector<tv::ValueState> args) {
+          z3::expr a = args[0].value();
+          z3::expr zero = context.bv_val(0, width);
+          tv::ValueState result(type, remainder ? z3::srem(a, zero) : a / zero);
+          result.set_poison(context.bool_val(true));
+          return result;
+        });
+      struct Boundary {
+        const char* name;
+        uint64_t a;
+        uint64_t b;
+        bool poison;
+        uint64_t quotient;
+        uint64_t rest;
+      };
+      for (Boundary boundary : {
+          Boundary{"overflow", minimum, minus_one, true, minimum, 0},
+          Boundary{"minimum_by_one", minimum, 1, false, minimum, 0},
+          Boundary{"adjacent", minimum + 1, minus_one, false, minimum - 1, 0},
+          Boundary{"seven_by_two", 7, 2, false, 3, 1}}) {
+        suite.tv_test(prefix + "_" + boundary.name).run_valuestate({},
+          [=](Builder& builder) {
+            return build(builder, builder.build_const(type, boundary.a), builder.build_const(type, boundary.b));
+          }, [=](z3::context& context, std::vector<tv::ValueState>) {
+            tv::ValueState result(type, context.bv_val(remainder ? boundary.rest : boundary.quotient, width));
+            result.set_poison(context.bool_val(boundary.poison));
+            return result;
+          });
+      }
+      suite.tv_test(prefix + "_unsigned_patterns").run_valuestate({},
+        [=](Builder& builder) -> Value* {
+          Value* a = builder.build_const(type, minimum);
+          Value* b = builder.build_const(type, minus_one);
+          return remainder ? (Value*) builder.build_mod_u(a, b) : (Value*) builder.build_div_u(a, b);
+        }, [=](z3::context& context, std::vector<tv::ValueState>) {
+          return tv::ValueState(type, context.bv_val(remainder ? minimum : uint64_t(0), width));
+        });
+      for (bool freeze : {false, true}) {
+        suite.tv_test(prefix + (freeze ? "_freeze_store" : "_store")).run_ub({Type::Ptr},
+          [=](Builder& builder) {
+            Value* result = build(builder, builder.build_const(type, minimum), builder.build_const(type, minus_one));
+            if (freeze) result = builder.build_freeze(result);
+            builder.build_store(builder.entry_arg(0), result, AliasingGroup(0), 0);
+            builder.build_exit();
+          }, [=](z3::context& context, std::vector<tv::ValueState>) {
+            return context.bool_val(!freeze);
+          });
+      }
+    }
+  }
+}
+
 void test_freeze_output_relationship(TVTestSuite& suite) {
   for (bool division : {false, true}) {
     std::string name = std::string("simplify_freeze_output_relationship_") +
@@ -354,7 +430,9 @@ int main(int argc, char** argv) {
     return builder.build_div_s(builder.entry_arg(0), builder.entry_arg(1));
   }, [](z3::context& context, std::vector<tv::ValueState> args) {
     tv::ValueState result(Type::Int32, args[0].value() / args[1].value());
-    result.set_poison(args[1].value() == context.bv_val(0, 32));
+    result.set_poison(args[1].value() == context.bv_val(0, 32) ||
+      (args[0].value() == context.bv_val(uint64_t(1) << 31, 32) &&
+       args[1].value() == context.bv_val(uint64_t(0xffffffff), 32)));
     return result;
   });
 
@@ -370,7 +448,9 @@ int main(int argc, char** argv) {
     return builder.build_mod_s(builder.entry_arg(0), builder.entry_arg(1));
   }, [](z3::context& context, std::vector<tv::ValueState> args) {
     tv::ValueState result(Type::Int32, z3::srem(args[0].value(), args[1].value()));
-    result.set_poison(args[1].value() == context.bv_val(0, 32));
+    result.set_poison(args[1].value() == context.bv_val(0, 32) ||
+      (args[0].value() == context.bv_val(uint64_t(1) << 31, 32) &&
+       args[1].value() == context.bv_val(uint64_t(0xffffffff), 32)));
     return result;
   });
 
@@ -542,6 +622,7 @@ int main(int argc, char** argv) {
     return result;
   });
 
+  test_signed_divmod_poison(suite);
   test_freeze_output_relationship(suite);
 
   return suite.finish();
