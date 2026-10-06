@@ -1623,5 +1623,34 @@ b0(%0: Ptr):
     check_trace_simplify(ir, {0}, ir);
   });
 
+  suite.test("deep_backwards_propagation").run([]() {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* entry = builder.build_block({Type::Ptr, Type::Int64});
+    builder.move_to_end(entry);
+    Value* value = entry->arg(1);
+    const uint64_t depth = 100000;
+    for (uint64_t index = 0; index < depth; index++) {
+      value = builder.build_add(value, builder.build_const(Type::Int64, 1));
+    }
+    Value* cond = builder.build_eq(value, builder.build_const(Type::Int64, 42));
+    Block* success = builder.build_block();
+    Block* failure = builder.build_block();
+    builder.build_branch(cond, success, failure);
+    builder.move_to_end(success);
+    StoreInst* store = builder.build_store(entry->arg(0), entry->arg(1), AliasingGroup(0), 0);
+    builder.build_exit();
+    builder.move_to_end(failure);
+    builder.build_exit();
+
+    Chain chain({entry, success});
+    SimplifyTrace::run(&section, &chain);
+    Const* result = dynamic_cast<Const*>(store->value());
+    unittest_assert(result);
+    unittest_assert(result->value() == uint64_t(42) - depth);
+  });
+
   return suite.finish();
 }
