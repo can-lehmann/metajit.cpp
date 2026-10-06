@@ -4522,8 +4522,12 @@ public:
     }
     if (dynmatch(EqInst, eq, value)) {
       if (bits.is_const() && bits.value == 1) {
-        if (dynmatch(Const, const_b, eq->arg(1))) {
-          return propagate_backwards(eq->arg(0), Bits::constant(const_b->type(), const_b->value()));
+        Bits arg0 = Bits::at(_values, eq->arg(0));
+        Bits arg1 = Bits::at(_values, eq->arg(1));
+        auto common = arg0.intersect(arg1);
+        if (common.has_value()) {
+          propagate_backwards(eq->arg(0), common.value());
+          propagate_backwards(eq->arg(1), common.value());
         }
       }
     } else if (dynmatch(AndInst, andinst, value)) {

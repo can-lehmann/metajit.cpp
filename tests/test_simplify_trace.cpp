@@ -828,5 +828,125 @@ b2:
 )");
   });
 
+  suite.test("backwards_eq_constant_left").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Eq 42:Int8, %1
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Eq 42:Int8, %1
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  Store %0, 42:Int8, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_eq_partial_intersection").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = And %1, 254:Int8
+  %4 = Or %2, 2:Int8
+  %5 = Eq %3, %4
+  Branch %5, true_block=b1, false_block=b2
+b1:
+  %7 = And %1, 2:Int8
+  %8 = And %2, 1:Int8
+  Store %0, %7, aliasing=0, offset=2
+  Store %0, %8, aliasing=0, offset=3
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = And %1, 254:Int8
+  %4 = Or %2, 2:Int8
+  %5 = Eq %3, %4
+  Branch %5, true_block=b1, false_block=b2
+b1:
+  %7 = And %1, 2:Int8
+  %8 = And %2, 1:Int8
+  Store %0, 2:Int8, aliasing=0, offset=2
+  Store %0, 0:Int8, aliasing=0, offset=3
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_eq_false_keeps_partial_bits").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = And %1, 254:Int8
+  %4 = Or %2, 2:Int8
+  %5 = Eq %3, %4
+  Branch %5, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  %8 = And %1, 2:Int8
+  %9 = And %2, 1:Int8
+  Store %0, %8, aliasing=0, offset=2
+  Store %0, %9, aliasing=0, offset=3
+  Exit
+}
+)";
+    check_trace_simplify(ir, {0, 2}, ir);
+  });
+
+  suite.test("backwards_eq_intersection_becomes_constant").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = And %1, 15:Int8
+  %4 = And %2, 240:Int8
+  %5 = Eq %3, %4
+  Branch %5, true_block=b1, false_block=b2
+b1:
+  Store %0, %3, aliasing=0, offset=2
+  Store %0, %4, aliasing=0, offset=3
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = And %1, 15:Int8
+  %4 = And %2, 240:Int8
+  %5 = Eq %3, %4
+  Branch %5, true_block=b1, false_block=b2
+b1:
+  Store %0, 0:Int8, aliasing=0, offset=2
+  Store %0, 0:Int8, aliasing=0, offset=3
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
   return suite.finish();
 }
