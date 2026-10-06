@@ -4399,11 +4399,6 @@ private:
   NameMap<Value*> _substs;
 
   void _add_subst(Inst* inst, Value* value) {
-    std::cout << "adding to substs: ";
-    inst->write(std::cout);
-    std::cout << " val ";
-    value->write_arg(std::cout);
-    std::cout << std::endl;
     _substs[inst] = value;
   }
 
@@ -4668,11 +4663,6 @@ public:
     } else if (dynmatch(ResizeXInst, resize, value)) {
       Value* arg = resize->arg(0);
       return propagate_backwards(arg, bits.resize_x(arg->type()));
-    } else if (dynmatch(Inst, inst, value)) {
-      std::cout << "unknown inst on backprop: ";
-      inst->write(std::cout);
-      std::cout << " "; bits.write(std::cout);
-      std::cout << std::endl;
     }
     return false;
   }
