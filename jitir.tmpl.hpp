@@ -3027,20 +3027,32 @@ namespace metajit {
         }
 
       static Bits div_u(Type type, uint64_t a, uint64_t b) {
+        if (b == 0) {
+          return Bits(type, 0, 0);
+        }
         return Bits::constant(type, a / b);
       }
 
       static Bits div_s(Type type, uint64_t a, uint64_t b) {
+        if (b == 0) {
+          return Bits(type, 0, 0);
+        }
         uint64_t res = 0;
         switch_type(/)
         return Bits::constant(type, res);
       }
 
       static Bits mod_u(Type type, uint64_t a, uint64_t b) {
+        if (b == 0) {
+          return Bits(type, 0, 0);
+        }
         return Bits::constant(type, a % b);
       }
 
       static Bits mod_s(Type type, uint64_t a, uint64_t b) {
+        if (b == 0) {
+          return Bits(type, 0, 0);
+        }
         uint64_t res = 0;
         switch_type(%)
         return Bits::constant(type, res);

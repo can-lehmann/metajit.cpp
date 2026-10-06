@@ -232,6 +232,22 @@ int main(int argc, char** argv) {
     }
   });
 
+  suite.test("division_and_remainder_by_zero_are_unknown").run([]() {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      Bits zero = Bits::constant(type, 0);
+      for (Bits numerator : {zero, Bits::constant(type, 7),
+                             Bits::constant(type, type_mask(type)), Bits(type, 0, 0)}) {
+        for (Bits result : {numerator.div_u(zero), numerator.div_s(zero),
+                            numerator.mod_u(zero), numerator.mod_s(zero)}) {
+          unittest_assert(result.type == type);
+          unittest_assert(result.mask == 0);
+          unittest_assert(result.value == 0);
+          unittest_assert(!result.is_const());
+        }
+      }
+    }
+  });
+
   test_add_example(suite);
   test_sub_example(suite);
   test_random(suite);
