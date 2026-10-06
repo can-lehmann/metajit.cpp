@@ -2321,6 +2321,12 @@ namespace metajit {
       assert(value->type() == Type::Bool);
       assert(!_guard_success);
 
+      if (dynmatch(Const, constant, value)) {
+        if (constant->value()) {
+          return false;
+        }
+      }
+
       bool reuse = _reusable_guard_failure && block() == _reusable_guard_success;
       if (reuse) {
         for (Inst* inst : *block()) {

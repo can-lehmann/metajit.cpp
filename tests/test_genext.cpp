@@ -23,6 +23,20 @@ void promoted_arithmetic_guard(Builder& builder, TraceTestData& data) {
   data.output(builder.build_add(promoted, builder.build_const(Type::Int32, 4)));
 }
 
+void folded_branch_guard(Builder& builder, TraceTestData& data) {
+  Value* x = data.input(RandomRange(Type::Int32));
+  Value* cond = builder.build_eq(x, x);
+  Block* true_block = builder.build_block();
+  Block* false_block = builder.build_block();
+  builder.build_branch(cond, true_block, false_block);
+  builder.move_to_end(true_block);
+  data.output(x);
+  builder.build_exit();
+  builder.move_to_end(false_block);
+  data.output(builder.build_const(Type::Int32, 123));
+  builder.build_exit();
+}
+
 void shared_promotion_exits(Builder& builder, TraceTestData& data) {
   Value* x = builder.build_promote(data.input(RandomRange(Type::Int32, 0, 3)));
   Value* y = data.input(RandomRange(Type::Int32, 0, 3));
@@ -80,6 +94,7 @@ int main(int argc, char** argv) {
     suite.set_record_replay(record_replay);
 
     suite.gen_ext_test("promoted_arithmetic_guard").run(promoted_arithmetic_guard);
+    suite.gen_ext_test("folded_branch_guard").guards(0, 0).run(folded_branch_guard);
     suite.gen_ext_test("shared_promotion_exits").guards(3, 1).run(shared_promotion_exits);
     suite.gen_ext_test("shared_branch_exit").guards(2, 1).run(shared_branch_exit);
     suite.gen_ext_test("shared_promotion_branch_exit").guards(2, 1).run(shared_promotion_branch_exit);
