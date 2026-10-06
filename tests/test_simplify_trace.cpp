@@ -1119,5 +1119,173 @@ b3:
 )");
   });
 
+  suite.test("backwards_select_known_true").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
+  %4 = Select %1, %2, %3
+  %5 = Eq %4, 42:Int8
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Branch %5, true_block=b3, false_block=b2
+b2:
+  Exit
+b3:
+  Store %0, %2, aliasing=0, offset=3
+  Store %0, %3, aliasing=0, offset=4
+  Exit
+}
+)", {0, 1, 3}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
+  %4 = Select %1, %2, %3
+  %5 = Eq %4, 42:Int8
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Branch %5, true_block=b3, false_block=b2
+b2:
+  Exit
+b3:
+  Store %0, 42:Int8, aliasing=0, offset=3
+  Store %0, %3, aliasing=0, offset=4
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_select_known_true_partial").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
+  %4 = Select %1, %2, %3
+  %5 = ResizeX %4, type=Bool
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Branch %5, true_block=b3, false_block=b2
+b2:
+  Exit
+b3:
+  %9 = And %2, 1:Int8
+  %10 = And %3, 1:Int8
+  Store %0, %9, aliasing=0, offset=3
+  Store %0, %10, aliasing=0, offset=4
+  Exit
+}
+)", {0, 1, 3}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
+  %4 = Select %1, %2, %3
+  %5 = ResizeX %4, type=Bool
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Branch %5, true_block=b3, false_block=b2
+b2:
+  Exit
+b3:
+  %9 = And %2, 1:Int8
+  %10 = And %3, 1:Int8
+  Store %0, 1:Int8, aliasing=0, offset=3
+  Store %0, %10, aliasing=0, offset=4
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_select_known_false").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
+  %4 = Select %1, %2, %3
+  %5 = Eq %4, 42:Int8
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Branch %5, true_block=b3, false_block=b4
+b3:
+  Store %0, %2, aliasing=0, offset=3
+  Store %0, %3, aliasing=0, offset=4
+  Exit
+b4:
+  Exit
+}
+)", {0, 2, 3}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
+  %4 = Select %1, %2, %3
+  %5 = Eq %4, 42:Int8
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Branch %5, true_block=b3, false_block=b4
+b3:
+  Store %0, %2, aliasing=0, offset=3
+  Store %0, 42:Int8, aliasing=0, offset=4
+  Exit
+b4:
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_select_known_false_partial").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
+  %4 = Select %1, %2, %3
+  %5 = ResizeX %4, type=Bool
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Branch %5, true_block=b3, false_block=b4
+b3:
+  %9 = And %2, 1:Int8
+  %10 = And %3, 1:Int8
+  Store %0, %9, aliasing=0, offset=3
+  Store %0, %10, aliasing=0, offset=4
+  Exit
+b4:
+  Exit
+}
+)", {0, 2, 3}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
+  %4 = Select %1, %2, %3
+  %5 = ResizeX %4, type=Bool
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Branch %5, true_block=b3, false_block=b4
+b3:
+  %9 = And %2, 1:Int8
+  %10 = And %3, 1:Int8
+  Store %0, %9, aliasing=0, offset=3
+  Store %0, 1:Int8, aliasing=0, offset=4
+  Exit
+b4:
+  Exit
+}
+)");
+  });
+
   return suite.finish();
 }

@@ -4604,6 +4604,10 @@ public:
         }
       }
     } else if (dynmatch(SelectInst, select, value)) {
+      Bits cond = Bits::at(_values, select->cond());
+      if (cond.is_const()) {
+        return propagate_backwards(select->arg(cond.value ? 1 : 2), bits);
+      }
       Bits arg1 = Bits::at(_values, select->arg(1));
       Bits equal1 = arg1.eq(bits);
       if (equal1.is_const() && !equal1.value) {
