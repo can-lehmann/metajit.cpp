@@ -5,6 +5,7 @@ HEADER_FILES := jitir.hpp jitir_llvmapi.hpp genext.hpp $(wildcard *.hpp)
 TEST_HEADER_FILES := $(wildcard tests/*.hpp)
 TEST_CFLAGS := ${CFLAGS} -DMETAJIT_DEBUG -DMETAJIT_SLOW_ASSERTS
 COVERAGE_CFLAGS := ${TEST_CFLAGS} -fprofile-instr-generate -fcoverage-mapping
+UBSAN_CFLAGS := ${TEST_CFLAGS} -fsanitize=undefined -fno-sanitize=function -fno-sanitize-recover=undefined
 
 COVERAGE_TESTS := test_knownbits test_insts test_interpreter test_clone test_cfg test_fuzzer test_opt test_reentry test_mem2reg test_source test_genext test_reader
 
@@ -26,6 +27,16 @@ test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_cl
 
 fuzz: tests/fuzzer
 	./tests/fuzzer
+
+.PHONY: test-ubsan
+test-ubsan: tests/ubsan/test_knownbits tests/ubsan/test_opt tests/ubsan/test_interpreter
+	./tests/ubsan/test_knownbits
+	./tests/ubsan/test_opt
+	./tests/ubsan/test_interpreter
+
+tests/ubsan/%: tests/%.cpp ${HEADER_FILES} ${TEST_HEADER_FILES} Makefile
+	mkdir -p tests/ubsan tests/output/$*
+	clang++ ${UBSAN_CFLAGS} -o $@ $<
 
 main: main.cpp ${HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
@@ -141,6 +152,7 @@ diff-cover: tests/coverage/merged.profdata
 	git worktree remove $(WORKTREE)
 
 clean:
+	-rm -r tests/ubsan
 	-rm -r tests/coverage
 	-rm main
 	-rm tests/test_knownbits
