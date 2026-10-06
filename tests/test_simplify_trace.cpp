@@ -614,5 +614,219 @@ b3:
 )");
   });
 
+  suite.test("backwards_or_left").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Or %1, 8:Int8
+  %3 = Eq %2, 13:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = And %1, 7:Int8
+  Store %0, %5, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Or %1, 8:Int8
+  %3 = Eq %2, 13:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = And %1, 7:Int8
+  Store %0, 5:Int8, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_or_right").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Or 8:Int8, %1
+  %3 = Eq %2, 13:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = And %1, 7:Int8
+  Store %0, %5, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Or 8:Int8, %1
+  %3 = Eq %2, 13:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = And %1, 7:Int8
+  Store %0, 5:Int8, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_sub_left_wrap").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Sub %1, 1:Int8
+  %3 = Eq %2, 255:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Sub %1, 1:Int8
+  %3 = Eq %2, 255:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  Store %0, 0:Int8, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_sub_right_wrap").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Sub 1:Int8, %1
+  %3 = Eq %2, 255:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Sub 1:Int8, %1
+  %3 = Eq %2, 255:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  Store %0, 2:Int8, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_or_false").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  %3 = Or %1, %2
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Store %0, %1, aliasing=0, offset=2
+  Store %0, %2, aliasing=0, offset=3
+  Exit
+}
+)", {0, 2}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  %3 = Or %1, %2
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Store %0, 0:Bool, aliasing=0, offset=2
+  Store %0, 0:Bool, aliasing=0, offset=3
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_sub_partial_left").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = And %2, 254:Int8
+  %4 = Sub %1, %3
+  %5 = ResizeX %4, type=Bool
+  Branch %5, true_block=b1, false_block=b2
+b1:
+  %7 = And %1, 1:Int8
+  Store %0, %7, aliasing=0, offset=2
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = And %2, 254:Int8
+  %4 = Sub %1, %3
+  %5 = ResizeX %4, type=Bool
+  Branch %5, true_block=b1, false_block=b2
+b1:
+  %7 = And %1, 1:Int8
+  Store %0, 1:Int8, aliasing=0, offset=2
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_sub_partial_right").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = And %2, 254:Int8
+  %4 = Sub %3, %1
+  %5 = ResizeX %4, type=Bool
+  Branch %5, true_block=b1, false_block=b2
+b1:
+  %7 = And %1, 1:Int8
+  Store %0, %7, aliasing=0, offset=2
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = And %2, 254:Int8
+  %4 = Sub %3, %1
+  %5 = ResizeX %4, type=Bool
+  Branch %5, true_block=b1, false_block=b2
+b1:
+  %7 = And %1, 1:Int8
+  Store %0, 1:Int8, aliasing=0, offset=2
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
   return suite.finish();
 }

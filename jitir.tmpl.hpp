@@ -3282,6 +3282,14 @@ namespace metajit {
         return Bits(type, other_mask, value);
       }
 
+      std::optional<Bits> or_backwards(const Bits& argument) const {
+        if (mask & ~value & argument.value) {
+          return {};
+        }
+        uint64_t other_mask = (argument.mask & ~argument.value & mask) | (mask & ~value);
+        return Bits(type, other_mask, value);
+      }
+
       std::optional<Bits> shl_backwards(size_t shift) const {
         uint64_t valid_mask = (uint64_t(1) << shift) - 1;
         if (value & valid_mask) {
@@ -4527,6 +4535,20 @@ public:
       if (arg1.has_value()) {
         propagate_backwards(andinst->arg(1), arg1.value());
       }
+    } else if (dynmatch(OrInst, orinst, value)) {
+      auto arg0 = bits.or_backwards(Bits::at(_values, orinst->arg(1)));
+      if (arg0.has_value()) {
+        propagate_backwards(orinst->arg(0), arg0.value());
+      }
+      auto arg1 = bits.or_backwards(Bits::at(_values, orinst->arg(0)));
+      if (arg1.has_value()) {
+        propagate_backwards(orinst->arg(1), arg1.value());
+      }
+    } else if (dynmatch(SubInst, sub, value)) {
+      Bits arg0 = bits + Bits::at(_values, sub->arg(1));
+      propagate_backwards(sub->arg(0), arg0);
+      Bits arg1 = Bits::at(_values, sub->arg(0)) - bits;
+      propagate_backwards(sub->arg(1), arg1);
     } else if (dynmatch(AddInst, add, value)) {
       Bits arg0 = bits - Bits::at(_values, add->arg(1));
       propagate_backwards(add->arg(0), arg0);

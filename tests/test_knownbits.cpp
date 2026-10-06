@@ -324,6 +324,57 @@ void test_lshift_backwards_boundaries(unittest::Suite& suite) {
 }
 
 
+void test_or_backwards_exhaustive(unittest::Suite& suite) {
+  suite.test("or_backwards_exhaustive").run([]() {
+    for (uint64_t result_mask = 0; result_mask < 16; result_mask++) {
+      for (uint64_t result_value = 0; result_value < 16; result_value++) {
+        if (result_value & ~result_mask) continue;
+        Bits result(Type::Int8, result_mask | 0xf0, result_value);
+        for (uint64_t arg_mask = 0; arg_mask < 16; arg_mask++) {
+          for (uint64_t arg_value = 0; arg_value < 16; arg_value++) {
+            if (arg_value & ~arg_mask) continue;
+            Bits argument(Type::Int8, arg_mask | 0xf0, arg_value);
+            auto inferred = result.or_backwards(argument);
+            bool possible = false;
+            uint64_t common_ones = 0xff;
+            uint64_t common_zeros = 0xff;
+            for (uint64_t a = 0; a < 16; a++) {
+              if (!argument.matches_const(a)) continue;
+              for (uint64_t b = 0; b < 16; b++) {
+                if (!result.matches_const(a | b)) continue;
+                possible = true;
+                common_ones &= b;
+                common_zeros &= ~b;
+              }
+            }
+            unittest_assert(inferred.has_value() == possible);
+            if (possible) {
+              unittest_assert(inferred->mask == (common_ones | common_zeros));
+              unittest_assert(inferred->value == common_ones);
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+void test_or_backwards_random(unittest::Suite& suite) {
+  suite.test("or_backwards_random").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
+      auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
+      Bits result(Type::Int64, rand64(), value_a | value_b);
+      auto inferred_a = result.or_backwards(bits_b);
+      auto inferred_b = result.or_backwards(bits_a);
+      unittest_assert(inferred_a.has_value());
+      unittest_assert(inferred_b.has_value());
+      unittest_assert(inferred_a->matches_const(value_a));
+      unittest_assert(inferred_b->matches_const(value_b));
+    }
+  });
+}
+
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
 
@@ -578,6 +629,9 @@ int main(int argc, char** argv) {
   test_lshift_backwards_example(suite);
   test_lshift_backwards_boundaries(suite);
   test_lshift_backwards_random(suite);
+
+  test_or_backwards_exhaustive(suite);
+  test_or_backwards_random(suite);
 
   return suite.finish();
 }
