@@ -295,6 +295,18 @@ int main(int argc, char** argv) {
     }
   });
 
+  suite.test("usedbits_signed_right_shift_boundaries").run([]() {
+    for (Type type : {Type::Int64, Type::Int32, Type::Int16, Type::Int8}) {
+      size_t width = type_width(type);
+      for (uint64_t used : {uint64_t(0), uint64_t(1), uint64_t(1) << (width - 1), type_mask(type)}) {
+        UsedBits::Bits bits(type, used);
+        unittest_assert(bits.shr_s_arg_0(0) == used);
+        uint64_t expected = used ? uint64_t(1) << (width - 1) : 0;
+        unittest_assert(bits.shr_s_arg_0(width - 1) == expected);
+      }
+    }
+  });
+
   test_add_example(suite);
   test_sub_example(suite);
   test_random(suite);

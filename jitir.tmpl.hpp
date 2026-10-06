@@ -3966,6 +3966,9 @@ namespace metajit {
       }
 
       uint64_t shr_s_arg_0(uint64_t shift) {
+        if (shift == 0) {
+          return used;
+        }
         // the uppermost shift bits are set in this
         uint64_t sign_extend_mask = ((1ull << shift) - 1) << (type_width(type) - shift);
         uint64_t result = (used << shift);
