@@ -1459,5 +1459,169 @@ b2:
     check_trace_simplify(ir, {0, 2}, ir);
   });
 
+  suite.test("and_reassociate_right_right").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = And %1, 15:Int8
+  %3 = And %2, 6:Int8
+  Store %0, %2, aliasing=0, offset=1
+  Store %0, %3, aliasing=0, offset=2
+  Exit
+}
+)", {0}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = And %1, 15:Int8
+  %3 = And %1, 6:Int8
+  Store %0, %2, aliasing=0, offset=1
+  Store %0, %3, aliasing=0, offset=2
+  Exit
+}
+)");
+  });
+
+  suite.test("and_reassociate_right_left").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = And %1, 15:Int8
+  %3 = And 6:Int8, %2
+  Store %0, %2, aliasing=0, offset=1
+  Store %0, %3, aliasing=0, offset=2
+  Exit
+}
+)", {0}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = And %1, 15:Int8
+  %3 = And %1, 6:Int8
+  Store %0, %2, aliasing=0, offset=1
+  Store %0, %3, aliasing=0, offset=2
+  Exit
+}
+)");
+  });
+
+  suite.test("and_reassociate_left_right").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = And 15:Int8, %1
+  %3 = And %2, 6:Int8
+  Store %0, %2, aliasing=0, offset=1
+  Store %0, %3, aliasing=0, offset=2
+  Exit
+}
+)", {0}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = And 15:Int8, %1
+  %3 = And %1, 6:Int8
+  Store %0, %2, aliasing=0, offset=1
+  Store %0, %3, aliasing=0, offset=2
+  Exit
+}
+)");
+  });
+
+  suite.test("and_reassociate_left_left").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = And 15:Int8, %1
+  %3 = And 6:Int8, %2
+  Store %0, %2, aliasing=0, offset=1
+  Store %0, %3, aliasing=0, offset=2
+  Exit
+}
+)", {0}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = And 15:Int8, %1
+  %3 = And %1, 6:Int8
+  Store %0, %2, aliasing=0, offset=1
+  Store %0, %3, aliasing=0, offset=2
+  Exit
+}
+)");
+  });
+
+  suite.test("and_reassociate_deep").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = And %1, 63:Int8
+  %3 = And %2, 30:Int8
+  %4 = And %3, 21:Int8
+  Store %0, %4, aliasing=0, offset=1
+  Exit
+}
+)", {0}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = And %1, 63:Int8
+  %3 = And %1, 30:Int8
+  %4 = And %1, 20:Int8
+  Store %0, %4, aliasing=0, offset=1
+  Exit
+}
+)");
+  });
+
+  suite.test("and_reassociate_disjoint_masks").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = And %1, 15:Int8
+  %3 = And %2, 240:Int8
+  Store %0, %3, aliasing=0, offset=1
+  Exit
+}
+)", {0}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = And %1, 15:Int8
+  %3 = And %1, 0:Int8
+  Store %0, 0:Int8, aliasing=0, offset=1
+  Exit
+}
+)");
+  });
+
+  suite.test("and_reassociate_high_bit").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  %2 = And %1, 9223372036854775823:Int64
+  %3 = And %2, 9223372036854775814:Int64
+  Store %0, %3, aliasing=0, offset=8
+  Exit
+}
+)", {0}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  %2 = And %1, 9223372036854775823:Int64
+  %3 = And %1, 9223372036854775814:Int64
+  Store %0, %3, aliasing=0, offset=8
+  Exit
+}
+)");
+  });
+
+  suite.test("and_reassociate_requires_inner_constant").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = And %1, %2
+  %4 = And %3, 6:Int8
+  Store %0, %4, aliasing=0, offset=2
+  Exit
+}
+)";
+    check_trace_simplify(ir, {0}, ir);
+  });
+
   return suite.finish();
 }

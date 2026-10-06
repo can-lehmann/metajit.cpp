@@ -4407,6 +4407,33 @@ private:
     _substs[inst] = value;
   }
 
+  void _reassociate_and(AndInst* inst) {
+    Value* value = inst->arg(0);
+    Const* mask = dynamic_cast<Const*>(inst->arg(1));
+    if (!mask) {
+      mask = dynamic_cast<Const*>(inst->arg(0));
+      value = inst->arg(1);
+    }
+    if (!mask) {
+      return;
+    }
+    while (dynmatch(AndInst, inner, value)) {
+      Value* base = inner->arg(0);
+      Const* inner_mask = dynamic_cast<Const*>(inner->arg(1));
+      if (!inner_mask) {
+        inner_mask = dynamic_cast<Const*>(inner->arg(0));
+        base = inner->arg(1);
+      }
+      if (!inner_mask) {
+        break;
+      }
+      mask = _builder.build_const(inst->type(), mask->value() & inner_mask->value());
+      value = base;
+      inst->set_arg(0, value);
+      inst->set_arg(1, mask);
+    }
+  }
+
   void _substitute_args(Inst* inst) {
     for (size_t arg_index = 0; arg_index < inst->arg_count(); arg_index++) {
       Value* argument = inst->arg(arg_index);
@@ -4448,6 +4475,9 @@ public:
             inst->type() == Type::Void ||
             inst->type() == Type::Ptr) {
           continue;
+        }
+        if (dynmatch(AndInst, and_inst, inst)) {
+          _reassociate_and(and_inst);
         }
         Bits bits = Bits::eval(inst, _values);
         _values[inst] = bits;
