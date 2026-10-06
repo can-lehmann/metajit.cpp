@@ -87,6 +87,27 @@ b2:
     check_trace_simplify(ir, {0, 1}, ir, false);
   });
 
+  suite.test("constant_zero_divisors").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  Branch 0:Bool, true_block=b1, false_block=b2
+b1:
+  %2 = DivU 7:Int64, 0:Int64
+  %3 = DivS 7:Int64, 0:Int64
+  %4 = ModU 7:Int64, 0:Int64
+  %5 = ModS 7:Int64, 0:Int64
+  %6 = Freeze %2
+  %7 = Freeze %3
+  %8 = Freeze %4
+  %9 = Freeze %5
+  Exit
+b2:
+  Exit
+}
+)";
+    check_trace_simplify(ir, {1}, ir, false);
+  });
+
   suite.test("freeze_poison").run([]() {
     Context context;
     Allocator allocator;
