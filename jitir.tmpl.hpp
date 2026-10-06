@@ -4393,14 +4393,23 @@ public:
   SimplifyTrace(metajit::Section* section, metajit::Chain* chain):
                  Pass(section), _section(section), _builder(section),
                  _values(section), _substs(section) {
-    if (chain->size() == 1) {
+    if (chain->size() == 0) {
       return;
     }
     section->autoname();
 
     _init_values();
-    Block* block = chain->front();
-    while (true) {
+    BlockMap<size_t> incoming(section);
+    for (Block* block : *section) {
+      if (dynmatch(BranchInst, branch, block->terminator())) {
+        incoming[branch->true_block()]++;
+        incoming[branch->false_block()]++;
+      } else if (dynmatch(JumpInst, jump, block->terminator())) {
+        incoming[jump->block()]++;
+      }
+    }
+    for (size_t index = 0; index < chain->size(); index++) {
+      Block* block = chain->at(index);
       for (Inst* inst : *block) {
         inst->substitute_args(_substs);
         if (inst->has_side_effect() ||
@@ -4453,23 +4462,19 @@ public:
           }
         }
       }
-      Inst* last_inst = block->terminator();
-      if (dynmatch(BranchInst, branch, last_inst)) {
-        // in the next block we know the value of the bool
-        Block* true_block = branch->true_block();
-        Block* false_block = branch->false_block();
-        Value* cond = branch->cond();
-        if (is_exit_block(true_block)) {
-          block = false_block;
-          propagate_backwards(cond, Bits::constant(false));
-          continue;
-        } else if (is_exit_block(false_block)) {
-          block = true_block;
-          propagate_backwards(cond, Bits::constant(true));
-          continue;
+      if (index + 1 == chain->size()) {
+        break;
+      }
+      Block* next = chain->at(index + 1);
+      if (incoming[next] == 1) {
+        if (dynmatch(BranchInst, branch, block->terminator())) {
+          if (branch->true_block() == next) {
+            propagate_backwards(branch->cond(), Bits::constant(true));
+          } else if (branch->false_block() == next) {
+            propagate_backwards(branch->cond(), Bits::constant(false));
+          }
         }
       }
-      return;
     }
   }
 
@@ -4482,14 +4487,6 @@ public:
         _values[inst] = Bits(inst->type(), 0, 0);
       }
     }
-  }
-
-  bool static is_exit_block(Block* block) {
-    Inst* terminator = block->terminator();
-    if (dynmatch(ExitInst, exit, terminator)) {
-      return true;
-    }
-    return false;
   }
 
   bool propagate_backwards(Value* value, const Bits& newinfo) {

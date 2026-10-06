@@ -379,5 +379,237 @@ b2:
 )");
   });
 
+  suite.test("completed_true_continuation").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Store %0, 1:Bool, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
+  suite.test("completed_false_continuation").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+}
+)", {0, 2}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Store %0, 0:Bool, aliasing=0, offset=1
+  Exit
+}
+)");
+  });
+
+  suite.test("empty_chain").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)";
+    check_trace_simplify(ir, {}, ir);
+  });
+
+  suite.test("single_block_chain").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = And %1, 0:Bool
+  Store %0, %2, aliasing=0, offset=1
+  Exit
+}
+)", {0}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = And %1, 0:Bool
+  Store %0, 0:Bool, aliasing=0, offset=1
+  Exit
+}
+)");
+  });
+
+  suite.test("stop_at_chain_end").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Branch %2, true_block=b3, false_block=b2
+b2:
+  Exit
+b3:
+  Store %0, %1, aliasing=0, offset=2
+  Store %0, %2, aliasing=0, offset=3
+  Jump block=b4
+b4:
+  Exit
+}
+)";
+    check_trace_simplify(ir, {0, 1}, ir);
+  });
+
+  suite.test("multiple_guards").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Branch %2, true_block=b3, false_block=b2
+b2:
+  Exit
+b3:
+  Store %0, %1, aliasing=0, offset=2
+  Store %0, %2, aliasing=0, offset=3
+  Jump block=b4
+b4:
+  Exit
+}
+)", {0, 1, 3}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Branch %2, true_block=b3, false_block=b2
+b2:
+  Exit
+b3:
+  Store %0, 1:Bool, aliasing=0, offset=2
+  Store %0, 1:Bool, aliasing=0, offset=3
+  Jump block=b4
+b4:
+  Exit
+}
+)");
+  });
+
+  suite.test("continue_across_jump").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Jump block=b3
+b2:
+  Exit
+b3:
+  Store %0, %1, aliasing=0, offset=2
+  Store %0, %2, aliasing=0, offset=3
+  Jump block=b4
+b4:
+  Exit
+}
+)", {0, 1, 3}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Jump block=b3
+b2:
+  Exit
+b3:
+  Store %0, 1:Bool, aliasing=0, offset=2
+  Store %0, %2, aliasing=0, offset=3
+  Jump block=b4
+b4:
+  Exit
+}
+)");
+  });
+
+  suite.test("same_branch_targets").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %1, true_block=b1, false_block=b1
+b1:
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+}
+)";
+    check_trace_simplify(ir, {0, 1}, ir);
+  });
+
+  suite.test("continuation_with_other_predecessor").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Jump block=b2
+b2:
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+}
+)";
+    check_trace_simplify(ir, {0, 2}, ir);
+  });
+
+  suite.test("nonadjacent_chain_blocks").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Jump block=b3
+b2:
+  Jump block=b3
+b3:
+  %5 = And %1, 0:Bool
+  Store %0, %5, aliasing=0, offset=1
+  Exit
+}
+)", {0, 3}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Jump block=b3
+b2:
+  Jump block=b3
+b3:
+  %5 = And %1, 0:Bool
+  Store %0, 0:Bool, aliasing=0, offset=1
+  Exit
+}
+)");
+  });
+
   return suite.finish();
 }
