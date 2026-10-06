@@ -375,6 +375,50 @@ void test_or_backwards_random(unittest::Suite& suite) {
   });
 }
 
+void test_shr_u_backwards_boundaries(unittest::Suite& suite) {
+  suite.test("shr_u_backwards_boundaries").run([]() {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      size_t width = type_width(type);
+      for (size_t shift = 0; shift < width; shift++) {
+        auto argument = Bits::constant(type, type_mask(type) >> shift).shr_u_backwards(shift);
+        uint64_t expected = (type_mask(type) << shift) & type_mask(type);
+        unittest_assert(argument.has_value());
+        unittest_assert(argument->mask == expected);
+        unittest_assert(argument->value == expected);
+        auto partial = Bits(type, 1, 1).shr_u_backwards(shift);
+        unittest_assert(partial.has_value());
+        unittest_assert(partial->mask == (uint64_t(1) << shift));
+        unittest_assert(partial->value == partial->mask);
+        if (shift != 0) {
+          uint64_t invalid = uint64_t(1) << (width - shift);
+          unittest_assert(!Bits(type, invalid, invalid).shr_u_backwards(shift).has_value());
+        }
+      }
+      for (size_t shift : {width, width + 1, size_t(64), size_t(128), SIZE_MAX}) {
+        unittest_assert(!Bits::constant(type, 0).shr_u_backwards(shift).has_value());
+      }
+    }
+    auto partial = Bits(Type::Int8, 0b11110101, 0b00010100).shr_u_backwards(3);
+    unittest_assert(partial.has_value());
+    unittest_assert(partial->mask == 0b10101000);
+    unittest_assert(partial->value == 0b10100000);
+  });
+}
+
+void test_shr_u_backwards_random(unittest::Suite& suite) {
+  suite.test("shr_u_backwards_random").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      uint64_t value = rand64();
+      size_t shift = rand() % 64;
+      Bits result(Type::Int64, rand64(), value >> shift);
+      auto argument = result.shr_u_backwards(shift);
+      unittest_assert(argument.has_value());
+      unittest_assert(argument->matches_const(value));
+      unittest_assert((argument->mask & ((uint64_t(1) << shift) - 1)) == 0);
+    }
+  });
+}
+
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
 
@@ -632,6 +676,9 @@ int main(int argc, char** argv) {
 
   test_or_backwards_exhaustive(suite);
   test_or_backwards_random(suite);
+
+  test_shr_u_backwards_boundaries(suite);
+  test_shr_u_backwards_random(suite);
 
   return suite.finish();
 }

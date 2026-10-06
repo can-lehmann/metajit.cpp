@@ -948,5 +948,146 @@ b2:
 )");
   });
 
+  suite.test("backwards_shr_u_keeps_discarded_bits_unknown").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = ShrU %1, 3:Int8
+  %3 = Eq %2, 22:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = And %1, 248:Int8
+  %6 = And %1, 7:Int8
+  Store %0, %5, aliasing=0, offset=1
+  Store %0, %6, aliasing=0, offset=2
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = ShrU %1, 3:Int8
+  %3 = Eq %2, 22:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = And %1, 248:Int8
+  %6 = And %1, 7:Int8
+  Store %0, 176:Int8, aliasing=0, offset=1
+  Store %0, %6, aliasing=0, offset=2
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_shr_u_partial").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = ShrU %1, 3:Int8
+  %3 = ResizeX %2, type=Bool
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = And %1, 8:Int8
+  Store %0, %5, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = ShrU %1, 3:Int8
+  %3 = ResizeX %2, type=Bool
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = And %1, 8:Int8
+  Store %0, 8:Int8, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_shr_u_high_bit").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  %2 = ShrU %1, 63:Int64
+  %3 = ResizeX %2, type=Bool
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = And %1, 9223372036854775808:Int64
+  Store %0, %5, aliasing=0, offset=8
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
+  %2 = ShrU %1, 63:Int64
+  %3 = ResizeX %2, type=Bool
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = And %1, 9223372036854775808:Int64
+  Store %0, 9223372036854775808:Int64, aliasing=0, offset=8
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_shr_u_zero").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = ShrU %1, 0:Int8
+  %3 = Eq %2, 42:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = ShrU %1, 0:Int8
+  %3 = Eq %2, 42:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  Store %0, 42:Int8, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_shr_u_variable_shift").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = And %2, 7:Int8
+  %4 = ShrU %1, %3
+  %5 = Eq %4, 1:Int8
+  Branch %5, true_block=b1, false_block=b2
+b1:
+  Store %0, %1, aliasing=0, offset=2
+  Exit
+b2:
+  Exit
+}
+)";
+    check_trace_simplify(ir, {0, 1}, ir);
+  });
+
   return suite.finish();
 }

@@ -3298,6 +3298,17 @@ namespace metajit {
         return Bits(type, mask >> shift, value >> shift);
       }
 
+      std::optional<Bits> shr_u_backwards(size_t shift) const {
+        if (shift >= type_width(type)) {
+          return {};
+        }
+        uint64_t valid_mask = type_mask(type) >> shift;
+        if (value & ~valid_mask) {
+          return {};
+        }
+        return Bits(type, mask << shift, value << shift);
+      }
+
       void write(std::ostream& stream) const {
         size_t bits = type == Type::Bool ? 1 : type_size(type) * 8;
         for (size_t it = bits; it-- > 0; ) {
@@ -4570,6 +4581,14 @@ public:
         auto arg0 = bits.shl_backwards(arg1.value);
         if (arg0.has_value()) {
           propagate_backwards(shl->arg(0), arg0.value());
+        }
+      }
+    } else if (dynmatch(ShrUInst, shr, value)) {
+      Bits arg1 = Bits::at(_values, shr->arg(1));
+      if (arg1.is_const()) {
+        auto arg0 = bits.shr_u_backwards(arg1.value);
+        if (arg0.has_value()) {
+          propagate_backwards(shr->arg(0), arg0.value());
         }
       }
     } else if (dynmatch(SelectInst, select, value)) {
