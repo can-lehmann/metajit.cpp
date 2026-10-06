@@ -248,6 +248,53 @@ int main(int argc, char** argv) {
     }
   });
 
+  suite.test("signed_division_and_remainder_overflow_are_unknown").run([]() {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      uint64_t min_value = uint64_t(1) << (type_width(type) - 1);
+      Bits minimum = Bits::constant(type, min_value);
+      Bits minus_one = Bits::constant(type, type_mask(type));
+      for (Bits result : {minimum.div_s(minus_one), minimum.mod_s(minus_one)}) {
+        unittest_assert(result.type == type);
+        unittest_assert(result.mask == 0);
+        unittest_assert(result.value == 0);
+        unittest_assert(!result.is_const());
+      }
+      Bits one = Bits::constant(type, 1);
+      unittest_assert(minimum.div_s(one) == minimum);
+      unittest_assert(minimum.mod_s(one) == Bits::constant(type, 0));
+      Bits near_minimum = Bits::constant(type, min_value + 1);
+      unittest_assert(near_minimum.div_s(minus_one) == Bits::constant(type, min_value - 1));
+      unittest_assert(near_minimum.mod_s(minus_one) == Bits::constant(type, 0));
+    }
+  });
+
+  suite.test("oversized_shifts_are_unknown").run([]() {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      size_t width = type_width(type);
+      for (Bits operand : {Bits::constant(type, 0), Bits::constant(type, type_mask(type)),
+                           Bits(type, 1, 1)}) {
+        for (size_t shift : {width, width + 1, size_t(64), size_t(128), SIZE_MAX}) {
+          Bits count = Bits::constant(type, shift);
+          for (Bits result : {operand.shl(shift), operand.shr_u(shift), operand.shr_s(shift),
+                              operand.shl(count), operand.shr_u(count), operand.shr_s(count)}) {
+            unittest_assert(result.type == type);
+            unittest_assert(result.mask == 0);
+            unittest_assert(result.value == 0);
+            unittest_assert(!result.is_const());
+          }
+        }
+        unittest_assert(operand.shl(0) == operand);
+        unittest_assert(operand.shr_u(0) == operand);
+        unittest_assert(operand.shr_s(0) == operand);
+      }
+      Bits one = Bits::constant(type, 1);
+      Bits ones = Bits::constant(type, type_mask(type));
+      unittest_assert(one.shl(width - 1) == Bits::constant(type, uint64_t(1) << (width - 1)));
+      unittest_assert(ones.shr_u(width - 1) == one);
+      unittest_assert(ones.shr_s(width - 1) == ones);
+    }
+  });
+
   test_add_example(suite);
   test_sub_example(suite);
   test_random(suite);

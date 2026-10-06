@@ -3002,6 +3002,10 @@ namespace metajit {
         return (mask & (uint64_t(1) << bit)) != 0;
       }
 
+      bool operator==(Bits other) {
+        return type == other.type && mask == other.mask && value == other.value;
+      }
+
       std::optional<bool> at(size_t bit) const {
         if (mask & (uint64_t(1) << bit)) {
           return (value & (uint64_t(1) << bit)) != 0;
@@ -3034,7 +3038,8 @@ namespace metajit {
       }
 
       static Bits div_s(Type type, uint64_t a, uint64_t b) {
-        if (b == 0) {
+        if (b == 0 ||
+            (a == (uint64_t(1) << (type_width(type) - 1)) && b == type_mask(type))) {
           return Bits(type, 0, 0);
         }
         uint64_t res = 0;
@@ -3050,7 +3055,8 @@ namespace metajit {
       }
 
       static Bits mod_s(Type type, uint64_t a, uint64_t b) {
-        if (b == 0) {
+        if (b == 0 ||
+            (a == (uint64_t(1) << (type_width(type) - 1)) && b == type_mask(type))) {
           return Bits(type, 0, 0);
         }
         uint64_t res = 0;
@@ -3153,6 +3159,9 @@ namespace metajit {
       }
 
       Bits shl(size_t shift) const {
+        if (shift >= type_width(type)) {
+          return Bits(type, 0, 0);
+        }
         return Bits(
           type,
           ((mask << shift) | ((uint64_t(1) << shift) - 1)) & type_mask(type),
@@ -3161,6 +3170,9 @@ namespace metajit {
       }
 
       Bits shr_u(size_t shift) const {
+        if (shift >= type_width(type)) {
+          return Bits(type, 0, 0);
+        }
         return Bits(
           type,
           (mask >> shift) | (type_mask(type) & ~(type_mask(type) >> shift)),
@@ -3169,6 +3181,9 @@ namespace metajit {
       }
 
       Bits shr_s(size_t shift) const {
+        if (shift >= type_width(type)) {
+          return Bits(type, 0, 0);
+        }
         Bits result(
           type,
           (mask >> shift),
