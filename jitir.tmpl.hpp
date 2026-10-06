@@ -3538,42 +3538,42 @@ namespace metajit {
 
       #undef float_binop
 
-      #define propagating_binop(name, expr) \
+      #define propagating_binop(name, result_type, expr) \
         Bits name(const Bits& other) const { \
           if (is_poison || other.is_poison) { \
-            return Bits::poison((expr).type); \
+            return Bits::poison(result_type); \
           } \
           return expr; \
         }
       
-      propagating_binop(operator+, Bits::constant(type, value + other.value))
-      propagating_binop(operator-, Bits::constant(type, value - other.value))
-      propagating_binop(operator*, Bits::constant(type, value * other.value))
+      propagating_binop(operator+, type, Bits::constant(type, value + other.value))
+      propagating_binop(operator-, type, Bits::constant(type, value - other.value))
+      propagating_binop(operator*, type, Bits::constant(type, value * other.value))
 
-      propagating_binop(div_u, div_u(type, value, other.value))
-      propagating_binop(div_s, div_s(type, value, other.value))
-      propagating_binop(mod_u, mod_u(type, value, other.value))
-      propagating_binop(mod_s, mod_s(type, value, other.value))
+      propagating_binop(div_u, type, div_u(type, value, other.value))
+      propagating_binop(div_s, type, div_s(type, value, other.value))
+      propagating_binop(mod_u, type, mod_u(type, value, other.value))
+      propagating_binop(mod_s, type, mod_s(type, value, other.value))
 
-      propagating_binop(operator&, Bits::constant(type, value & other.value))
-      propagating_binop(operator|, Bits::constant(type, value | other.value))
-      propagating_binop(operator^, Bits::constant(type, value ^ other.value))
+      propagating_binop(operator&, type, Bits::constant(type, value & other.value))
+      propagating_binop(operator|, type, Bits::constant(type, value | other.value))
+      propagating_binop(operator^, type, Bits::constant(type, value ^ other.value))
 
-      propagating_binop(eq, Bits::constant(Type::Bool, value == other.value))      
-      propagating_binop(lt_u, Bits::constant(Type::Bool, value < other.value))
-      propagating_binop(lt_s, lt_s(type, value, other.value))
+      propagating_binop(eq, Type::Bool, Bits::constant(Type::Bool, value == other.value))
+      propagating_binop(lt_u, Type::Bool, Bits::constant(Type::Bool, value < other.value))
+      propagating_binop(lt_s, Type::Bool, lt_s(type, value, other.value))
 
-      propagating_binop(shl, Bits::constant(type, value << other.value))
-      propagating_binop(shr_s, shr_s(type, value, other.value))
-      propagating_binop(shr_u, Bits::constant(type, value >> other.value))
+      propagating_binop(shl, type, Bits::constant(type, value << other.value))
+      propagating_binop(shr_s, type, shr_s(type, value, other.value))
+      propagating_binop(shr_u, type, Bits::constant(type, value >> other.value))
 
-      propagating_binop(add_f, add_f(type, value, other.value))
-      propagating_binop(sub_f, sub_f(type, value, other.value))
-      propagating_binop(mul_f, mul_f(type, value, other.value))
-      propagating_binop(div_f, div_f(type, value, other.value))
+      propagating_binop(add_f, type, add_f(type, value, other.value))
+      propagating_binop(sub_f, type, sub_f(type, value, other.value))
+      propagating_binop(mul_f, type, mul_f(type, value, other.value))
+      propagating_binop(div_f, type, div_f(type, value, other.value))
 
-      propagating_binop(lt_f_u, lt_f_u(type, value, other.value))
-      propagating_binop(lt_f_o, lt_f_o(type, value, other.value))
+      propagating_binop(lt_f_u, Type::Bool, lt_f_u(type, value, other.value))
+      propagating_binop(lt_f_o, Type::Bool, lt_f_o(type, value, other.value))
 
       #undef propagating_binop
 

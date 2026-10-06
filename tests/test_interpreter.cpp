@@ -25,6 +25,46 @@ int main(int argc, char** argv) {
   using Bits = Interpreter::Bits;
   using TestCase = InterpreterTest::TestCase;
 
+  suite.test("poison_integer_arithmetic").run([]() {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      for (Bits a : {Bits::constant(type, 7), Bits::poison(type)}) {
+        for (Bits b : {Bits::poison(type), Bits::constant(type, 0), Bits::constant(type, 64)}) {
+          if (!a.is_poison && !b.is_poison) continue;
+          for (Bits result : {a + b, a - b, a * b, a.div_u(b), a.div_s(b),
+                              a.mod_u(b), a.mod_s(b), a & b, a | b, a ^ b,
+                              a.shl(b), a.shr_u(b), a.shr_s(b)}) {
+            unittest_assert(result.is_poison);
+            unittest_assert(result.type == type);
+          }
+          for (Bits result : {a.eq(b), a.lt_u(b), a.lt_s(b)}) {
+            unittest_assert(result.is_poison);
+            unittest_assert(result.type == Type::Bool);
+          }
+        }
+      }
+    }
+  });
+
+  suite.test("poison_float_arithmetic").run([]() {
+    for (Type type : {Type::Float32, Type::Float64}) {
+      Bits poison = Bits::poison(type);
+      Bits zero = Bits::constant(type, 0);
+      for (Bits a : {poison, zero}) {
+        for (Bits b : {poison, zero}) {
+          if (!a.is_poison && !b.is_poison) continue;
+          for (Bits result : {a.add_f(b), a.sub_f(b), a.mul_f(b), a.div_f(b)}) {
+            unittest_assert(result.is_poison);
+            unittest_assert(result.type == type);
+          }
+          for (Bits result : {a.lt_f_u(b), a.lt_f_o(b)}) {
+            unittest_assert(result.is_poison);
+            unittest_assert(result.type == Type::Bool);
+          }
+        }
+      }
+    }
+  });
+
   suite.interpreter_test("simple_add").run([](Builder& builder) -> std::vector<TestCase> {
     builder.move_to_end(builder.build_block({Type::Int32, Type::Int32}));
     Arg* a = builder.entry_arg(0);
