@@ -49,6 +49,8 @@ void check_trace_simplify(const std::string& input,
   }
 
   unittest_assert(!section->verify(std::cout));
+  Section original(context, allocator);
+  Clone::run(section.get(), &original);
   SimplifyTrace::run(section.get(), &chain);
   std::stringstream ss;
   section->write(ss);
@@ -58,6 +60,7 @@ void check_trace_simplify(const std::string& input,
   unittest_assert(ss.str() == expected);
 
   unittest_assert(!section->verify(std::cout));
+  check_opt_differential(&original, section.get(), data);
   check_codegen_differential("", section.get(), data);
 }
 
