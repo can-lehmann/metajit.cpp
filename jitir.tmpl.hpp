@@ -3076,23 +3076,23 @@ namespace metajit {
 
       #undef switch_type
 
-      #define const_binop(name, expr) \
+      #define const_binop(name, result_type, expr) \
         Bits name(const Bits& other) const { \
           if (is_const() && other.is_const()) { \
             return expr; \
           } \
-          return Bits(type, 0, 0); \
+          return Bits(result_type, 0, 0); \
         }
       
-      const_binop(operator*, Bits::constant(type, value * other.value))
+      const_binop(operator*, type, Bits::constant(type, value * other.value))
 
-      const_binop(div_u, div_u(type, value, other.value))
-      const_binop(div_s, div_s(type, value, other.value))
-      const_binop(mod_u, mod_u(type, value, other.value))
-      const_binop(mod_s, mod_s(type, value, other.value))
+      const_binop(div_u, type, div_u(type, value, other.value))
+      const_binop(div_s, type, div_s(type, value, other.value))
+      const_binop(mod_u, type, mod_u(type, value, other.value))
+      const_binop(mod_s, type, mod_s(type, value, other.value))
 
-      const_binop(lt_u, lt_u(type, value, other.value))
-      const_binop(lt_s, lt_s(type, value, other.value))
+      const_binop(lt_u, Type::Bool, lt_u(type, value, other.value))
+      const_binop(lt_s, Type::Bool, lt_s(type, value, other.value))
 
       #undef const_binop
 

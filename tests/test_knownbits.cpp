@@ -213,6 +213,24 @@ void test_usedbits_shr(unittest::Suite& suite) {
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
 
+  suite.test("comparison_result_types").run([]() {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      for (Bits a : {Bits(type, 0, 0), Bits(type, 1, 0), Bits::constant(type, 0)}) {
+        for (Bits b : {Bits(type, 0, 0), Bits(type, 1, 1), Bits::constant(type, 1)}) {
+          for (Bits result : {a.lt_s(b), a.lt_u(b)}) {
+            unittest_assert(result.type == Type::Bool);
+            if (a.is_const() && b.is_const()) {
+              unittest_assert(result == Bits::constant(true));
+            } else {
+              unittest_assert(result == Bits(Type::Bool, 0, 0));
+            }
+            unittest_assert((result & Bits::constant(false)) == Bits::constant(false));
+          }
+        }
+      }
+    }
+  });
+
   suite.test("symbol_and_poison_have_unknown_bits").run([]() {
     Context context;
     Allocator allocator;
