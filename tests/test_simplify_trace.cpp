@@ -108,6 +108,26 @@ b2:
     check_trace_simplify(ir, {1}, ir, false);
   });
 
+  suite.test("invalid_constant_arithmetic_stays_unknown").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = DivS 9223372036854775808:Int64, 18446744073709551615:Int64
+  %2 = ModS 9223372036854775808:Int64, 18446744073709551615:Int64
+  %3 = Shl 1:Int64, 64:Int64
+  %4 = ShrU 1:Int64, 64:Int64
+  %5 = ShrS 1:Int64, 64:Int64
+  %6 = Freeze %1
+  %7 = Freeze %2
+  %8 = Freeze %3
+  %9 = Freeze %4
+  %10 = Freeze %5
+  Store %0, 0:Int64, aliasing=0, offset=0
+  Exit
+}
+)";
+    check_trace_simplify(ir, {0}, ir, false);
+  });
+
   suite.test("freeze_poison").run([]() {
     Context context;
     Allocator allocator;
