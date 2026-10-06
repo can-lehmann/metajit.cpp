@@ -3476,20 +3476,34 @@ namespace metajit {
         }
 
       static Bits div_u(Type type, uint64_t a, uint64_t b) {
+        if (b == 0) {
+          return Bits::poison(type);
+        }
         return Bits::constant(type, a / b);
       }
 
       static Bits div_s(Type type, uint64_t a, uint64_t b) {
+        if (b == 0 ||
+            (a == (uint64_t(1) << (type_width(type) - 1)) && b == type_mask(type))) {
+          return Bits::poison(type);
+        }
         uint64_t res = 0;
         switch_type(/)
         return Bits::constant(type, res);
       }
 
       static Bits mod_u(Type type, uint64_t a, uint64_t b) {
+        if (b == 0) {
+          return Bits::poison(type);
+        }
         return Bits::constant(type, a % b);
       }
 
       static Bits mod_s(Type type, uint64_t a, uint64_t b) {
+        if (b == 0 ||
+            (a == (uint64_t(1) << (type_width(type) - 1)) && b == type_mask(type))) {
+          return Bits::poison(type);
+        }
         uint64_t res = 0;
         switch_type(%)
         return Bits::constant(type, res);
@@ -3501,7 +3515,24 @@ namespace metajit {
         return Bits::constant(res);
       }
 
+      static Bits shl(Type type, uint64_t a, uint64_t b) {
+        if (b >= type_width(type)) {
+          return Bits::poison(type);
+        }
+        return Bits::constant(type, a << b);
+      }
+
+      static Bits shr_u(Type type, uint64_t a, uint64_t b) {
+        if (b >= type_width(type)) {
+          return Bits::poison(type);
+        }
+        return Bits::constant(type, a >> b);
+      }
+
       static Bits shr_s(Type type, uint64_t a, uint64_t b) {
+        if (b >= type_width(type)) {
+          return Bits::poison(type);
+        }
         uint64_t res = 0;
         switch_type(>>)
         return Bits::constant(type, res);
@@ -3563,9 +3594,9 @@ namespace metajit {
       propagating_binop(lt_u, Type::Bool, Bits::constant(Type::Bool, value < other.value))
       propagating_binop(lt_s, Type::Bool, lt_s(type, value, other.value))
 
-      propagating_binop(shl, type, Bits::constant(type, value << other.value))
+      propagating_binop(shl, type, shl(type, value, other.value))
       propagating_binop(shr_s, type, shr_s(type, value, other.value))
-      propagating_binop(shr_u, type, Bits::constant(type, value >> other.value))
+      propagating_binop(shr_u, type, shr_u(type, value, other.value))
 
       propagating_binop(add_f, type, add_f(type, value, other.value))
       propagating_binop(sub_f, type, sub_f(type, value, other.value))
