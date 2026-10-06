@@ -2078,6 +2078,8 @@ namespace metajit {
     ExpandingVector<Value*> _exact_memory;
     
     Block* _guard_success = nullptr;
+    Block* _reusable_guard_failure = nullptr;
+    Block* _reusable_guard_success = nullptr;
 
     bool could_alias(LoadInst* load, Value* ptr, Type type, AliasingGroup aliasing, uint64_t offset) {
       if (load->aliasing() != aliasing) {
@@ -2315,15 +2317,35 @@ namespace metajit {
       return block;
     }
 
-    void build_guard_begin(Value* value) {
+    bool build_guard_begin(Value* value) {
       assert(value->type() == Type::Bool);
       assert(!_guard_success);
 
-      Block* failure = Builder::build_block();
+      bool reuse = _reusable_guard_failure && block() == _reusable_guard_success;
+      if (reuse) {
+        for (Inst* inst : *block()) {
+          if (inst->has_side_effect()) {
+            reuse = false;
+            break;
+          }
+        }
+      }
+
+      Block* failure = reuse ? _reusable_guard_failure : Builder::build_block();
       _guard_success = build_block();
       fold_branch(value, _guard_success, failure);
       
+      _reusable_guard_failure = failure;
+      _reusable_guard_success = _guard_success;
+      if (reuse) {
+        section()->remove(failure);
+        section()->add(failure);
+        move_to_end(_guard_success);
+        _guard_success = nullptr;
+        return false;
+      }
       move_to_end(failure);
+      return true;
     }
 
     void build_guard_end() {
@@ -5701,8 +5723,7 @@ namespace metajit {
         for (Inst* inst : *block) {
           if (dynmatch(BranchInst, branch, inst)) {
             if (!(_binding_time_groups->is_static(branch->cond()))) {
-              _closures.emplace(*branch->true_block()->begin(), Closure());
-              _closures.emplace(*branch->false_block()->begin(), Closure());
+              _closures.emplace(branch, Closure());
             }
           } else if (dynmatch(PromoteInst, promote, inst)) {
             if (!(_binding_time_groups->is_static(promote->arg(0)))) {
