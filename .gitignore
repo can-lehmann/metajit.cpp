@@ -14,6 +14,7 @@ tests/test_fuzzer
 tests/test_cfg
 tests/test_knownbits
 tests/test_opt
+tests/test_simplify_trace
 tests/output
 tests/fuzzer
 tests/test_tv

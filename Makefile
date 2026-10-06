@@ -7,12 +7,12 @@ TEST_CFLAGS := ${CFLAGS} -DMETAJIT_DEBUG -DMETAJIT_SLOW_ASSERTS
 COVERAGE_CFLAGS := ${TEST_CFLAGS} -fprofile-instr-generate -fcoverage-mapping
 UBSAN_CFLAGS := ${TEST_CFLAGS} -fsanitize=undefined -fno-sanitize=function -fno-sanitize-recover=undefined
 
-COVERAGE_TESTS := test_knownbits test_insts test_interpreter test_clone test_cfg test_fuzzer test_opt test_reentry test_mem2reg test_source test_genext test_reader
+COVERAGE_TESTS := test_knownbits test_insts test_interpreter test_clone test_cfg test_fuzzer test_opt test_simplify_trace test_reentry test_mem2reg test_source test_genext test_reader
 
 run: main
 	./main
 
-test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
+test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_simplify_trace tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
 	./tests/test_knownbits
 	./tests/test_insts
 	./tests/test_interpreter
@@ -20,6 +20,7 @@ test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_cl
 	./tests/test_cfg
 	./tests/test_fuzzer
 	./tests/test_opt
+	./tests/test_simplify_trace
 	./tests/test_reentry
 	./tests/test_mem2reg
 	./tests/test_source
@@ -29,9 +30,10 @@ fuzz: tests/fuzzer
 	./tests/fuzzer
 
 .PHONY: test-ubsan
-test-ubsan: tests/ubsan/test_knownbits tests/ubsan/test_opt tests/ubsan/test_interpreter
+test-ubsan: tests/ubsan/test_knownbits tests/ubsan/test_opt tests/ubsan/test_simplify_trace tests/ubsan/test_interpreter
 	./tests/ubsan/test_knownbits
 	./tests/ubsan/test_opt
+	./tests/ubsan/test_simplify_trace
 	./tests/ubsan/test_interpreter
 
 tests/ubsan/%: tests/%.cpp ${HEADER_FILES} ${TEST_HEADER_FILES} Makefile
@@ -60,6 +62,9 @@ tests/test_cfg: tests/test_cfg.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_opt: tests/test_opt.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${TEST_CFLAGS} -o $@ $<
+
+tests/test_simplify_trace: tests/test_simplify_trace.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_reader: tests/test_reader.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
@@ -162,6 +167,7 @@ clean:
 	-rm tests/test_fuzzer
 	-rm tests/test_cfg
 	-rm tests/test_opt
+	-rm tests/test_simplify_trace
 	-rm tests/test_source
 	-rm tests/test_reader
 	-rm tests/test_reentry
@@ -176,6 +182,7 @@ clean:
 	mkdir -p tests/output/test_fuzzer
 	mkdir -p tests/output/test_cfg
 	mkdir -p tests/output/test_opt
+	mkdir -p tests/output/test_simplify_trace
 	mkdir -p tests/output/test_source
 	mkdir -p tests/output/test_reader
 	mkdir -p tests/output/test_mem2reg
