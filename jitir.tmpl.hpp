@@ -1504,6 +1504,10 @@ namespace metajit {
           return a;
         } else if (const_b->value() == 0) {
           return const_b;
+        } else if (dynmatch(AndInst, and_a, a)) {
+          if (dynmatch(Const, const_a, and_a->arg(1))) {
+            return fold_and(and_a->arg(0), build_const(a->type(), const_a->value() & const_b->value()));
+          }
         } else if (dynmatch(OrInst, or_a, a)) {
           if (dynmatch(AndInst, and_arg1_a, or_a->arg(1))) {
             if (dynmatch(Const, const2, and_arg1_a->arg(1))) {
