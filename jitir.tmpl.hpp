@@ -4080,9 +4080,7 @@ namespace metajit {
               use(arg, _values[inst]);
             }
           } else if (dynmatch(SelectInst, select, inst)) {
-            if (_values[inst].used != 0) {
-              use(select->cond(), Bits::all(select->cond()->type()));
-            }
+            use_all(select->cond());
             use(select->arg(1), _values[inst]);
             use(select->arg(2), _values[inst]);
           } else if (dynamic_cast<AddInst*>(inst) ||

@@ -313,6 +313,53 @@ void test_freeze_output_relationship(TVTestSuite& suite) {
 int main(int argc, char** argv) {
   TVTestSuite suite(argc, argv);
 
+  suite.test("simplify_preserves_select_poison_condition").run([]() {
+    Context context;
+    Allocator allocator;
+    std::istringstream stream(R"(section {
+b0(%0: Ptr, %1: Int8):
+  %2 = And %1, 1:Int8
+  %3 = Eq %2, 0:Int8
+  %4 = Shl 0:Int8, 8:Int8
+  %5 = Select %3, 0:Int8, %4
+  %6 = And %5, 2:Int8
+  %7 = Mul %6, 3:Int8
+  %8 = And %7, 1:Int8
+  Store %0, %8, aliasing=0, offset=0
+  Exit
+}
+)");
+    std::unique_ptr<Section> before(SectionReader<>::read_section(context, allocator, stream));
+    before->order_blocks(BlockOrdering::Dominator);
+    unittest_assert(!before->verify(std::cout));
+    Section after(context, allocator);
+    Clone::run(before.get(), &after);
+    after.order_blocks(BlockOrdering::Dominator);
+    Simplify::run(&after, 4);
+    unittest_assert(!after.verify(std::cout));
+
+    z3::context z3_context;
+    tv::MemoryState memory(z3_context, {std::nullopt});
+    tv::ValueState ptr(Type::Ptr, z3_context.bv_const("ptr", type_width(Type::Ptr)));
+    ptr.set_provenance(z3_context.bv_val(0, memory.provenance_width()));
+    std::vector<tv::ValueState> args = {
+      ptr, tv::ValueState(Type::Int8, z3_context.bv_const("input", 8))
+    };
+    tv::Z3CodeGen original(before.get(), z3_context, args, memory);
+    tv::Z3CodeGen optimized(&after, z3_context, args, memory);
+    z3::solver solver(z3_context);
+    solver.add(!original.has_ub() && optimized.has_ub());
+    z3::check_result result = solver.check();
+    if (result == z3::sat) {
+      std::ostringstream message;
+      message << solver.get_model() << "\nOptimized:\n";
+      after.write(message);
+      throw unittest::AssertionError("Simplify introduced UB through Select",
+        __LINE__, __FILE__, message.str());
+    }
+    unittest_assert(result == z3::unsat);
+  });
+
   suite.tv_test("add").run({Type::Int32, Type::Int32}, [](Builder& builder) {
     return builder.build_add(builder.entry_arg(0), builder.entry_arg(1));
   }, [](z3::context& context, std::vector<tv::ValueState> args) {

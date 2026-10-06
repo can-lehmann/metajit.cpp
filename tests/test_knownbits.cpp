@@ -214,6 +214,49 @@ int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
 
   using ConcreteBits = Interpreter::Bits;
+  suite.test("usedbits_select_preserves_definedness").run([]() {
+    for (uint64_t demanded : {uint64_t(255), uint64_t(1), uint64_t(128), uint64_t(0)}) {
+      Context context;
+      Allocator allocator;
+      std::istringstream stream(
+        "section {\n"
+        "b0(%0: Ptr, %1: Int8, %2: Int8):\n"
+        "  %3 = Load %0, type=Bool, flags={}, aliasing=0, offset=0\n"
+        "  %4 = Select %3, %1, %2\n"
+        "  %5 = And %4, " + std::to_string(demanded) + ":Int8\n"
+        "  Store %0, %5, aliasing=0, offset=1\n"
+        "  Exit\n"
+        "}\n");
+      std::unique_ptr<Section> section(SectionReader<>::read_section(context, allocator, stream));
+      section->order_blocks(BlockOrdering::Dominator);
+      unittest_assert(!section->verify(std::cout));
+      Value* condition = *section->entry()->begin();
+      UsedBits used(section.get());
+      uint64_t condition_used = used.at(condition).used;
+      for (bool poison_true : {false, true}) {
+        ConcreteBits defined = ConcreteBits::constant(Type::Int8, 42);
+        ConcreteBits poison = ConcreteBits::poison(Type::Int8);
+        ConcreteBits a = poison_true ? poison : defined;
+        ConcreteBits b = poison_true ? defined : poison;
+        for (uint64_t cond : {uint64_t(0), uint64_t(1)}) {
+          ConcreteBits original = ConcreteBits::constant(Type::Bool, cond).select(a, b);
+          if (original.is_poison) continue;
+          for (uint64_t extra : {uint64_t(0), uint64_t(1)}) {
+            uint64_t changed_cond = (cond & condition_used) | (extra & ~condition_used);
+            ConcreteBits changed = ConcreteBits::constant(Type::Bool, changed_cond).select(a, b);
+            if (changed.is_poison) {
+              std::cerr << "Select demanded=" << demanded << " condition mask=" << condition_used
+                        << " original condition=" << cond << " changed condition=" << changed_cond
+                        << " poison true arm=" << poison_true << "\n";
+            }
+            unittest_assert(!changed.is_poison);
+            unittest_assert(((original.value ^ changed.value) & demanded) == 0);
+          }
+        }
+      }
+    }
+  });
+
   struct UsedBitsOperation {
     const char* name;
     ConcreteBits (ConcreteBits::*evaluate)(const ConcreteBits&) const;
