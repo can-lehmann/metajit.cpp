@@ -213,6 +213,25 @@ void test_usedbits_shr(unittest::Suite& suite) {
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
 
+  suite.test("symbol_and_poison_have_unknown_bits").run([]() {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    NameMap<Bits> values(&section);
+    auto check_unknown = [&](Value* value) {
+      Bits bits = Bits::at(values, value);
+      unittest_assert(bits.type == value->type());
+      unittest_assert(bits.mask == 0);
+      unittest_assert(bits.value == 0);
+      unittest_assert(!bits.is_const());
+    };
+    check_unknown(builder.build_symbol(Type::Ptr, "target"));
+    for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64, Type::Ptr}) {
+      check_unknown(builder.build_poison(type));
+    }
+  });
+
   test_add_example(suite);
   test_sub_example(suite);
   test_random(suite);

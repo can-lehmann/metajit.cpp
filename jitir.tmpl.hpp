@@ -3290,6 +3290,8 @@ namespace metajit {
             return Bits(value->type(), 0, 0);
           }
           return values.at(named_value);
+        } else if (dynamic_cast<Symbol*>(value) || dynamic_cast<Poison*>(value)) {
+          return Bits(value->type(), 0, 0);
         } else {
           assert(false); // Unreachable
           return Bits();
