@@ -309,15 +309,21 @@ void test_lshift_backwards_random(unittest::Suite& suite) {
 
 void test_lshift_backwards_boundaries(unittest::Suite& suite) {
   suite.test("lshift_backwards_boundaries").run([]() {
-    for (size_t shift : {0, 1, 30, 31, 32, 33, 62, 63}) {
-      uint64_t value = uint64_t(1) << shift;
-      auto argument = Bits::constant(Type::Int64, value).shl_backwards(shift);
-      unittest_assert(argument.has_value());
-      unittest_assert(argument->mask == (UINT64_MAX >> shift));
-      unittest_assert(argument->value == 1);
-      if (shift != 0) {
-        auto inconsistent = Bits::constant(Type::Int64, value | (value >> 1)).shl_backwards(shift);
-        unittest_assert(!inconsistent.has_value());
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      size_t width = type_width(type);
+      for (size_t shift = 0; shift < width; shift++) {
+        uint64_t value = uint64_t(1) << shift;
+        auto argument = Bits::constant(type, value).shl_backwards(shift);
+        unittest_assert(argument.has_value());
+        unittest_assert(argument->mask == (type_mask(type) >> shift));
+        unittest_assert(argument->value == 1);
+        if (shift != 0) {
+          auto inconsistent = Bits::constant(type, value | (value >> 1)).shl_backwards(shift);
+          unittest_assert(!inconsistent.has_value());
+        }
+      }
+      for (size_t shift : {width, width + 1, size_t(64), size_t(128), SIZE_MAX}) {
+        unittest_assert(!Bits::constant(type, 0).shl_backwards(shift).has_value());
       }
     }
   });
