@@ -210,6 +210,104 @@ void test_usedbits_shr(unittest::Suite& suite) {
   });
 }
 
+void test_intersect_example(unittest::Suite& suite) {
+  suite.test("intersect_example").run([]() {
+    Bits a = Bits(Type::Int64, 0b10001111, 0b10001010); // 1???1010
+    Bits b = Bits(Type::Int64, 0b11100011, 0b11000010); // 110???10
+    auto c = a.intersect(b); // 110?1010;
+    unittest_assert (c.has_value());
+    unittest_assert (c.value().mask == 0b11101111);
+    unittest_assert (c.value().value == 0b11001010);
+
+    a = Bits(Type::Int64, 0b1, 0b0);
+    b = Bits(Type::Int64, 0b1, 0b1);
+    c = a.intersect(b);
+    unittest_assert (not c.has_value());
+  });
+}
+
+void test_random_intersect(unittest::Suite& suite) {
+  suite.test("random_intersect").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      auto [value_a, bits_a] = random_value_and_bits(Type::Int8);
+      auto [value_b, bits_b] = random_value_and_bits(Type::Int8);
+      auto c = bits_a.intersect(bits_b);
+      if (c.has_value()) {
+        Bits bits_c = c.value();
+        for (uint64_t j = 0; j < 256; j++) {
+          if (bits_c.matches_const(j)) {
+            unittest_assert (bits_a.matches_const(j));
+            unittest_assert (bits_b.matches_const(j));
+          }
+        }
+      } else {
+        unittest_assert (!bits_a.matches_const(value_b));
+        unittest_assert (!bits_b.matches_const(value_a));
+      }
+    }
+  });
+}
+
+void test_and_backwards_example(unittest::Suite& suite) {
+  suite.test("and_backwards_example").run([]() {
+    Bits result = Bits(Type::Int8, 0b11010110, 0b10000100); // 10?0?10?
+    Bits a = Bits(Type::Int8, 0b11111000, 0b11100000); // 11100???
+    auto b = result.and_backwards(a); // 10???1??;
+    unittest_assert (b.has_value());
+    unittest_assert (b.value().mask == 0b11000100);
+    unittest_assert (b.value().value == 0b10000100);
+
+    result = Bits(Type::Int64, 0b1, 0b1); // ?...?1
+    a = Bits(Type::Int64, 0b1, 0b0); // ?...?0
+    b = result.and_backwards(a);
+    unittest_assert (not b.has_value());
+  });
+}
+
+void test_and_backwards_random(unittest::Suite& suite) {
+  suite.test("and_backwards_random").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
+      auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
+      auto result = bits_a & bits_b;
+      auto better_b = result.and_backwards(bits_a);
+      unittest_assert (better_b.has_value());
+      unittest_assert (better_b.value().matches_const(value_b));
+      unittest_assert (better_b.value().intersect(bits_b).has_value());
+    }
+  });
+}
+
+void test_lshift_backwards_example(unittest::Suite& suite) {
+  suite.test("lshift_backwards_example").run([]() {
+    Bits result = Bits(Type::Int8, 0b11010111, 0b10000000); // 10?0?000
+    auto a = result.shl_backwards(3); // ???10?0?
+    unittest_assert (a.has_value());
+    unittest_assert (a.value().mask == 0b11010);
+    unittest_assert (a.value().value == 0b10000);
+
+    result = Bits(Type::Int8, 0b11010111, 0b10000111); // 10?0?111
+    a = result.shl_backwards(3);
+    unittest_assert (!a.has_value());
+  });
+}
+
+
+void test_lshift_backwards_random(unittest::Suite& suite) {
+  suite.test("lshift_backwards_random").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
+      uint64_t shift = (rand() % 64);
+      Bits result = bits_a.shl(shift);
+      auto better_a = result.shl_backwards(shift);
+      unittest_assert (better_a.has_value());
+      unittest_assert (better_a.value().matches_const(value_a));
+      unittest_assert (better_a.value().intersect(bits_a).has_value());
+    }
+  });
+}
+
+
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
 
@@ -456,6 +554,13 @@ int main(int argc, char** argv) {
   test_idempotent_conditions(suite);
   test_usedbits_shr_s_bug(suite);
   test_usedbits_shr(suite);
+
+  test_intersect_example(suite);
+  test_random_intersect(suite);
+  test_and_backwards_example(suite);
+  test_and_backwards_random(suite);
+  test_lshift_backwards_example(suite);
+  test_lshift_backwards_random(suite);
 
   return suite.finish();
 }

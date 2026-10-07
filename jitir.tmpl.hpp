@@ -3267,6 +3267,29 @@ namespace metajit {
         );
       }
 
+      std::optional<Bits> and_backwards(const Bits& argument) const {
+        // if this is the result an and-operation,
+        // and other is one of the arguments,
+        // what do we know about the other argument?
+        // if we have a place where result is 1 but argument is 0, then we are
+        // inconsistent
+        if (value & argument.mask & ~argument.value) {
+          return {};
+        }
+        // in all the places where the result is 1 both arguments have to 1. in
+        // the places where the result is 0, other has to be 0 iff argument is known 1.
+        uint64_t other_mask = (argument.value & mask) | value;
+        return Bits(type, other_mask, value);
+      }
+
+      std::optional<Bits> shl_backwards(size_t shift) const {
+        uint64_t valid_mask = (1 << shift) - 1;
+        if (value & valid_mask) {
+          return {};
+        }
+        return Bits(type, mask >> shift, value >> shift);
+      }
+
       void write(std::ostream& stream) const {
         size_t bits = type == Type::Bool ? 1 : type_size(type) * 8;
         for (size_t it = bits; it-- > 0; ) {
@@ -3323,6 +3346,16 @@ namespace metajit {
           assert(false); // Unreachable
           return Bits();
         }
+      }
+
+      std::optional<Bits> intersect(const Bits& other) {
+        uint64_t resvalue = value | other.value;
+        uint64_t either_known = mask | other.mask;
+        uint64_t both_known = mask & other.mask;
+        if ((value & both_known) == (other.value & both_known)) {
+          return Bits(type, either_known, resvalue);
+        }
+        return {};
       }
 
       bool and_idempotent_condition(const Bits& b) const {
@@ -4337,6 +4370,216 @@ namespace metajit {
       }
     }
   };
+
+class SimplifyTrace: public metajit::Pass<SimplifyTrace> {
+ using Bits = metajit::KnownBits::Bits;
+private:
+  metajit::Section* _section = nullptr;
+  metajit::Builder _builder;
+  NameMap<Bits> _values;
+  NameMap<Value*> _substs;
+
+  void _add_subst(Inst* inst, Value* value) {
+    std::cout << "adding to substs: ";
+    inst->write(std::cout);
+    std::cout << " val ";
+    value->write_arg(std::cout);
+    std::cout << std::endl;
+    _substs[inst] = value;
+  }
+
+public:
+
+  SimplifyTrace(metajit::Section* section, metajit::Chain* chain):
+                 Pass(section), _section(section), _builder(section),
+                 _values(section), _substs(section) {
+    if (chain->size() == 1) {
+      return;
+    }
+    section->autoname();
+
+    _init_values();
+    Block* block = chain->front();
+    while (true) {
+      for (Inst* inst : *block) {
+        inst->substitute_args(_substs);
+        if (inst->has_side_effect() ||
+            inst->is_terminator() ||
+            inst->type() == Type::Void ||
+            inst->type() == Type::Ptr) {
+          continue;
+        }
+        Bits bits = Bits::eval(inst, _values);
+        _values[inst] = bits;
+        if (bits.is_const()) {
+          _add_subst(inst, _builder.build_const(inst->type(), bits.value));
+        } else if (dynmatch(SelectInst, select, inst)) {
+          KnownBits::Bits cond = Bits::at(_values, select->cond());
+          if (cond.is_const()) {
+            if (cond.value != 0) {
+              _add_subst(inst, select->arg(1));
+            } else {
+              _add_subst(inst, select->arg(2));
+            }
+          }
+        } else if (dynmatch(AndInst, and_inst, inst)) {
+          Bits a = Bits::at(_values, and_inst->arg(0));
+          Bits b = Bits::at(_values, and_inst->arg(1));
+
+          // If there is no case where b_i is 0 and a_i is 1 or _, then a & b == a
+          if (((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
+            _add_subst(inst, and_inst->arg(0));
+          }
+        } else if (dynmatch(OrInst, or_inst, inst)) {
+          KnownBits::Bits a = Bits::at(_values, or_inst->arg(0));
+          KnownBits::Bits b = Bits::at(_values, or_inst->arg(1));
+
+          // If there is no case where b_i is 0 and a_i is 1 or _, then a | b == b
+          if (((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
+            _add_subst(inst, or_inst->arg(1));
+          }
+          if (((a.value ^ type_mask(a.type)) & (~b.mask | b.value)) == 0) {
+            _add_subst(inst, or_inst->arg(0));
+          }
+        } else if (dynmatch(EqInst, eqinst, inst)) {
+          if (dynmatch(Const, const_b, eqinst->arg(1))) {
+            if (const_b->value() == 1) {
+              if (dynmatch(ResizeUInst, resizeu, eqinst->arg(0))) {
+                if (resizeu->arg(0)->type() == Type::Bool) {
+                  _add_subst(inst, resizeu->arg(0));
+                }
+              }
+            }
+          }
+        }
+      }
+      Inst* last_inst = block->terminator();
+      if (dynmatch(BranchInst, branch, last_inst)) {
+        // in the next block we know the value of the bool
+        Block* true_block = branch->true_block();
+        Block* false_block = branch->false_block();
+        Value* cond = branch->cond();
+        if (is_exit_block(true_block)) {
+          block = false_block;
+          propagate_backwards(cond, Bits::constant(false));
+          continue;
+        } else if (is_exit_block(false_block)) {
+          block = true_block;
+          propagate_backwards(cond, Bits::constant(true));
+          continue;
+        }
+      }
+      return;
+    }
+  }
+
+  void _init_values() {
+    for (Block* block : *_section) {
+      for (Arg* arg : block->args()) {
+        _values[arg] = Bits(arg->type(), 0, 0);
+      }
+      for (Inst* inst : *block) {
+        _values[inst] = Bits(inst->type(), 0, 0);
+      }
+    }
+  }
+
+  bool static is_exit_block(Block* block) {
+    Inst* terminator = block->terminator();
+    if (dynmatch(ExitInst, exit, terminator)) {
+      return true;
+    }
+    return false;
+  }
+
+  bool propagate_backwards(Value* value, const Bits& newinfo) {
+
+    Bits old_bits = Bits::at(_values, value);
+    auto maybe_bits = old_bits.intersect(newinfo);
+    if (!maybe_bits.has_value()) {
+      // trace guards contradict each other, can happen when fuzzing
+      return false;
+    }
+    Bits bits = maybe_bits.value();
+    
+    if (dynmatch(Const, constant, value)) {
+      assert (bits.matches_const(constant->value()));
+      return false;
+    }
+    if (old_bits == bits) {
+      return false;
+    }
+    if (dynmatch(NamedValue, val, value)) {
+      _values[val] = bits;
+      if (bits.is_const()) {
+        _substs[val] = _builder.build_const(val->type(), bits.value);
+      }
+    }
+    if (dynmatch(EqInst, eq, value)) {
+      if (bits.is_const() && bits.value == 1) {
+        if (dynmatch(Const, const_b, eq->arg(1))) {
+          return propagate_backwards(eq->arg(0), Bits::constant(const_b->type(), const_b->value()));
+        }
+      }
+    } else if (dynmatch(AndInst, andinst, value)) {
+      auto arg0 = bits.and_backwards(Bits::at(_values, andinst->arg(1)));
+      if (arg0.has_value()) {
+        propagate_backwards(andinst->arg(0), arg0.value());
+      }
+      auto arg1 = bits.and_backwards(Bits::at(_values, andinst->arg(0)));
+      if (arg1.has_value()) {
+        propagate_backwards(andinst->arg(1), arg1.value());
+      }
+    } else if (dynmatch(AddInst, add, value)) {
+      Bits arg0 = bits - Bits::at(_values, add->arg(1));
+      propagate_backwards(add->arg(0), arg0);
+      Bits arg1 = bits - Bits::at(_values, add->arg(0));
+      propagate_backwards(add->arg(1), arg1);
+    } else if (dynmatch(XorInst, add, value)) {
+      // xor is its own inverse
+      Bits arg0 = bits ^ Bits::at(_values, add->arg(1));
+      propagate_backwards(add->arg(0), arg0);
+      Bits arg1 = bits ^ Bits::at(_values, add->arg(0));
+      propagate_backwards(add->arg(1), arg1);
+    } else if (dynmatch(ShlInst, shl, value)) {
+      Bits arg1 = Bits::at(_values, shl->arg(1));
+      if (arg1.is_const()) {
+        auto arg0 = bits.shl_backwards(arg1.value);
+        if (arg0.has_value()) {
+          propagate_backwards(shl->arg(0), arg0.value());
+        }
+      }
+    } else if (dynmatch(SelectInst, select, value)) {
+      Bits arg1 = Bits::at(_values, select->arg(1));
+      Bits equal1 = arg1.eq(bits);
+      if (equal1.is_const() && !equal1.value) {
+        propagate_backwards(select->arg(2), bits);
+        propagate_backwards(select->arg(0), Bits::constant(Type::Bool, 0));
+      } else {
+        Bits arg2 = Bits::at(_values, select->arg(2));
+        Bits equal2 = arg2.eq(bits);
+        if (equal2.is_const() && !equal2.value) {
+          propagate_backwards(select->arg(1), bits);
+          propagate_backwards(select->arg(0), Bits::constant(Type::Bool, 1));
+        }
+      }
+    } else if (dynmatch(ResizeUInst, resize, value)) {
+      Value* arg = resize->arg(0);
+      // we also need to use resize_x here,
+      // we don't know which bits got removed on narrowing
+      return propagate_backwards(arg, bits.resize_x(arg->type()));
+    } else if (dynmatch(ResizeXInst, resize, value)) {
+      Value* arg = resize->arg(0);
+      return propagate_backwards(arg, bits.resize_x(arg->type()));
+    } else if (dynmatch(Inst, inst, value)) {
+      std::cout << "unknown inst on backprop: ";
+      inst->write(std::cout);
+      std::cout << " "; bits.write(std::cout);
+      std::cout << std::endl;
+    }
+    return false;
+  }
+};
 
   class Loop {
   private:
