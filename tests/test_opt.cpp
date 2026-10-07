@@ -125,6 +125,71 @@ void test_natural_order_deep_chain() {
   unittest_assert(section.ordering() == BlockOrdering::Topological);
 }
 
+void trace_builder_shared_exits() {
+  for (int effect = 0; effect < 4; effect++) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    TraceBuilder builder(&section);
+    Chain chain;
+    builder.set_chain(&chain);
+    Block* entry = builder.build_block(std::vector<Type>{Type::Bool, Type::Bool, Type::Ptr});
+    builder.move_to_end(entry);
+    Value* ptr = entry->arg(2);
+    Value* value = builder.build_const(Type::Int32, 42);
+    unittest_assert(!builder.build_guard_begin(builder.build_eq(value, value)));
+    unittest_assert(builder.block() == entry);
+    unittest_assert(!entry->terminator());
+    unittest_assert(builder.build_guard_begin(entry->arg(0)));
+    Block* failure = builder.block();
+    builder.build_store(ptr, value, AliasingGroup(0), 0);
+    builder.build_call(builder.build_symbol(Type::Ptr, "reentry"), Type::Void, std::vector<Value*>{ptr});
+    builder.build_guard_end();
+    if (effect == 1) {
+      builder.build_store(ptr, value, AliasingGroup(0), 0);
+    } else if (effect == 2) {
+      builder.build_call(builder.build_symbol(Type::Ptr, "effect"), Type::Void, std::vector<Value*>{ptr});
+    } else if (effect == 3) {
+      Value* loaded = builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+      unittest_assert(!builder.build_store(ptr, loaded, AliasingGroup(0), 0));
+    }
+    Block* guard_block = builder.block();
+    unittest_assert(!builder.build_guard_begin(builder.build_const(Type::Bool, 1)));
+    unittest_assert(builder.block() == guard_block);
+    unittest_assert(!guard_block->terminator());
+    bool needs_closure = builder.build_guard_begin(entry->arg(1));
+    unittest_assert(needs_closure == (effect == 1 || effect == 2));
+    BranchInst* guard = dynamic_cast<BranchInst*>(guard_block->terminator());
+    unittest_assert(guard);
+    unittest_assert((guard->false_block() == failure) == !needs_closure);
+    if (needs_closure) {
+      builder.build_guard_end();
+    }
+    builder.build_exit();
+    unittest_assert(!section.verify(std::cout));
+    unittest_assert(chain.size() == 3);
+  }
+}
+
+void trace_builder_false_guard() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  TraceBuilder builder(&section);
+  builder.move_to_end(builder.build_block(std::vector<Type>{Type::Ptr}));
+  Value* ptr = builder.entry_arg(0);
+  unittest_assert(builder.build_guard_begin(builder.build_const(Type::Bool, 0)));
+  builder.build_store(ptr, builder.build_const(Type::Int8, 42), 0, 0);
+  builder.build_guard_end();
+  builder.build_store(ptr, builder.build_const(Type::Int8, 7), 0, 0);
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+  uint8_t result = 0;
+  Interpreter interpreter(&section, {Interpreter::Bits::constant(&result)});
+  unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+  unittest_assert(result == 42);
+}
+
 int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
@@ -1299,6 +1364,9 @@ b1:
 )", section);
     delete section;
   });
+
+  suite.test("trace_builder_shared_exits").run(trace_builder_shared_exits);
+  suite.test("trace_builder_false_guard").run(trace_builder_false_guard);
 
   suite.test("trace_builder_guard_excludes_failure_from_chain").run([]() {
     for (bool expected : {false, true}) {
