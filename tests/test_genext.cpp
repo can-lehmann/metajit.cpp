@@ -85,6 +85,26 @@ void store_separates_exits(Builder& builder, TraceTestData& data) {
   data.output(y);
 }
 
+void captured_constant_block_argument(Builder& builder, TraceTestData& data) {
+  Value* x = data.static_input(RandomRange(Type::Int32, 0, 10));
+  Value* value = builder.build_add(x, builder.build_const(Type::Int32, 1));
+  Block* continuation = builder.build_block({Type::Int32});
+  builder.build_jump(continuation, {value});
+  builder.move_to_end(continuation);
+  data.keep(builder.build_const(Type::Int32, 0));
+  Value* cond = data.input(RandomRange(Type::Bool));
+  Block* yes = builder.build_block();
+  Block* no = builder.build_block();
+  builder.build_branch(cond, yes, no);
+  builder.move_to_end(yes);
+  Value* result = builder.build_add(continuation->arg(0), builder.build_const(Type::Int32, 1));
+  data.output(result);
+  builder.build_exit();
+  builder.move_to_end(no);
+  data.output(builder.build_add(continuation->arg(0), builder.build_const(Type::Int32, 2)));
+  builder.build_exit();
+}
+
 int main(int argc, char** argv) {
   LLVMCodeGen::initilize_llvm_jit();
 
@@ -92,6 +112,8 @@ int main(int argc, char** argv) {
 
   for (bool record_replay : {false, true}) {
     suite.set_record_replay(record_replay);
+
+    suite.gen_ext_test("captured_constant_block_argument").run(captured_constant_block_argument);
 
     suite.gen_ext_test("promoted_arithmetic_guard").run(promoted_arithmetic_guard);
     suite.gen_ext_test("folded_branch_guard").guards(0, 0).run(folded_branch_guard);
