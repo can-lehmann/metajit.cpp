@@ -46,6 +46,14 @@ jobs:
         run: |
           make clean
           make test
+      - name: Run known-bits, simplification, and interpreter tests with UBSan
+        working-directory: metajit.cpp
+        run: make test-ubsan
+      - name: Run translation validation unit tests
+        working-directory: metajit.cpp
+        run: |
+          make tests/test_tv Z3_FLAGS="-I../z3build/include -L../z3build/bin -lz3 -Wl,-rpath,$(pwd)/../z3build/bin"
+          ./tests/test_tv
       - name: Fuzz a bit
         working-directory: metajit.cpp
         run: |

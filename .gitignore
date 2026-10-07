@@ -23,3 +23,4 @@ tests/test_reentry
 tests/test_mem2reg
 tests/coverage/
 tests/test_genext
+tests/ubsan/

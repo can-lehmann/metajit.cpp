@@ -3002,6 +3002,10 @@ namespace metajit {
         return (mask & (uint64_t(1) << bit)) != 0;
       }
 
+      bool operator==(Bits other) {
+        return type == other.type && mask == other.mask && value == other.value;
+      }
+
       std::optional<bool> at(size_t bit) const {
         if (mask & (uint64_t(1) << bit)) {
           return (value & (uint64_t(1) << bit)) != 0;
@@ -3027,20 +3031,34 @@ namespace metajit {
         }
 
       static Bits div_u(Type type, uint64_t a, uint64_t b) {
+        if (b == 0) {
+          return Bits(type, 0, 0);
+        }
         return Bits::constant(type, a / b);
       }
 
       static Bits div_s(Type type, uint64_t a, uint64_t b) {
+        if (b == 0 ||
+            (a == (uint64_t(1) << (type_width(type) - 1)) && b == type_mask(type))) {
+          return Bits(type, 0, 0);
+        }
         uint64_t res = 0;
         switch_type(/)
         return Bits::constant(type, res);
       }
 
       static Bits mod_u(Type type, uint64_t a, uint64_t b) {
+        if (b == 0) {
+          return Bits(type, 0, 0);
+        }
         return Bits::constant(type, a % b);
       }
 
       static Bits mod_s(Type type, uint64_t a, uint64_t b) {
+        if (b == 0 ||
+            (a == (uint64_t(1) << (type_width(type) - 1)) && b == type_mask(type))) {
+          return Bits(type, 0, 0);
+        }
         uint64_t res = 0;
         switch_type(%)
         return Bits::constant(type, res);
@@ -3058,23 +3076,23 @@ namespace metajit {
 
       #undef switch_type
 
-      #define const_binop(name, expr) \
+      #define const_binop(name, result_type, expr) \
         Bits name(const Bits& other) const { \
           if (is_const() && other.is_const()) { \
             return expr; \
           } \
-          return Bits(type, 0, 0); \
+          return Bits(result_type, 0, 0); \
         }
       
-      const_binop(operator*, Bits::constant(type, value * other.value))
+      const_binop(operator*, type, Bits::constant(type, value * other.value))
 
-      const_binop(div_u, div_u(type, value, other.value))
-      const_binop(div_s, div_s(type, value, other.value))
-      const_binop(mod_u, mod_u(type, value, other.value))
-      const_binop(mod_s, mod_s(type, value, other.value))
+      const_binop(div_u, type, div_u(type, value, other.value))
+      const_binop(div_s, type, div_s(type, value, other.value))
+      const_binop(mod_u, type, mod_u(type, value, other.value))
+      const_binop(mod_s, type, mod_s(type, value, other.value))
 
-      const_binop(lt_u, lt_u(type, value, other.value))
-      const_binop(lt_s, lt_s(type, value, other.value))
+      const_binop(lt_u, Type::Bool, lt_u(type, value, other.value))
+      const_binop(lt_s, Type::Bool, lt_s(type, value, other.value))
 
       #undef const_binop
 
@@ -3141,6 +3159,9 @@ namespace metajit {
       }
 
       Bits shl(size_t shift) const {
+        if (shift >= type_width(type)) {
+          return Bits(type, 0, 0);
+        }
         return Bits(
           type,
           ((mask << shift) | ((uint64_t(1) << shift) - 1)) & type_mask(type),
@@ -3149,6 +3170,9 @@ namespace metajit {
       }
 
       Bits shr_u(size_t shift) const {
+        if (shift >= type_width(type)) {
+          return Bits(type, 0, 0);
+        }
         return Bits(
           type,
           (mask >> shift) | (type_mask(type) & ~(type_mask(type) >> shift)),
@@ -3157,6 +3181,9 @@ namespace metajit {
       }
 
       Bits shr_s(size_t shift) const {
+        if (shift >= type_width(type)) {
+          return Bits(type, 0, 0);
+        }
         Bits result(
           type,
           (mask >> shift),
@@ -3290,6 +3317,8 @@ namespace metajit {
             return Bits(value->type(), 0, 0);
           }
           return values.at(named_value);
+        } else if (dynamic_cast<Symbol*>(value) || dynamic_cast<Poison*>(value)) {
+          return Bits(value->type(), 0, 0);
         } else {
           assert(false); // Unreachable
           return Bits();
@@ -3307,8 +3336,9 @@ namespace metajit {
       }
 
       static Bits eval(Inst* inst, NameMap<Bits>& values) {
-        if (dynamic_cast<FreezeInst*>(inst) ||
-            dynamic_cast<PromoteInst*>(inst) ||
+        if (dynamic_cast<FreezeInst*>(inst)) {
+          return Bits(inst->type(), 0, 0);
+        } else if (dynamic_cast<PromoteInst*>(inst) ||
             dynamic_cast<AssumeConstInst*>(inst)) {
           return at(values, inst->arg(0));
         } else if (dynmatch(SelectInst, select, inst)) {
@@ -3446,20 +3476,34 @@ namespace metajit {
         }
 
       static Bits div_u(Type type, uint64_t a, uint64_t b) {
+        if (b == 0) {
+          return Bits::poison(type);
+        }
         return Bits::constant(type, a / b);
       }
 
       static Bits div_s(Type type, uint64_t a, uint64_t b) {
+        if (b == 0 ||
+            (a == (uint64_t(1) << (type_width(type) - 1)) && b == type_mask(type))) {
+          return Bits::poison(type);
+        }
         uint64_t res = 0;
         switch_type(/)
         return Bits::constant(type, res);
       }
 
       static Bits mod_u(Type type, uint64_t a, uint64_t b) {
+        if (b == 0) {
+          return Bits::poison(type);
+        }
         return Bits::constant(type, a % b);
       }
 
       static Bits mod_s(Type type, uint64_t a, uint64_t b) {
+        if (b == 0 ||
+            (a == (uint64_t(1) << (type_width(type) - 1)) && b == type_mask(type))) {
+          return Bits::poison(type);
+        }
         uint64_t res = 0;
         switch_type(%)
         return Bits::constant(type, res);
@@ -3471,7 +3515,24 @@ namespace metajit {
         return Bits::constant(res);
       }
 
+      static Bits shl(Type type, uint64_t a, uint64_t b) {
+        if (b >= type_width(type)) {
+          return Bits::poison(type);
+        }
+        return Bits::constant(type, a << b);
+      }
+
+      static Bits shr_u(Type type, uint64_t a, uint64_t b) {
+        if (b >= type_width(type)) {
+          return Bits::poison(type);
+        }
+        return Bits::constant(type, a >> b);
+      }
+
       static Bits shr_s(Type type, uint64_t a, uint64_t b) {
+        if (b >= type_width(type)) {
+          return Bits::poison(type);
+        }
         uint64_t res = 0;
         switch_type(>>)
         return Bits::constant(type, res);
@@ -3508,42 +3569,42 @@ namespace metajit {
 
       #undef float_binop
 
-      #define propagating_binop(name, expr) \
+      #define propagating_binop(name, result_type, expr) \
         Bits name(const Bits& other) const { \
           if (is_poison || other.is_poison) { \
-            return Bits::poison((expr).type); \
+            return Bits::poison(result_type); \
           } \
           return expr; \
         }
       
-      propagating_binop(operator+, Bits::constant(type, value + other.value))
-      propagating_binop(operator-, Bits::constant(type, value - other.value))
-      propagating_binop(operator*, Bits::constant(type, value * other.value))
+      propagating_binop(operator+, type, Bits::constant(type, value + other.value))
+      propagating_binop(operator-, type, Bits::constant(type, value - other.value))
+      propagating_binop(operator*, type, Bits::constant(type, value * other.value))
 
-      propagating_binop(div_u, div_u(type, value, other.value))
-      propagating_binop(div_s, div_s(type, value, other.value))
-      propagating_binop(mod_u, mod_u(type, value, other.value))
-      propagating_binop(mod_s, mod_s(type, value, other.value))
+      propagating_binop(div_u, type, div_u(type, value, other.value))
+      propagating_binop(div_s, type, div_s(type, value, other.value))
+      propagating_binop(mod_u, type, mod_u(type, value, other.value))
+      propagating_binop(mod_s, type, mod_s(type, value, other.value))
 
-      propagating_binop(operator&, Bits::constant(type, value & other.value))
-      propagating_binop(operator|, Bits::constant(type, value | other.value))
-      propagating_binop(operator^, Bits::constant(type, value ^ other.value))
+      propagating_binop(operator&, type, Bits::constant(type, value & other.value))
+      propagating_binop(operator|, type, Bits::constant(type, value | other.value))
+      propagating_binop(operator^, type, Bits::constant(type, value ^ other.value))
 
-      propagating_binop(eq, Bits::constant(Type::Bool, value == other.value))      
-      propagating_binop(lt_u, Bits::constant(Type::Bool, value < other.value))
-      propagating_binop(lt_s, lt_s(type, value, other.value))
+      propagating_binop(eq, Type::Bool, Bits::constant(Type::Bool, value == other.value))
+      propagating_binop(lt_u, Type::Bool, Bits::constant(Type::Bool, value < other.value))
+      propagating_binop(lt_s, Type::Bool, lt_s(type, value, other.value))
 
-      propagating_binop(shl, Bits::constant(type, value << other.value))
-      propagating_binop(shr_s, shr_s(type, value, other.value))
-      propagating_binop(shr_u, Bits::constant(type, value >> other.value))
+      propagating_binop(shl, type, shl(type, value, other.value))
+      propagating_binop(shr_s, type, shr_s(type, value, other.value))
+      propagating_binop(shr_u, type, shr_u(type, value, other.value))
 
-      propagating_binop(add_f, add_f(type, value, other.value))
-      propagating_binop(sub_f, sub_f(type, value, other.value))
-      propagating_binop(mul_f, mul_f(type, value, other.value))
-      propagating_binop(div_f, div_f(type, value, other.value))
+      propagating_binop(add_f, type, add_f(type, value, other.value))
+      propagating_binop(sub_f, type, sub_f(type, value, other.value))
+      propagating_binop(mul_f, type, mul_f(type, value, other.value))
+      propagating_binop(div_f, type, div_f(type, value, other.value))
 
-      propagating_binop(lt_f_u, lt_f_u(type, value, other.value))
-      propagating_binop(lt_f_o, lt_f_o(type, value, other.value))
+      propagating_binop(lt_f_u, Type::Bool, lt_f_u(type, value, other.value))
+      propagating_binop(lt_f_o, Type::Bool, lt_f_o(type, value, other.value))
 
       #undef propagating_binop
 
@@ -3936,6 +3997,9 @@ namespace metajit {
       }
 
       uint64_t shr_s_arg_0(uint64_t shift) {
+        if (shift == 0) {
+          return used;
+        }
         // the uppermost shift bits are set in this
         uint64_t sign_extend_mask = ((1ull << shift) - 1) << (type_width(type) - shift);
         uint64_t result = (used << shift);
@@ -4016,9 +4080,7 @@ namespace metajit {
               use(arg, _values[inst]);
             }
           } else if (dynmatch(SelectInst, select, inst)) {
-            if (_values[inst].used != 0) {
-              use(select->cond(), Bits::all(select->cond()->type()));
-            }
+            use_all(select->cond());
             use(select->arg(1), _values[inst]);
             use(select->arg(2), _values[inst]);
           } else if (dynamic_cast<AddInst*>(inst) ||
@@ -4031,6 +4093,14 @@ namespace metajit {
             for (Value* arg : inst->args()) {
               use(arg, used);
             }
+          } else if (dynamic_cast<ShlInst*>(inst) ||
+                     dynamic_cast<DivUInst*>(inst) ||
+                     dynamic_cast<ModUInst*>(inst)) {
+            use(inst->arg(0), _values[inst].used ? type_mask(inst->type()) : 0);
+            use_all(inst->arg(1));
+          } else if (dynamic_cast<DivSInst*>(inst) ||
+                     dynamic_cast<ModSInst*>(inst)) {
+            use_all_args(inst);
           } else if (dynamic_cast<ShrUInst*>(inst) ||
                      dynamic_cast<ShrSInst*>(inst)) {
             if (dynmatch(Const, const_b, inst->arg(1))) {

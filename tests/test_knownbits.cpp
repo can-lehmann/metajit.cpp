@@ -213,6 +213,239 @@ void test_usedbits_shr(unittest::Suite& suite) {
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
 
+  using ConcreteBits = Interpreter::Bits;
+  suite.test("usedbits_select_preserves_definedness").run([]() {
+    for (uint64_t demanded : {uint64_t(255), uint64_t(1), uint64_t(128), uint64_t(0)}) {
+      Context context;
+      Allocator allocator;
+      std::istringstream stream(
+        "section {\n"
+        "b0(%0: Ptr, %1: Int8, %2: Int8):\n"
+        "  %3 = Load %0, type=Bool, flags={}, aliasing=0, offset=0\n"
+        "  %4 = Select %3, %1, %2\n"
+        "  %5 = And %4, " + std::to_string(demanded) + ":Int8\n"
+        "  Store %0, %5, aliasing=0, offset=1\n"
+        "  Exit\n"
+        "}\n");
+      std::unique_ptr<Section> section(SectionReader<>::read_section(context, allocator, stream));
+      section->order_blocks(BlockOrdering::Dominator);
+      unittest_assert(!section->verify(std::cout));
+      Value* condition = *section->entry()->begin();
+      UsedBits used(section.get());
+      uint64_t condition_used = used.at(condition).used;
+      for (bool poison_true : {false, true}) {
+        ConcreteBits defined = ConcreteBits::constant(Type::Int8, 42);
+        ConcreteBits poison = ConcreteBits::poison(Type::Int8);
+        ConcreteBits a = poison_true ? poison : defined;
+        ConcreteBits b = poison_true ? defined : poison;
+        for (uint64_t cond : {uint64_t(0), uint64_t(1)}) {
+          ConcreteBits original = ConcreteBits::constant(Type::Bool, cond).select(a, b);
+          if (original.is_poison) continue;
+          for (uint64_t extra : {uint64_t(0), uint64_t(1)}) {
+            uint64_t changed_cond = (cond & condition_used) | (extra & ~condition_used);
+            ConcreteBits changed = ConcreteBits::constant(Type::Bool, changed_cond).select(a, b);
+            if (changed.is_poison) {
+              std::cerr << "Select demanded=" << demanded << " condition mask=" << condition_used
+                        << " original condition=" << cond << " changed condition=" << changed_cond
+                        << " poison true arm=" << poison_true << "\n";
+            }
+            unittest_assert(!changed.is_poison);
+            unittest_assert(((original.value ^ changed.value) & demanded) == 0);
+          }
+        }
+      }
+    }
+  });
+
+  struct UsedBitsOperation {
+    const char* name;
+    ConcreteBits (ConcreteBits::*evaluate)(const ConcreteBits&) const;
+  };
+  for (UsedBitsOperation operation : {
+      UsedBitsOperation{"Shl", &ConcreteBits::shl},
+      UsedBitsOperation{"ShrU", &ConcreteBits::shr_u},
+      UsedBitsOperation{"ShrS", &ConcreteBits::shr_s},
+      UsedBitsOperation{"DivU", &ConcreteBits::div_u},
+      UsedBitsOperation{"DivS", &ConcreteBits::div_s},
+      UsedBitsOperation{"ModU", &ConcreteBits::mod_u},
+      UsedBitsOperation{"ModS", &ConcreteBits::mod_s}}) {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      suite.test(std::string("usedbits_preserves_defined_results_") + operation.name +
+                 "_Int" + std::to_string(type_width(type))).run([operation, type]() {
+        uint64_t width = type_width(type);
+        uint64_t sign = uint64_t(1) << (width - 1);
+        uint64_t mask = type_mask(type);
+        for (uint64_t demanded : {mask, uint64_t(1), sign, mask >> 1, uint64_t(0)}) {
+          Context context;
+          Allocator allocator;
+          std::string type_name = "Int" + std::to_string(width);
+          std::istringstream stream(
+            "section {\n"
+            "b0(%0: Ptr):\n"
+            "  %1 = Load %0, type=" + type_name + ", flags={}, aliasing=0, offset=0\n"
+            "  %2 = Load %0, type=" + type_name + ", flags={}, aliasing=0, offset=8\n"
+            "  %3 = " + operation.name + " %1, %2\n"
+            "  %4 = And %3, " + std::to_string(demanded) + ":" + type_name + "\n"
+            "  Store %0, %4, aliasing=0, offset=16\n"
+            "  Exit\n"
+            "}\n");
+          std::unique_ptr<Section> section(SectionReader<>::read_section(context, allocator, stream));
+          section->order_blocks(BlockOrdering::Dominator);
+          unittest_assert(!section->verify(std::cout));
+          auto inst = (*section->begin())->begin();
+          Value* lhs = *inst++;
+          Value* rhs = *inst++;
+          UsedBits used(section.get());
+          uint64_t lhs_used = used.at(lhs).used;
+          uint64_t rhs_used = used.at(rhs).used;
+          auto evaluate = [&](uint64_t a, uint64_t b) {
+            return (ConcreteBits::constant(type, a).*operation.evaluate)(ConcreteBits::constant(type, b));
+          };
+          auto check = [&](uint64_t a, uint64_t b, uint64_t extra_a, uint64_t extra_b) {
+            ConcreteBits original = evaluate(a, b);
+            if (original.is_poison) return;
+            uint64_t changed_a = ((a & lhs_used) | (extra_a & ~lhs_used)) & mask;
+            uint64_t changed_b = ((b & rhs_used) | (extra_b & ~rhs_used)) & mask;
+            ConcreteBits changed = evaluate(changed_a, changed_b);
+            if (changed.is_poison || ((original.value ^ changed.value) & demanded) != 0) {
+              std::cerr << operation.name << " " << type_name << " demanded=" << demanded
+                        << " operand masks=" << lhs_used << "," << rhs_used
+                        << " original=" << a << "," << b
+                        << " changed=" << changed_a << "," << changed_b << "\n";
+            }
+            unittest_assert(!changed.is_poison);
+            unittest_assert(((original.value ^ changed.value) & demanded) == 0);
+          };
+          std::vector<uint64_t> boundaries = {0, 1, 2, 7, width - 1, width, sign, sign + 1, mask};
+          for (uint64_t a : boundaries) {
+            for (uint64_t b : boundaries) {
+              for (uint64_t extra_a : boundaries) {
+                for (uint64_t extra_b : boundaries) {
+                  check(a, b, extra_a, extra_b);
+                }
+              }
+            }
+          }
+          for (size_t sample = 0; sample < 1000; sample++) {
+            check(rand64() & mask, rand64() & mask, rand64(), rand64());
+          }
+        }
+      });
+    }
+  }
+
+  suite.test("comparison_result_types").run([]() {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      for (Bits a : {Bits(type, 0, 0), Bits(type, 1, 0), Bits::constant(type, 0)}) {
+        for (Bits b : {Bits(type, 0, 0), Bits(type, 1, 1), Bits::constant(type, 1)}) {
+          for (Bits result : {a.lt_s(b), a.lt_u(b)}) {
+            unittest_assert(result.type == Type::Bool);
+            if (a.is_const() && b.is_const()) {
+              unittest_assert(result == Bits::constant(true));
+            } else {
+              unittest_assert(result == Bits(Type::Bool, 0, 0));
+            }
+            unittest_assert((result & Bits::constant(false)) == Bits::constant(false));
+          }
+        }
+      }
+    }
+  });
+
+  suite.test("symbol_and_poison_have_unknown_bits").run([]() {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    NameMap<Bits> values(&section);
+    auto check_unknown = [&](Value* value) {
+      Bits bits = Bits::at(values, value);
+      unittest_assert(bits.type == value->type());
+      unittest_assert(bits.mask == 0);
+      unittest_assert(bits.value == 0);
+      unittest_assert(!bits.is_const());
+    };
+    check_unknown(builder.build_symbol(Type::Ptr, "target"));
+    for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64, Type::Ptr}) {
+      check_unknown(builder.build_poison(type));
+    }
+  });
+
+  suite.test("division_and_remainder_by_zero_are_unknown").run([]() {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      Bits zero = Bits::constant(type, 0);
+      for (Bits numerator : {zero, Bits::constant(type, 7),
+                             Bits::constant(type, type_mask(type)), Bits(type, 0, 0)}) {
+        for (Bits result : {numerator.div_u(zero), numerator.div_s(zero),
+                            numerator.mod_u(zero), numerator.mod_s(zero)}) {
+          unittest_assert(result.type == type);
+          unittest_assert(result.mask == 0);
+          unittest_assert(result.value == 0);
+          unittest_assert(!result.is_const());
+        }
+      }
+    }
+  });
+
+  suite.test("signed_division_and_remainder_overflow_are_unknown").run([]() {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      uint64_t min_value = uint64_t(1) << (type_width(type) - 1);
+      Bits minimum = Bits::constant(type, min_value);
+      Bits minus_one = Bits::constant(type, type_mask(type));
+      for (Bits result : {minimum.div_s(minus_one), minimum.mod_s(minus_one)}) {
+        unittest_assert(result.type == type);
+        unittest_assert(result.mask == 0);
+        unittest_assert(result.value == 0);
+        unittest_assert(!result.is_const());
+      }
+      Bits one = Bits::constant(type, 1);
+      unittest_assert(minimum.div_s(one) == minimum);
+      unittest_assert(minimum.mod_s(one) == Bits::constant(type, 0));
+      Bits near_minimum = Bits::constant(type, min_value + 1);
+      unittest_assert(near_minimum.div_s(minus_one) == Bits::constant(type, min_value - 1));
+      unittest_assert(near_minimum.mod_s(minus_one) == Bits::constant(type, 0));
+    }
+  });
+
+  suite.test("oversized_shifts_are_unknown").run([]() {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      size_t width = type_width(type);
+      for (Bits operand : {Bits::constant(type, 0), Bits::constant(type, type_mask(type)),
+                           Bits(type, 1, 1)}) {
+        for (size_t shift : {width, width + 1, size_t(64), size_t(128), SIZE_MAX}) {
+          Bits count = Bits::constant(type, shift);
+          for (Bits result : {operand.shl(shift), operand.shr_u(shift), operand.shr_s(shift),
+                              operand.shl(count), operand.shr_u(count), operand.shr_s(count)}) {
+            unittest_assert(result.type == type);
+            unittest_assert(result.mask == 0);
+            unittest_assert(result.value == 0);
+            unittest_assert(!result.is_const());
+          }
+        }
+        unittest_assert(operand.shl(0) == operand);
+        unittest_assert(operand.shr_u(0) == operand);
+        unittest_assert(operand.shr_s(0) == operand);
+      }
+      Bits one = Bits::constant(type, 1);
+      Bits ones = Bits::constant(type, type_mask(type));
+      unittest_assert(one.shl(width - 1) == Bits::constant(type, uint64_t(1) << (width - 1)));
+      unittest_assert(ones.shr_u(width - 1) == one);
+      unittest_assert(ones.shr_s(width - 1) == ones);
+    }
+  });
+
+  suite.test("usedbits_signed_right_shift_boundaries").run([]() {
+    for (Type type : {Type::Int64, Type::Int32, Type::Int16, Type::Int8}) {
+      size_t width = type_width(type);
+      for (uint64_t used : {uint64_t(0), uint64_t(1), uint64_t(1) << (width - 1), type_mask(type)}) {
+        UsedBits::Bits bits(type, used);
+        unittest_assert(bits.shr_s_arg_0(0) == used);
+        uint64_t expected = used ? uint64_t(1) << (width - 1) : 0;
+        unittest_assert(bits.shr_s_arg_0(width - 1) == expected);
+      }
+    }
+  });
+
   test_add_example(suite);
   test_sub_example(suite);
   test_random(suite);

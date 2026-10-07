@@ -438,13 +438,19 @@ namespace metajit {
             return result; \
           }
 
-        #define binop_divmod(InstType, expression) \
+        #define binop_divmod(InstType, expression, is_signed) \
           else if (dynamic_cast<InstType*>(inst)) { \
             z3::expr a = emit(inst->arg(0)).value(); \
             z3::expr b = emit(inst->arg(1)).value(); \
             ValueState result(inst->type(), expression); \
             result.set_poison(input_poison(inst) || \
                               b == _context.bv_val(0, type_width(inst->type()))); \
+            if (is_signed) { \
+              size_t width = type_width(inst->type()); \
+              result.set_poison(result.is_poison() || \
+                (a == _context.bv_val(uint64_t(1) << (width - 1), width) && \
+                 b == _context.bv_val(type_mask(inst->type()), width))); \
+            } \
             return result; \
           }
 
@@ -461,10 +467,10 @@ namespace metajit {
         binop(AddInst, a + b)
         binop(SubInst, a - b)
         binop(MulInst, a * b)
-        binop_divmod(DivSInst, a / b)
-        binop_divmod(DivUInst, z3::udiv(a, b))
-        binop_divmod(ModSInst, z3::srem(a, b))
-        binop_divmod(ModUInst, z3::urem(a, b))
+        binop_divmod(DivSInst, a / b, true)
+        binop_divmod(DivUInst, z3::udiv(a, b), false)
+        binop_divmod(ModSInst, z3::srem(a, b), true)
+        binop_divmod(ModUInst, z3::urem(a, b), false)
         binop(AndInst, a & b)
         binop(OrInst, a | b)
         binop(XorInst, a ^ b)
