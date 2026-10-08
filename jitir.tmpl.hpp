@@ -764,7 +764,7 @@ namespace metajit {
       // Guaranteed to be in bounds of an allocation, so will not trap
       InBounds = 1 << 1,
       // The value of this load is known at section entry
-      EntryFrozen = 1 << 2,
+      EntryPromoted = 1 << 2,
     };
 
     using BaseFlags<LoadFlags>::BaseFlags;
@@ -772,7 +772,7 @@ namespace metajit {
     constexpr static const char* NAMES[] = {
       "Pure",
       "InBounds",
-      "EntryFrozen",
+      "EntryPromoted",
     };
 
     constexpr static size_t COUNT = 3;
