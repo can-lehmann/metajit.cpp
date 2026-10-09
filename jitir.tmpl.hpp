@@ -2307,6 +2307,8 @@ namespace metajit {
                         CallConv call_conv = CallConv::Default,
                         CallFlags call_flags = CallFlags::None) {
       if (!_guard_success) {
+        // Calls may read/write memory reachable through pointers, so invalidate
+        // forwarding and exact aliasing state conservatively.
         invalidate_memory_state();
       }
       return Builder::build_call(callee, args, type, call_conv, call_flags);
