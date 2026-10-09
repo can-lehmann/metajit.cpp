@@ -2206,6 +2206,10 @@ namespace metajit {
     // We override load/store to do simple load/store forwarding
 
     Value* build_load(Value* ptr, Type type, LoadFlags flags, AliasingGroup aliasing, uint64_t offset) {
+      if (_guard_success) {
+        return Builder::build_load(ptr, type, flags, aliasing, offset);
+      }
+
       if (dynmatch(AddPtrInst, add_ptr, ptr)) {
         if (dynmatch(Const, const_offset, add_ptr->offset())) {
           ptr = add_ptr->ptr();
@@ -2253,6 +2257,10 @@ namespace metajit {
 
   public:
     Value* build_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
+      if (_guard_success) {
+        return Builder::build_store(ptr, value, aliasing, offset);
+      }
+
       if (dynmatch(AddPtrInst, add_ptr, ptr)) {
         if (dynmatch(Const, const_offset, add_ptr->offset())) {
           ptr = add_ptr->ptr();
@@ -2293,15 +2301,27 @@ namespace metajit {
       }
     }
 
+    CallInst* build_call(Value* callee,
+                        size_t args,
+                        Type type,
+                        CallConv call_conv = CallConv::Default,
+                        CallFlags call_flags = CallFlags::None) {
+      if (!_guard_success) {
+        invalidate_memory_state();
+      }
+      return Builder::build_call(callee, args, type, call_conv, call_flags);
+    }
+
     Value* build_call(Value* callee,
                       Type type,
                       const lwir::Span<Value*>& args,
                       CallConv call_conv = CallConv::Default,
                       CallFlags call_flags = CallFlags::None) {
-      // Calls may read/write memory reachable through pointers, so invalidate
-      // forwarding and exact aliasing state conservatively.
-      invalidate_memory_state();
-      return Builder::build_call(callee, type, args, call_conv, call_flags);
+      CallInst* call = build_call(callee, args.size(), type, call_conv, call_flags);
+      for (size_t it = 0; it < args.size(); it++) {
+        call->set_arg(it + 1, args[it]);
+      }
+      return call;
     }
 
     Value* build_call(Value* callee,
