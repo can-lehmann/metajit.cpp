@@ -7,12 +7,12 @@ TEST_CFLAGS := ${CFLAGS} -DMETAJIT_DEBUG -DMETAJIT_SLOW_ASSERTS
 COVERAGE_CFLAGS := ${TEST_CFLAGS} -fprofile-instr-generate -fcoverage-mapping
 UBSAN_CFLAGS := ${TEST_CFLAGS} -fsanitize=undefined -fno-sanitize=function -fno-sanitize-recover=undefined
 
-COVERAGE_TESTS := test_knownbits test_insts test_interpreter test_clone test_cfg test_fuzzer test_opt test_reentry test_mem2reg test_source test_genext test_reader
+COVERAGE_TESTS := test_knownbits test_insts test_interpreter test_clone test_cfg test_fuzzer test_opt test_simplify_trace test_reentry test_mem2reg test_source test_genext test_reader
 
 run: main
 	./main
 
-test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
+test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_simplify_trace tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
 	./tests/test_knownbits
 	./tests/test_insts
 	./tests/test_interpreter
@@ -20,6 +20,7 @@ test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_cl
 	./tests/test_cfg
 	./tests/test_fuzzer
 	./tests/test_opt
+	./tests/test_simplify_trace
 	./tests/test_reentry
 	./tests/test_mem2reg
 	./tests/test_source
@@ -29,9 +30,10 @@ fuzz: tests/fuzzer
 	./tests/fuzzer
 
 .PHONY: test-ubsan
-test-ubsan: tests/ubsan/test_knownbits tests/ubsan/test_opt tests/ubsan/test_interpreter
+test-ubsan: tests/ubsan/test_knownbits tests/ubsan/test_opt tests/ubsan/test_simplify_trace tests/ubsan/test_interpreter
 	./tests/ubsan/test_knownbits
 	./tests/ubsan/test_opt
+	./tests/ubsan/test_simplify_trace
 	./tests/ubsan/test_interpreter
 
 tests/ubsan/%: tests/%.cpp ${HEADER_FILES} ${TEST_HEADER_FILES} Makefile
@@ -60,6 +62,9 @@ tests/test_cfg: tests/test_cfg.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_opt: tests/test_opt.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${TEST_CFLAGS} -o $@ $<
+
+tests/test_simplify_trace: tests/test_simplify_trace.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_reader: tests/test_reader.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
@@ -105,32 +110,38 @@ jitir.hpp jitir_llvmapi.hpp genext.hpp &: jitir.py jitir.tmpl.hpp jitir_llvmapi.
 	PYTHONPATH="../lwir.cpp" python3 jitir.py
 
 COVERAGE_PROFRAW_FILES := $(patsubst %,tests/coverage/%.profraw,$(COVERAGE_TESTS))
+COVERAGE_LCOV_FILES := $(patsubst %,tests/coverage/%.lcov,$(COVERAGE_TESTS))
 
-tests/coverage/%.profraw: tests/%.cpp jitir.hpp jitir_llvmapi.hpp genext.hpp ${HEADER_FILES} ${TEST_HEADER_FILES} | tests/coverage
+.SECONDARY: $(COVERAGE_PROFRAW_FILES)
+
+tests/coverage/%.profraw: tests/%.cpp jitir.hpp jitir_llvmapi.hpp genext.hpp ${HEADER_FILES} ${TEST_HEADER_FILES} Makefile | tests/coverage
 	clang++ $(COVERAGE_CFLAGS) -o tests/coverage/$* $<
 	LLVM_PROFILE_FILE=$@ tests/coverage/$*
 
 tests/coverage/test_source.profraw: ${TEST_SOURCE_LL_FILES}
 
-tests/coverage/merged.profdata: $(COVERAGE_PROFRAW_FILES)
-	llvm-profdata-20 merge -sparse $^ -o $@
+tests/coverage/%.lcov: tests/coverage/%.profraw
+	llvm-profdata-20 merge -sparse $< -o tests/coverage/$*.profdata
+	llvm-cov-20 export --format=lcov --instr-profile=tests/coverage/$*.profdata \
+		-object tests/coverage/$* \
+		--ignore-filename-regex="^/usr|/tests/|lwir_utils\.hpp|unittest\.hpp" \
+		> $@
+
+tests/coverage/coverage.lcov: $(COVERAGE_LCOV_FILES) tests/merge_coverage.py
+	python3 tests/merge_coverage.py --output $@ $(COVERAGE_LCOV_FILES)
 
 tests/coverage:
 	mkdir -p tests/coverage
 
-coverage: tests/coverage/merged.profdata
-	llvm-cov-20 show --format=html --instr-profile=$< \
-		$(patsubst %,-object tests/coverage/%,$(COVERAGE_TESTS)) \
-		--ignore-filename-regex="^/usr" \
-		> tests/coverage/report.html
-	@echo "Coverage report: tests/coverage/report.html"
+coverage: tests/coverage/coverage.lcov
+	genhtml --branch-coverage --rc derive_function_end_line=0 --rc check_data_consistency=0 \
+		$< --output-directory tests/coverage/html
+	@echo "Coverage report: tests/coverage/html/index.html"
 
-coverage-report: tests/coverage/merged.profdata
-	llvm-cov-20 report --instr-profile=$< \
-		$(patsubst %,-object tests/coverage/%,$(COVERAGE_TESTS)) \
-		--ignore-filename-regex="^/usr|/tests/|lwir_utils\.hpp|unittest\.hpp"
+coverage-report: tests/coverage/coverage.lcov
+	@python3 tests/coverage_to_markdown.py < $<
 
-diff-cover: tests/coverage/merged.profdata
+diff-cover: tests/coverage/coverage.lcov
 	$(eval MERGE_BASE := $(shell git merge-base HEAD origin/main))
 	$(eval WORKTREE := $(shell mktemp -d))
 	git worktree add $(WORKTREE) $(MERGE_BASE)
@@ -144,10 +155,6 @@ diff-cover: tests/coverage/merged.profdata
 	  diff -u $(WORKTREE)/genext.hpp genext.hpp | tail -n +3; \
 	  git diff $(MERGE_BASE) -- . ':(exclude)jitir.hpp' ':(exclude)jitir_llvmapi.hpp' ':(exclude)genext.hpp'; \
 	} > tests/coverage/combined.diff || true
-	llvm-cov-20 export --format=lcov --instr-profile=$< \
-		$(patsubst %,-object tests/coverage/%,$(COVERAGE_TESTS)) \
-		--ignore-filename-regex="^/usr|/tests/|lwir_utils\.hpp|unittest\.hpp" \
-		> tests/coverage/coverage.lcov 2>/dev/null
 	diff-cover tests/coverage/coverage.lcov --diff-file=tests/coverage/combined.diff --format markdown:tests/coverage/diff-report.md
 	git worktree remove $(WORKTREE)
 
@@ -162,6 +169,7 @@ clean:
 	-rm tests/test_fuzzer
 	-rm tests/test_cfg
 	-rm tests/test_opt
+	-rm tests/test_simplify_trace
 	-rm tests/test_source
 	-rm tests/test_reader
 	-rm tests/test_reentry
@@ -176,6 +184,7 @@ clean:
 	mkdir -p tests/output/test_fuzzer
 	mkdir -p tests/output/test_cfg
 	mkdir -p tests/output/test_opt
+	mkdir -p tests/output/test_simplify_trace
 	mkdir -p tests/output/test_source
 	mkdir -p tests/output/test_reader
 	mkdir -p tests/output/test_mem2reg
