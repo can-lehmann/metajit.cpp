@@ -4198,8 +4198,16 @@ namespace metajit {
             for (Value* arg : inst->args()) {
               use(arg, used);
             }
-          } else if (dynamic_cast<ShlInst*>(inst) ||
-                     dynamic_cast<DivUInst*>(inst) ||
+          } else if (dynmatch(ShlInst, shl, inst)) {
+            if (dynmatch(Const, shift, shl->arg(1))) {
+              uint64_t used = shift->value() < type_width(shl->type()) ?
+                _values[inst].used >> shift->value() : 0;
+              use(shl->arg(0), used);
+            } else {
+              use(shl->arg(0), _values[inst].used ? type_mask(shl->type()) : 0);
+            }
+            use_all(shl->arg(1));
+          } else if (dynamic_cast<DivUInst*>(inst) ||
                      dynamic_cast<ModUInst*>(inst)) {
             use(inst->arg(0), _values[inst].used ? type_mask(inst->type()) : 0);
             use_all(inst->arg(1));
@@ -4225,7 +4233,9 @@ namespace metajit {
               use_all_args(inst);
             }
           } else {
-            if (inst->has_side_effect() || inst->is_terminator() || _values[inst].used != 0) {
+            if (inst->has_side_effect() || inst->is_terminator() ||
+                dynamic_cast<LoadInst*>(inst) || dynamic_cast<AllocaInst*>(inst) ||
+                _values[inst].used != 0) {
               use_all_args(inst);
             } else {
               for (Value* arg : inst->args()) {
@@ -4413,6 +4423,12 @@ namespace metajit {
         UsedBits used_bits(section);
         
         changed |= substitute([&](Inst* inst) -> Value* {
+          if (is_int_or_bool(inst->type()) &&
+              !inst->has_side_effect() && !inst->is_terminator() &&
+              !dynamic_cast<LoadInst*>(inst) &&
+              used_bits.at(inst).used == 0) {
+            return _builder.build_const(inst->type(), 0);
+          }
           if (dynmatch(AndInst, and_inst, inst)) {
             UsedBits::Bits used = used_bits.at(inst);
 

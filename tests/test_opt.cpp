@@ -29,6 +29,144 @@ void check_simplify(const std::string& expected, Section* section) {
   unittest_assert(ss.str() == expected);
 }
 
+void check_simplify_text(const std::string& input, const std::string& expected) {
+  Context context;
+  Allocator allocator;
+  std::istringstream input_stream(input);
+  Section* section = SectionReader<Builder>::read_section(context, allocator, input_stream);
+  section->order_blocks(BlockOrdering::Dominator);
+  unittest_assert(!section->verify(std::cout));
+  std::istringstream expected_stream(expected);
+  Section* expected_section = SectionReader<Builder>::read_section(context, allocator, expected_stream);
+  std::ostringstream normalized;
+  expected_section->write(normalized);
+  check_simplify(normalized.str(), section);
+  unittest_assert(!section->verify(std::cout));
+  delete expected_section;
+  delete section;
+}
+
+void test_simplify_overwritten_bytes() {
+  check_simplify_text(R"(section {
+b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
+  %5 = Or %1, %2
+  %6 = And %5, 65280:Int16
+  %7 = Or %6, %3
+  %8 = And %7, 255:Int16
+  %9 = Or %8, %4
+  Store %0, %9, aliasing=0, offset=0
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
+  %5 = And %3, 255:Int16
+  %6 = Or %5, %4
+  Store %0, %6, aliasing=0, offset=0
+  Exit
+}
+)");
+}
+
+void test_simplify_used_bits_other_use() {
+  const std::string input = R"(section {
+b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
+  %5 = Or %1, %2
+  Store %0, %5, aliasing=0, offset=2
+  %7 = And %5, 65280:Int16
+  %8 = Or %7, %3
+  %9 = And %8, 255:Int16
+  %10 = Or %9, %4
+  Store %0, %10, aliasing=0, offset=0
+  Exit
+}
+)";
+  check_simplify_text(input, R"(section {
+b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
+  %5 = Or %1, %2
+  Store %0, %5, aliasing=0, offset=2
+  %7 = And %3, 255:Int16
+  %8 = Or %7, %4
+  Store %0, %8, aliasing=0, offset=0
+  Exit
+}
+)");
+}
+
+void test_simplify_used_bits_effects() {
+  const std::string input = R"(section {
+b0(%0: Ptr, %1: Ptr, %2: Bool, %3: Int32):
+  %4 = Load %0, type=Int32, flags={}, aliasing=0, offset=0
+  %5 = Call %1, %3, type=Int32, call_conv=Default, flags={}
+  Store %0, %3, aliasing=0, offset=4
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  Exit
+}
+)";
+  check_simplify_text(input, input);
+}
+
+void test_simplify_used_bits_shl_mask() {
+  check_simplify_text(R"(section {
+b0(%0: Ptr, %1: Int32):
+  %2 = And %1, 255:Int32
+  %3 = Shl %2, 24:Int32
+  Store %0, %3, aliasing=0, offset=0
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr, %1: Int32):
+  %2 = Shl %1, 24:Int32
+  Store %0, %2, aliasing=0, offset=0
+  Exit
+}
+)");
+}
+
+void test_simplify_used_bits_load_address() {
+  const std::string input = R"(section {
+b0(%0: Ptr, %1: Int64):
+  %2 = Add %1, 1:Int64
+  %3 = AddPtr %0, %2
+  %4 = Load %3, type=Int8, flags={}, aliasing=0, offset=0
+  Exit
+}
+)";
+  check_simplify_text(input, input);
+}
+
+void test_simplify_used_bits_alloca_size() {
+  const std::string input = R"(section {
+b0(%0: Int64):
+  %1 = Add %0, 1:Int64
+  %2 = Alloca %1, align=8
+  Exit
+}
+)";
+  check_simplify_text(input, input);
+}
+
+void test_simplify_overwritten_bytes_differential(Builder& builder, TestData& data) {
+  Value* first = data.input(Type::Int16);
+  Value* second = data.input(Type::Int16);
+  Value* low = data.input(Type::Int16);
+  Value* high = data.input(Type::Int16);
+  Value* old = builder.build_or(first, second);
+  Value* value = builder.build_and(old, builder.build_const(Type::Int16, 0xff00));
+  value = builder.build_or(value, low);
+  value = builder.build_and(value, builder.build_const(Type::Int16, 0x00ff));
+  value = builder.build_or(value, high);
+  data.output(value);
+  builder.build_exit();
+  builder.section()->order_blocks(BlockOrdering::Dominator);
+  Section original(builder.section()->context(), builder.section()->allocator());
+  Clone::run(builder.section(), &original);
+  Simplify::run(builder.section(), 1);
+  check_opt_differential(&original, builder.section(), data);
+}
+
 void check_simplifycfg(const std::string& expected, Section* section) {
   unittest_assert (!section->verify(std::cout)); // make sure that we start from a valid cfg
   metajit::SimplifyCFG::run(section);
@@ -242,6 +380,14 @@ int main(int argc, char** argv) {
 
   DiffTestSuite suite("tests/output/test_opt", argc, argv);
 
+  suite.test("simplify overwritten bytes").run(test_simplify_overwritten_bytes);
+  suite.test("simplify used bits other use").run(test_simplify_used_bits_other_use);
+  suite.test("simplify used bits effects").run(test_simplify_used_bits_effects);
+  suite.test("simplify used bits shl mask").run(test_simplify_used_bits_shl_mask);
+  suite.test("simplify used bits load address").run(test_simplify_used_bits_load_address);
+  suite.test("simplify used bits alloca size").run(test_simplify_used_bits_alloca_size);
+  suite.diff_test("simplify overwritten bytes differential").run(test_simplify_overwritten_bytes_differential);
+
   suite.test("freeze_preserves_output_relationship").run([]() {
     Context context;
     Allocator allocator;
@@ -278,9 +424,8 @@ int main(int argc, char** argv) {
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = ResizeX %1, type=Int8
-  %3 = And %1, 255:Int64
-  Store %0, %3, aliasing=0, offset=8
+  %2 = And %1, 255:Int64
+  Store %0, %2, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -297,9 +442,8 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = ShrU %1, 1:Int64
-  %3 = And %1, 6:Int64
-  Store %0, %3, aliasing=0, offset=8
+  %2 = And %1, 6:Int64
+  Store %0, %2, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -316,10 +460,9 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = ShrU %1, 10:Int64
-  %3 = ShrU %1, 9:Int64
-  %4 = And %3, 2:Int64
-  Store %0, %4, aliasing=0, offset=8
+  %2 = ShrU %1, 9:Int64
+  %3 = And %2, 2:Int64
+  Store %0, %3, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -335,10 +478,9 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = ShrU %1, 1:Int64
-  %3 = Shl %1, 2:Int64
-  %4 = And %3, 8:Int64
-  Store %0, %4, aliasing=0, offset=8
+  %2 = Shl %1, 2:Int64
+  %3 = And %2, 8:Int64
+  Store %0, %3, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -355,10 +497,9 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = Shl %1, 1:Int64
-  %3 = Shl %1, 4:Int64
-  %4 = And %3, 2040:Int64
-  Store %0, %4, aliasing=0, offset=8
+  %2 = Shl %1, 4:Int64
+  %3 = And %2, 2040:Int64
+  Store %0, %3, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -391,9 +532,8 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
-  %3 = Or %2, %1
-  %4 = And %2, 4294902015:Int64
-  Store %0, %4, aliasing=0, offset=16
+  %3 = And %2, 4294902015:Int64
+  Store %0, %3, aliasing=0, offset=16
 }
 )", builder.section());
   });
@@ -440,7 +580,6 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
-  %3 = ResizeX %1, type=Int64
   Store %0, %2, aliasing=0, offset=16
 }
 )", builder.section());
@@ -515,11 +654,8 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int16, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int16, flags={}, aliasing=0, offset=2
   %3 = Load %0, type=Int16, flags={}, aliasing=0, offset=4
-  %4 = Shl %2, 14:Int16
-  %5 = Or %3, %1
-  %6 = Or %5, %4
-  %7 = And %1, 4095:Int16
-  Store %0, %7, aliasing=0, offset=6
+  %4 = And %1, 4095:Int16
+  Store %0, %4, aliasing=0, offset=6
 }
 )", builder.section());
   });
