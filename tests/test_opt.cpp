@@ -171,6 +171,26 @@ void trace_builder_shared_exits() {
   }
 }
 
+void trace_builder_failure_store_preserves_forwarding() {
+  for (AliasingGroup aliasing : {AliasingGroup(0), AliasingGroup(-1)}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    TraceBuilder builder(&section);
+    Block* entry = builder.build_block(std::vector<Type>{Type::Bool, Type::Ptr});
+    builder.move_to_end(entry);
+    Value* ptr = entry->arg(1);
+    Value* value = builder.build_const(Type::Int32, 42);
+    builder.build_store(ptr, value, aliasing, 0);
+    unittest_assert(builder.build_guard_begin(entry->arg(0)));
+    builder.build_store(ptr, builder.build_const(Type::Int32, 7), aliasing, 0);
+    builder.build_guard_end();
+    unittest_assert(builder.build_load(ptr, Type::Int32, LoadFlags::None, aliasing, 0) == value);
+    builder.build_exit();
+    unittest_assert(!section.verify(std::cout));
+  }
+}
+
 void trace_builder_false_guard() {
   Context context;
   Allocator allocator;
@@ -188,6 +208,33 @@ void trace_builder_false_guard() {
   Interpreter interpreter(&section, {Interpreter::Bits::constant(&result)});
   unittest_assert(interpreter.run() == Interpreter::Event::Exit);
   unittest_assert(result == 42);
+}
+
+void trace_builder_failure_load_bypasses_forwarding() {
+  for (AliasingGroup aliasing : {AliasingGroup(0), AliasingGroup(-1)}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    TraceBuilder builder(&section);
+    Block* entry = builder.build_block(std::vector<Type>{Type::Bool, Type::Ptr});
+    builder.move_to_end(entry);
+    Value* ptr = entry->arg(1);
+    Value* value = builder.build_const(Type::Int32, 42);
+    builder.build_store(ptr, value, aliasing, 0);
+    unittest_assert(builder.build_guard_begin(entry->arg(0)));
+    unittest_assert(dynamic_cast<LoadInst*>(builder.build_load(ptr, Type::Int32, LoadFlags::None, aliasing, 0)));
+    unittest_assert(builder.build_store(ptr, value, aliasing, 0));
+    AliasingGroup uncached = aliasing < 0 ? AliasingGroup(-2) : AliasingGroup(1);
+    Value* failure_load = builder.build_load(ptr, Type::Int32, LoadFlags::None, uncached, 0);
+    builder.build_guard_end();
+    unittest_assert(builder.build_load(ptr, Type::Int32, LoadFlags::None, aliasing, 0) == value);
+    Value* success_load = builder.build_load(ptr, Type::Int32, LoadFlags::None, uncached, 0);
+    unittest_assert(dynamic_cast<LoadInst*>(success_load));
+    unittest_assert(success_load != failure_load);
+    unittest_assert(!builder.build_store(ptr, success_load, uncached, 0));
+    builder.build_exit();
+    unittest_assert(!section.verify(std::cout));
+  }
 }
 
 int main(int argc, char** argv) {
@@ -1366,6 +1413,8 @@ b1:
   });
 
   suite.test("trace_builder_shared_exits").run(trace_builder_shared_exits);
+  suite.test("trace_builder_failure_store_preserves_forwarding").run(trace_builder_failure_store_preserves_forwarding);
+  suite.test("trace_builder_failure_load_bypasses_forwarding").run(trace_builder_failure_load_bypasses_forwarding);
   suite.test("trace_builder_false_guard").run(trace_builder_false_guard);
 
   suite.test("trace_builder_guard_excludes_failure_from_chain").run([]() {

@@ -449,6 +449,17 @@ namespace metajit {
 
       assert(_section->ordering() >= BlockOrdering::Dominator);
 
+      if (reentry_closures) {
+        for (Block* block : *section) {
+          for (Arg* arg : block->args()) {
+            if (reentry_closures->is_captured(arg)) {
+              _can_trace_inst[arg] = true;
+              _can_trace_const[arg] = true;
+            }
+          }
+        }
+      }
+
       for (Block* block : section->rev_range()) {
         for (Inst* inst : block->rev_range()) {
           if (inst->has_side_effect() ||
