@@ -5628,6 +5628,91 @@ private:
     Children children() { return Children(*this); }
   };
 
+  class CodeSinking: public Pass<CodeSinking> {
+  private:
+    DominatorTree _dominators;
+    BlockMap<size_t> _depth;
+
+    Block* common_dominator(Block* a, Block* b) {
+      while (a != b) {
+        if (_depth[a] > _depth[b]) {
+          a = _dominators.idom(a);
+        } else {
+          b = _dominators.idom(b);
+        }
+      }
+      return a;
+    }
+
+    static bool can_sink(Inst* inst) {
+      return !inst->has_side_effect() && !inst->is_terminator() &&
+             !dynamic_cast<LoadInst*>(inst) &&
+             !dynamic_cast<AllocaInst*>(inst) &&
+             !dynamic_cast<FreezeInst*>(inst) &&
+             !dynamic_cast<PromoteInst*>(inst) &&
+             !dynamic_cast<AssumeConstInst*>(inst) &&
+             !dynamic_cast<CommentInst*>(inst);
+    }
+
+  public:
+    CodeSinking(Section* section): Pass(section), _dominators(section), _depth(section) {
+      assert(section->ordering() >= BlockOrdering::Dominator);
+      Uses uses(section);
+      NameMap<Block*> locations(section);
+      std::vector<int64_t> loop_ranges(section->block_count() + 1, 0);
+      BlockMap<bool> in_loop(section);
+      for (Block* block : *section) {
+        if (Block* parent = _dominators.idom(block)) {
+          _depth[block] = _depth[parent] + 1;
+        }
+        for (Inst* inst : *block) {
+          locations[inst] = block;
+        }
+        for (Block* successor : block->successors()) {
+          if (successor->name() <= block->name()) {
+            loop_ranges[successor->name()]++;
+            loop_ranges[block->name() + 1]--;
+          }
+        }
+      }
+      int64_t active_ranges = 0;
+      for (Block* block : *section) {
+        active_ranges += loop_ranges[block->name()];
+        in_loop[block] = active_ranges != 0;
+      }
+      for (Block* block : section->rev_range()) {
+        if (block != section->entry() && !_dominators.idom(block)) {
+          continue;
+        }
+        for (auto inst_it = block->rbegin(); inst_it != block->rend(); ) {
+          Inst* inst = *inst_it;
+          inst_it++;
+          if (!can_sink(inst) || uses.at(inst).empty()) {
+            continue;
+          }
+          Block* target = nullptr;
+          for (const Uses::Use& use : uses.at(inst)) {
+            Block* user = locations[use.inst];
+            if (user != section->entry() && !_dominators.idom(user)) {
+              target = block;
+              break;
+            }
+            target = target ? common_dominator(target, user) : user;
+          }
+          assert(_dominators.dominates(block, target));
+          while (target != block && in_loop[target]) {
+            target = _dominators.idom(target);
+          }
+          if (target != block) {
+            block->remove(inst);
+            target->insert_before(*target->begin(), inst);
+            locations[inst] = target;
+          }
+        }
+      }
+    }
+  };
+
   class CommonSubexprElim: public Pass<CommonSubexprElim> {
   private:
     struct Lookup {
