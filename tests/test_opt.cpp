@@ -108,6 +108,23 @@ b2:
   check_simplify_text(input, input);
 }
 
+void test_simplify_used_bits_shl_mask() {
+  check_simplify_text(R"(section {
+b0(%0: Ptr, %1: Int32):
+  %2 = And %1, 255:Int32
+  %3 = Shl %2, 24:Int32
+  Store %0, %3, aliasing=0, offset=0
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr, %1: Int32):
+  %2 = Shl %1, 24:Int32
+  Store %0, %2, aliasing=0, offset=0
+  Exit
+}
+)");
+}
+
 void test_simplify_used_bits_load_address() {
   const std::string input = R"(section {
 b0(%0: Ptr, %1: Int64):
@@ -366,6 +383,7 @@ int main(int argc, char** argv) {
   suite.test("simplify overwritten bytes").run(test_simplify_overwritten_bytes);
   suite.test("simplify used bits other use").run(test_simplify_used_bits_other_use);
   suite.test("simplify used bits effects").run(test_simplify_used_bits_effects);
+  suite.test("simplify used bits shl mask").run(test_simplify_used_bits_shl_mask);
   suite.test("simplify used bits load address").run(test_simplify_used_bits_load_address);
   suite.test("simplify used bits alloca size").run(test_simplify_used_bits_alloca_size);
   suite.diff_test("simplify overwritten bytes differential").run(test_simplify_overwritten_bytes_differential);

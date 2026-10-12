@@ -382,6 +382,58 @@ void test_simplify_overwritten_bytes_refinement() {
   }
 }
 
+void test_simplify_shl_mask_refinement() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t width = type_width(type);
+    for (uint64_t shift : {uint64_t(0), uint64_t(1), width / 2, width - 1}) {
+      Context context;
+      Allocator allocator;
+      Section before(context, allocator);
+      Builder builder(&before);
+      Block* entry = builder.build_block({Type::Ptr, type});
+      builder.move_to_end(entry);
+      Value* masked = builder.build_and(entry->arg(1), builder.build_const(type, type_mask(type) >> shift));
+      Value* result = builder.build_shl(masked, builder.build_const(type, shift));
+      builder.build_store(entry->arg(0), result, AliasingGroup(0), 0);
+      builder.build_exit();
+      before.order_blocks(BlockOrdering::Dominator);
+      unittest_assert(!before.verify(std::cout));
+      Section after(context, allocator);
+      Clone::run(&before, &after);
+      Simplify::run(&after, 1);
+      unittest_assert(!after.verify(std::cout));
+      for (Block* block : after) {
+        for (Inst* inst : *block) {
+          unittest_assert(!dynamic_cast<AndInst*>(inst));
+        }
+      }
+
+      z3::context z3_context;
+      tv::MemoryState memory(z3_context, {std::nullopt});
+      tv::ValueState ptr(Type::Ptr, z3_context.bv_const("ptr", type_width(Type::Ptr)));
+      ptr.set_provenance(z3_context.bv_val(0, memory.provenance_width()));
+      tv::ValueState input(type, z3_context.bv_const("input", width));
+      input.set_poison(z3_context.bool_const("input_poison"));
+      std::vector<tv::ValueState> args = {ptr, input};
+      tv::Z3CodeGen original(&before, z3_context, args, memory);
+      tv::Z3CodeGen optimized(&after, z3_context, args, memory);
+      tv::ValueState original_result = original.exit_memory_state().load(ptr, type);
+      tv::ValueState optimized_result = optimized.exit_memory_state().load(ptr, type);
+      z3::solver solver(z3_context);
+      solver.set("timeout", unsigned(5000));
+      solver.add(!original.has_ub() &&
+                 (optimized.has_ub() || optimized_result.is_poison() ||
+                  original_result.value() != optimized_result.value()));
+      z3::check_result outcome = solver.check();
+      if (outcome == z3::sat) {
+        throw unittest::AssertionError("Simplify changed masked left shift",
+          __LINE__, __FILE__, solver.get_model().to_string());
+      }
+      unittest_assert(outcome == z3::unsat);
+    }
+  }
+}
+
 void test_simplify_unused_load_address_refinement() {
   Context context;
   Allocator allocator;
@@ -442,6 +494,7 @@ int main(int argc, char** argv) {
 
   suite.test("simplify overwritten bytes refinement").run(test_simplify_overwritten_bytes_refinement);
   suite.test("simplify unused load address refinement").run(test_simplify_unused_load_address_refinement);
+  suite.test("simplify left shift mask refinement").run(test_simplify_shl_mask_refinement);
 
   suite.test("simplify_preserves_select_poison_condition").run([]() {
     Context context;

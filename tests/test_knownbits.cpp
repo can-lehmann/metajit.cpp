@@ -177,6 +177,55 @@ void test_idempotent_conditions(unittest::Suite& suite) {
   });
 }
 
+void test_usedbits_constant_shl() {
+  using ConcreteBits = Interpreter::Bits;
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t width = type_width(type);
+    uint64_t mask = type_mask(type);
+    for (uint64_t shift : {uint64_t(0), uint64_t(1), width / 2, width - 1,
+                           width, width + 1, mask}) {
+      for (uint64_t demanded : {uint64_t(0), uint64_t(1), uint64_t(1) << (width - 1),
+                                mask, mask & uint64_t(0xaaaaaaaaaaaaaaaa)}) {
+        Context context;
+        Allocator allocator;
+        Section section(context, allocator);
+        Builder builder(&section);
+        Block* entry = builder.build_block({Type::Ptr});
+        builder.move_to_end(entry);
+        Value* input = builder.build_load(entry->arg(0), type, LoadFlags::None, AliasingGroup(0), 0);
+        Value* shifted = builder.build_shl(input, builder.build_const(type, shift));
+        Value* result = builder.build_and(shifted, builder.build_const(type, demanded));
+        builder.build_store(entry->arg(0), result, AliasingGroup(0), 8);
+        builder.build_exit();
+        section.order_blocks(BlockOrdering::Dominator);
+        section.autoname();
+        unittest_assert(!section.verify(std::cout));
+        UsedBits used(&section);
+        uint64_t input_used = used.at(input).used;
+        uint64_t expected = 0;
+        for (uint64_t bit = 0; bit < width; bit++) {
+          if (shift < width && bit + shift < width &&
+              (demanded & (uint64_t(1) << (bit + shift)))) {
+            expected |= uint64_t(1) << bit;
+          }
+        }
+        unittest_assert(input_used == expected);
+        for (size_t sample = 0; sample < 100; sample++) {
+          uint64_t original_value = rand64() & mask;
+          uint64_t changed_value = (original_value & input_used) | (rand64() & mask & ~input_used);
+          ConcreteBits amount = ConcreteBits::constant(type, shift);
+          ConcreteBits original = ConcreteBits::constant(type, original_value).shl(amount);
+          ConcreteBits changed = ConcreteBits::constant(type, changed_value).shl(amount);
+          unittest_assert(original.is_poison == changed.is_poison);
+          if (!original.is_poison) {
+            unittest_assert(((original.value ^ changed.value) & demanded) == 0);
+          }
+        }
+      }
+    }
+  }
+}
+
 void test_usedbits_shr_s_bug(unittest::Suite& suite) {
   suite.test("usedbits_shr_s_bug").run([]() {
     using Bits = UsedBits::Bits;
@@ -427,6 +476,8 @@ void test_shr_u_backwards_random(unittest::Suite& suite) {
 
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
+
+  suite.test("usedbits_constant_shl").run(test_usedbits_constant_shl);
 
   using ConcreteBits = Interpreter::Bits;
   suite.test("usedbits_select_preserves_definedness").run([]() {

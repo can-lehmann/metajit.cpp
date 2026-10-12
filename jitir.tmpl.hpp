@@ -4198,8 +4198,16 @@ namespace metajit {
             for (Value* arg : inst->args()) {
               use(arg, used);
             }
-          } else if (dynamic_cast<ShlInst*>(inst) ||
-                     dynamic_cast<DivUInst*>(inst) ||
+          } else if (dynmatch(ShlInst, shl, inst)) {
+            if (dynmatch(Const, shift, shl->arg(1))) {
+              uint64_t used = shift->value() < type_width(shl->type()) ?
+                _values[inst].used >> shift->value() : 0;
+              use(shl->arg(0), used);
+            } else {
+              use(shl->arg(0), _values[inst].used ? type_mask(shl->type()) : 0);
+            }
+            use_all(shl->arg(1));
+          } else if (dynamic_cast<DivUInst*>(inst) ||
                      dynamic_cast<ModUInst*>(inst)) {
             use(inst->arg(0), _values[inst].used ? type_mask(inst->type()) : 0);
             use_all(inst->arg(1));
