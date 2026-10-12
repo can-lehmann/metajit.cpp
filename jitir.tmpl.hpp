@@ -5699,9 +5699,7 @@ private:
             }
             target = target ? common_dominator(target, user) : user;
           }
-          if (!_dominators.dominates(block, target)) {
-            continue;
-          }
+          assert(_dominators.dominates(block, target));
           while (target != block && in_loop[target]) {
             target = _dominators.idom(target);
           }
