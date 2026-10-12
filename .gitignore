@@ -25,3 +25,4 @@ tests/test_mem2reg
 tests/coverage/
 tests/test_genext
 tests/ubsan/
+tests/test_code_sinking
