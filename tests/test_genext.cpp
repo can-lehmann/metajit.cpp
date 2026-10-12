@@ -23,6 +23,68 @@ void promoted_arithmetic_guard(Builder& builder, TraceTestData& data) {
   data.output(builder.build_add(promoted, builder.build_const(Type::Int32, 4)));
 }
 
+void folded_branch_guard(Builder& builder, TraceTestData& data) {
+  Value* x = data.input(RandomRange(Type::Int32));
+  Value* cond = builder.build_eq(x, x);
+  Block* true_block = builder.build_block();
+  Block* false_block = builder.build_block();
+  builder.build_branch(cond, true_block, false_block);
+  builder.move_to_end(true_block);
+  data.output(x);
+  builder.build_exit();
+  builder.move_to_end(false_block);
+  data.output(builder.build_const(Type::Int32, 123));
+  builder.build_exit();
+}
+
+void shared_promotion_exits(Builder& builder, TraceTestData& data) {
+  Value* x = builder.build_promote(data.input(RandomRange(Type::Int32, 0, 3)));
+  Value* y = data.input(RandomRange(Type::Int32, 0, 3));
+  y = builder.build_promote(builder.build_add(y, builder.build_const(Type::Int32, 1)));
+  Value* z = builder.build_promote(data.input(RandomRange(Type::Int32, 0, 3)));
+  data.output(builder.build_add(builder.build_add(x, y), z));
+}
+
+void shared_branch_exit(Builder& builder, TraceTestData& data) {
+  Value* cond = data.input(RandomRange(Type::Bool));
+  Value* x = data.input(RandomRange(Type::Int32, 0, 3));
+  data.keep(x);
+  Block* true_block = builder.build_block();
+  Block* false_block = builder.build_block();
+  builder.build_branch(cond, true_block, false_block);
+  builder.move_to_end(true_block);
+  data.output(builder.build_add(builder.build_promote(x), builder.build_const(Type::Int32, 10)));
+  builder.build_exit();
+  builder.move_to_end(false_block);
+  data.output(builder.build_add(builder.build_promote(x), builder.build_const(Type::Int32, 20)));
+  builder.build_exit();
+}
+
+void shared_promotion_branch_exit(Builder& builder, TraceTestData& data) {
+  Value* x = builder.build_promote(data.input(RandomRange(Type::Int32, 0, 3)));
+  Value* cond = data.input(RandomRange(Type::Bool));
+  Block* true_block = builder.build_block();
+  Block* false_block = builder.build_block();
+  builder.build_branch(cond, true_block, false_block);
+  builder.move_to_end(true_block);
+  data.output(builder.build_add(x, builder.build_const(Type::Int32, 10)));
+  builder.build_exit();
+  builder.move_to_end(false_block);
+  data.output(builder.build_add(x, builder.build_const(Type::Int32, 20)));
+  builder.build_exit();
+}
+
+void store_separates_exits(Builder& builder, TraceTestData& data) {
+  Value* x = builder.build_promote(data.input(RandomRange(Type::Int32, 0, 3)));
+  size_t offset = data.alloc_output(Type::Int32);
+  Value* ptr = builder.entry_arg(0);
+  Value* old = builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(0), offset);
+  Value* increment = builder.build_add(x, builder.build_const(Type::Int32, 1));
+  builder.build_store(ptr, builder.build_add(old, increment), AliasingGroup(0), offset);
+  Value* y = builder.build_promote(data.input(RandomRange(Type::Int32, 0, 3)));
+  data.output(y);
+}
+
 int main(int argc, char** argv) {
   LLVMCodeGen::initilize_llvm_jit();
 
@@ -32,6 +94,11 @@ int main(int argc, char** argv) {
     suite.set_record_replay(record_replay);
 
     suite.gen_ext_test("promoted_arithmetic_guard").run(promoted_arithmetic_guard);
+    suite.gen_ext_test("folded_branch_guard").guards(0, 0).run(folded_branch_guard);
+    suite.gen_ext_test("shared_promotion_exits").guards(3, 1).run(shared_promotion_exits);
+    suite.gen_ext_test("shared_branch_exit").guards(2, 1).run(shared_branch_exit);
+    suite.gen_ext_test("shared_promotion_branch_exit").guards(2, 1).run(shared_promotion_branch_exit);
+    suite.gen_ext_test("store_separates_exits").guards(2, 2).run(store_separates_exits);
 
     suite.gen_ext_test("add_promoted").run([](Builder& builder, TraceTestData& data) {
       Value* x = data.static_input(RandomRange(Type::Int32));  // promoted

@@ -48,7 +48,7 @@ namespace metajit {
       build_guard_begin = module->getOrInsertFunction(
         "jitir_build_guard_begin",
         llvm::FunctionType::get(
-          llvm::Type::getVoidTy(context),
+          llvm::Type::getInt1Ty(context),
           std::vector<llvm::Type*>({
             llvm::PointerType::get(context, 0),
             llvm::PointerType::get(context, 0)
@@ -117,10 +117,10 @@ namespace metajit {
       return (void*) builder.build_const_fast((Type) type, value);
     }
 
-    void jitir_build_guard_begin(void* builder_ptr, void* value_ptr) {
+    bool jitir_build_guard_begin(void* builder_ptr, void* value_ptr) {
       TraceBuilder& builder = *(TraceBuilder*)builder_ptr;
       Value* value = (Value*)value_ptr;
-      builder.build_guard_begin(value);
+      return builder.build_guard_begin(value);
     }
 
     void jitir_build_guard_end(void* builder_ptr) {

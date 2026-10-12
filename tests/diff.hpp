@@ -777,7 +777,8 @@ namespace metajit {
                                          TraceTestData& data,
                                          bool record_replay = false,
                                          size_t static_sample_count = 16,
-                                         size_t dynamic_sample_count = 64) {
+                                         size_t dynamic_sample_count = 64,
+                                         std::optional<std::pair<size_t, size_t>> expected_guards = std::nullopt) {
       
       section->autoname();
 
@@ -952,6 +953,20 @@ namespace metajit {
           );
         }
 
+        if (expected_guards) {
+          size_t guards = 0;
+          size_t exits = 0;
+          for (Block* block : *trace_section) {
+            if (dynmatch(BranchInst, branch, block->terminator())) {
+              guards++;
+            } else if (dynamic_cast<ExitInst*>(block->terminator())) {
+              exits++;
+            }
+          }
+          unittest_assert(guards == expected_guards->first);
+          unittest_assert(exits == expected_guards->second + 1);
+        }
+
         llvm::LLVMContext trace_llvm_context;
         std::unique_ptr<llvm::Module> trace_module = std::make_unique<llvm::Module>("trace_module", trace_llvm_context);
         std::string trace_func_name = "trace_func_" + std::to_string(static_sample);
@@ -1063,6 +1078,7 @@ namespace metajit {
       bool _record_replay = false;
       size_t _static_sample_count = 16;
       size_t _dynamic_sample_count = 64;
+      std::optional<std::pair<size_t, size_t>> _expected_guards;
     public:
       GenExtTest(const std::string& name, const std::string& output_path):
         unittest::BaseTest<GenExtTest>(name), _output_path(output_path) {}
@@ -1070,6 +1086,11 @@ namespace metajit {
       GenExtTest&& samples(size_t static_samples, size_t dynamic_samples) && {
         _static_sample_count = static_samples;
         _dynamic_sample_count = dynamic_samples;
+        return std::move(*this);
+      }
+
+      GenExtTest&& guards(size_t guards, size_t exits) && {
+        _expected_guards = std::make_pair(guards, exits);
         return std::move(*this);
       }
 
@@ -1106,7 +1127,8 @@ namespace metajit {
             data,
             _record_replay,
             _static_sample_count,
-            _dynamic_sample_count
+            _dynamic_sample_count,
+            _expected_guards
           );
 
           delete section;

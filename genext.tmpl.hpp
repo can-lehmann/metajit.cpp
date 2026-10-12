@@ -825,7 +825,7 @@ namespace metajit {
       _is_const[load] = is_const_load;
     }
 
-    Value* emit_build_guard_begin(Value* value) {
+    Value* emit_build_guard_begin(Value* value, Value*& needs_closure) {
       Value* expected = emit_arg(value);
       Value* expected_const = _builder.build_call(
         _syms.build_const_fast, Type::Ptr,
@@ -842,7 +842,7 @@ namespace metajit {
         expected_const
       });
 
-      _builder.build_call(_syms.build_guard_begin, Type::Void, {_jitir_builder, success_built});
+      needs_closure = _builder.build_call(_syms.build_guard_begin, Type::Bool, {_jitir_builder, success_built});
 
       return expected_const;
     }
@@ -897,6 +897,19 @@ namespace metajit {
       }
     }
 
+    void emit_guard_end(Value* needs_closure, Inst* inst) {
+      Block* closure_block = _builder.build_block_after(_builder.block());
+      Block* continuation = _builder.build_block_after(closure_block);
+      _builder.build_branch(needs_closure, closure_block, continuation);
+      _builder.move_to_end(closure_block);
+      if (_reentry_closures) {
+        emit_closure(_reentry_closures->reusing_at(inst));
+      }
+      _builder.build_call(_syms.build_guard_end, Type::Void, {_jitir_builder});
+      _builder.build_jump(continuation);
+      _builder.move_to_end(continuation);
+    }
+
     Value* emit_build_inst(Inst* inst) {
       if (_config.comments &&
           !dynamic_cast<CommentInst*>(inst)) {
@@ -923,11 +936,9 @@ namespace metajit {
                   return emit_built_arg(promote->arg(0));
                 },
                 [&]() -> Value* {
-                  Value* built_const = emit_build_guard_begin(promote->arg(0));
-                  if (_reentry_closures) {
-                    emit_closure(_reentry_closures->reusing_at(promote));
-                  }
-                  _builder.build_call(_syms.build_guard_end, Type::Void, {_jitir_builder});
+                  Value* needs_closure;
+                  Value* built_const = emit_build_guard_begin(promote->arg(0), needs_closure);
+                  emit_guard_end(needs_closure, promote);
                   return built_const;
                 }
               );
@@ -1161,15 +1172,9 @@ namespace metajit {
       assert(inst);
       if (dynmatch(BranchInst, branch, inst)) {
         if (!_binding_time_groups.is_static(branch->cond())) {
-          emit_build_guard_begin(branch->arg(0));
-          if (_reentry_closures) {
-            emit_branch(emit_arg(branch->arg(0)), [&]() {
-              emit_closure(_reentry_closures->reusing_at(*branch->false_block()->begin()));
-            }, [&]() {
-              emit_closure(_reentry_closures->reusing_at(*branch->true_block()->begin()));
-            });
-          }
-          _builder.build_call(_syms.build_guard_end, Type::Void, {_jitir_builder});
+          Value* needs_closure;
+          emit_build_guard_begin(branch->arg(0), needs_closure);
+          emit_guard_end(needs_closure, branch);
         }
       } else if (dynmatch(JumpInst, jump, inst)) {
         std::vector<Value*> args;
