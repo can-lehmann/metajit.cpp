@@ -108,6 +108,29 @@ b2:
   check_simplify_text(input, input);
 }
 
+void test_simplify_used_bits_load_address() {
+  const std::string input = R"(section {
+b0(%0: Ptr, %1: Int64):
+  %2 = Add %1, 1:Int64
+  %3 = AddPtr %0, %2
+  %4 = Load %3, type=Int8, flags={}, aliasing=0, offset=0
+  Exit
+}
+)";
+  check_simplify_text(input, input);
+}
+
+void test_simplify_used_bits_alloca_size() {
+  const std::string input = R"(section {
+b0(%0: Int64):
+  %1 = Add %0, 1:Int64
+  %2 = Alloca %1, align=8
+  Exit
+}
+)";
+  check_simplify_text(input, input);
+}
+
 void test_simplify_overwritten_bytes_differential(Builder& builder, TestData& data) {
   Value* first = data.input(Type::Int16);
   Value* second = data.input(Type::Int16);
@@ -343,6 +366,8 @@ int main(int argc, char** argv) {
   suite.test("simplify overwritten bytes").run(test_simplify_overwritten_bytes);
   suite.test("simplify used bits other use").run(test_simplify_used_bits_other_use);
   suite.test("simplify used bits effects").run(test_simplify_used_bits_effects);
+  suite.test("simplify used bits load address").run(test_simplify_used_bits_load_address);
+  suite.test("simplify used bits alloca size").run(test_simplify_used_bits_alloca_size);
   suite.diff_test("simplify overwritten bytes differential").run(test_simplify_overwritten_bytes_differential);
 
   suite.test("freeze_preserves_output_relationship").run([]() {

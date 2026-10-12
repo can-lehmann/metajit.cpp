@@ -4225,7 +4225,9 @@ namespace metajit {
               use_all_args(inst);
             }
           } else {
-            if (inst->has_side_effect() || inst->is_terminator() || _values[inst].used != 0) {
+            if (inst->has_side_effect() || inst->is_terminator() ||
+                dynamic_cast<LoadInst*>(inst) || dynamic_cast<AllocaInst*>(inst) ||
+                _values[inst].used != 0) {
               use_all_args(inst);
             } else {
               for (Value* arg : inst->args()) {

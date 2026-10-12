@@ -382,10 +382,66 @@ void test_simplify_overwritten_bytes_refinement() {
   }
 }
 
+void test_simplify_unused_load_address_refinement() {
+  Context context;
+  Allocator allocator;
+  Section before(context, allocator);
+  Builder builder(&before);
+  Block* entry = builder.build_block({Type::Ptr, Type::Int64});
+  builder.move_to_end(entry);
+  Value* offset = builder.build_add(entry->arg(1), builder.build_const(Type::Int64, 1));
+  Value* address = builder.build_add_ptr(entry->arg(0), offset);
+  builder.build_load(address, Type::Int8, LoadFlags::None, AliasingGroup(0), 0);
+  builder.build_exit();
+  before.order_blocks(BlockOrdering::Dominator);
+  unittest_assert(!before.verify(std::cout));
+
+  Section after(context, allocator);
+  Clone::run(&before, &after);
+  Simplify::run(&after, 1);
+  unittest_assert(!after.verify(std::cout));
+
+  z3::context z3_context;
+  tv::MemoryState memory(z3_context, {size_t(1)});
+  tv::ValueState ptr(Type::Ptr, z3_context.bv_const("base", type_width(Type::Ptr)));
+  ptr.set_provenance(z3_context.bv_val(0, memory.provenance_width()));
+  std::vector<tv::ValueState> args = {
+    ptr, tv::ValueState(Type::Int64, z3_context.bv_const("index", 64))
+  };
+  tv::Z3CodeGen original(&before, z3_context, args, memory);
+  tv::Z3CodeGen optimized(&after, z3_context, args, memory);
+  z3::expr region_size = z3_context.bv_val(1, type_width(Type::Ptr));
+  z3::expr original_valid = !original.has_ub() &&
+    z3::ult(original.emit(address).value(), region_size);
+  z3::expr optimized_invalid = optimized.has_ub();
+  for (Block* block : after) {
+    for (Inst* inst : *block) {
+      if (dynmatch(LoadInst, load, inst)) {
+        tv::ValueState load_address = optimized.emit(load->ptr()).add_ptr(load->offset());
+        optimized_invalid = optimized_invalid || load_address.is_poison() ||
+          z3::uge(load_address.value(), region_size);
+      }
+    }
+  }
+  z3::solver solver(z3_context);
+  solver.set("timeout", unsigned(5000));
+  solver.add(z3::ule(ptr.value(), region_size) && original_valid && optimized_invalid);
+  z3::check_result result = solver.check();
+  if (result == z3::sat) {
+    std::ostringstream message;
+    message << solver.get_model() << "\nOptimized:\n";
+    after.write(message);
+    throw unittest::AssertionError("Simplify invalidated a retained load address",
+      __LINE__, __FILE__, message.str());
+  }
+  unittest_assert(result == z3::unsat);
+}
+
 int main(int argc, char** argv) {
   TVTestSuite suite(argc, argv);
 
   suite.test("simplify overwritten bytes refinement").run(test_simplify_overwritten_bytes_refinement);
+  suite.test("simplify unused load address refinement").run(test_simplify_unused_load_address_refinement);
 
   suite.test("simplify_preserves_select_poison_condition").run([]() {
     Context context;
