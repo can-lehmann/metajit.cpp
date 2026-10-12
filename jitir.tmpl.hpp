@@ -4413,6 +4413,12 @@ namespace metajit {
         UsedBits used_bits(section);
         
         changed |= substitute([&](Inst* inst) -> Value* {
+          if (is_int_or_bool(inst->type()) &&
+              !inst->has_side_effect() && !inst->is_terminator() &&
+              !dynamic_cast<LoadInst*>(inst) &&
+              used_bits.at(inst).used == 0) {
+            return _builder.build_const(inst->type(), 0);
+          }
           if (dynmatch(AndInst, and_inst, inst)) {
             UsedBits::Bits used = used_bits.at(inst);
 

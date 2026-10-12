@@ -317,8 +317,75 @@ void test_freeze_output_relationship(TVTestSuite& suite) {
   }
 }
 
+void test_simplify_overwritten_bytes_refinement() {
+  for (bool freeze : {false, true}) {
+    Context context;
+    Allocator allocator;
+    Section before(context, allocator);
+    Builder builder(&before);
+    Block* entry = builder.build_block({Type::Ptr, Type::Int32, Type::Int32,
+                                       Type::Int32, Type::Int32, Type::Int32, Type::Int32});
+    builder.move_to_end(entry);
+    Value* value = builder.build_or(entry->arg(1), entry->arg(2));
+    if (freeze) {
+      value = builder.build_freeze(value);
+    }
+    for (size_t byte = 0; byte < 4; byte++) {
+      uint64_t mask = uint64_t(0xffffffff) ^ (uint64_t(255) << (8 * byte));
+      value = builder.build_and(value, builder.build_const(Type::Int32, mask));
+      value = builder.build_or(value, entry->arg(3 + byte));
+    }
+    builder.build_store(entry->arg(0), value, AliasingGroup(0), 0);
+    builder.build_exit();
+    before.order_blocks(BlockOrdering::Dominator);
+    unittest_assert(!before.verify(std::cout));
+
+    Section after(context, allocator);
+    Clone::run(&before, &after);
+    Simplify::run(&after, 1);
+    unittest_assert(!after.verify(std::cout));
+    for (Block* block : after) {
+      for (Inst* inst : *block) {
+        for (Value* arg : inst->args()) {
+          unittest_assert(arg != after.entry()->arg(1));
+          unittest_assert(arg != after.entry()->arg(2));
+        }
+      }
+    }
+
+    z3::context z3_context;
+    tv::MemoryState memory(z3_context, {std::nullopt});
+    tv::ValueState ptr(Type::Ptr, z3_context.bv_const("ptr", type_width(Type::Ptr)));
+    ptr.set_provenance(z3_context.bv_val(0, memory.provenance_width()));
+    std::vector<tv::ValueState> args = {ptr};
+    for (size_t index = 1; index < 7; index++) {
+      std::string name = "input" + std::to_string(index);
+      tv::ValueState arg(Type::Int32, z3_context.bv_const(name.c_str(), 32));
+      arg.set_poison(z3_context.bool_const((name + "_poison").c_str()));
+      args.push_back(arg);
+    }
+    tv::Z3CodeGen original(&before, z3_context, args, memory);
+    tv::Z3CodeGen optimized(&after, z3_context, args, memory);
+    tv::ValueState original_result = original.exit_memory_state().load(ptr, Type::Int32);
+    tv::ValueState optimized_result = optimized.exit_memory_state().load(ptr, Type::Int32);
+    z3::solver solver(z3_context);
+    solver.set("timeout", unsigned(5000));
+    solver.add(!original.has_ub() &&
+               (optimized.has_ub() || optimized_result.is_poison() ||
+                original_result.value() != optimized_result.value()));
+    z3::check_result result = solver.check();
+    if (result == z3::sat) {
+      throw unittest::AssertionError("Simplify changed overwritten bytes",
+        __LINE__, __FILE__, solver.get_model().to_string());
+    }
+    unittest_assert(result == z3::unsat);
+  }
+}
+
 int main(int argc, char** argv) {
   TVTestSuite suite(argc, argv);
+
+  suite.test("simplify overwritten bytes refinement").run(test_simplify_overwritten_bytes_refinement);
 
   suite.test("simplify_preserves_select_poison_condition").run([]() {
     Context context;
