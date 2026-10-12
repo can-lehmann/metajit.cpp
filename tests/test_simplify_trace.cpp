@@ -1901,5 +1901,172 @@ b2:
     unittest_assert(result->value() == uint64_t(42) - depth);
   });
 
+  suite.test("select_false_guard_nonconstant_operand").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  %6 = Select %1, %2, %3
+  Store %0, %6, aliasing=0, offset=3
+  Exit
+}
+)", {0, 2}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Exit
+b2:
+  %6 = Select 0:Bool, %2, %3
+  Store %0, %3, aliasing=0, offset=3
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_select_infers_false_condition").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = Select %1, 4:Int8, %2
+  %4 = Eq %3, 7:Int8
+  Branch %4, true_block=b1, false_block=b2
+b1:
+  Store %0, %1, aliasing=0, offset=2
+  Store %0, %2, aliasing=0, offset=3
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = Select %1, 4:Int8, %2
+  %4 = Eq %3, 7:Int8
+  Branch %4, true_block=b1, false_block=b2
+b1:
+  Store %0, 0:Bool, aliasing=0, offset=2
+  Store %0, 7:Int8, aliasing=0, offset=3
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
+  suite.test("and_or_partial_knownbits_operand_substitution").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = And %1, 15:Int8
+  %4 = Or %2, 15:Int8
+  %5 = And %3, %4
+  %6 = Or %3, %4
+  %7 = Or %4, %3
+  Store %0, %5, aliasing=0, offset=2
+  Store %0, %6, aliasing=0, offset=3
+  Store %0, %7, aliasing=0, offset=4
+  Exit
+}
+)", {0}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = And %1, 15:Int8
+  %4 = Or %2, 15:Int8
+  %5 = And %3, %4
+  %6 = Or %3, %4
+  %7 = Or %4, %3
+  Store %0, %3, aliasing=0, offset=2
+  Store %0, %4, aliasing=0, offset=3
+  Store %0, %4, aliasing=0, offset=4
+  Exit
+}
+)");
+  });
+
+  suite.test("duplicate_pending_facts").run([]() {
+    check_trace_simplify(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = And %1, %1
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  Store %0, %1, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)", {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = And %1, %1
+  Branch %2, true_block=b1, false_block=b2
+b1:
+  Store %0, 1:Bool, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)");
+  });
+
+  suite.test("backwards_eq_contradictory_operand_facts").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = Eq %1, %2
+  %4 = Eq %1, 1:Int8
+  %5 = Eq %2, 2:Int8
+  Branch %4, true_block=b1, false_block=b2
+b1:
+  Branch %5, true_block=b3, false_block=b4
+b2:
+  Exit
+b3:
+  Branch %3, true_block=b5, false_block=b6
+b4:
+  Exit
+b5:
+  %11 = And %1, 0:Int8
+  Store %0, %11, aliasing=0, offset=2
+  Exit
+b6:
+  Exit
+}
+)";
+    check_trace_simplify(ir, {0, 1, 3, 5}, ir);
+  });
+
+  suite.test("and_or_partial_knownbits_insufficient_for_substitution").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
+  %3 = And %1, 31:Int8
+  %4 = Or %2, 15:Int8
+  %5 = And %3, %4
+  %6 = Or %3, %4
+  %7 = Or %4, %3
+  Store %0, %5, aliasing=0, offset=2
+  Store %0, %6, aliasing=0, offset=3
+  Store %0, %7, aliasing=0, offset=4
+  Exit
+}
+)";
+    check_trace_simplify(ir, {0}, ir);
+  });
+
   return suite.finish();
 }

@@ -4665,10 +4665,7 @@ private:
     }
     Bits bits = maybe_bits.value();
     
-    if (dynmatch(Const, constant, value)) {
-      assert (bits.matches_const(constant->value()));
-      return;
-    }
+    assert(!dynamic_cast<Const*>(value));
     if (old_bits == bits) {
       return;
     }
