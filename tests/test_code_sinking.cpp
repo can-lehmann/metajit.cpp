@@ -3,19 +3,24 @@
 using namespace metajit;
 using namespace metajit::test;
 
-Section* read_sinking_section(Context& context, Allocator& allocator, const std::string& input) {
+Section* read_sinking_section(Context& context, Allocator& allocator, const std::string& input,
+                              bool preserve_order = false) {
   std::istringstream stream(input);
   Section* section = SectionReader<>::read_section(context, allocator, stream);
-  OrderBlocks::run(section, BlockOrdering::Natural);
+  if (preserve_order) {
+    section->set_ordering(BlockOrdering::Dominator);
+  } else {
+    OrderBlocks::run(section, BlockOrdering::Natural);
+  }
   unittest_assert(!section->verify(std::cout));
   return section;
 }
 
-void check_sinking(const std::string& input, const std::string& expected) {
+void check_sinking(const std::string& input, const std::string& expected, bool preserve_order = false) {
   Context context;
   Allocator allocator;
-  Section* section = read_sinking_section(context, allocator, input);
-  Section* expected_section = read_sinking_section(context, allocator, expected);
+  Section* section = read_sinking_section(context, allocator, input, preserve_order);
+  Section* expected_section = read_sinking_section(context, allocator, expected, preserve_order);
   Section original(context, allocator);
   Clone::run(section, &original);
   CodeSinking::run(section);
@@ -330,6 +335,89 @@ b3:
   Exit
 }
 )");
+  });
+
+  suite.test("unreachable source stays in place").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  Exit
+b1:
+  %2 = Add %1, 1:Int8
+  Jump block=b2
+b2:
+  Store %0, %2, aliasing=0, offset=8
+  Exit
+}
+)";
+    check_sinking(ir, ir, true);
+  });
+
+  suite.test("unreachable use prevents sinking").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Add %1, 1:Int8
+  %3 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  Store %0, %2, aliasing=0, offset=8
+  Exit
+b2:
+  Exit
+b3:
+  Store %0, %2, aliasing=0, offset=9
+  Exit
+}
+)";
+    check_sinking(ir, ir, true);
+  });
+
+  suite.test("nested loops retain computations outside deeper loops").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Add %1, 1:Int8
+  Jump 2:Int8, block=b1
+b1(%4: Int8):
+  %5 = Add %1, %4
+  Jump 3:Int8, block=b2
+b2(%7: Int8):
+  Store %0, %2, aliasing=0, offset=8
+  Store %0, %5, aliasing=0, offset=9
+  %10 = Sub %7, 1:Int8
+  %11 = Eq %10, 0:Int8
+  Branch %11, true_block=b4, false_block=b3
+b3:
+  Jump %10, block=b2
+b4:
+  %14 = Sub %4, 1:Int8
+  %15 = Eq %14, 0:Int8
+  Branch %15, true_block=b6, false_block=b5
+b5:
+  Jump %14, block=b1
+b6:
+  Exit
+}
+)";
+    check_sinking(ir, ir);
+  });
+
+  suite.test("dominator ordering with an acyclic backward edge").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Add %1, 1:Int8
+  %3 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  Store %0, %2, aliasing=0, offset=8
+  Exit
+b2:
+  Jump block=b1
+}
+)";
+    check_sinking(ir, ir, true);
   });
 
   return suite.finish();
