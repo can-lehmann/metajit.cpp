@@ -426,6 +426,26 @@ int main(int argc, char** argv) {
     builder.build_exit();
 
     Incoming incoming(&section);
+    DominatorTree dominators(&section);
+    auto dom_children = dominators.children();
+    unittest_assert(&dom_children.domtree() == &dominators);
+    unittest_assert(dominators.root() == entry);
+    unittest_assert(dom_children.at(entry).size() == 3);
+    unittest_assert(dom_children.at(exit).empty());
+    using DomEvent = DominatorTree::Children::Event;
+    std::vector<std::pair<DomEvent, Block*>> events;
+    for (auto event : dom_children) {
+      events.push_back(event);
+    }
+    unittest_assert(events == (std::vector<std::pair<DomEvent, Block*>>{
+      {DomEvent::Open, entry},
+      {DomEvent::Open, a}, {DomEvent::Close, a},
+      {DomEvent::Open, b}, {DomEvent::Close, b},
+      {DomEvent::Open, merge},
+      {DomEvent::Open, exit}, {DomEvent::Close, exit},
+      {DomEvent::Close, merge}, {DomEvent::Close, entry}
+    }));
+
     PostDominatorTree tree(incoming);
     unittest_assert(tree.section() == &section);
     unittest_assert(&tree.incoming() == &incoming);
