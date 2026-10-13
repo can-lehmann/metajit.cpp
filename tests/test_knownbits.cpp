@@ -177,6 +177,55 @@ void test_idempotent_conditions(unittest::Suite& suite) {
   });
 }
 
+void test_usedbits_constant_shl() {
+  using ConcreteBits = Interpreter::Bits;
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t width = type_width(type);
+    uint64_t mask = type_mask(type);
+    for (uint64_t shift : {uint64_t(0), uint64_t(1), width / 2, width - 1,
+                           width, width + 1, mask}) {
+      for (uint64_t demanded : {uint64_t(0), uint64_t(1), uint64_t(1) << (width - 1),
+                                mask, mask & uint64_t(0xaaaaaaaaaaaaaaaa)}) {
+        Context context;
+        Allocator allocator;
+        Section section(context, allocator);
+        Builder builder(&section);
+        Block* entry = builder.build_block({Type::Ptr});
+        builder.move_to_end(entry);
+        Value* input = builder.build_load(entry->arg(0), type, LoadFlags::None, AliasingGroup(0), 0);
+        Value* shifted = builder.build_shl(input, builder.build_const(type, shift));
+        Value* result = builder.build_and(shifted, builder.build_const(type, demanded));
+        builder.build_store(entry->arg(0), result, AliasingGroup(0), 8);
+        builder.build_exit();
+        section.order_blocks(BlockOrdering::Dominator);
+        section.autoname();
+        unittest_assert(!section.verify(std::cout));
+        UsedBits used(&section);
+        uint64_t input_used = used.at(input).used;
+        uint64_t expected = 0;
+        for (uint64_t bit = 0; bit < width; bit++) {
+          if (shift < width && bit + shift < width &&
+              (demanded & (uint64_t(1) << (bit + shift)))) {
+            expected |= uint64_t(1) << bit;
+          }
+        }
+        unittest_assert(input_used == expected);
+        for (size_t sample = 0; sample < 100; sample++) {
+          uint64_t original_value = rand64() & mask;
+          uint64_t changed_value = (original_value & input_used) | (rand64() & mask & ~input_used);
+          ConcreteBits amount = ConcreteBits::constant(type, shift);
+          ConcreteBits original = ConcreteBits::constant(type, original_value).shl(amount);
+          ConcreteBits changed = ConcreteBits::constant(type, changed_value).shl(amount);
+          unittest_assert(original.is_poison == changed.is_poison);
+          if (!original.is_poison) {
+            unittest_assert(((original.value ^ changed.value) & demanded) == 0);
+          }
+        }
+      }
+    }
+  }
+}
+
 void test_usedbits_shr_s_bug(unittest::Suite& suite) {
   suite.test("usedbits_shr_s_bug").run([]() {
     using Bits = UsedBits::Bits;
@@ -210,8 +259,225 @@ void test_usedbits_shr(unittest::Suite& suite) {
   });
 }
 
+void test_intersect_example(unittest::Suite& suite) {
+  suite.test("intersect_example").run([]() {
+    Bits a = Bits(Type::Int64, 0b10001111, 0b10001010); // 1???1010
+    Bits b = Bits(Type::Int64, 0b11100011, 0b11000010); // 110???10
+    auto c = a.intersect(b); // 110?1010;
+    unittest_assert (c.has_value());
+    unittest_assert (c.value().mask == 0b11101111);
+    unittest_assert (c.value().value == 0b11001010);
+
+    a = Bits(Type::Int64, 0b1, 0b0);
+    b = Bits(Type::Int64, 0b1, 0b1);
+    c = a.intersect(b);
+    unittest_assert (not c.has_value());
+  });
+}
+
+void test_random_intersect(unittest::Suite& suite) {
+  suite.test("random_intersect").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      auto [value_a, bits_a] = random_value_and_bits(Type::Int8);
+      auto [value_b, bits_b] = random_value_and_bits(Type::Int8);
+      auto c = bits_a.intersect(bits_b);
+      if (c.has_value()) {
+        Bits bits_c = c.value();
+        for (uint64_t j = 0; j < 256; j++) {
+          if (bits_c.matches_const(j)) {
+            unittest_assert (bits_a.matches_const(j));
+            unittest_assert (bits_b.matches_const(j));
+          }
+        }
+      } else {
+        unittest_assert (!bits_a.matches_const(value_b));
+        unittest_assert (!bits_b.matches_const(value_a));
+      }
+    }
+  });
+}
+
+void test_and_backwards_example(unittest::Suite& suite) {
+  suite.test("and_backwards_example").run([]() {
+    Bits result = Bits(Type::Int8, 0b11010110, 0b10000100); // 10?0?10?
+    Bits a = Bits(Type::Int8, 0b11111000, 0b11100000); // 11100???
+    auto b = result.and_backwards(a); // 10???1??;
+    unittest_assert (b.has_value());
+    unittest_assert (b.value().mask == 0b11000100);
+    unittest_assert (b.value().value == 0b10000100);
+
+    result = Bits(Type::Int64, 0b1, 0b1); // ?...?1
+    a = Bits(Type::Int64, 0b1, 0b0); // ?...?0
+    b = result.and_backwards(a);
+    unittest_assert (not b.has_value());
+  });
+}
+
+void test_and_backwards_random(unittest::Suite& suite) {
+  suite.test("and_backwards_random").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
+      auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
+      auto result = bits_a & bits_b;
+      auto better_b = result.and_backwards(bits_a);
+      unittest_assert (better_b.has_value());
+      unittest_assert (better_b.value().matches_const(value_b));
+      unittest_assert (better_b.value().intersect(bits_b).has_value());
+    }
+  });
+}
+
+void test_lshift_backwards_example(unittest::Suite& suite) {
+  suite.test("lshift_backwards_example").run([]() {
+    Bits result = Bits(Type::Int8, 0b11010111, 0b10000000); // 10?0?000
+    auto a = result.shl_backwards(3); // ???10?0?
+    unittest_assert (a.has_value());
+    unittest_assert (a.value().mask == 0b11010);
+    unittest_assert (a.value().value == 0b10000);
+
+    result = Bits(Type::Int8, 0b11010111, 0b10000111); // 10?0?111
+    a = result.shl_backwards(3);
+    unittest_assert (!a.has_value());
+  });
+}
+
+
+void test_lshift_backwards_random(unittest::Suite& suite) {
+  suite.test("lshift_backwards_random").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
+      uint64_t shift = (rand() % 64);
+      Bits result = bits_a.shl(shift);
+      auto better_a = result.shl_backwards(shift);
+      unittest_assert (better_a.has_value());
+      unittest_assert (better_a.value().matches_const(value_a));
+      unittest_assert (better_a.value().intersect(bits_a).has_value());
+    }
+  });
+}
+
+void test_lshift_backwards_boundaries(unittest::Suite& suite) {
+  suite.test("lshift_backwards_boundaries").run([]() {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      size_t width = type_width(type);
+      for (size_t shift = 0; shift < width; shift++) {
+        uint64_t value = uint64_t(1) << shift;
+        auto argument = Bits::constant(type, value).shl_backwards(shift);
+        unittest_assert(argument.has_value());
+        unittest_assert(argument->mask == (type_mask(type) >> shift));
+        unittest_assert(argument->value == 1);
+        if (shift != 0) {
+          auto inconsistent = Bits::constant(type, value | (value >> 1)).shl_backwards(shift);
+          unittest_assert(!inconsistent.has_value());
+        }
+      }
+      for (size_t shift : {width, width + 1, size_t(64), size_t(128), SIZE_MAX}) {
+        unittest_assert(!Bits::constant(type, 0).shl_backwards(shift).has_value());
+      }
+    }
+  });
+}
+
+
+void test_or_backwards_exhaustive(unittest::Suite& suite) {
+  suite.test("or_backwards_exhaustive").run([]() {
+    for (uint64_t result_mask = 0; result_mask < 16; result_mask++) {
+      for (uint64_t result_value = 0; result_value < 16; result_value++) {
+        if (result_value & ~result_mask) continue;
+        Bits result(Type::Int8, result_mask | 0xf0, result_value);
+        for (uint64_t arg_mask = 0; arg_mask < 16; arg_mask++) {
+          for (uint64_t arg_value = 0; arg_value < 16; arg_value++) {
+            if (arg_value & ~arg_mask) continue;
+            Bits argument(Type::Int8, arg_mask | 0xf0, arg_value);
+            auto inferred = result.or_backwards(argument);
+            bool possible = false;
+            uint64_t common_ones = 0xff;
+            uint64_t common_zeros = 0xff;
+            for (uint64_t a = 0; a < 16; a++) {
+              if (!argument.matches_const(a)) continue;
+              for (uint64_t b = 0; b < 16; b++) {
+                if (!result.matches_const(a | b)) continue;
+                possible = true;
+                common_ones &= b;
+                common_zeros &= ~b;
+              }
+            }
+            unittest_assert(inferred.has_value() == possible);
+            if (possible) {
+              unittest_assert(inferred->mask == (common_ones | common_zeros));
+              unittest_assert(inferred->value == common_ones);
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+void test_or_backwards_random(unittest::Suite& suite) {
+  suite.test("or_backwards_random").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      auto [value_a, bits_a] = random_value_and_bits(Type::Int64);
+      auto [value_b, bits_b] = random_value_and_bits(Type::Int64);
+      Bits result(Type::Int64, rand64(), value_a | value_b);
+      auto inferred_a = result.or_backwards(bits_b);
+      auto inferred_b = result.or_backwards(bits_a);
+      unittest_assert(inferred_a.has_value());
+      unittest_assert(inferred_b.has_value());
+      unittest_assert(inferred_a->matches_const(value_a));
+      unittest_assert(inferred_b->matches_const(value_b));
+    }
+  });
+}
+
+void test_shr_u_backwards_boundaries(unittest::Suite& suite) {
+  suite.test("shr_u_backwards_boundaries").run([]() {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      size_t width = type_width(type);
+      for (size_t shift = 0; shift < width; shift++) {
+        auto argument = Bits::constant(type, type_mask(type) >> shift).shr_u_backwards(shift);
+        uint64_t expected = (type_mask(type) << shift) & type_mask(type);
+        unittest_assert(argument.has_value());
+        unittest_assert(argument->mask == expected);
+        unittest_assert(argument->value == expected);
+        auto partial = Bits(type, 1, 1).shr_u_backwards(shift);
+        unittest_assert(partial.has_value());
+        unittest_assert(partial->mask == (uint64_t(1) << shift));
+        unittest_assert(partial->value == partial->mask);
+        if (shift != 0) {
+          uint64_t invalid = uint64_t(1) << (width - shift);
+          unittest_assert(!Bits(type, invalid, invalid).shr_u_backwards(shift).has_value());
+        }
+      }
+      for (size_t shift : {width, width + 1, size_t(64), size_t(128), SIZE_MAX}) {
+        unittest_assert(!Bits::constant(type, 0).shr_u_backwards(shift).has_value());
+      }
+    }
+    auto partial = Bits(Type::Int8, 0b11110101, 0b00010100).shr_u_backwards(3);
+    unittest_assert(partial.has_value());
+    unittest_assert(partial->mask == 0b10101000);
+    unittest_assert(partial->value == 0b10100000);
+  });
+}
+
+void test_shr_u_backwards_random(unittest::Suite& suite) {
+  suite.test("shr_u_backwards_random").run([]() {
+    for (int i = 0; i < num_examples; i++) {
+      uint64_t value = rand64();
+      size_t shift = rand() % 64;
+      Bits result(Type::Int64, rand64(), value >> shift);
+      auto argument = result.shr_u_backwards(shift);
+      unittest_assert(argument.has_value());
+      unittest_assert(argument->matches_const(value));
+      unittest_assert((argument->mask & ((uint64_t(1) << shift) - 1)) == 0);
+    }
+  });
+}
+
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
+
+  suite.test("usedbits_constant_shl").run(test_usedbits_constant_shl);
 
   using ConcreteBits = Interpreter::Bits;
   suite.test("usedbits_select_preserves_definedness").run([]() {
@@ -456,6 +722,20 @@ int main(int argc, char** argv) {
   test_idempotent_conditions(suite);
   test_usedbits_shr_s_bug(suite);
   test_usedbits_shr(suite);
+
+  test_intersect_example(suite);
+  test_random_intersect(suite);
+  test_and_backwards_example(suite);
+  test_and_backwards_random(suite);
+  test_lshift_backwards_example(suite);
+  test_lshift_backwards_boundaries(suite);
+  test_lshift_backwards_random(suite);
+
+  test_or_backwards_exhaustive(suite);
+  test_or_backwards_random(suite);
+
+  test_shr_u_backwards_boundaries(suite);
+  test_shr_u_backwards_random(suite);
 
   return suite.finish();
 }
