@@ -5695,6 +5695,7 @@ private:
 
 
     Block* common_dominator(Block* a, Block* b) {
+      assert(_section->ordering() >= BlockOrdering::Dominator);
       while (a != b) {
         if (a->name() > b->name()) {
           a = idom(a);
@@ -5853,6 +5854,7 @@ private:
     BlockMap<bool> _in_loop;
     NameMap<Block*> _parents;
     Uses _uses;
+    bool _requires_reorder = false;
 
     static bool can_sink(Inst* inst) {
       return !inst->has_side_effect() && !inst->is_terminator() &&
@@ -5971,7 +5973,7 @@ private:
       target->add(branch);
       builder.move_to_end(entry);
       builder.build_jump(exit);
-      _section->set_ordering(BlockOrdering::None);
+      _requires_reorder = true;
     }
 
   public:
@@ -6015,7 +6017,8 @@ private:
         }
         sink_branch(block);
       }
-      if (section->ordering() == BlockOrdering::None) {
+      if (_requires_reorder) {
+        section->set_ordering(BlockOrdering::None);
         section->order_blocks();
       }
     }
