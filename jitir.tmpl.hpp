@@ -5770,6 +5770,7 @@ private:
 
   class CodeSinking: public Pass<CodeSinking> {
   private:
+    Section* _section;
     DominatorTree _dom;
     PostDominatorTree _postdom;
 
@@ -5832,6 +5833,7 @@ private:
   public:
     CodeSinking(Section* section):
         Pass(section),
+        _section(section),
         _dom(section),
         _postdom(section),
         _in_loop(section),
