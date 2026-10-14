@@ -5757,7 +5757,9 @@ private:
 
     static Block* find_exit(Block* branch, DominatorTree& dom, PostDominatorTree& postdom) {
       dynmatch(BranchInst, branch_inst, branch->terminator());
-      assert(branch_inst);
+      if (!branch_inst) {
+        return nullptr;
+      }
       Block* exit = postdom.common_dominator(branch_inst->true_block(), branch_inst->false_block());
       if (exit && exit != postdom.virtual_exit() && dom.idom(exit) == branch) {
         return exit;
@@ -5873,6 +5875,17 @@ private:
       return target;
     }
 
+    Block* find_target(const lwir::Span<Arg*>& args) {
+      Block* target = nullptr;
+      for (Arg* arg : args) {
+        if (!_uses.at(arg).empty()) {
+          Block* user = find_target(arg);
+          target = target ? _dom.common_dominator(target, user) : user;
+        }
+      }
+      return target;
+    }
+
   public:
     CodeSinking(Section* section):
         Pass(section),
@@ -5912,6 +5925,10 @@ private:
             _parents[inst] = target;
           }
         }
+        sink_branch(block);
+      }
+      if (section->ordering() == BlockOrdering::None) {
+        section->order_blocks();
       }
     }
   };
