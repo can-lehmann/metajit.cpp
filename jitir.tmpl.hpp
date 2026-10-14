@@ -5813,11 +5813,12 @@ private:
       return std::nullopt;
     }
 
-    bool has_side_effect() const {
+
+    std::set<Block*> blocks() const {
       std::deque<Block*> open;
       std::set<Block*> closed;
       #define insert(block) \
-        if (closed.find(block) == closed.end()) { \
+        if (closed.find(block) == closed.end() && block != _exit) { \
           open.push_back(block); \
           closed.insert(block); \
         }
@@ -5829,20 +5830,24 @@ private:
         Block* block = open.front();
         open.pop_front();
         
-        if (block != _exit) {
-          for (Inst* inst : *block) {
-            if (inst->has_side_effect()) {
-              return true;
-            }
-          }
-          for (Block* succ : block->successors()) {
-            insert(succ);
-          }
+        for (Block* succ : block->successors()) {
+          insert(succ);
         }
       }
 
       #undef insert
 
+      return closed;
+    }
+
+    bool has_side_effect() const {
+      for (Block* block : blocks()) {
+        for (Inst* inst : *block) {
+          if (inst->has_side_effect()) {
+            return true;
+          }
+        }
+      }
       return false;
     }
   };
@@ -5923,6 +5928,50 @@ private:
         }
       }
       return target;
+    }
+
+    void sink_branch(Block* exit) {
+      const std::optional<BranchRegion>& region = _regions[exit];
+      if (!region.has_value() || _in_loop[region->entry()] || region->has_side_effect()) {
+        return;
+      }
+      Block* entry = region->entry();
+      Block* target = find_target(exit->args());
+      if (!target || target == exit) {
+        return;
+      }
+      auto blocks = region->blocks();
+      for (Block* block : *_section) {
+        if (_dom.dominates(exit, block) && !_dom.dominates(target, block)) {
+          for (Inst* inst : *block) {
+            if (inst->has_side_effect()) {
+              return;
+            }
+          }
+        }
+      }
+      Builder builder(_section);
+      Block* continuation = builder.build_block_after(target, exit->args());
+      continuation->set_name(target->name());
+      Inst* first = *target->begin();
+      Inst* last = target->terminator();
+      target->remove(first, last);
+      continuation->add(first, last);
+      blocks.insert(entry);
+      const std::map<Block*, Block*> substs = {{exit, continuation}};
+      for (Block* block : blocks) {
+        block->terminator()->substitute_blocks(substs);
+      }
+      exit->set_args({});
+      for (Arg* arg : continuation->args()) {
+        _parents[arg] = target;
+      }
+      BranchInst* branch = region->branch();
+      entry->remove(branch);
+      target->add(branch);
+      builder.move_to_end(entry);
+      builder.build_jump(exit);
+      _section->set_ordering(BlockOrdering::None);
     }
 
   public:
