@@ -443,6 +443,9 @@ namespace metajit {
   template<class T>
   class NameMap;
 
+  template<class T>
+  class BlockMap;
+
   class NamedValue : public Value {
   private:
     size_t _name = 0;
@@ -487,6 +490,9 @@ namespace metajit {
     }
 
     void substitute_args(NameMap<Value*>& substs);
+
+    void substitute_blocks(BlockMap<Block*>& substs);
+    void substitute_blocks(const std::map<Block*, Block*>& substs);
 
     void substitute_args(const std::map<Value*, Value*>& substs) {
       for (size_t it = 0; it < arg_count(); it++) {
@@ -2480,6 +2486,39 @@ namespace metajit {
         if (substs[(Inst*) argument]) {
           set_arg(it, substs[(Inst*) argument]);
         }
+      }
+    }
+  }
+
+  void Inst::substitute_blocks(BlockMap<Block*>& substs) {
+    if (dynmatch(JumpInst, jump, this)) {
+      if (Block* block = substs[jump->block()]) {
+        jump->set_block(block);
+      }
+    } else if (dynmatch(BranchInst, branch, this)) {
+      if (Block* block = substs[branch->true_block()]) {
+        branch->set_true_block(block);
+      }
+      if (Block* block = substs[branch->false_block()]) {
+        branch->set_false_block(block);
+      }
+    }
+  }
+
+  void Inst::substitute_blocks(const std::map<Block*, Block*>& substs) {
+    if (dynmatch(JumpInst, jump, this)) {
+      auto it = substs.find(jump->block());
+      if (it != substs.end()) {
+        jump->set_block(it->second);
+      }
+    } else if (dynmatch(BranchInst, branch, this)) {
+      auto true_it = substs.find(branch->true_block());
+      if (true_it != substs.end()) {
+        branch->set_true_block(true_it->second);
+      }
+      auto false_it = substs.find(branch->false_block());
+      if (false_it != substs.end()) {
+        branch->set_false_block(false_it->second);
       }
     }
   }

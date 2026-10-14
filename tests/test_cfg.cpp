@@ -345,6 +345,60 @@ int main(int argc, char** argv) {
     data.output(s);
   });
 
+  suite.test("substitute blocks").run([]() {
+    for (bool dense : {false, true}) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* entry = builder.build_block({Type::Bool});
+      Block* left = builder.build_block();
+      Block* right = builder.build_block();
+      Block* merge = builder.build_block({Type::Int8});
+      Block* target = builder.build_block({Type::Int8});
+      builder.move_to_end(entry);
+      BranchInst* branch = builder.build_branch(entry->arg(0), left, right);
+      builder.move_to_end(left);
+      Value* value = builder.build_const(Type::Int8, 17);
+      JumpInst* jump = builder.build_jump(merge, {value});
+      builder.move_to_end(right);
+      Inst* exit = builder.build_exit();
+      builder.move_to_end(merge);
+      JumpInst* unchanged = builder.build_jump(target, {merge->arg(0)});
+      builder.move_to_end(target);
+      Inst* add = builder.build_add(target->arg(0), value);
+      builder.build_exit();
+      section.autoname();
+
+      auto check = [&](auto& substs) {
+        branch->substitute_blocks(substs);
+        jump->substitute_blocks(substs);
+        unchanged->substitute_blocks(substs);
+        exit->substitute_blocks(substs);
+        add->substitute_blocks(substs);
+        unittest_assert(branch->true_block() == right && branch->false_block() == left);
+        unittest_assert(branch->arg(0) == entry->arg(0));
+        unittest_assert(jump->block() == target && jump->arg(0) == value);
+        unittest_assert(unchanged->block() == target && unchanged->arg(0) == merge->arg(0));
+        unittest_assert(add->arg(0) == target->arg(0) && add->arg(1) == value);
+        branch->set_true_block(left);
+        branch->set_false_block(left);
+        branch->substitute_blocks(substs);
+        unittest_assert(branch->true_block() == right && branch->false_block() == right);
+      };
+      if (dense) {
+        BlockMap<Block*> substs(&section);
+        substs[left] = right;
+        substs[right] = left;
+        substs[merge] = target;
+        check(substs);
+      } else {
+        const std::map<Block*, Block*> substs = {{left, right}, {right, left}, {merge, target}};
+        check(substs);
+      }
+    }
+  });
+
   suite.test("branch region exits").run([]() {
     for (int mode = 0; mode < 3; mode++) {
       Context context;
