@@ -4283,15 +4283,15 @@ namespace metajit {
         for (Inst* inst : *block) {
           for (size_t it = 0; it < inst->arg_count(); it++) {
             Value* arg = inst->arg(it);
-            if (arg->is_inst()) {
-              _uses[(Inst*) arg].emplace_back(inst, it);
+            if (arg->is_named()) {
+              _uses[(NamedValue*) arg].emplace_back(inst, it);
             }
           }
         }
       }
     }
 
-    const std::vector<Use>& at(Inst* inst) const {
+    const std::vector<Use>& at(NamedValue* inst) const {
       return _uses.at(inst);
     }
   };
@@ -5765,25 +5765,24 @@ private:
       return nullptr;
     }
 
-    BranchRegion* find(Block* block, DominatorTree& dom, PostDominatorTree& postdom) {
-      Block* exit = find_exit(block, dom, postdom);
-      if (exit) {
-        return new BranchRegion(block, exit);
+    static std::optional<BranchRegion> find(Block* block, DominatorTree& dom, PostDominatorTree& postdom) {
+      if (Block* exit = find_exit(block, dom, postdom)) {
+        return BranchRegion(block, exit);
       }
-      return nullptr;
+      return std::nullopt;
     }
 
     bool has_side_effect() const {
       std::deque<Block*> open;
       std::set<Block*> closed;
-      insert(branch()->true_block());
-      insert(branch()->false_block());
-
       #define insert(block) \
         if (closed.find(block) == closed.end()) { \
           open.push_back(block); \
           closed.insert(block); \
         }
+
+      insert(branch()->true_block());
+      insert(branch()->false_block());
 
       while (!open.empty()) {
         Block* block = open.front();
@@ -5814,6 +5813,7 @@ private:
     Incoming _incoming;
     PostDominatorTree _postdom;
 
+    BlockMap<std::optional<BranchRegion>> _regions;
     BlockMap<bool> _in_loop;
     NameMap<Block*> _parents;
     Uses _uses;
@@ -5830,6 +5830,9 @@ private:
 
     void find_parents() {
       for (Block* block : *_section) {
+        for (Arg* arg : block->args()) {
+          _parents[arg] = block;
+        }
         for (Inst* inst : *block) {
           _parents[inst] = block;
         }
@@ -5853,7 +5856,7 @@ private:
       }
     }
 
-    Block* find_target(Inst* value) {
+    Block* find_target(NamedValue* value) {
       Block* target = nullptr;
       for (const Uses::Use& use : _uses.at(value)) {
         Block* user = _parents[use.inst];
@@ -5877,6 +5880,7 @@ private:
         _dom(section),
         _incoming(section),
         _postdom(_incoming),
+        _regions(section),
         _in_loop(section),
         _parents(section),
         _uses(section) {
@@ -5885,6 +5889,11 @@ private:
       
       find_parents();
       find_loops();
+      for (Block* block : *section) {
+        if (auto region = BranchRegion::find(block, _dom, _postdom)) {
+          _regions[region->exit()] = region;
+        }
+      }
 
       for (Block* block : section->rev_range()) {
         if (block != section->entry() && !_dom.idom(block)) {
