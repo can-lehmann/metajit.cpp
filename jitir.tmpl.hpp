@@ -5840,16 +5840,6 @@ private:
       return closed;
     }
 
-    bool has_side_effect() const {
-      for (Block* block : blocks()) {
-        for (Inst* inst : *block) {
-          if (inst->has_side_effect()) {
-            return true;
-          }
-        }
-      }
-      return false;
-    }
   };
 
   class CodeSinking: public Pass<CodeSinking> {
@@ -5932,7 +5922,7 @@ private:
 
     void sink_branch(Block* exit) {
       const std::optional<BranchRegion>& region = _regions[exit];
-      if (!region.has_value() || _in_loop[region->entry()] || region->has_side_effect()) {
+      if (!region.has_value() || _in_loop[region->entry()]) {
         return;
       }
       Block* entry = region->entry();
@@ -5941,6 +5931,16 @@ private:
         return;
       }
       auto blocks = region->blocks();
+      for (Block* block : blocks) {
+        if (_in_loop[block]) {
+          return;
+        }
+        for (Inst* inst : *block) {
+          if (inst->has_side_effect()) {
+            return;
+          }
+        }
+      }
       for (Block* block : *_section) {
         if (_dom.dominates(exit, block) && !_dom.dominates(target, block)) {
           for (Inst* inst : *block) {
