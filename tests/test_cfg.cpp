@@ -345,6 +345,50 @@ int main(int argc, char** argv) {
     data.output(s);
   });
 
+  suite.test("branch region exits").run([]() {
+    for (int mode = 0; mode < 3; mode++) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* entry = builder.build_block({Type::Bool});
+      Block* left = builder.build_block();
+      Block* right = builder.build_block();
+      Block* merge = builder.build_block();
+      builder.move_to_end(entry);
+      builder.build_branch(entry->arg(0), left, right);
+      builder.move_to_end(left);
+      builder.build_jump(merge);
+      builder.move_to_end(right);
+      if (mode == 0) {
+        builder.build_jump(merge);
+      } else if (mode == 1) {
+        builder.build_exit();
+      } else {
+        builder.build_jump(right);
+      }
+      builder.move_to_end(merge);
+      builder.build_exit();
+      OrderBlocks::run(&section, BlockOrdering::Natural);
+      DominatorTree dom(&section);
+      Incoming incoming(&section);
+      PostDominatorTree postdom(incoming);
+      if (mode == 0) {
+        unittest_assert(postdom.common_dominator(left, right) == merge);
+        unittest_assert(BranchRegion::find_exit(entry, dom, postdom) == merge);
+      } else if (mode == 1) {
+        unittest_assert(postdom.common_dominator(left, right) == postdom.virtual_exit());
+        unittest_assert(BranchRegion::find_exit(entry, dom, postdom) == nullptr);
+      } else {
+        unittest_assert(postdom.common_dominator(left, right) == nullptr);
+        unittest_assert(BranchRegion::find_exit(entry, dom, postdom) == nullptr);
+      }
+      std::stringstream dot;
+      postdom.write_dot(dot);
+      unittest_assert(!dot.str().empty());
+    }
+  });
+
   suite.test("dominator_order_verify").run([]() {
     Context context;
     Allocator allocator;

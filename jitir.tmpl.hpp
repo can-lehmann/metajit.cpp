@@ -5600,16 +5600,16 @@ private:
 
     void write_dot(std::ostream& stream) {
       stream << "digraph {\n";
-      for (Block* block : *_section) {
+      for (Block* block : static_cast<Self*>(this)->blocks()) {
         stream << "  b" << block->name() << " [shape=box";
         if (block->terminator() && dynamic_cast<ExitInst*>(block->terminator())) {
           stream << ", peripheries=2";
         }
         stream << "];\n";
       }
-      for (Block* block : *_section) {
-        if (idom(block)) {
-          stream << "  b" << idom(block)->name() << " -> b" << block->name() << ";\n";
+      for (Block* block : static_cast<Self*>(this)->blocks()) {
+        if (this->idom(block)) {
+          stream << "  b" << this->idom(block)->name() << " -> b" << block->name() << ";\n";
         }
       }
       stream << "}\n";
@@ -5658,9 +5658,9 @@ private:
     Block* common_dominator(Block* a, Block* b) {
       while (a != b) {
         if (a->name() > b->name()) {
-          a = _dom.idom(a);
+          a = idom(a);
         } else {
-          b = _dom.idom(b);
+          b = idom(b);
         }
       }
       return a;
@@ -5700,7 +5700,8 @@ private:
 
     PostDominatorTree(Incoming& incoming, Mode mode = Mode::Default):
         DominatorTreeBase<PostDominatorTree>(block_count(incoming.section())),
-        _incoming(incoming) {
+        _incoming(incoming),
+        _depth(incoming.section()->block_count() + 1) {
       
       _virtual_exit.set_name(section()->block_count());
       for (Block* block : *section()) {
@@ -5716,8 +5717,8 @@ private:
       for (Block* block : order()) {
         if (block == &_virtual_exit) {
           _depth[block] = 0;
-        } else {
-          _depth[block] = _depth[idom(block)] + 1;
+        } else if (Block* parent = idom(block)) {
+          _depth[block] = _depth[parent] + 1;
         }
       }
     }
@@ -5729,6 +5730,9 @@ private:
     const std::vector<Block*>& exits() const { return _exits; }
 
     Block* common_dominator(Block* a, Block* b) {
+      if (!a || !b || (a != root() && !idom(a)) || (b != root() && !idom(b))) {
+        return nullptr;
+      }
       while (a != b) {
         if (_depth[a] > _depth[b]) {
           a = idom(a);
@@ -5761,7 +5765,7 @@ private:
       dynmatch(BranchInst, branch_inst, branch->terminator());
       assert(branch_inst);
       Block* exit = postdom.common_dominator(branch_inst->true_block(), branch_inst->false_block());
-      if (dom.idom(exit) == branch) {
+      if (exit && exit != postdom.virtual_exit() && dom.idom(exit) == branch) {
         return exit;
       }
       return nullptr;
@@ -5772,6 +5776,7 @@ private:
   private:
     Section* _section;
     DominatorTree _dom;
+    Incoming _incoming;
     PostDominatorTree _postdom;
 
     BlockMap<bool> _in_loop;
@@ -5789,7 +5794,7 @@ private:
     }
 
     void find_parents() {
-      for (Block* block : *section()) {
+      for (Block* block : *_section) {
         for (Inst* inst : *block) {
           _parents[inst] = block;
         }
@@ -5797,8 +5802,8 @@ private:
     }
 
     void find_loops() {
-      std::vector<int64_t> loop_ranges(section()->block_count() + 1, 0);
-      for (Block* block : *section()) {
+      std::vector<int64_t> loop_ranges(_section->block_count() + 1, 0);
+      for (Block* block : *_section) {
         for (Block* successor : block->successors()) {
           if (successor->name() <= block->name()) {
             loop_ranges[successor->name()]++;
@@ -5807,18 +5812,18 @@ private:
         }
       }
       int64_t active_ranges = 0;
-      for (Block* block : *section()) {
+      for (Block* block : *_section) {
         active_ranges += loop_ranges[block->name()];
         _in_loop[block] = active_ranges != 0;
       }
     }
 
-    Block* find_target(NamedValue* value) {
+    Block* find_target(Inst* value) {
       Block* target = nullptr;
-      for (const Uses::Use& use : _uses.at(inst)) {
-        Block* user = locations[use.inst];
-        if (user != section()->entry() && !_dom.idom(user)) {
-          target = block;
+      for (const Uses::Use& use : _uses.at(value)) {
+        Block* user = _parents[use.inst];
+        if (user != _section->entry() && !_dom.idom(user)) {
+          target = _parents[value];
           break;
         }
         target = target ? _dom.common_dominator(target, user) : user;
@@ -5835,7 +5840,8 @@ private:
         Pass(section),
         _section(section),
         _dom(section),
-        _postdom(section),
+        _incoming(section),
+        _postdom(_incoming),
         _in_loop(section),
         _parents(section),
         _uses(section) {
@@ -5852,7 +5858,7 @@ private:
         for (auto inst_it = block->rbegin(); inst_it != block->rend(); ) {
           Inst* inst = *inst_it;
           inst_it++;
-          if (!can_sink(inst) || uses.at(inst).empty()) {
+          if (!can_sink(inst) || _uses.at(inst).empty()) {
             continue;
           }
           Block* target = find_target(inst);
