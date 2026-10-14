@@ -443,6 +443,9 @@ namespace metajit {
   template<class T>
   class NameMap;
 
+  template<class T>
+  class BlockMap;
+
   class NamedValue : public Value {
   private:
     size_t _name = 0;
@@ -487,6 +490,9 @@ namespace metajit {
     }
 
     void substitute_args(NameMap<Value*>& substs);
+
+    void substitute_blocks(BlockMap<Block*>& substs);
+    void substitute_blocks(const std::map<Block*, Block*>& substs);
 
     void substitute_args(const std::map<Value*, Value*>& substs) {
       for (size_t it = 0; it < arg_count(); it++) {
@@ -2484,6 +2490,39 @@ namespace metajit {
     }
   }
 
+  void Inst::substitute_blocks(BlockMap<Block*>& substs) {
+    if (dynmatch(JumpInst, jump, this)) {
+      if (Block* block = substs[jump->block()]) {
+        jump->set_block(block);
+      }
+    } else if (dynmatch(BranchInst, branch, this)) {
+      if (Block* block = substs[branch->true_block()]) {
+        branch->set_true_block(block);
+      }
+      if (Block* block = substs[branch->false_block()]) {
+        branch->set_false_block(block);
+      }
+    }
+  }
+
+  void Inst::substitute_blocks(const std::map<Block*, Block*>& substs) {
+    if (dynmatch(JumpInst, jump, this)) {
+      auto it = substs.find(jump->block());
+      if (it != substs.end()) {
+        jump->set_block(it->second);
+      }
+    } else if (dynmatch(BranchInst, branch, this)) {
+      auto true_it = substs.find(branch->true_block());
+      if (true_it != substs.end()) {
+        branch->set_true_block(true_it->second);
+      }
+      auto false_it = substs.find(branch->false_block());
+      if (false_it != substs.end()) {
+        branch->set_false_block(false_it->second);
+      }
+    }
+  }
+
   template<class BuilderType = Builder>
   class SectionReader {
   private:
@@ -4283,15 +4322,15 @@ namespace metajit {
         for (Inst* inst : *block) {
           for (size_t it = 0; it < inst->arg_count(); it++) {
             Value* arg = inst->arg(it);
-            if (arg->is_inst()) {
-              _uses[(Inst*) arg].emplace_back(inst, it);
+            if (arg->is_named()) {
+              _uses[(NamedValue*) arg].emplace_back(inst, it);
             }
           }
         }
       }
     }
 
-    const std::vector<Use>& at(Inst* inst) const {
+    const std::vector<Use>& at(NamedValue* inst) const {
       return _uses.at(inst);
     }
   };
@@ -5478,6 +5517,31 @@ private:
     }
   };
 
+  class Incoming {
+  private:
+    Section* _section;
+    BlockMap<std::vector<Block*>> _incoming;
+
+    static size_t block_count(Section* section) {
+      section->autoname();
+      return section->block_count();
+    }
+  public:
+    Incoming(Section* section): _section(section), _incoming(block_count(section)) {
+      for (Block* block : *section) {
+        for (Block* successor : block->successors()) {
+          std::vector<Block*>& predecessors = _incoming[successor];
+          if (predecessors.empty() || predecessors.back() != block) {
+            predecessors.push_back(block);
+          }
+        }
+      }
+    }
+
+    Section* section() const { return _section; }
+    const std::vector<Block*>& at(Block* block) const { return _incoming[block]; }
+  };
+
   template <class Self>
   class DominatorTreeBase: public lwir::DominatorTreeBase<Self, Block, BlockMap> {
   private:
@@ -5572,6 +5636,31 @@ private:
     };
 
     Children children() { return Children(*static_cast<Self*>(this)); }
+
+    void write_dot(std::ostream& stream) {
+      stream << "digraph {\n";
+      for (Block* block : static_cast<Self*>(this)->blocks()) {
+        stream << "  b" << block->name() << " [shape=box";
+        if (block->terminator() && dynamic_cast<ExitInst*>(block->terminator())) {
+          stream << ", peripheries=2";
+        }
+        stream << "];\n";
+      }
+      for (Block* block : static_cast<Self*>(this)->blocks()) {
+        if (this->idom(block)) {
+          stream << "  b" << this->idom(block)->name() << " -> b" << block->name() << ";\n";
+        }
+      }
+      stream << "}\n";
+    }
+
+    void save_dot(const std::string& path) {
+      std::ofstream file(path);
+      if (!file) {
+        throw std::runtime_error("Failed to open file for writing: " + path);
+      }
+      write_dot(file);
+    }
   };
 
   class DominatorTree: public DominatorTreeBase<DominatorTree> {
@@ -5604,62 +5693,18 @@ private:
     Section* section() const { return _section; }
     Block* root() const { return _section->entry(); }
 
-    void write_dot(std::ostream& stream, bool non_tree_edges = true) {
-      stream << "digraph {\n";
-      for (Block* block : *_section) {
-        stream << "  b" << block->name() << " [shape=box";
-        if (block->terminator() && dynamic_cast<ExitInst*>(block->terminator())) {
-          stream << ", peripheries=2";
-        }
-        stream << "];\n";
-      }
-      for (Block* block : *_section) {
-        if (idom(block)) {
-          stream << "  b" << idom(block)->name() << " -> b" << block->name() << ";\n";
-        }
-        if (non_tree_edges) {
-          for (Block* succ : block->successors()) {
-            if (idom(succ) != block) {
-              stream << "  b" << block->name() << " -> b" << succ->name() << " [style=dashed, weight=0];\n";
-            }
-          }
+
+    Block* common_dominator(Block* a, Block* b) {
+      assert(_section->ordering() >= BlockOrdering::Dominator);
+      while (a != b) {
+        if (a->name() > b->name()) {
+          a = idom(a);
+        } else {
+          b = idom(b);
         }
       }
-      stream << "}\n";
+      return a;
     }
-
-    void save_dot(const std::string& path) {
-      std::ofstream file(path);
-      if (!file) {
-        throw std::runtime_error("Failed to open file for writing: " + path);
-      }
-      write_dot(file);
-    }
-  };
-
-  class Incoming {
-  private:
-    Section* _section;
-    BlockMap<std::vector<Block*>> _incoming;
-
-    static size_t block_count(Section* section) {
-      section->autoname();
-      return section->block_count();
-    }
-  public:
-    Incoming(Section* section): _section(section), _incoming(block_count(section)) {
-      for (Block* block : *section) {
-        for (Block* successor : block->successors()) {
-          std::vector<Block*>& predecessors = _incoming[successor];
-          if (predecessors.empty() || predecessors.back() != block) {
-            predecessors.push_back(block);
-          }
-        }
-      }
-    }
-
-    Section* section() const { return _section; }
-    const std::vector<Block*>& at(Block* block) const { return _incoming[block]; }
   };
 
   class PostDominatorTree: public DominatorTreeBase<PostDominatorTree> {
@@ -5669,6 +5714,7 @@ private:
     Incoming& _incoming;
     Block _virtual_exit;
     std::vector<Block*> _exits;
+    BlockMap<size_t> _depth;
 
     static size_t block_count(Section* section) {
       section->autoname();
@@ -5694,7 +5740,9 @@ private:
 
     PostDominatorTree(Incoming& incoming, Mode mode = Mode::Default):
         DominatorTreeBase<PostDominatorTree>(block_count(incoming.section())),
-        _incoming(incoming) {
+        _incoming(incoming),
+        _depth(incoming.section()->block_count() + 1) {
+      
       _virtual_exit.set_name(section()->block_count());
       for (Block* block : *section()) {
         if (block->successors().empty()) {
@@ -5705,6 +5753,14 @@ private:
         }
       }
       build(&_virtual_exit);
+
+      for (Block* block : order()) {
+        if (block == &_virtual_exit) {
+          _depth[block] = 0;
+        } else if (Block* parent = idom(block)) {
+          _depth[block] = _depth[parent] + 1;
+        }
+      }
     }
 
     Section* section() const { return _incoming.section(); }
@@ -5713,58 +5769,92 @@ private:
     Block* root() { return virtual_exit(); }
     const std::vector<Block*>& exits() const { return _exits; }
 
-    void write_dot(std::ostream& stream, bool non_tree_edges = true) {
-      stream << "digraph {\n";
-      std::vector<Block*> all_blocks = blocks();
-      for (Block* block : all_blocks) {
-        stream << "  b" << block->name() << " [shape=box";
-        if (block == &_virtual_exit) {
-          stream << ", label=\"virtual exit\"";
-        }
-        if (block->terminator() && dynamic_cast<ExitInst*>(block->terminator())) {
-          stream << ", peripheries=2";
-        }
-        stream << "];\n";
-      }
-      for (Block* block : all_blocks) {
-        if (idom(block)) {
-          stream << "  b" << idom(block)->name() << " -> b" << block->name() << ";\n";
-        }
-        if (non_tree_edges) {
-          for (Block* succ : successors(block)) {
-            if (idom(succ) != block) {
-              stream << "  b" << block->name() << " -> b" << succ->name() << " [style=dashed, weight=0];\n";
-            }
-          }
-        }
-      }
-      stream << "}\n";
-    }
-
-    void save_dot(const std::string& path) {
-      std::ofstream file(path);
-      if (!file) {
-        throw std::runtime_error("Failed to open file for writing: " + path);
-      }
-      write_dot(file);
-    }
-  };
-
-  class CodeSinking: public Pass<CodeSinking> {
-  private:
-    DominatorTree _dominators;
-    BlockMap<size_t> _depth;
-
     Block* common_dominator(Block* a, Block* b) {
+      if (!a || !b || (a != root() && !idom(a)) || (b != root() && !idom(b))) {
+        return nullptr;
+      }
       while (a != b) {
         if (_depth[a] > _depth[b]) {
-          a = _dominators.idom(a);
+          a = idom(a);
         } else {
-          b = _dominators.idom(b);
+          b = idom(b);
         }
       }
       return a;
     }
+  };
+
+  class BranchRegion {
+  private:
+    Block* _entry = nullptr;
+    Block* _exit = nullptr;
+  public:
+    BranchRegion(Block* entry, Block* exit): _entry(entry), _exit(exit) {}
+    
+    Block* entry() const { return _entry; }
+    Block* exit() const { return _exit; }
+    BranchInst* branch() const { return dynamic_cast<BranchInst*>(_entry->terminator()); }
+
+    static Block* find_exit(Block* branch, DominatorTree& dom, PostDominatorTree& postdom) {
+      dynmatch(BranchInst, branch_inst, branch->terminator());
+      if (!branch_inst) {
+        return nullptr;
+      }
+      Block* exit = postdom.common_dominator(branch_inst->true_block(), branch_inst->false_block());
+      if (exit && exit != postdom.virtual_exit() && dom.idom(exit) == branch) {
+        return exit;
+      }
+      return nullptr;
+    }
+
+    static std::optional<BranchRegion> find(Block* block, DominatorTree& dom, PostDominatorTree& postdom) {
+      if (Block* exit = find_exit(block, dom, postdom)) {
+        return BranchRegion(block, exit);
+      }
+      return std::nullopt;
+    }
+
+
+    std::set<Block*> blocks() const {
+      std::deque<Block*> open;
+      std::set<Block*> closed;
+      #define insert(block) \
+        if (closed.find(block) == closed.end() && block != _exit) { \
+          open.push_back(block); \
+          closed.insert(block); \
+        }
+
+      insert(branch()->true_block());
+      insert(branch()->false_block());
+
+      while (!open.empty()) {
+        Block* block = open.front();
+        open.pop_front();
+        
+        for (Block* succ : block->successors()) {
+          insert(succ);
+        }
+      }
+
+      #undef insert
+
+      return closed;
+    }
+
+  };
+
+  class CodeSinking: public Pass<CodeSinking> {
+  private:
+    Section* _section;
+    DominatorTree _dom;
+    Incoming _incoming;
+    PostDominatorTree _postdom;
+
+    BlockMap<std::optional<BranchRegion>> _regions;
+    BlockMap<bool> _in_loop;
+    NameMap<Block*> _parents;
+    Uses _uses;
+    bool _requires_reorder = false;
 
     static bool can_sink(Inst* inst) {
       return !inst->has_side_effect() && !inst->is_terminator() &&
@@ -5776,20 +5866,20 @@ private:
              !dynamic_cast<CommentInst*>(inst);
     }
 
-  public:
-    CodeSinking(Section* section): Pass(section), _dominators(section), _depth(section) {
-      assert(section->ordering() >= BlockOrdering::Dominator);
-      Uses uses(section);
-      NameMap<Block*> locations(section);
-      std::vector<int64_t> loop_ranges(section->block_count() + 1, 0);
-      BlockMap<bool> in_loop(section);
-      for (Block* block : *section) {
-        if (Block* parent = _dominators.idom(block)) {
-          _depth[block] = _depth[parent] + 1;
+    void find_parents() {
+      for (Block* block : *_section) {
+        for (Arg* arg : block->args()) {
+          _parents[arg] = block;
         }
         for (Inst* inst : *block) {
-          locations[inst] = block;
+          _parents[inst] = block;
         }
+      }
+    }
+
+    void find_loops() {
+      std::vector<int64_t> loop_ranges(_section->block_count() + 1, 0);
+      for (Block* block : *_section) {
         for (Block* successor : block->successors()) {
           if (successor->name() <= block->name()) {
             loop_ranges[successor->name()]++;
@@ -5798,39 +5888,138 @@ private:
         }
       }
       int64_t active_ranges = 0;
-      for (Block* block : *section) {
+      for (Block* block : *_section) {
         active_ranges += loop_ranges[block->name()];
-        in_loop[block] = active_ranges != 0;
+        _in_loop[block] = active_ranges != 0;
       }
+    }
+
+    Block* find_target(NamedValue* value) {
+      Block* target = nullptr;
+      for (const Uses::Use& use : _uses.at(value)) {
+        Block* user = _parents[use.inst];
+        if (user != _section->entry() && !_dom.idom(user)) {
+          target = _parents[value];
+          break;
+        }
+        target = target ? _dom.common_dominator(target, user) : user;
+      }
+      assert(_dom.dominates(_parents[value], target));
+      while (target != _parents[value] && _in_loop[target]) {
+        target = _dom.idom(target);
+      }
+      return target;
+    }
+
+    Block* find_target(const lwir::Span<Arg*>& args) {
+      Block* target = nullptr;
+      for (Arg* arg : args) {
+        if (!_uses.at(arg).empty()) {
+          Block* user = find_target(arg);
+          target = target ? _dom.common_dominator(target, user) : user;
+        }
+      }
+      return target;
+    }
+
+    void sink_branch(Block* exit) {
+      const std::optional<BranchRegion>& region = _regions[exit];
+      if (!region.has_value() || _in_loop[region->entry()]) {
+        return;
+      }
+      Block* entry = region->entry();
+      Block* target = find_target(exit->args());
+      if (!target || target == exit) {
+        return;
+      }
+      auto blocks = region->blocks();
+      for (Block* block : blocks) {
+        if (_in_loop[block]) {
+          return;
+        }
+        for (Inst* inst : *block) {
+          if (inst->has_side_effect()) {
+            return;
+          }
+        }
+      }
+      for (Block* block : *_section) {
+        if (_dom.dominates(exit, block) && !_dom.dominates(target, block)) {
+          for (Inst* inst : *block) {
+            if (inst->has_side_effect()) {
+              return;
+            }
+          }
+        }
+      }
+      Builder builder(_section);
+      Block* continuation = builder.build_block_after(target, exit->args());
+      continuation->set_name(target->name());
+      Inst* first = *target->begin();
+      Inst* last = target->terminator();
+      target->remove(first, last);
+      continuation->add(first, last);
+      blocks.insert(entry);
+      const std::map<Block*, Block*> substs = {{exit, continuation}};
+      for (Block* block : blocks) {
+        block->terminator()->substitute_blocks(substs);
+      }
+      exit->set_args({});
+      for (Arg* arg : continuation->args()) {
+        _parents[arg] = target;
+      }
+      BranchInst* branch = region->branch();
+      entry->remove(branch);
+      target->add(branch);
+      builder.move_to_end(entry);
+      builder.build_jump(exit);
+      _requires_reorder = true;
+    }
+
+  public:
+    CodeSinking(Section* section):
+        Pass(section),
+        _section(section),
+        _dom(section),
+        _incoming(section),
+        _postdom(_incoming),
+        _regions(section),
+        _in_loop(section),
+        _parents(section),
+        _uses(section) {
+      
+      assert(section->ordering() >= BlockOrdering::Dominator);
+      
+      find_parents();
+      find_loops();
+      for (Block* block : *section) {
+        if (auto region = BranchRegion::find(block, _dom, _postdom)) {
+          _regions[region->exit()] = region;
+        }
+      }
+
       for (Block* block : section->rev_range()) {
-        if (block != section->entry() && !_dominators.idom(block)) {
+        if (block != section->entry() && !_dom.idom(block)) {
           continue;
         }
         for (auto inst_it = block->rbegin(); inst_it != block->rend(); ) {
           Inst* inst = *inst_it;
           inst_it++;
-          if (!can_sink(inst) || uses.at(inst).empty()) {
+          if (!can_sink(inst) || _uses.at(inst).empty()) {
             continue;
           }
-          Block* target = nullptr;
-          for (const Uses::Use& use : uses.at(inst)) {
-            Block* user = locations[use.inst];
-            if (user != section->entry() && !_dominators.idom(user)) {
-              target = block;
-              break;
-            }
-            target = target ? common_dominator(target, user) : user;
-          }
-          assert(_dominators.dominates(block, target));
-          while (target != block && in_loop[target]) {
-            target = _dominators.idom(target);
-          }
+          Block* target = find_target(inst);
           if (target != block) {
             block->remove(inst);
             target->insert_before(*target->begin(), inst);
-            locations[inst] = target;
+            _parents[inst] = target;
           }
         }
+        sink_branch(block);
+      }
+      if (_requires_reorder) {
+        section->set_ordering(BlockOrdering::None);
+        section->order_blocks();
       }
     }
   };
