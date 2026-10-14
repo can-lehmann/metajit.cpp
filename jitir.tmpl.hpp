@@ -5748,18 +5748,12 @@ private:
   private:
     Block* _entry = nullptr;
     Block* _exit = nullptr;
-    std::vector<BranchRegion*> _children;
   public:
     BranchRegion(Block* entry, Block* exit): _entry(entry), _exit(exit) {}
     
     Block* entry() const { return _entry; }
     Block* exit() const { return _exit; }
-
-    ~BranchRegion() {
-      for (BranchRegion* child : _children) {
-        delete child;
-      }
-    }
+    BranchInst* branch() const { return dynamic_cast<BranchInst*>(_entry->terminator()); }
 
     static Block* find_exit(Block* branch, DominatorTree& dom, PostDominatorTree& postdom) {
       dynmatch(BranchInst, branch_inst, branch->terminator());
@@ -5769,6 +5763,47 @@ private:
         return exit;
       }
       return nullptr;
+    }
+
+    BranchRegion* find(Block* block, DominatorTree& dom, PostDominatorTree& postdom) {
+      Block* exit = find_exit(block, dom, postdom);
+      if (exit) {
+        return new BranchRegion(block, exit);
+      }
+      return nullptr;
+    }
+
+    bool has_side_effect() const {
+      std::deque<Block*> open;
+      std::set<Block*> closed;
+      insert(branch()->true_block());
+      insert(branch()->false_block());
+
+      #define insert(block) \
+        if (closed.find(block) == closed.end()) { \
+          open.push_back(block); \
+          closed.insert(block); \
+        }
+
+      while (!open.empty()) {
+        Block* block = open.front();
+        open.pop_front();
+        
+        if (block != _exit) {
+          for (Inst* inst : *block) {
+            if (inst->has_side_effect()) {
+              return true;
+            }
+          }
+          for (Block* succ : block->successors()) {
+            insert(succ);
+          }
+        }
+      }
+
+      #undef insert
+
+      return false;
     }
   };
 
