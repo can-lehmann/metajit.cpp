@@ -737,6 +737,58 @@ void test_fold_and_factoring() {
   }
 }
 
+void check_fold_mixed_absorption(bool dual) {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type, type, type});
+    builder.move_to_end(block);
+    for (bool constant : {false, true}) {
+      Value* x1 = constant ? (Value*) builder.build_const(type, 7) : block->arg(0);
+      Value* x2 = constant ? (Value*) builder.build_const(type, 7) : block->arg(0);
+      if (constant) {
+        unittest_assert(x1 != x2);
+      }
+      for (Value* z : {block->arg(1), block->arg(2)}) {
+        for (bool swap_left : {false, true}) {
+          for (bool swap_right : {false, true}) {
+            Value* a = swap_left ? block->arg(1) : x1;
+            Value* b = swap_left ? x1 : block->arg(1);
+            Value* c = swap_right ? z : x2;
+            Value* d = swap_right ? x2 : z;
+            Value* left = dual ? (Value*) builder.build_or(a, b) : builder.build_and(a, b);
+            Value* right = dual ? (Value*) builder.build_and(c, d) : builder.build_or(c, d);
+            unittest_assert((dual ? builder.fold_and(left, right) : builder.fold_or(left, right)) == right);
+            unittest_assert((dual ? builder.fold_and(right, left) : builder.fold_or(right, left)) == right);
+          }
+        }
+      }
+    }
+    Value* left = dual ? (Value*) builder.build_or(block->arg(0), block->arg(1)) :
+                         builder.build_and(block->arg(0), block->arg(1));
+    Value* right = dual ? (Value*) builder.build_and(block->arg(2), block->arg(3)) :
+                          builder.build_or(block->arg(2), block->arg(3));
+    Value* unrelated = dual ? builder.fold_and(left, right) : builder.fold_or(left, right);
+    unittest_assert(dual ? dynamic_cast<AndInst*>(unrelated) != nullptr :
+                           dynamic_cast<OrInst*>(unrelated) != nullptr);
+    unittest_assert(((Inst*) unrelated)->arg(0) == left);
+    unittest_assert(((Inst*) unrelated)->arg(1) == right);
+    Value* seven = builder.build_const(type, 7);
+    Value* eight = builder.build_const(type, 8);
+    left = dual ? (Value*) builder.build_or(block->arg(0), seven) : builder.build_and(block->arg(0), seven);
+    right = dual ? (Value*) builder.build_and(block->arg(1), eight) : builder.build_or(block->arg(1), eight);
+    unrelated = dual ? builder.fold_and(left, right) : builder.fold_or(left, right);
+    unittest_assert(((Inst*) unrelated)->arg(0) == left);
+    unittest_assert(((Inst*) unrelated)->arg(1) == right);
+  }
+}
+
+void test_fold_or_mixed_absorption() {
+  check_fold_mixed_absorption(false);
+}
+
 void test_fold_and_absorption() {
   for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -1165,6 +1217,7 @@ int main(int argc, char** argv) {
   suite.test("fold equal constants select").run(test_fold_equal_constants_select);
   suite.test("fold or factoring").run(test_fold_or_factoring);
   suite.test("fold and factoring").run(test_fold_and_factoring);
+  suite.test("fold or mixed absorption").run(test_fold_or_mixed_absorption);
   suite.test("fold or absorption").run(test_fold_or_absorption);
   suite.test("fold or complement absorption").run(test_fold_or_complement_absorption);
   suite.test("fold and complement absorption").run(test_fold_and_complement_absorption);

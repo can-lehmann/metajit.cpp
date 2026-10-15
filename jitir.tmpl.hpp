@@ -1284,6 +1284,13 @@ namespace metajit {
     // Folding
 
   private:
+    bool binary_ops_share_operand(Inst* a, Inst* b) {
+      return is_always_equal(a->arg(0), b->arg(0)) ||
+             is_always_equal(a->arg(0), b->arg(1)) ||
+             is_always_equal(a->arg(1), b->arg(0)) ||
+             is_always_equal(a->arg(1), b->arg(1));
+    }
+
     struct ConstSelect {
       Value* cond = nullptr;
       Const* true_const = nullptr;
@@ -1650,6 +1657,12 @@ namespace metajit {
         if (is_always_equal(and_a->arg(0), b) || is_always_equal(and_a->arg(1), b)) {
           return b;
         }
+        if (dynmatch(OrInst, or_b, b)) {
+          // (x & y) | (x | z) => x | z
+          if (binary_ops_share_operand(and_a, or_b)) {
+            return b;
+          }
+        }
         if (XorInst* not_b = is_not(b)) {
           // (x & y) | ~x => y | ~x
           if (and_a->arg(0) == not_b->arg(0)) {
@@ -1664,6 +1677,12 @@ namespace metajit {
         // x | (x & y) => x
         if (and_b->arg(0) == a || and_b->arg(1) == a) {
           return a;
+        }
+        if (dynmatch(OrInst, or_a, a)) {
+          // (x | z) | (x & y) => x | z
+          if (binary_ops_share_operand(or_a, and_b)) {
+            return a;
+          }
         }
         if (XorInst* not_a = is_not(a)) {
           // ~x | (x & y) => ~x | y
