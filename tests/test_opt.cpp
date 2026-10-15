@@ -405,12 +405,28 @@ void test_fold_xor_same_operand() {
   }
 }
 
+void test_fold_lt_u_same_operand() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type});
+    builder.move_to_end(block);
+    Value* result = builder.fold_lt_u(block->arg(0), block->arg(0));
+    unittest_assert(dynamic_cast<Const*>(result));
+    unittest_assert(((Const*) result)->value() == 0);
+    unittest_assert(result->type() == Type::Bool);
+  }
+}
+
 int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
   DiffTestSuite suite("tests/output/test_opt", argc, argv);
 
   suite.test("fold xor same operand").run(test_fold_xor_same_operand);
+  suite.test("fold lt_u same operand").run(test_fold_lt_u_same_operand);
   suite.test("fold sub same operand").run(test_fold_sub_same_operand);
   suite.test("simplify overwritten bytes").run(test_simplify_overwritten_bytes);
   suite.test("simplify used bits other use").run(test_simplify_used_bits_other_use);
