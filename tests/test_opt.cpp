@@ -785,6 +785,10 @@ void check_fold_mixed_absorption(bool dual) {
   }
 }
 
+void test_fold_and_mixed_absorption() {
+  check_fold_mixed_absorption(true);
+}
+
 void test_fold_or_mixed_absorption() {
   check_fold_mixed_absorption(false);
 }
@@ -1217,6 +1221,7 @@ int main(int argc, char** argv) {
   suite.test("fold equal constants select").run(test_fold_equal_constants_select);
   suite.test("fold or factoring").run(test_fold_or_factoring);
   suite.test("fold and factoring").run(test_fold_and_factoring);
+  suite.test("fold and mixed absorption").run(test_fold_and_mixed_absorption);
   suite.test("fold or mixed absorption").run(test_fold_or_mixed_absorption);
   suite.test("fold or absorption").run(test_fold_or_absorption);
   suite.test("fold or complement absorption").run(test_fold_or_complement_absorption);

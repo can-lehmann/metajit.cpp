@@ -1588,6 +1588,12 @@ namespace metajit {
         if (is_always_equal(or_a->arg(0), b) || is_always_equal(or_a->arg(1), b)) {
           return b;
         }
+        if (dynmatch(AndInst, and_b, b)) {
+          // (x | y) & (x & z) => x & z
+          if (binary_ops_share_operand(or_a, and_b)) {
+            return b;
+          }
+        }
         if (dynmatch(OrInst, or_b, b)) {
           // (x | y) & (x | z) => x | (y & z)
           for (size_t i = 0; i < 2; i++) {
@@ -1603,6 +1609,12 @@ namespace metajit {
         // x & (x | y) => x
         if (or_b->arg(0) == a || or_b->arg(1) == a) {
           return a;
+        }
+        if (dynmatch(AndInst, and_a, a)) {
+          // (x & z) & (x | y) => x & z
+          if (binary_ops_share_operand(and_a, or_b)) {
+            return a;
+          }
         }
       }
 
