@@ -1939,6 +1939,13 @@ namespace metajit {
         return a;
       }
 
+      if (dynmatch(ResizeXInst, resize, a)) {
+        if (type_width(type) < type_width(a->type()) &&
+            type_width(a->type()) < type_width(resize->arg(0)->type())) {
+          return fold_resize_x(resize->arg(0), type);
+        }
+      }
+
       unop_const_prop(type, const_a->value());
       
       return build_resize_x(a, type);

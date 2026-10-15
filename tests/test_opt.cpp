@@ -793,6 +793,32 @@ void test_fold_and_repeated_operand() {
   }
 }
 
+void test_fold_nested_narrowing_resize_x() {
+  for (Type source : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (Type intermediate : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      for (Type target : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+        if (source == intermediate || intermediate == target) {
+          continue;
+        }
+        Context context;
+        Allocator allocator;
+        Section section(context, allocator);
+        Builder builder(&section);
+        Block* block = builder.build_block({source});
+        builder.move_to_end(block);
+        Value* input = block->arg(0);
+        Value* inner = builder.build_resize_x(input, intermediate);
+        Value* result = builder.fold_resize_x(inner, target);
+        unittest_assert(dynamic_cast<ResizeXInst*>(result));
+        unittest_assert(result->type() == target);
+        Value* expected = type_width(target) < type_width(intermediate) &&
+                          type_width(intermediate) < type_width(source) ? input : inner;
+        unittest_assert(((ResizeXInst*) result)->arg(0) == expected);
+      }
+    }
+  }
+}
+
 void test_fold_masked_resize_roundtrip() {
   const uint64_t masks[] = {0, 1, 0x55, 0xff00, 0x123456789abcdef0,
                             uint64_t(1) << 63, ~uint64_t(0)};
@@ -956,6 +982,7 @@ int main(int argc, char** argv) {
   suite.test("fold or complement absorption").run(test_fold_or_complement_absorption);
   suite.test("fold and complement absorption").run(test_fold_and_complement_absorption);
   suite.test("fold and absorption").run(test_fold_and_absorption);
+  suite.test("fold nested narrowing resize x").run(test_fold_nested_narrowing_resize_x);
   suite.test("fold masked resize roundtrip").run(test_fold_masked_resize_roundtrip);
   suite.test("fold masked resize without roundtrip").run(test_fold_masked_resize_without_roundtrip);
   suite.test("fold sub same operand").run(test_fold_sub_same_operand);
