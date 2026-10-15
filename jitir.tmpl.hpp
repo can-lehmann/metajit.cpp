@@ -1542,6 +1542,17 @@ namespace metajit {
         }
       }
 
+      if (dynmatch(OrInst, or_a, a)) {
+        if (or_a->arg(0) == b || or_a->arg(1) == b) {
+          return b;
+        }
+      }
+      if (dynmatch(OrInst, or_b, b)) {
+        if (or_b->arg(0) == a || or_b->arg(1) == a) {
+          return a;
+        }
+      }
+
       return build_and(a, b);
     }
 

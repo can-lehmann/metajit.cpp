@@ -420,6 +420,25 @@ void test_fold_lt_u_same_operand() {
   }
 }
 
+void test_fold_and_absorption() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    Value* y = block->arg(1);
+    for (Value* inner : {builder.build_or(x, y), builder.build_or(y, x)}) {
+      unittest_assert(builder.fold_and(x, inner) == x);
+      unittest_assert(builder.fold_and(inner, x) == x);
+    }
+    Value* unrelated = builder.build_or(y, builder.build_const(type, 1));
+    unittest_assert(dynamic_cast<AndInst*>(builder.fold_and(x, unrelated)));
+  }
+}
+
 int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
@@ -427,6 +446,7 @@ int main(int argc, char** argv) {
 
   suite.test("fold xor same operand").run(test_fold_xor_same_operand);
   suite.test("fold lt_u same operand").run(test_fold_lt_u_same_operand);
+  suite.test("fold and absorption").run(test_fold_and_absorption);
   suite.test("fold sub same operand").run(test_fold_sub_same_operand);
   suite.test("simplify overwritten bytes").run(test_simplify_overwritten_bytes);
   suite.test("simplify used bits other use").run(test_simplify_used_bits_other_use);
