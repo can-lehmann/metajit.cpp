@@ -1809,6 +1809,20 @@ namespace metajit {
         if (resize_a->arg(0)->type() == type) {
           return fold_and(resize_a->arg(0), build_const(type, type_mask(resize_a->type())));
         }
+      } else if (dynmatch(AndInst, and_a, a)) {
+        Value* resized = and_a->arg(0);
+        Const* mask = dynamic_cast<Const*>(and_a->arg(1));
+        if (!mask) {
+          mask = dynamic_cast<Const*>(and_a->arg(0));
+          resized = and_a->arg(1);
+        }
+        if (mask) {
+          if (dynmatch(ResizeXInst, resize, resized)) {
+            if (resize->arg(0)->type() == type) {
+              return fold_and(resize->arg(0), build_const(type, mask->value() & type_mask(resize->type()) & type_mask(type)));
+            }
+          }
+        }
       }
       unop_const_prop(type, const_a->value());
       return build_resize_u(a, type);

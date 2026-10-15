@@ -458,6 +458,64 @@ void test_fold_or_absorption() {
   }
 }
 
+void test_fold_masked_resize_roundtrip() {
+  const uint64_t masks[] = {0, 1, 0x55, 0xff00, 0x123456789abcdef0,
+                            uint64_t(1) << 63, ~uint64_t(0)};
+  for (Type source : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (Type intermediate : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      if (source == intermediate) {
+        continue;
+      }
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* block = builder.build_block({source, intermediate});
+      builder.move_to_end(block);
+      Value* x = block->arg(0);
+      Value* resized = builder.build_resize_x(x, intermediate);
+      for (uint64_t mask : masks) {
+        Const* constant = builder.build_const(intermediate, mask & type_mask(intermediate));
+        for (Value* masked : {builder.build_and(resized, constant), builder.build_and(constant, resized)}) {
+          Value* result = builder.fold_resize_u(masked, source);
+          uint64_t expected = mask & type_mask(intermediate) & type_mask(source);
+          if (expected == 0) {
+            unittest_assert(dynamic_cast<Const*>(result));
+            unittest_assert(((Const*) result)->value() == 0);
+          } else if (expected == type_mask(source)) {
+            unittest_assert(result == x);
+          } else {
+            unittest_assert(dynamic_cast<AndInst*>(result));
+            AndInst* and_inst = (AndInst*) result;
+            unittest_assert(and_inst->arg(0) == x);
+            unittest_assert(dynamic_cast<Const*>(and_inst->arg(1)));
+            unittest_assert(((Const*) and_inst->arg(1))->value() == expected);
+          }
+          unittest_assert(result->type() == source);
+        }
+      }
+      Value* dynamic_mask = builder.build_and(resized, block->arg(1));
+      Value* result = builder.fold_resize_u(dynamic_mask, source);
+      unittest_assert(dynamic_cast<ResizeUInst*>(result));
+      unittest_assert(((ResizeUInst*) result)->arg(0) == dynamic_mask);
+    }
+  }
+}
+
+void test_fold_masked_resize_without_roundtrip() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Int32});
+  builder.move_to_end(block);
+  Value* resized = builder.build_resize_x(block->arg(0), Type::Int8);
+  Value* masked = builder.build_and(resized, builder.build_const(Type::Int8, 7));
+  Value* result = builder.fold_resize_u(masked, Type::Int64);
+  unittest_assert(dynamic_cast<ResizeUInst*>(result));
+  unittest_assert(((ResizeUInst*) result)->arg(0) == masked);
+}
+
 int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
@@ -467,6 +525,8 @@ int main(int argc, char** argv) {
   suite.test("fold lt_u same operand").run(test_fold_lt_u_same_operand);
   suite.test("fold or absorption").run(test_fold_or_absorption);
   suite.test("fold and absorption").run(test_fold_and_absorption);
+  suite.test("fold masked resize roundtrip").run(test_fold_masked_resize_roundtrip);
+  suite.test("fold masked resize without roundtrip").run(test_fold_masked_resize_without_roundtrip);
   suite.test("fold sub same operand").run(test_fold_sub_same_operand);
   suite.test("simplify overwritten bytes").run(test_simplify_overwritten_bytes);
   suite.test("simplify used bits other use").run(test_simplify_used_bits_other_use);
