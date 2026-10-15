@@ -478,6 +478,45 @@ void test_fold_and_complement_absorption() {
   }
 }
 
+void test_fold_or_complement_absorption() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type, type});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    Value* y = block->arg(1);
+    Value* not_x = builder.fold_not(x);
+    Value* not_y = builder.fold_not(y);
+    Value* not_z = builder.fold_not(block->arg(2));
+    for (Value* inner : {builder.build_and(x, y), builder.build_and(y, x)}) {
+      for (size_t shared = 0; shared < 2; shared++) {
+        Value* negated = shared == 0 ? not_x : not_y;
+        Value* remaining = shared == 0 ? y : x;
+        for (Value* result : {builder.fold_or(inner, negated), builder.fold_or(negated, inner)}) {
+          unittest_assert(dynamic_cast<OrInst*>(result));
+          OrInst* or_inst = (OrInst*) result;
+          unittest_assert((or_inst->arg(0) == remaining && or_inst->arg(1) == negated) ||
+                          (or_inst->arg(0) == negated && or_inst->arg(1) == remaining));
+        }
+      }
+      Value* unrelated_result = builder.fold_or(inner, not_z);
+      unittest_assert(dynamic_cast<OrInst*>(unrelated_result));
+      OrInst* unrelated = (OrInst*) unrelated_result;
+      unittest_assert(unrelated->arg(0) == inner && unrelated->arg(1) == not_z);
+      if (type != Type::Bool) {
+        Value* partial = builder.build_xor(y, builder.build_const(type, 1));
+        Value* partial_result = builder.fold_or(inner, partial);
+        unittest_assert(dynamic_cast<OrInst*>(partial_result));
+        OrInst* unchanged = (OrInst*) partial_result;
+        unittest_assert(unchanged->arg(0) == inner && unchanged->arg(1) == partial);
+      }
+    }
+  }
+}
+
 void test_fold_or_absorption() {
   for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -731,6 +770,7 @@ int main(int argc, char** argv) {
   suite.test("fold or xor operand").run(test_fold_or_xor_operand);
   suite.test("fold or repeated operand").run(test_fold_or_repeated_operand);
   suite.test("fold or absorption").run(test_fold_or_absorption);
+  suite.test("fold or complement absorption").run(test_fold_or_complement_absorption);
   suite.test("fold and complement absorption").run(test_fold_and_complement_absorption);
   suite.test("fold and absorption").run(test_fold_and_absorption);
   suite.test("fold masked resize roundtrip").run(test_fold_masked_resize_roundtrip);
