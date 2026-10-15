@@ -475,6 +475,186 @@ void test_fold_unmasked_shift_pairs() {
   }
 }
 
+void test_builder_is_always_equal() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Int8, Type::Int8});
+  Const* seven = builder.build_const(Type::Int8, 7);
+  unittest_assert(builder.is_always_equal(seven, builder.build_const(Type::Int8, 7)));
+  unittest_assert(!builder.is_always_equal(seven, builder.build_const(Type::Int8, 8)));
+  unittest_assert(!builder.is_always_equal(seven, builder.build_const(Type::Int16, 7)));
+  unittest_assert(builder.is_always_equal(block->arg(0), block->arg(0)));
+  unittest_assert(!builder.is_always_equal(block->arg(0), block->arg(1)));
+  unittest_assert(!builder.is_always_equal(block->arg(0), seven));
+  unittest_assert(builder.is_always_equal(nullptr, nullptr));
+  unittest_assert(!builder.is_always_equal(nullptr, seven));
+  unittest_assert(!builder.is_always_equal(seven, nullptr));
+}
+
+void test_fold_equal_constants_factoring() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type, Type::Bool});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    Value* y = block->arg(1);
+    Const* c1 = builder.build_const(type, 7);
+    Const* c2 = builder.build_const(type, 7);
+    unittest_assert(c1 != c2);
+    for (bool dual : {false, true}) {
+      for (bool swap_left : {false, true}) {
+        for (bool swap_right : {false, true}) {
+          Value* a = swap_left ? c1 : x;
+          Value* b = swap_left ? x : c1;
+          Value* c = swap_right ? c2 : y;
+          Value* d = swap_right ? y : c2;
+          Value* left = dual ? (Value*) builder.build_or(a, b) : builder.build_and(a, b);
+          Value* right = dual ? (Value*) builder.build_or(c, d) : builder.build_and(c, d);
+          for (bool swap_outer : {false, true}) {
+            Value* first = swap_outer ? right : left;
+            Value* second = swap_outer ? left : right;
+            Value* result = dual ? builder.fold_and(first, second) : builder.fold_or(first, second);
+            unittest_assert(dual ? dynamic_cast<OrInst*>(result) != nullptr :
+                                   dynamic_cast<AndInst*>(result) != nullptr);
+            Inst* outer = (Inst*) result;
+            unittest_assert(dynamic_cast<Const*>(outer->arg(1)));
+            unittest_assert(((Const*) outer->arg(1))->value() == 7);
+            unittest_assert(dual ? dynamic_cast<AndInst*>(outer->arg(0)) != nullptr :
+                                   dynamic_cast<OrInst*>(outer->arg(0)) != nullptr);
+            Inst* inner = (Inst*) outer->arg(0);
+            unittest_assert((inner->arg(0) == x && inner->arg(1) == y) ||
+                            (inner->arg(0) == y && inner->arg(1) == x));
+          }
+        }
+      }
+    }
+  }
+}
+
+void test_fold_equal_constants_absorption() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type, Type::Bool});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    Value* y = block->arg(1);
+    Const* c1 = builder.build_const(type, 7);
+    Const* c2 = builder.build_const(type, 7);
+    unittest_assert(c1 != c2);
+    for (Value* inner : {builder.build_or(x, c1), builder.build_or(c1, x)}) {
+      unittest_assert(builder.fold_and(inner, c2) == c2);
+      unittest_assert(builder.fold_and(c2, inner) == c2);
+    }
+    for (Value* inner : {builder.build_and(x, c1), builder.build_and(c1, x)}) {
+      unittest_assert(builder.fold_or(inner, c2) == c2);
+      unittest_assert(builder.fold_or(c2, inner) == c2);
+    }
+  }
+}
+
+void test_fold_equal_constants_repeated_or() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type, Type::Bool});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    Value* y = block->arg(1);
+    Const* c1 = builder.build_const(type, 7);
+    Const* c2 = builder.build_const(type, 7);
+    unittest_assert(c1 != c2);
+    for (Value* inner : {builder.build_or(x, c1), builder.build_or(c1, x)}) {
+      unittest_assert(builder.fold_or(inner, c2) == inner);
+      unittest_assert(builder.fold_or(c2, inner) == inner);
+    }
+  }
+}
+
+void test_fold_equal_constants_xor_or() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type, Type::Bool});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    Value* y = block->arg(1);
+    Const* c1 = builder.build_const(type, 7);
+    Const* c2 = builder.build_const(type, 7);
+    unittest_assert(c1 != c2);
+    for (Value* inner : {builder.build_xor(x, c1), builder.build_xor(c1, x)}) {
+      for (Value* result : {builder.fold_or(inner, c2), builder.fold_or(c2, inner)}) {
+        unittest_assert(dynamic_cast<OrInst*>(result));
+        OrInst* outer = (OrInst*) result;
+        unittest_assert(outer->arg(0) == x);
+        unittest_assert(dynamic_cast<Const*>(outer->arg(1)));
+        unittest_assert(((Const*) outer->arg(1))->value() == 7);
+      }
+    }
+  }
+}
+
+void test_fold_equal_constants_negated_or() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type, Type::Bool});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    Value* y = block->arg(1);
+    Const* c1 = builder.build_const(type, 7);
+    Const* c2 = builder.build_const(type, 7);
+    unittest_assert(c1 != c2);
+    for (Value* inner : {builder.build_or(x, c1), builder.build_or(c1, x)}) {
+      Value* negated = builder.fold_not(inner);
+      for (Value* result : {builder.fold_or(negated, c2), builder.fold_or(c2, negated)}) {
+        unittest_assert(dynamic_cast<OrInst*>(result));
+        OrInst* outer = (OrInst*) result;
+        unittest_assert(dynamic_cast<Const*>(outer->arg(1)));
+        unittest_assert(((Const*) outer->arg(1))->value() == 7);
+        unittest_assert(is_not(outer->arg(0)));
+        unittest_assert(is_not(outer->arg(0))->arg(0) == x);
+      }
+    }
+  }
+}
+
+void test_fold_equal_constants_select() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type, Type::Bool});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    Value* y = block->arg(1);
+    Const* c1 = builder.build_const(type, 7);
+    Const* c2 = builder.build_const(type, 7);
+    unittest_assert(c1 != c2);
+    unittest_assert(builder.fold_select(block->arg(2), c1, c2) == c1);
+    Value* different = builder.fold_select(block->arg(2), c1, builder.build_const(type, 8));
+    if (type == Type::Bool) {
+      unittest_assert(different == block->arg(2));
+    } else {
+      unittest_assert(dynamic_cast<SelectInst*>(different));
+    }
+  }
+}
+
 void test_fold_or_factoring() {
   for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -976,6 +1156,13 @@ int main(int argc, char** argv) {
   suite.test("fold or xor operand").run(test_fold_or_xor_operand);
   suite.test("fold or repeated operand").run(test_fold_or_repeated_operand);
   suite.test("fold unmasked shift pairs").run(test_fold_unmasked_shift_pairs);
+  suite.test("builder is always equal").run(test_builder_is_always_equal);
+  suite.test("fold equal constants factoring").run(test_fold_equal_constants_factoring);
+  suite.test("fold equal constants absorption").run(test_fold_equal_constants_absorption);
+  suite.test("fold equal constants repeated_or").run(test_fold_equal_constants_repeated_or);
+  suite.test("fold equal constants xor_or").run(test_fold_equal_constants_xor_or);
+  suite.test("fold equal constants negated_or").run(test_fold_equal_constants_negated_or);
+  suite.test("fold equal constants select").run(test_fold_equal_constants_select);
   suite.test("fold or factoring").run(test_fold_or_factoring);
   suite.test("fold and factoring").run(test_fold_and_factoring);
   suite.test("fold or absorption").run(test_fold_or_absorption);

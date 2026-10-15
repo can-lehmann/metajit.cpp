@@ -1267,6 +1267,20 @@ namespace metajit {
       }
     }
 
+    bool is_always_equal(Value* a, Value* b) {
+      if (a == b) {
+        return true;
+      } else if (a && b && a->type() == b->type()) {
+        if (dynmatch(Const, const_a, a)) {
+          if (dynmatch(Const, const_b, b)) {
+            return const_a->value() == const_b->value();
+          }
+        }
+      }
+
+      return false;
+    }
+
     // Folding
 
   private:
@@ -1564,14 +1578,14 @@ namespace metajit {
 
       if (dynmatch(OrInst, or_a, a)) {
         // (x | y) & x => x
-        if (or_a->arg(0) == b || or_a->arg(1) == b) {
+        if (is_always_equal(or_a->arg(0), b) || is_always_equal(or_a->arg(1), b)) {
           return b;
         }
         if (dynmatch(OrInst, or_b, b)) {
           // (x | y) & (x | z) => x | (y & z)
           for (size_t i = 0; i < 2; i++) {
             for (size_t j = 0; j < 2; j++) {
-              if (or_a->arg(i) == or_b->arg(j)) {
+              if (is_always_equal(or_a->arg(i), or_b->arg(j))) {
                 return fold_or(or_a->arg(i), fold_and(or_a->arg(1 - i), or_b->arg(1 - j)));
               }
             }
@@ -1624,7 +1638,7 @@ namespace metajit {
           // (x & y) | (x & z) => x & (y | z)
           for (size_t i = 0; i < 2; i++) {
             for (size_t j = 0; j < 2; j++) {
-              if (and_a->arg(i) == and_b->arg(j)) {
+              if (is_always_equal(and_a->arg(i), and_b->arg(j))) {
                 return fold_and(and_a->arg(i), fold_or(and_a->arg(1 - i), and_b->arg(1 - j)));
               }
             }
@@ -1633,7 +1647,7 @@ namespace metajit {
       }
       if (dynmatch(AndInst, and_a, a)) {
         // (x & y) | x => x
-        if (and_a->arg(0) == b || and_a->arg(1) == b) {
+        if (is_always_equal(and_a->arg(0), b) || is_always_equal(and_a->arg(1), b)) {
           return b;
         }
         if (XorInst* not_b = is_not(b)) {
@@ -1664,7 +1678,7 @@ namespace metajit {
 
       if (dynmatch(OrInst, or_a, a)) {
         // (x | y) | x => x | y
-        if (or_a->arg(0) == b || or_a->arg(1) == b) {
+        if (is_always_equal(or_a->arg(0), b) || is_always_equal(or_a->arg(1), b)) {
           return a;
         }
       }
@@ -1677,19 +1691,19 @@ namespace metajit {
 
       if (dynmatch(XorInst, xor_a, a)) {
         // (x ^ y) | x => x | y
-        if (xor_a->arg(0) == b) {
+        if (is_always_equal(xor_a->arg(0), b)) {
           return fold_or(xor_a->arg(1), b);
         }
-        if (xor_a->arg(1) == b) {
+        if (is_always_equal(xor_a->arg(1), b)) {
           return fold_or(xor_a->arg(0), b);
         }
         if (is_not(a)) {
           if (dynmatch(OrInst, inner, xor_a->arg(0))) {
             // ~(x | y) | x => x | ~y
-            if (inner->arg(0) == b) {
+            if (is_always_equal(inner->arg(0), b)) {
               return fold_or(b, fold_not(inner->arg(1)));
             }
-            if (inner->arg(1) == b) {
+            if (is_always_equal(inner->arg(1), b)) {
               return fold_or(b, fold_not(inner->arg(0)));
             }
           }
@@ -1839,7 +1853,7 @@ namespace metajit {
         } else {
           return false_value;
         }
-      } else if (true_value == false_value) {
+      } else if (is_always_equal(true_value, false_value)) {
         return true_value;
       }
 
@@ -2423,22 +2437,6 @@ namespace metajit {
       }
     }
 
-  private:
-    bool is_always_equal(Value* a, Value* b) {
-      if (a == b) {
-        return true;
-      } else if (a && b && a->type() == b->type()) {
-        if (dynmatch(Const, const_a, a)) {
-          if (dynmatch(Const, const_b, b)) {
-            return const_a->value() == const_b->value();
-          }
-        }
-      }
-
-      return false;
-    }
-
-  public:
     Value* build_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
       if (_guard_success) {
         return Builder::build_store(ptr, value, aliasing, offset);
