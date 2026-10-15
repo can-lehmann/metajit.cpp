@@ -1432,6 +1432,10 @@ namespace metajit {
     }
 
     Value* fold_sub(Value* a, Value* b) {
+      if (a == b) {
+        return build_const(a->type(), 0);
+      }
+
       if (dynmatch(Const, const_b, b)) {
         if (const_b->value() == 0) {
           return a;
