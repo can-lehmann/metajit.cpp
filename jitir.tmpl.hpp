@@ -4781,6 +4781,21 @@ private:
     }
   }
 
+  void _enqueue_upper_bound(Value* value, uint64_t bound) {
+    for (size_t shift = 1; shift < 64; shift *= 2) {
+      bound |= bound >> shift;
+    }
+    _enqueue(value, Bits(value->type(), ~bound, 0));
+  }
+
+  void _enqueue_lower_bound(Value* value, uint64_t bound) {
+    uint64_t unknown = ~bound & type_mask(value->type());
+    for (size_t shift = 1; shift < 64; shift *= 2) {
+      unknown |= unknown >> shift;
+    }
+    _enqueue(value, Bits(value->type(), ~unknown, ~unknown));
+  }
+
   void _propagate_one(Value* value, const Bits& newinfo) {
     Bits old_bits = Bits::at(_values, value);
     auto maybe_bits = old_bits.intersect(newinfo);
@@ -4818,17 +4833,26 @@ private:
         }
       }
     } else if (dynmatch(LtUInst, lt, value)) {
-      Bits bound = Bits::at(_values, lt->arg(1));
-      if (bits.is_const() && bits.value == 1 && bound.is_const()) {
-        if (bound.value == 0) {
-          _contradiction = true;
-          return;
+      if (bits.is_const()) {
+        Bits x = Bits::at(_values, lt->arg(0));
+        Bits y = Bits::at(_values, lt->arg(1));
+        uint64_t xmax = x.value | (~x.mask & type_mask(x.type));
+        uint64_t ymax = y.value | (~y.mask & type_mask(y.type));
+        if (bits.value == 1) {
+          if (x.value >= ymax) {
+            _contradiction = true;
+            return;
+          }
+          _enqueue_upper_bound(lt->arg(0), ymax - 1);
+          _enqueue_lower_bound(lt->arg(1), x.value + 1);
+        } else {
+          if (xmax < y.value) {
+            _contradiction = true;
+            return;
+          }
+          _enqueue_lower_bound(lt->arg(0), y.value);
+          _enqueue_upper_bound(lt->arg(1), xmax);
         }
-        uint64_t mask = bound.value - 1;
-        for (size_t shift = 1; shift < 64; shift *= 2) {
-          mask |= mask >> shift;
-        }
-        _enqueue(lt->arg(0), Bits(lt->arg(0)->type(), ~mask, 0));
       }
     } else if (dynmatch(AndInst, andinst, value)) {
       auto arg0 = bits.and_backwards(Bits::at(_values, andinst->arg(1)));
