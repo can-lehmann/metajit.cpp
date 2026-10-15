@@ -3194,6 +3194,13 @@ namespace metajit {
         assert ((value & ~mask) == 0);
       }
 
+      static uint64_t mask_through_highest_bit(uint64_t value) {
+        for (size_t shift = 1; shift < 64; shift *= 2) {
+          value |= value >> shift;
+        }
+        return value;
+      }
+
       uint64_t umin() const {
         return value;
       }
@@ -4848,17 +4855,12 @@ private:
   }
 
   void _enqueue_upper_bound(Value* value, uint64_t bound) {
-    for (size_t shift = 1; shift < 64; shift *= 2) {
-      bound |= bound >> shift;
-    }
-    _enqueue(value, Bits(value->type(), ~bound, 0));
+    uint64_t mask = Bits::mask_through_highest_bit(bound);
+    _enqueue(value, Bits(value->type(), ~mask, 0));
   }
 
   void _enqueue_lower_bound(Value* value, uint64_t bound) {
-    uint64_t unknown = ~bound & type_mask(value->type());
-    for (size_t shift = 1; shift < 64; shift *= 2) {
-      unknown |= unknown >> shift;
-    }
+    uint64_t unknown = Bits::mask_through_highest_bit(~bound & type_mask(value->type()));
     _enqueue(value, Bits(value->type(), ~unknown, ~unknown));
   }
 

@@ -474,6 +474,20 @@ void test_shr_u_backwards_random(unittest::Suite& suite) {
   });
 }
 
+void test_mask_through_highest_bit() {
+  unittest_assert(Bits::mask_through_highest_bit(0) == 0);
+  unittest_assert(Bits::mask_through_highest_bit(UINT64_MAX) == UINT64_MAX);
+  unittest_assert(Bits::mask_through_highest_bit(10) == 15);
+  unittest_assert(Bits::mask_through_highest_bit(0x123456789abcdef0ULL) == 0x1fffffffffffffffULL);
+  for (size_t bit = 0; bit < 64; bit++) {
+    uint64_t power = uint64_t(1) << bit;
+    uint64_t expected = power | (power - 1);
+    unittest_assert(Bits::mask_through_highest_bit(power) == expected);
+    unittest_assert(Bits::mask_through_highest_bit(power - 1) == power - 1);
+    unittest_assert(Bits::mask_through_highest_bit(expected) == expected);
+  }
+}
+
 void test_unsigned_bounds() {
   for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Bits unknown(type, 0, 0);
@@ -563,6 +577,7 @@ b0(%0: Ptr, %1: Int32):
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
 
+  suite.test("mask through highest bit").run(test_mask_through_highest_bit);
   suite.test("unsigned bounds").run(test_unsigned_bounds);
   suite.test("unsigned comparison bounds").run(test_unsigned_comparison_bounds);
   suite.test("unsigned comparison after resize").run(test_unsigned_comparison_after_resize);
