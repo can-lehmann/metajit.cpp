@@ -420,6 +420,61 @@ void test_fold_lt_u_same_operand() {
   }
 }
 
+void test_fold_unmasked_shift_pairs() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    uint64_t width = type_width(type);
+    for (uint64_t c1 : {uint64_t(1), width / 2, width - 1}) {
+      for (uint64_t c2 : {uint64_t(1), width / 2, width - 1}) {
+        Value* right = builder.build_shr_u(x, builder.build_const(type, c1));
+        Value* result = builder.fold_shl(right, builder.build_const(type, c2));
+        unittest_assert(dynamic_cast<AndInst*>(result));
+        AndInst* masked = (AndInst*) result;
+        unittest_assert(dynamic_cast<Const*>(masked->arg(1)));
+        unittest_assert(((Const*) masked->arg(1))->value() == ((type_mask(type) << c2) & type_mask(type)));
+        if (c1 == c2) {
+          unittest_assert(masked->arg(0) == x);
+          unittest_assert(builder.fold_or(x, result) == x);
+          unittest_assert(builder.fold_or(result, x) == x);
+        } else {
+          Inst* shifted = dynamic_cast<Inst*>(masked->arg(0));
+          unittest_assert(shifted);
+          unittest_assert(c1 > c2 ? dynamic_cast<ShrUInst*>(shifted) != nullptr :
+                                   dynamic_cast<ShlInst*>(shifted) != nullptr);
+          unittest_assert(shifted->arg(0) == x);
+          unittest_assert(dynamic_cast<Const*>(shifted->arg(1)));
+          unittest_assert(((Const*) shifted->arg(1))->value() == (c1 > c2 ? c1 - c2 : c2 - c1));
+        }
+        Value* left = builder.build_shl(x, builder.build_const(type, c1));
+        Value* combined = builder.fold_shl(left, builder.build_const(type, c2));
+        if (c1 + c2 >= width) {
+          unittest_assert(dynamic_cast<Const*>(combined));
+          unittest_assert(((Const*) combined)->value() == 0);
+        } else {
+          unittest_assert(dynamic_cast<AndInst*>(combined));
+          AndInst* masked_left = (AndInst*) combined;
+          unittest_assert(((Const*) masked_left->arg(1))->value() == ((type_mask(type) << c2) & type_mask(type)));
+          unittest_assert(dynamic_cast<ShlInst*>(masked_left->arg(0)));
+          ShlInst* shifted_left = (ShlInst*) masked_left->arg(0);
+          unittest_assert(shifted_left->arg(0) == x);
+          unittest_assert(((Const*) shifted_left->arg(1))->value() == c1 + c2);
+        }
+      }
+    }
+    Value* shifted = builder.build_shr_u(x, builder.build_const(type, 1));
+    Value* dynamic_mask = builder.build_and(shifted, block->arg(1));
+    Value* unchanged = builder.fold_shl(dynamic_mask, builder.build_const(type, 1));
+    unittest_assert(dynamic_cast<ShlInst*>(unchanged));
+    unittest_assert(((ShlInst*) unchanged)->arg(0) == dynamic_mask);
+  }
+}
+
 void test_fold_or_factoring() {
   for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -894,6 +949,7 @@ int main(int argc, char** argv) {
   suite.test("fold or negated or operand").run(test_fold_or_negated_or_operand);
   suite.test("fold or xor operand").run(test_fold_or_xor_operand);
   suite.test("fold or repeated operand").run(test_fold_or_repeated_operand);
+  suite.test("fold unmasked shift pairs").run(test_fold_unmasked_shift_pairs);
   suite.test("fold or factoring").run(test_fold_or_factoring);
   suite.test("fold and factoring").run(test_fold_and_factoring);
   suite.test("fold or absorption").run(test_fold_or_absorption);
