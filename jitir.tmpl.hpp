@@ -3194,6 +3194,14 @@ namespace metajit {
         assert ((value & ~mask) == 0);
       }
 
+      uint64_t umin() const {
+        return value;
+      }
+
+      uint64_t umax() const {
+        return value | (~mask & type_mask(type));
+      }
+
       static Bits constant(Type type, uint64_t value) {
         return Bits(type, type_mask(type), value);
       }
@@ -4885,21 +4893,21 @@ private:
       if (bits.is_const()) {
         Bits x = Bits::at(_values, lt->arg(0));
         Bits y = Bits::at(_values, lt->arg(1));
-        uint64_t xmax = x.value | (~x.mask & type_mask(x.type));
-        uint64_t ymax = y.value | (~y.mask & type_mask(y.type));
+        uint64_t xmax = x.umax();
+        uint64_t ymax = y.umax();
         if (bits.value == 1) {
-          if (x.value >= ymax) {
+          if (x.umin() >= ymax) {
             _contradiction = true;
             return;
           }
           _enqueue_upper_bound(lt->arg(0), ymax - 1);
-          _enqueue_lower_bound(lt->arg(1), x.value + 1);
+          _enqueue_lower_bound(lt->arg(1), x.umin() + 1);
         } else {
-          if (xmax < y.value) {
+          if (xmax < y.umin()) {
             _contradiction = true;
             return;
           }
-          _enqueue_lower_bound(lt->arg(0), y.value);
+          _enqueue_lower_bound(lt->arg(0), y.umin());
           _enqueue_upper_bound(lt->arg(1), xmax);
         }
       }

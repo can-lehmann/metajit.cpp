@@ -474,8 +474,27 @@ void test_shr_u_backwards_random(unittest::Suite& suite) {
   });
 }
 
+void test_unsigned_bounds() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Bits unknown(type, 0, 0);
+    unittest_assert(unknown.umin() == 0);
+    unittest_assert(unknown.umax() == type_mask(type));
+    const uint64_t values[] = {0, 1, uint64_t(1) << (type_width(type) - 1), type_mask(type)};
+    for (uint64_t value : values) {
+      Bits fixed = Bits::constant(type, value);
+      unittest_assert(fixed.umin() == value);
+      unittest_assert(fixed.umax() == value);
+    }
+    Bits sparse(type, 0xaaaaaaaaaaaaaaaaULL, 0x8888888888888888ULL);
+    unittest_assert(sparse.umin() == (0x8888888888888888ULL & type_mask(type)));
+    unittest_assert(sparse.umax() == (0xddddddddddddddddULL & type_mask(type)));
+  }
+}
+
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
+
+  suite.test("unsigned bounds").run(test_unsigned_bounds);
 
   suite.test("usedbits_constant_shl").run(test_usedbits_constant_shl);
 
