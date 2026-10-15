@@ -1602,17 +1602,15 @@ namespace metajit {
           return constant;
         }
       } else if (dynmatch(AndInst, and_a, a)) {
-        // (x & c1) | (x & c2) => x & (c1 | c2)
         if (dynmatch(AndInst, and_b, b)) {
-          if (dynmatch(Const, const_a, and_a->arg(1))) {
-            if (dynmatch(Const, const_b, and_b->arg(1))) {
-              if (and_a->arg(0) == and_b->arg(0)) {
-                return fold_and(and_a->arg(0), build_const(a->type(), const_a->value() | const_b->value()));
+          for (size_t i = 0; i < 2; i++) {
+            for (size_t j = 0; j < 2; j++) {
+              if (and_a->arg(i) == and_b->arg(j)) {
+                return fold_and(and_a->arg(i), fold_or(and_a->arg(1 - i), and_b->arg(1 - j)));
               }
             }
           }
         }
-
       }
       if (dynmatch(AndInst, and_a, a)) {
         if (and_a->arg(0) == b || and_a->arg(1) == b) {
