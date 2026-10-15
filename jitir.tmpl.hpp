@@ -1535,10 +1535,26 @@ namespace metajit {
         if (not_a->arg(0) == b) {
           return build_const(a->type(), 0);
         }
+        if (dynmatch(OrInst, or_b, b)) {
+          if (or_b->arg(0) == not_a->arg(0)) {
+            return fold_and(a, or_b->arg(1));
+          }
+          if (or_b->arg(1) == not_a->arg(0)) {
+            return fold_and(a, or_b->arg(0));
+          }
+        }
       } else if (XorInst* not_b = is_not(b)) {
         // a & !a => 0
         if (not_b->arg(0) == a) {
           return build_const(a->type(), 0);
+        }
+        if (dynmatch(OrInst, or_a, a)) {
+          if (or_a->arg(0) == not_b->arg(0)) {
+            return fold_and(or_a->arg(1), b);
+          }
+          if (or_a->arg(1) == not_b->arg(0)) {
+            return fold_and(or_a->arg(0), b);
+          }
         }
       }
 
