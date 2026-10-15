@@ -560,11 +560,98 @@ void test_fold_masked_resize_without_roundtrip() {
   unittest_assert(((ResizeUInst*) result)->arg(0) == masked);
 }
 
+void check_cse_operand_order(const std::string& opcode, Type type,
+                             bool commutative, bool constant = false) {
+  Context context;
+  Allocator allocator;
+  std::ostringstream text;
+  text << "section {\nb0(%0: Ptr, %1: " << type << ", %2: " << type << "):\n";
+  std::string rhs = constant ? "1:" + std::string(to_string(type)) : "%2";
+  text << "  %3 = " << opcode << " %1, " << rhs << "\n";
+  text << "  %4 = " << opcode << " " << rhs << ", %1\n";
+  text << "  Store %0, %3, aliasing=0, offset=0\n";
+  text << "  Store %0, %4, aliasing=0, offset=8\n  Exit\n}\n";
+  std::istringstream stream(text.str());
+  Section* section = SectionReader<Builder>::read_section(context, allocator, stream);
+  std::vector<StoreInst*> outputs;
+  for (Inst* inst : *section->entry()) {
+    if (dynmatch(StoreInst, store, inst)) {
+      outputs.push_back(store);
+    }
+  }
+  Inst* first = (Inst*) outputs.at(0)->value();
+  Inst* second = (Inst*) outputs.at(1)->value();
+  Value* left = first->arg(0);
+  Value* right = first->arg(1);
+  unittest_assert(!first->equals(second));
+  unittest_assert(!section->verify(std::cout));
+  CommonSubexprElim::run(section);
+  unittest_assert(!section->verify(std::cout));
+  unittest_assert((outputs.at(0)->value() == outputs.at(1)->value()) == commutative);
+  unittest_assert(first->arg(0) == left && first->arg(1) == right);
+  unittest_assert(!first->equals(second));
+  delete section;
+}
+
+void test_cse_commutative_operands() {
+  for (const std::string& opcode : {"Add", "Mul", "And", "Or", "Xor", "Eq"}) {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      check_cse_operand_order(opcode, type, true);
+      check_cse_operand_order(opcode, type, true, true);
+    }
+  }
+  for (const std::string& opcode : {"And", "Or", "Xor", "Eq"}) {
+    check_cse_operand_order(opcode, Type::Bool, true);
+    check_cse_operand_order(opcode, Type::Bool, true, true);
+  }
+  check_cse_operand_order("Eq", Type::Ptr, true);
+}
+
+void test_cse_ordered_operands() {
+  for (const std::string& opcode : {"Sub", "DivS", "DivU", "ModS", "ModU",
+                                   "Shl", "ShrS", "ShrU", "LtS", "LtU"}) {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      check_cse_operand_order(opcode, type, false);
+      check_cse_operand_order(opcode, type, false, true);
+    }
+  }
+  for (const std::string& opcode : {"AddF", "SubF", "MulF", "DivF", "LtFO", "LtFU"}) {
+    for (Type type : {Type::Float32, Type::Float64}) {
+      check_cse_operand_order(opcode, type, false);
+    }
+  }
+}
+
+void test_cse_commutative_after_substitution() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Ptr, Type::Int32, Type::Int32});
+  builder.move_to_end(entry);
+  Value* x = entry->arg(1);
+  Value* y = entry->arg(2);
+  Value* a = builder.build_add(x, y);
+  Value* b = builder.build_add(y, x);
+  Value* first = builder.build_xor(a, x);
+  Value* second = builder.build_xor(x, b);
+  StoreInst* output1 = builder.build_store(entry->arg(0), first, AliasingGroup(0), 0);
+  StoreInst* output2 = builder.build_store(entry->arg(0), second, AliasingGroup(0), 8);
+  builder.build_exit();
+  section.order_blocks(BlockOrdering::Dominator);
+  CommonSubexprElim::run(&section);
+  unittest_assert(!section.verify(std::cout));
+  unittest_assert(output1->value() == output2->value());
+}
+
 int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
   DiffTestSuite suite("tests/output/test_opt", argc, argv);
 
+  suite.test("cse commutative operands").run(test_cse_commutative_operands);
+  suite.test("cse ordered operands").run(test_cse_ordered_operands);
+  suite.test("cse commutative after substitution").run(test_cse_commutative_after_substitution);
   suite.test("fold xor same operand").run(test_fold_xor_same_operand);
   suite.test("fold lt_u same operand").run(test_fold_lt_u_same_operand);
   suite.test("fold and repeated operand").run(test_fold_and_repeated_operand);
@@ -1532,7 +1619,7 @@ b0(%0: Ptr):
     Block* b2 = builder.build_block();
     builder.build_jump(b2);
     builder.move_to_end(b2);
-    Value* sum2 = builder.build_add(a, b);
+    Value* sum2 = builder.build_add(b, a);
     builder.build_store(ptr, sum2, AliasingGroup(0), 0);
     builder.build_exit();
     section->set_ordering(BlockOrdering::Dominator);
@@ -1572,7 +1659,7 @@ b2:
     builder.build_jump(b3);
 
     builder.move_to_end(b2);
-    Value* sum2 = builder.build_add(a, b);
+    Value* sum2 = builder.build_add(b, a);
     builder.build_store(ptr, sum2, AliasingGroup(0), 8);
     builder.build_jump(b3);
 
@@ -1587,7 +1674,7 @@ b1:
   Store %3, %5, aliasing=0, offset=0
   Jump block=b3
 b2:
-  %8 = Add %0, %1
+  %8 = Add %1, %0
   Store %3, %8, aliasing=0, offset=8
   Jump block=b3
 b3:

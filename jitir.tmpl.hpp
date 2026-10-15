@@ -6139,7 +6139,24 @@ private:
       Lookup(Value* _value): value(_value) {}
 
       bool operator==(const Lookup& other) const {
-        return value->equals(other.value);
+        if (value->equals(other.value)) {
+          return true;
+        }
+        if (typeid(*value) != typeid(*other.value)) {
+          return false;
+        }
+        if (dynamic_cast<AndInst*>(value) ||
+            dynamic_cast<OrInst*>(value) ||
+            dynamic_cast<XorInst*>(value) ||
+            dynamic_cast<AddInst*>(value) ||
+            dynamic_cast<MulInst*>(value) ||
+            dynamic_cast<EqInst*>(value)) {
+          Inst* inst = (Inst*) value;
+          Inst* other_inst = (Inst*) other.value;
+          return inst->arg(0) == other_inst->arg(1) &&
+                 inst->arg(1) == other_inst->arg(0);
+        }
+        return false;
       }
     };
 
