@@ -491,10 +491,81 @@ void test_unsigned_bounds() {
   }
 }
 
+void test_unsigned_comparison_bounds() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t high = uint64_t(1) << (type_width(type) - 1);
+    Bits low(type, high, 0);
+    Bits upper(type, high, high);
+    Bits unknown(type, 0, 0);
+    Bits zero = Bits::constant(type, 0);
+    Bits maximum = Bits::constant(type, type_mask(type));
+    Bits boundary = Bits::constant(type, high - 1);
+    Bits even(type, 1, 0);
+    struct Comparison {
+      Bits a;
+      Bits b;
+      int expected;
+    };
+    const Comparison cases[] = {
+      {low, upper, 1}, {upper, low, 0}, {unknown, zero, 0},
+      {maximum, unknown, 0}, {zero, unknown, -1}, {unknown, maximum, -1},
+      {low, boundary, -1}, {boundary, low, 0}, {unknown, unknown, -1},
+      {even, maximum, 1}, {maximum, even, 0},
+      {zero, zero, 0}, {maximum, maximum, 0}, {zero, maximum, 1}
+    };
+    for (const Comparison& comparison : cases) {
+      Bits result = comparison.a.lt_u(comparison.b);
+      unittest_assert(result.type == Type::Bool);
+      if (comparison.expected < 0) {
+        unittest_assert(!result.is_const());
+      } else {
+        unittest_assert(result.is_const());
+        unittest_assert(result.value == uint64_t(comparison.expected));
+      }
+    }
+  }
+}
+
+void test_unsigned_comparison_after_resize() {
+  Context context;
+  Allocator allocator;
+  std::istringstream stream(R"(section {
+b0(%0: Ptr, %1: Int32):
+  %2 = And %1, 16777215:Int32
+  %3 = ResizeU %2, type=Int64
+  %4 = LtU %3, 16777216:Int64
+  %5 = LtU 16777216:Int64, %3
+  %6 = LtU %3, 16777215:Int64
+  Store %0, %4, aliasing=0, offset=0
+  Store %0, %5, aliasing=0, offset=8
+  Store %0, %6, aliasing=0, offset=16
+  Exit
+}
+)");
+  Section* section = SectionReader<Builder>::read_section(context, allocator, stream);
+  std::vector<StoreInst*> outputs;
+  for (Inst* inst : *section->entry()) {
+    if (dynmatch(StoreInst, store, inst)) {
+      outputs.push_back(store);
+    }
+  }
+  section->order_blocks(BlockOrdering::Dominator);
+  Simplify::run(section, 10);
+  unittest_assert(!section->verify(std::cout));
+  unittest_assert(dynamic_cast<Const*>(outputs.at(0)->value()));
+  unittest_assert(((Const*) outputs.at(0)->value())->value() == 1);
+  unittest_assert(dynamic_cast<Const*>(outputs.at(1)->value()));
+  unittest_assert(((Const*) outputs.at(1)->value())->value() == 0);
+  unittest_assert(dynamic_cast<LtUInst*>(outputs.at(2)->value()));
+  delete section;
+}
+
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
 
   suite.test("unsigned bounds").run(test_unsigned_bounds);
+  suite.test("unsigned comparison bounds").run(test_unsigned_comparison_bounds);
+  suite.test("unsigned comparison after resize").run(test_unsigned_comparison_after_resize);
 
   suite.test("usedbits_constant_shl").run(test_usedbits_constant_shl);
 

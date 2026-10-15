@@ -3307,10 +3307,19 @@ namespace metajit {
       const_binop(mod_u, type, mod_u(type, value, other.value))
       const_binop(mod_s, type, mod_s(type, value, other.value))
 
-      const_binop(lt_u, Type::Bool, lt_u(type, value, other.value))
       const_binop(lt_s, Type::Bool, lt_s(type, value, other.value))
 
       #undef const_binop
+
+      Bits lt_u(const Bits& other) const {
+        if (umax() < other.umin()) {
+          return Bits::constant(true);
+        }
+        if (umin() >= other.umax()) {
+          return Bits::constant(false);
+        }
+        return Bits(Type::Bool, 0, 0);
+      }
 
       Bits eq(const Bits& other) const {
         if ((mask & other.mask & value) != (mask & other.mask & other.value)) {
