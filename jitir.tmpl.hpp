@@ -1562,6 +1562,15 @@ namespace metajit {
         if (or_a->arg(0) == b || or_a->arg(1) == b) {
           return b;
         }
+        if (dynmatch(OrInst, or_b, b)) {
+          for (size_t i = 0; i < 2; i++) {
+            for (size_t j = 0; j < 2; j++) {
+              if (or_a->arg(i) == or_b->arg(j)) {
+                return fold_or(or_a->arg(i), fold_and(or_a->arg(1 - i), or_b->arg(1 - j)));
+              }
+            }
+          }
+        }
       }
       if (dynmatch(OrInst, or_b, b)) {
         if (or_b->arg(0) == a || or_b->arg(1) == a) {

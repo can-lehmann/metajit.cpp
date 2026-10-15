@@ -465,6 +465,43 @@ void test_fold_or_factoring() {
   }
 }
 
+void test_fold_and_factoring() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type, type, type});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    Value* y = block->arg(1);
+    Value* z = block->arg(2);
+    for (Value* left : {builder.build_or(x, y), builder.build_or(y, x)}) {
+      for (Value* right : {builder.build_or(x, z), builder.build_or(z, x)}) {
+        for (Value* result : {builder.fold_and(left, right), builder.fold_and(right, left)}) {
+          unittest_assert(dynamic_cast<OrInst*>(result));
+          OrInst* factored = (OrInst*) result;
+          unittest_assert(factored->arg(0) == x);
+          unittest_assert(dynamic_cast<AndInst*>(factored->arg(1)));
+          AndInst* inner = (AndInst*) factored->arg(1);
+          unittest_assert((inner->arg(0) == y && inner->arg(1) == z) ||
+                          (inner->arg(0) == z && inner->arg(1) == y));
+        }
+      }
+    }
+    Value* left = builder.build_or(x, builder.build_const(type, 15 & type_mask(type)));
+    Value* right = builder.build_or(x, builder.build_const(type, 240 & type_mask(type)));
+    Value* result = builder.fold_and(left, right);
+    unittest_assert(result == x);
+    Value* unrelated_left = builder.build_or(x, y);
+    Value* unrelated_right = builder.build_or(z, block->arg(3));
+    Value* unrelated = builder.fold_and(unrelated_left, unrelated_right);
+    unittest_assert(dynamic_cast<AndInst*>(unrelated));
+    AndInst* unchanged = (AndInst*) unrelated;
+    unittest_assert(unchanged->arg(0) == unrelated_left && unchanged->arg(1) == unrelated_right);
+  }
+}
+
 void test_fold_and_absorption() {
   for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -858,6 +895,7 @@ int main(int argc, char** argv) {
   suite.test("fold or xor operand").run(test_fold_or_xor_operand);
   suite.test("fold or repeated operand").run(test_fold_or_repeated_operand);
   suite.test("fold or factoring").run(test_fold_or_factoring);
+  suite.test("fold and factoring").run(test_fold_and_factoring);
   suite.test("fold or absorption").run(test_fold_or_absorption);
   suite.test("fold or complement absorption").run(test_fold_or_complement_absorption);
   suite.test("fold and complement absorption").run(test_fold_and_complement_absorption);
