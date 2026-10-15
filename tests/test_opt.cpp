@@ -536,6 +536,48 @@ void test_fold_or_absorption() {
   }
 }
 
+void test_fold_or_negated_or_operand() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type, type});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    Value* y = block->arg(1);
+    for (Value* inner : {builder.build_or(x, y), builder.build_or(y, x)}) {
+      Value* negated = builder.fold_not(inner);
+      for (size_t shared_index = 0; shared_index < 2; shared_index++) {
+        Value* shared = shared_index == 0 ? x : y;
+        Value* remaining = shared_index == 0 ? y : x;
+        for (Value* result : {builder.fold_or(shared, negated), builder.fold_or(negated, shared)}) {
+          unittest_assert(dynamic_cast<OrInst*>(result));
+          OrInst* or_inst = (OrInst*) result;
+          unittest_assert(or_inst->arg(0) == shared || or_inst->arg(1) == shared);
+          Value* complement = or_inst->arg(or_inst->arg(0) == shared ? 1 : 0);
+          XorInst* not_remaining = is_not(complement);
+          unittest_assert(not_remaining && not_remaining->arg(0) == remaining);
+        }
+      }
+      Value* unrelated = builder.fold_or(negated, block->arg(2));
+      unittest_assert(dynamic_cast<OrInst*>(unrelated));
+      OrInst* or_inst = (OrInst*) unrelated;
+      unittest_assert(or_inst->arg(0) == negated && or_inst->arg(1) == block->arg(2));
+      if (type != Type::Bool) {
+        Value* partial = builder.build_xor(inner, builder.build_const(type, 1));
+        Value* unchanged = builder.fold_or(x, partial);
+        unittest_assert(dynamic_cast<OrInst*>(unchanged));
+        OrInst* unchanged_or = (OrInst*) unchanged;
+        unittest_assert(unchanged_or->arg(0) == x && unchanged_or->arg(1) == partial);
+      }
+    }
+    Value* same = builder.fold_or(x, builder.fold_not(builder.build_or(x, x)));
+    unittest_assert(dynamic_cast<Const*>(same));
+    unittest_assert(((Const*) same)->value() == type_mask(type));
+  }
+}
+
 void test_fold_or_xor_operand() {
   for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -767,6 +809,7 @@ int main(int argc, char** argv) {
   suite.test("fold xor same operand").run(test_fold_xor_same_operand);
   suite.test("fold lt_u same operand").run(test_fold_lt_u_same_operand);
   suite.test("fold and repeated operand").run(test_fold_and_repeated_operand);
+  suite.test("fold or negated or operand").run(test_fold_or_negated_or_operand);
   suite.test("fold or xor operand").run(test_fold_or_xor_operand);
   suite.test("fold or repeated operand").run(test_fold_or_repeated_operand);
   suite.test("fold or absorption").run(test_fold_or_absorption);

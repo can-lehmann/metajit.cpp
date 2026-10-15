@@ -1659,6 +1659,16 @@ namespace metajit {
         if (xor_a->arg(1) == b) {
           return fold_or(xor_a->arg(0), b);
         }
+        if (is_not(a)) {
+          if (dynmatch(OrInst, inner, xor_a->arg(0))) {
+            if (inner->arg(0) == b) {
+              return fold_or(b, fold_not(inner->arg(1)));
+            }
+            if (inner->arg(1) == b) {
+              return fold_or(b, fold_not(inner->arg(0)));
+            }
+          }
+        }
       }
       if (dynmatch(XorInst, xor_b, b)) {
         if (xor_b->arg(0) == a) {
@@ -1666,6 +1676,16 @@ namespace metajit {
         }
         if (xor_b->arg(1) == a) {
           return fold_or(a, xor_b->arg(0));
+        }
+        if (is_not(b)) {
+          if (dynmatch(OrInst, inner, xor_b->arg(0))) {
+            if (inner->arg(0) == a) {
+              return fold_or(a, fold_not(inner->arg(1)));
+            }
+            if (inner->arg(1) == a) {
+              return fold_or(a, fold_not(inner->arg(0)));
+            }
+          }
         }
       }
 
