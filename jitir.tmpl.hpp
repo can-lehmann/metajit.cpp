@@ -1433,6 +1433,7 @@ namespace metajit {
 
     Value* fold_sub(Value* a, Value* b) {
       if (a == b) {
+        // x - x => 0
         return build_const(a->type(), 0);
       }
 
@@ -1489,6 +1490,7 @@ namespace metajit {
     Value* fold_mod_u(Value* a, Value* b) {
       if (dynmatch(Const, const_b, b)) {
         if (is_power_of_two(const_b->value())) {
+          // x %u 2^n => x & (2^n - 1)
           uint64_t mask = const_b->value() - 1;
           return fold_and(a, build_const(a->type(), mask));
         }
@@ -1536,6 +1538,7 @@ namespace metajit {
           return build_const(a->type(), 0);
         }
         if (dynmatch(OrInst, or_b, b)) {
+          // ~x & (x | y) => ~x & y
           if (or_b->arg(0) == not_a->arg(0)) {
             return fold_and(a, or_b->arg(1));
           }
@@ -1549,6 +1552,7 @@ namespace metajit {
           return build_const(a->type(), 0);
         }
         if (dynmatch(OrInst, or_a, a)) {
+          // (x | y) & ~x => y & ~x
           if (or_a->arg(0) == not_b->arg(0)) {
             return fold_and(or_a->arg(1), b);
           }
@@ -1559,10 +1563,12 @@ namespace metajit {
       }
 
       if (dynmatch(OrInst, or_a, a)) {
+        // (x | y) & x => x
         if (or_a->arg(0) == b || or_a->arg(1) == b) {
           return b;
         }
         if (dynmatch(OrInst, or_b, b)) {
+          // (x | y) & (x | z) => x | (y & z)
           for (size_t i = 0; i < 2; i++) {
             for (size_t j = 0; j < 2; j++) {
               if (or_a->arg(i) == or_b->arg(j)) {
@@ -1573,17 +1579,20 @@ namespace metajit {
         }
       }
       if (dynmatch(OrInst, or_b, b)) {
+        // x & (x | y) => x
         if (or_b->arg(0) == a || or_b->arg(1) == a) {
           return a;
         }
       }
 
       if (dynmatch(AndInst, and_a, a)) {
+        // (x & y) & x => x & y
         if (and_a->arg(0) == b || and_a->arg(1) == b) {
           return a;
         }
       }
       if (dynmatch(AndInst, and_b, b)) {
+        // x & (x & y) => x & y
         if (and_b->arg(0) == a || and_b->arg(1) == a) {
           return b;
         }
@@ -1612,6 +1621,7 @@ namespace metajit {
         }
       } else if (dynmatch(AndInst, and_a, a)) {
         if (dynmatch(AndInst, and_b, b)) {
+          // (x & y) | (x & z) => x & (y | z)
           for (size_t i = 0; i < 2; i++) {
             for (size_t j = 0; j < 2; j++) {
               if (and_a->arg(i) == and_b->arg(j)) {
@@ -1622,10 +1632,12 @@ namespace metajit {
         }
       }
       if (dynmatch(AndInst, and_a, a)) {
+        // (x & y) | x => x
         if (and_a->arg(0) == b || and_a->arg(1) == b) {
           return b;
         }
         if (XorInst* not_b = is_not(b)) {
+          // (x & y) | ~x => y | ~x
           if (and_a->arg(0) == not_b->arg(0)) {
             return fold_or(and_a->arg(1), b);
           }
@@ -1635,10 +1647,12 @@ namespace metajit {
         }
       }
       if (dynmatch(AndInst, and_b, b)) {
+        // x | (x & y) => x
         if (and_b->arg(0) == a || and_b->arg(1) == a) {
           return a;
         }
         if (XorInst* not_a = is_not(a)) {
+          // ~x | (x & y) => ~x | y
           if (and_b->arg(0) == not_a->arg(0)) {
             return fold_or(a, and_b->arg(1));
           }
@@ -1649,17 +1663,20 @@ namespace metajit {
       }
 
       if (dynmatch(OrInst, or_a, a)) {
+        // (x | y) | x => x | y
         if (or_a->arg(0) == b || or_a->arg(1) == b) {
           return a;
         }
       }
       if (dynmatch(OrInst, or_b, b)) {
+        // x | (x | y) => x | y
         if (or_b->arg(0) == a || or_b->arg(1) == a) {
           return b;
         }
       }
 
       if (dynmatch(XorInst, xor_a, a)) {
+        // (x ^ y) | x => x | y
         if (xor_a->arg(0) == b) {
           return fold_or(xor_a->arg(1), b);
         }
@@ -1668,6 +1685,7 @@ namespace metajit {
         }
         if (is_not(a)) {
           if (dynmatch(OrInst, inner, xor_a->arg(0))) {
+            // ~(x | y) | x => x | ~y
             if (inner->arg(0) == b) {
               return fold_or(b, fold_not(inner->arg(1)));
             }
@@ -1678,6 +1696,7 @@ namespace metajit {
         }
       }
       if (dynmatch(XorInst, xor_b, b)) {
+        // x | (x ^ y) => x | y
         if (xor_b->arg(0) == a) {
           return fold_or(a, xor_b->arg(1));
         }
@@ -1686,6 +1705,7 @@ namespace metajit {
         }
         if (is_not(b)) {
           if (dynmatch(OrInst, inner, xor_b->arg(0))) {
+            // x | ~(x | y) => x | ~y
             if (inner->arg(0) == a) {
               return fold_or(a, fold_not(inner->arg(1)));
             }
@@ -1701,6 +1721,7 @@ namespace metajit {
   
     Value* fold_xor(Value* a, Value* b) {
       if (a == b) {
+        // x ^ x => 0
         return build_const(a->type(), 0);
       }
 
@@ -1771,6 +1792,7 @@ namespace metajit {
 
     Value* fold_lt_u(Value* a, Value* b) {
       if (a == b) {
+        // x <u x => false
         return build_const(Type::Bool, 0);
       }
 
@@ -1905,6 +1927,7 @@ namespace metajit {
         return build_const(type, value);
       } else if (dynmatch(ResizeXInst, resize_a, a)) {
         if (resize_a->arg(0)->type() == type) {
+          // ResizeU(ResizeX(x, M), N) => x & mask(M), where x has type N
           return fold_and(resize_a->arg(0), build_const(type, type_mask(resize_a->type())));
         }
       } else if (dynmatch(AndInst, and_a, a)) {
@@ -1917,6 +1940,7 @@ namespace metajit {
         if (mask) {
           if (dynmatch(ResizeXInst, resize, resized)) {
             if (resize->arg(0)->type() == type) {
+              // ResizeU(ResizeX(x, M) & m, N) => x & (m & mask(M) & mask(N)), where x has type N
               return fold_and(resize->arg(0), build_const(type, mask->value() & type_mask(resize->type()) & type_mask(type)));
             }
           }
@@ -1942,6 +1966,7 @@ namespace metajit {
       if (dynmatch(ResizeXInst, resize, a)) {
         if (type_width(type) < type_width(a->type()) &&
             type_width(a->type()) < type_width(resize->arg(0)->type())) {
+          // ResizeX(ResizeX(x, M), N) => ResizeX(x, N) if N < M < width(x)
           return fold_resize_x(resize->arg(0), type);
         }
       }
@@ -1966,6 +1991,7 @@ namespace metajit {
         } else if (const_b->value() == 0) {
           return a;
         }
+        // Treat a missing & m as an all-ones mask.
         Value* shifted = a;
         uint64_t mask = type_mask(a->type());
         if (dynmatch(AndInst, andinst, a)) {
@@ -1983,9 +2009,12 @@ namespace metajit {
               uint64_t c1 = constant->value();
               if (c1 < width) {
                 Value* input = shr_u->arg(0);
+                // ((x >>u c1) & m) << c2 => x & (m << c2) if c1 == c2
                 if (c1 > c2) {
+                  // ((x >>u c1) & m) << c2 => (x >>u (c1 - c2)) & (m << c2)
                   input = fold_shr_u(input, build_const(a->type(), c1 - c2));
                 } else if (c1 < c2) {
+                  // ((x >>u c1) & m) << c2 => (x << (c2 - c1)) & (m << c2)
                   input = fold_shl(input, build_const(a->type(), c2 - c1));
                 }
                 return fold_and(input, build_const(a->type(), mask));
@@ -1996,8 +2025,10 @@ namespace metajit {
               uint64_t c1 = constant->value();
               if (c1 < width) {
                 if (c1 + c2 >= width) {
+                  // ((x << c1) & m) << c2 => 0 if c1 + c2 >= width(x)
                   return build_const(a->type(), 0);
                 }
+                // ((x << c1) & m) << c2 => (x << (c1 + c2)) & (m << c2)
                 return fold_and(fold_shl(shl->arg(0), build_const(a->type(), c1 + c2)),
                                 build_const(a->type(), mask));
               }
