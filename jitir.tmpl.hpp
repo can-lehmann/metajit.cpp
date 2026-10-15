@@ -1580,6 +1580,10 @@ namespace metajit {
     }
   
     Value* fold_xor(Value* a, Value* b) {
+      if (a == b) {
+        return build_const(a->type(), 0);
+      }
+
       if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
       }
