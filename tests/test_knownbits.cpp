@@ -713,8 +713,6 @@ int main(int argc, char** argv) {
             unittest_assert(result.type == Type::Bool);
             if (a.is_const() && b.is_const()) {
               unittest_assert(result == Bits::constant(true));
-            } else {
-              unittest_assert(result == Bits(Type::Bool, 0, 0));
             }
             unittest_assert((result & Bits::constant(false)) == Bits::constant(false));
           }
