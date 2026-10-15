@@ -4781,6 +4781,19 @@ private:
           _enqueue(eq->arg(0), Bits::constant(!arg1.value));
         }
       }
+    } else if (dynmatch(LtUInst, lt, value)) {
+      Bits bound = Bits::at(_values, lt->arg(1));
+      if (bits.is_const() && bits.value == 1 && bound.is_const()) {
+        if (bound.value == 0) {
+          _contradiction = true;
+          return;
+        }
+        uint64_t mask = bound.value - 1;
+        for (size_t shift = 1; shift < 64; shift *= 2) {
+          mask |= mask >> shift;
+        }
+        _enqueue(lt->arg(0), Bits(lt->arg(0)->type(), ~mask, 0));
+      }
     } else if (dynmatch(AndInst, andinst, value)) {
       auto arg0 = bits.and_backwards(Bits::at(_values, andinst->arg(1)));
       _enqueue(andinst->arg(0), arg0);

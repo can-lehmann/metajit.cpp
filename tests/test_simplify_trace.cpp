@@ -67,9 +67,114 @@ void check_trace_simplify(const std::string& input,
   }
 }
 
+void test_unsigned_guard_known_bits() {
+  const uint64_t bounds[] = {1, 2, 3, 7, 8, 9, 127, 128, 129, 255, 256,
+                             16777215, 16777216, 16777217,
+                             uint64_t(1) << 63, (uint64_t(1) << 63) + 1,
+                             ~uint64_t(0)};
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (uint64_t bound : bounds) {
+      if (bound > type_mask(type)) {
+        continue;
+      }
+      uint64_t mask = bound - 1;
+      for (size_t shift = 1; shift < 64; shift *= 2) {
+        mask |= mask >> shift;
+      }
+      for (bool truth : {false, true}) {
+        Context context;
+        Allocator allocator;
+        Section section(context, allocator);
+        Builder builder(&section);
+        Block* entry = builder.build_block({Type::Ptr, type});
+        Block* success = builder.build_block();
+        Block* failure = builder.build_block();
+        builder.move_to_end(entry);
+        Value* x = entry->arg(1);
+        Value* cond = builder.build_lt_u(x, builder.build_const(type, bound));
+        builder.build_branch(cond, truth ? success : failure, truth ? failure : success);
+        builder.move_to_end(success);
+        Value* masked = builder.build_and(x, builder.build_const(type, mask));
+        StoreInst* store = builder.build_store(entry->arg(0), masked, AliasingGroup(0), 0);
+        Value* smaller = builder.build_and(x, builder.build_const(type, mask >> 1));
+        StoreInst* smaller_store = builder.build_store(entry->arg(0), smaller, AliasingGroup(0), 8);
+        builder.build_exit();
+        builder.move_to_end(failure);
+        builder.build_exit();
+        section.order_blocks(BlockOrdering::Dominator);
+        Chain chain({entry, success});
+        SimplifyTrace::run(&section, &chain);
+        unittest_assert(!section.verify(std::cout));
+        if (truth && bound == 1) {
+          unittest_assert(dynamic_cast<Const*>(store->value()));
+          unittest_assert(((Const*) store->value())->value() == 0);
+        } else if (truth || mask == type_mask(type)) {
+          unittest_assert(store->value() == x);
+        } else {
+          unittest_assert(store->value() != x);
+        }
+        if (bound > 1) {
+          unittest_assert(smaller_store->value() != x);
+        }
+      }
+    }
+  }
+}
+
+void test_unsigned_guard_zero_contradiction() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Int64});
+  builder.move_to_end(entry);
+  Value* cond = builder.build_lt_u(entry->arg(0), builder.build_const(Type::Int64, 0));
+  builder.build_exit();
+  section.order_blocks(BlockOrdering::Dominator);
+  Chain chain({entry});
+  SimplifyTrace simplify(&section, &chain);
+  unittest_assert(!simplify.propagate_backwards(cond, KnownBits::Bits::constant(true)));
+}
+
+void test_unsigned_guard_remainder() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Ptr});
+  Block* success = builder.build_block();
+  Block* failure = builder.build_block();
+  builder.move_to_end(entry);
+  TestData data(builder);
+  Value* x = data.input(RandomRange(Type::Int64, 0, 16777218));
+  Value* divisor = builder.build_const(Type::Int64, 16777216);
+  Value* cond = builder.build_lt_u(x, divisor);
+  builder.build_branch(cond, success, failure);
+  builder.move_to_end(success);
+  Value* remainder = builder.fold_mod_u(x, divisor);
+  size_t offset = data.alloc_output(Type::Int64);
+  StoreInst* store = builder.build_store(entry->arg(0), remainder, AliasingGroup(0), offset);
+  builder.build_exit();
+  builder.move_to_end(failure);
+  builder.build_store(entry->arg(0), builder.build_const(Type::Int64, 0), AliasingGroup(0), offset);
+  builder.build_exit();
+  section.order_blocks(BlockOrdering::Dominator);
+  Section original(context, allocator);
+  Clone::run(&section, &original);
+  Chain chain({entry, success});
+  SimplifyTrace::run(&section, &chain);
+  unittest_assert(store->value() == x);
+  unittest_assert(!section.verify(std::cout));
+  check_opt_differential(&original, &section, data);
+}
+
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
   metajit::LLVMCodeGen::initilize_llvm_jit();
+
+  suite.test("unsigned guard known bits").run(test_unsigned_guard_known_bits);
+  suite.test("unsigned guard zero contradiction").run(test_unsigned_guard_zero_contradiction);
+  suite.test("unsigned guard remainder").run(test_unsigned_guard_remainder);
 
   suite.test("freeze_preserves_output_relationship").run([]() {
     Context context;
