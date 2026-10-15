@@ -480,6 +480,28 @@ void test_fold_or_repeated_operand() {
   }
 }
 
+void test_fold_and_repeated_operand() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type, type});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    Value* y = block->arg(1);
+    for (Value* inner : {builder.build_and(x, y), builder.build_and(y, x)}) {
+      for (Value* repeated : {x, y}) {
+        unittest_assert(builder.fold_and(repeated, inner) == inner);
+        unittest_assert(builder.fold_and(inner, repeated) == inner);
+      }
+      Value* unrelated = builder.fold_and(block->arg(2), inner);
+      unittest_assert(dynamic_cast<AndInst*>(unrelated));
+      unittest_assert(unrelated != inner);
+    }
+  }
+}
+
 void test_fold_masked_resize_roundtrip() {
   const uint64_t masks[] = {0, 1, 0x55, 0xff00, 0x123456789abcdef0,
                             uint64_t(1) << 63, ~uint64_t(0)};
@@ -545,6 +567,7 @@ int main(int argc, char** argv) {
 
   suite.test("fold xor same operand").run(test_fold_xor_same_operand);
   suite.test("fold lt_u same operand").run(test_fold_lt_u_same_operand);
+  suite.test("fold and repeated operand").run(test_fold_and_repeated_operand);
   suite.test("fold or repeated operand").run(test_fold_or_repeated_operand);
   suite.test("fold or absorption").run(test_fold_or_absorption);
   suite.test("fold and absorption").run(test_fold_and_absorption);
