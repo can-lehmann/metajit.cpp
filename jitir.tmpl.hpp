@@ -1620,6 +1620,23 @@ namespace metajit {
         }
       }
 
+      if (dynmatch(XorInst, xor_a, a)) {
+        if (xor_a->arg(0) == b) {
+          return fold_or(xor_a->arg(1), b);
+        }
+        if (xor_a->arg(1) == b) {
+          return fold_or(xor_a->arg(0), b);
+        }
+      }
+      if (dynmatch(XorInst, xor_b, b)) {
+        if (xor_b->arg(0) == a) {
+          return fold_or(a, xor_b->arg(1));
+        }
+        if (xor_b->arg(1) == a) {
+          return fold_or(a, xor_b->arg(0));
+        }
+      }
+
       return build_or(a, b);
     }
   

@@ -458,6 +458,40 @@ void test_fold_or_absorption() {
   }
 }
 
+void test_fold_or_xor_operand() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type, type});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    Value* parameter = block->arg(1);
+    Value* constant = builder.build_const(type, 1);
+    for (Value* y : {parameter, constant}) {
+      for (Value* inner : {builder.build_xor(x, y), builder.build_xor(y, x)}) {
+        for (Value* repeated : {x, y}) {
+          for (Value* result : {builder.fold_or(inner, repeated), builder.fold_or(repeated, inner)}) {
+            if (type == Type::Bool && dynamic_cast<Const*>(y)) {
+              unittest_assert(result == y);
+            } else {
+              unittest_assert(dynamic_cast<OrInst*>(result));
+              OrInst* or_inst = (OrInst*) result;
+              unittest_assert((or_inst->arg(0) == x && or_inst->arg(1) == y) ||
+                              (or_inst->arg(0) == y && or_inst->arg(1) == x));
+            }
+          }
+        }
+        Value* unrelated = builder.fold_or(inner, block->arg(2));
+        unittest_assert(dynamic_cast<OrInst*>(unrelated));
+        OrInst* or_inst = (OrInst*) unrelated;
+        unittest_assert(or_inst->arg(0) == inner && or_inst->arg(1) == block->arg(2));
+      }
+    }
+  }
+}
+
 void test_fold_or_repeated_operand() {
   for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -655,6 +689,7 @@ int main(int argc, char** argv) {
   suite.test("fold xor same operand").run(test_fold_xor_same_operand);
   suite.test("fold lt_u same operand").run(test_fold_lt_u_same_operand);
   suite.test("fold and repeated operand").run(test_fold_and_repeated_operand);
+  suite.test("fold or xor operand").run(test_fold_or_xor_operand);
   suite.test("fold or repeated operand").run(test_fold_or_repeated_operand);
   suite.test("fold or absorption").run(test_fold_or_absorption);
   suite.test("fold and absorption").run(test_fold_and_absorption);
