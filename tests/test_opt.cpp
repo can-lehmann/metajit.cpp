@@ -1100,7 +1100,56 @@ void test_fold_and_repeated_operand() {
   }
 }
 
-void test_fold_nested_unsigned_extensions() {
+void check_fold_nested_truncations(bool inner_unsigned, bool outer_unsigned) {
+  for (Type source : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (Type intermediate : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      for (Type target : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+        if (type_width(source) <= type_width(intermediate) || type_width(intermediate) <= type_width(target)) {
+          continue;
+        }
+        Context context;
+        Allocator allocator;
+        Section section(context, allocator);
+        Builder builder(&section);
+        Block* block = builder.build_block({source});
+        builder.move_to_end(block);
+        for (Value* input : {(Value*) block->arg(0), (Value*) builder.build_poison(source)}) {
+          Value* inner = inner_unsigned ? (Value*) builder.build_resize_u(input, intermediate) :
+                                                  builder.build_resize_x(input, intermediate);
+          Value* result = outer_unsigned ? builder.fold_resize_u(inner, target) : builder.fold_resize_x(inner, target);
+          unittest_assert(outer_unsigned ? dynamic_cast<ResizeUInst*>(result) != nullptr :
+                                           dynamic_cast<ResizeXInst*>(result) != nullptr);
+          unittest_assert(result->type() == target);
+          unittest_assert(((Inst*) result)->arg(0) == input);
+        }
+      }
+    }
+  }
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Int32});
+  builder.move_to_end(block);
+  Value* inner = inner_unsigned ? (Value*) builder.build_resize_u(block->arg(0), Type::Int8) :
+                                          builder.build_resize_x(block->arg(0), Type::Int8);
+  Value* result = outer_unsigned ? builder.fold_resize_u(inner, Type::Int16) : builder.fold_resize_x(inner, Type::Int16);
+  unittest_assert(((Inst*) result)->arg(0) == inner);
+}
+
+void test_fold_narrowing_resize_uu() {
+  check_fold_nested_truncations(true, true);
+}
+
+void test_fold_narrowing_resize_ux() {
+  check_fold_nested_truncations(true, false);
+}
+
+void test_fold_narrowing_resize_xu() {
+  check_fold_nested_truncations(false, true);
+}
+
+void test_fold_nested_unsigned_resizes() {
   for (Type source : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     for (Type intermediate : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
       for (Type target : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
@@ -1118,8 +1167,9 @@ void test_fold_nested_unsigned_extensions() {
           Value* result = builder.fold_resize_u(inner, target);
           unittest_assert(dynamic_cast<ResizeUInst*>(result));
           unittest_assert(result->type() == target);
-          Value* expected = type_width(source) < type_width(intermediate) &&
-                            type_width(intermediate) < type_width(target) ? input : inner;
+          bool widening = type_width(source) < type_width(intermediate) && type_width(intermediate) < type_width(target);
+          bool narrowing = type_width(source) > type_width(intermediate) && type_width(intermediate) > type_width(target);
+          Value* expected = widening || narrowing ? input : inner;
           unittest_assert(((ResizeUInst*) result)->arg(0) == expected);
         }
       }
@@ -1404,7 +1454,10 @@ int main(int argc, char** argv) {
   suite.test("fold and complement absorption").run(test_fold_and_complement_absorption);
   suite.test("fold and absorption").run(test_fold_and_absorption);
   suite.test("fold unspecified extension roundtrip").run(test_fold_unspecified_extension_roundtrip);
-  suite.test("fold nested unsigned extensions").run(test_fold_nested_unsigned_extensions);
+  suite.test("fold narrowing resize uu").run(test_fold_narrowing_resize_uu);
+  suite.test("fold narrowing resize ux").run(test_fold_narrowing_resize_ux);
+  suite.test("fold narrowing resize xu").run(test_fold_narrowing_resize_xu);
+  suite.test("fold nested unsigned resizes").run(test_fold_nested_unsigned_resizes);
   suite.test("fold unsigned extension roundtrip").run(test_fold_unsigned_extension_roundtrip);
   suite.test("fold nested narrowing resize x").run(test_fold_nested_narrowing_resize_x);
   suite.test("fold masked resize roundtrip").run(test_fold_masked_resize_roundtrip);
