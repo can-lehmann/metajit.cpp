@@ -410,6 +410,42 @@ void test_fold_add_complement_to_sub() {
   }
 }
 
+void test_fold_sub_eq_zero() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type});
+    builder.move_to_end(block);
+    Value* a = block->arg(0);
+    Value* b = block->arg(1);
+    Value* difference = builder.build_sub(a, b);
+    Const* zero = builder.build_const(type, 0);
+    for (Value* result : {builder.fold_eq(difference, zero), builder.fold_eq(zero, difference)}) {
+      unittest_assert(dynamic_cast<EqInst*>(result));
+      EqInst* eq = (EqInst*) result;
+      unittest_assert(eq->arg(0) == a);
+      unittest_assert(eq->arg(1) == b);
+      unittest_assert(eq->type() == Type::Bool);
+    }
+    for (Value* result : {builder.fold_ne(difference, zero), builder.fold_ne(zero, difference)}) {
+      XorInst* negated = is_not(result);
+      unittest_assert(negated);
+      unittest_assert(dynamic_cast<EqInst*>(negated->arg(0)));
+      EqInst* eq = (EqInst*) negated->arg(0);
+      unittest_assert(eq->arg(0) == a);
+      unittest_assert(eq->arg(1) == b);
+    }
+    Value* same = builder.fold_eq(builder.build_sub(a, a), zero);
+    unittest_assert(dynamic_cast<Const*>(same));
+    unittest_assert(((Const*) same)->value() == 1);
+    Value* different = builder.fold_eq(difference, builder.build_const(type, 1));
+    unittest_assert(dynamic_cast<EqInst*>(different));
+    unittest_assert(((EqInst*) different)->arg(0) == difference);
+  }
+}
+
 void test_fold_sub_same_operand() {
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -1266,6 +1302,7 @@ int main(int argc, char** argv) {
   suite.test("fold masked resize roundtrip").run(test_fold_masked_resize_roundtrip);
   suite.test("fold masked resize without roundtrip").run(test_fold_masked_resize_without_roundtrip);
   suite.test("fold add complement to sub").run(test_fold_add_complement_to_sub);
+  suite.test("fold sub eq zero").run(test_fold_sub_eq_zero);
   suite.test("fold sub same operand").run(test_fold_sub_same_operand);
   suite.test("simplify overwritten bytes").run(test_simplify_overwritten_bytes);
   suite.test("simplify used bits other use").run(test_simplify_used_bits_other_use);

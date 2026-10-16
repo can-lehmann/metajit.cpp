@@ -1830,6 +1830,10 @@ namespace metajit {
             // (a ^ b) == 0 => a == b
             return fold_eq(xor_a->arg(0), xor_a->arg(1));
           }
+          if (dynmatch(SubInst, sub_a, a)) {
+            // (a - b) == 0 => a == b
+            return fold_eq(sub_a->arg(0), sub_a->arg(1));
+          }
         }
       }
 
