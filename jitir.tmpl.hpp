@@ -1988,6 +1988,12 @@ namespace metajit {
           // ResizeU(ResizeX(x, M), N) => x & mask(M), where x has type N
           return fold_and(resize_a->arg(0), build_const(type, type_mask(resize_a->type())));
         }
+      } else if (dynmatch(ResizeUInst, resize_a, a)) {
+        if (type_width(resize_a->arg(0)->type()) < type_width(a->type()) &&
+            type_width(a->type()) < type_width(type)) {
+          // ResizeU(ResizeU(x, M), N) => ResizeU(x, N) if width(x) < M < N
+          return fold_resize_u(resize_a->arg(0), type);
+        }
       } else if (dynmatch(AndInst, and_a, a)) {
         Value* resized = and_a->arg(0);
         Const* mask = dynamic_cast<Const*>(and_a->arg(1));

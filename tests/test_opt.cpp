@@ -1100,6 +1100,33 @@ void test_fold_and_repeated_operand() {
   }
 }
 
+void test_fold_nested_unsigned_extensions() {
+  for (Type source : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (Type intermediate : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      for (Type target : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+        if (source == intermediate || intermediate == target) {
+          continue;
+        }
+        Context context;
+        Allocator allocator;
+        Section section(context, allocator);
+        Builder builder(&section);
+        Block* block = builder.build_block({source});
+        builder.move_to_end(block);
+        for (Value* input : {(Value*) block->arg(0), (Value*) builder.build_poison(source)}) {
+          Value* inner = builder.build_resize_u(input, intermediate);
+          Value* result = builder.fold_resize_u(inner, target);
+          unittest_assert(dynamic_cast<ResizeUInst*>(result));
+          unittest_assert(result->type() == target);
+          Value* expected = type_width(source) < type_width(intermediate) &&
+                            type_width(intermediate) < type_width(target) ? input : inner;
+          unittest_assert(((ResizeUInst*) result)->arg(0) == expected);
+        }
+      }
+    }
+  }
+}
+
 void test_fold_unsigned_extension_roundtrip() {
   for (Type source : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     for (Type intermediate : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
@@ -1377,6 +1404,7 @@ int main(int argc, char** argv) {
   suite.test("fold and complement absorption").run(test_fold_and_complement_absorption);
   suite.test("fold and absorption").run(test_fold_and_absorption);
   suite.test("fold unspecified extension roundtrip").run(test_fold_unspecified_extension_roundtrip);
+  suite.test("fold nested unsigned extensions").run(test_fold_nested_unsigned_extensions);
   suite.test("fold unsigned extension roundtrip").run(test_fold_unsigned_extension_roundtrip);
   suite.test("fold nested narrowing resize x").run(test_fold_nested_narrowing_resize_x);
   suite.test("fold masked resize roundtrip").run(test_fold_masked_resize_roundtrip);
