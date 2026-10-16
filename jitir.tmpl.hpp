@@ -2027,6 +2027,11 @@ namespace metajit {
           // ResizeX(ResizeX(x, M), N) => ResizeX(x, N) if N < M < width(x)
           return fold_resize_x(resize->arg(0), type);
         }
+      } else if (dynmatch(ResizeUInst, resize, a)) {
+        if (resize->arg(0)->type() == type && type_width(type) < type_width(a->type())) {
+          // ResizeX(ResizeU(x, M), N) => x if width(x) == N < M
+          return resize->arg(0);
+        }
       }
 
       unop_const_prop(type, const_a->value());
