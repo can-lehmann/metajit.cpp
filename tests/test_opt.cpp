@@ -1137,6 +1137,43 @@ void test_fold_unsigned_extension_roundtrip() {
   unittest_assert(((ResizeXInst*) different_type)->arg(0) == inner);
 }
 
+void test_fold_unspecified_extension_roundtrip() {
+  for (Type source : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (Type intermediate : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      if (source == intermediate) {
+        continue;
+      }
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* block = builder.build_block({source});
+      builder.move_to_end(block);
+      for (Value* input : { (Value*) block->arg(0), (Value*) builder.build_poison(source) }) {
+        Value* inner = builder.build_resize_x(input, intermediate);
+        Value* result = builder.fold_resize_x(inner, source);
+        unittest_assert(result->type() == source);
+        if (type_width(source) < type_width(intermediate)) {
+          unittest_assert(result == input);
+        } else {
+          unittest_assert(dynamic_cast<ResizeXInst*>(result));
+          unittest_assert(((ResizeXInst*) result)->arg(0) == inner);
+        }
+      }
+    }
+  }
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Bool});
+  builder.move_to_end(block);
+  Value* inner = builder.build_resize_x(block->arg(0), Type::Int64);
+  Value* different_type = builder.fold_resize_x(inner, Type::Int32);
+  unittest_assert(dynamic_cast<ResizeXInst*>(different_type));
+  unittest_assert(((ResizeXInst*) different_type)->arg(0) == inner);
+}
+
 void test_fold_nested_narrowing_resize_x() {
   for (Type source : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     for (Type intermediate : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
@@ -1153,8 +1190,12 @@ void test_fold_nested_narrowing_resize_x() {
         Value* input = block->arg(0);
         Value* inner = builder.build_resize_x(input, intermediate);
         Value* result = builder.fold_resize_x(inner, target);
-        unittest_assert(dynamic_cast<ResizeXInst*>(result));
         unittest_assert(result->type() == target);
+        if (source == target && type_width(source) < type_width(intermediate)) {
+          unittest_assert(result == input);
+          continue;
+        }
+        unittest_assert(dynamic_cast<ResizeXInst*>(result));
         Value* expected = type_width(target) < type_width(intermediate) &&
                           type_width(intermediate) < type_width(source) ? input : inner;
         unittest_assert(((ResizeXInst*) result)->arg(0) == expected);
@@ -1335,6 +1376,7 @@ int main(int argc, char** argv) {
   suite.test("fold or complement absorption").run(test_fold_or_complement_absorption);
   suite.test("fold and complement absorption").run(test_fold_and_complement_absorption);
   suite.test("fold and absorption").run(test_fold_and_absorption);
+  suite.test("fold unspecified extension roundtrip").run(test_fold_unspecified_extension_roundtrip);
   suite.test("fold unsigned extension roundtrip").run(test_fold_unsigned_extension_roundtrip);
   suite.test("fold nested narrowing resize x").run(test_fold_nested_narrowing_resize_x);
   suite.test("fold masked resize roundtrip").run(test_fold_masked_resize_roundtrip);

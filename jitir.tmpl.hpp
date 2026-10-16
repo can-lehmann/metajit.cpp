@@ -2022,6 +2022,10 @@ namespace metajit {
       }
 
       if (dynmatch(ResizeXInst, resize, a)) {
+        if (resize->arg(0)->type() == type && type_width(type) < type_width(a->type())) {
+          // ResizeX(ResizeX(x, M), N) => x if width(x) == N < M
+          return resize->arg(0);
+        }
         if (type_width(type) < type_width(a->type()) &&
             type_width(a->type()) < type_width(resize->arg(0)->type())) {
           // ResizeX(ResizeX(x, M), N) => ResizeX(x, N) if N < M < width(x)
