@@ -1435,6 +1435,15 @@ namespace metajit {
         }
 
         if (dynmatch(AddInst, add_a, a)) {
+          if (const_b->value() == 1) {
+            // (x + ~y) + 1 => x - y
+            if (XorInst* not_b = is_not(add_a->arg(1))) {
+              return fold_sub(add_a->arg(0), not_b->arg(0));
+            }
+            if (XorInst* not_a = is_not(add_a->arg(0))) {
+              return fold_sub(add_a->arg(1), not_a->arg(0));
+            }
+          }
           if (dynmatch(Const, const_a_b, add_a->arg(1))) {
             return fold_add(
               add_a->arg(0),

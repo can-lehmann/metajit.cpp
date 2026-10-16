@@ -375,6 +375,41 @@ void trace_builder_failure_load_bypasses_forwarding() {
   }
 }
 
+void test_fold_add_complement_to_sub() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type});
+    builder.move_to_end(block);
+    Value* a = block->arg(0);
+    Value* b = block->arg(1);
+    Value* complemented = builder.fold_not(b);
+    Const* one = builder.build_const(type, 1);
+    for (Value* sum : {builder.fold_add(a, complemented), builder.fold_add(complemented, a)}) {
+      for (Value* result : {builder.fold_add(sum, one), builder.fold_add(one, sum)}) {
+        unittest_assert(dynamic_cast<SubInst*>(result));
+        SubInst* sub = (SubInst*) result;
+        unittest_assert(sub->arg(0) == a);
+        unittest_assert(sub->arg(1) == b);
+        unittest_assert(sub->type() == type);
+      }
+      Value* different = builder.fold_add(sum, builder.build_const(type, 2));
+      unittest_assert(dynamic_cast<AddInst*>(different));
+      unittest_assert(((AddInst*) different)->arg(0) == sum);
+    }
+    Value* sum = builder.fold_add(a, builder.fold_not(a));
+    Value* zero = builder.fold_add(sum, one);
+    unittest_assert(dynamic_cast<Const*>(zero));
+    unittest_assert(((Const*) zero)->value() == 0);
+    Value* different = builder.fold_add(a, builder.fold_xor(b, builder.build_const(type, 2)));
+    Value* unchanged = builder.fold_add(different, one);
+    unittest_assert(dynamic_cast<AddInst*>(unchanged));
+    unittest_assert(((AddInst*) unchanged)->arg(0) == different);
+  }
+}
+
 void test_fold_sub_same_operand() {
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -1230,6 +1265,7 @@ int main(int argc, char** argv) {
   suite.test("fold nested narrowing resize x").run(test_fold_nested_narrowing_resize_x);
   suite.test("fold masked resize roundtrip").run(test_fold_masked_resize_roundtrip);
   suite.test("fold masked resize without roundtrip").run(test_fold_masked_resize_without_roundtrip);
+  suite.test("fold add complement to sub").run(test_fold_add_complement_to_sub);
   suite.test("fold sub same operand").run(test_fold_sub_same_operand);
   suite.test("simplify overwritten bytes").run(test_simplify_overwritten_bytes);
   suite.test("simplify used bits other use").run(test_simplify_used_bits_other_use);
