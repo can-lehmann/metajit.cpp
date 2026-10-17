@@ -2093,6 +2093,58 @@ void test_fold_nested_narrowing_resize_x() {
   }
 }
 
+void test_fold_resize_x_sign_bit() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type});
+    builder.move_to_end(block);
+    Value* input = block->arg(0);
+    Value* shifted = builder.build_shr_u(input, builder.build_const(type, type_width(type) - 1));
+    Value* result = builder.fold_resize_x(shifted, Type::Bool);
+    unittest_assert(dynamic_cast<LtSInst*>(result));
+    unittest_assert(((LtSInst*) result)->arg(0) == input);
+    Value* zero = ((LtSInst*) result)->arg(1);
+    unittest_assert(dynamic_cast<Const*>(zero));
+    unittest_assert(((Const*) zero)->value() == 0);
+    unittest_assert(zero->type() == type);
+    unittest_assert(result->type() == Type::Bool);
+  }
+}
+
+void test_fold_resize_x_sign_bit_negative() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type});
+    builder.move_to_end(block);
+    Value* input = block->arg(0);
+    for (uint64_t amount : {uint64_t(type_width(type) - 2), uint64_t(type_width(type)), uint64_t(type_width(type) + 1)}) {
+      Value* shifted = builder.build_shr_u(input, builder.build_const(type, amount));
+      Value* result = builder.fold_resize_x(shifted, Type::Bool);
+      unittest_assert(dynamic_cast<ResizeXInst*>(result));
+      unittest_assert(((ResizeXInst*) result)->arg(0) == shifted);
+    }
+    Value* variable_shift = builder.build_shr_u(input, block->arg(1));
+    Value* variable_result = builder.fold_resize_x(variable_shift, Type::Bool);
+    unittest_assert(dynamic_cast<ResizeXInst*>(variable_result));
+    unittest_assert(((ResizeXInst*) variable_result)->arg(0) == variable_shift);
+    Value* shifted = builder.build_shr_u(input, builder.build_const(type, type_width(type) - 1));
+    Type target = type == Type::Int8 ? Type::Int16 : Type::Int8;
+    Value* result = builder.fold_resize_x(shifted, target);
+    unittest_assert(dynamic_cast<ResizeXInst*>(result));
+    unittest_assert(((ResizeXInst*) result)->arg(0) == shifted);
+    Value* signed_shift = builder.build_shr_s(input, builder.build_const(type, type_width(type) - 1));
+    Value* signed_result = builder.fold_resize_x(signed_shift, Type::Bool);
+    unittest_assert(dynamic_cast<ResizeXInst*>(signed_result));
+    unittest_assert(((ResizeXInst*) signed_result)->arg(0) == signed_shift);
+  }
+}
+
 void test_fold_masked_resize_roundtrip() {
   const uint64_t masks[] = {0, 1, 0x55, 0xff00, 0x123456789abcdef0,
                             uint64_t(1) << 63, ~uint64_t(0)};
@@ -2273,6 +2325,8 @@ int main(int argc, char** argv) {
   suite.test("fold nested unsigned resizes").run(test_fold_nested_unsigned_resizes);
   suite.test("fold unsigned extension roundtrip").run(test_fold_unsigned_extension_roundtrip);
   suite.test("fold nested narrowing resize x").run(test_fold_nested_narrowing_resize_x);
+  suite.test("fold resize x sign bit").run(test_fold_resize_x_sign_bit);
+  suite.test("fold resize x sign bit negative").run(test_fold_resize_x_sign_bit_negative);
   suite.test("fold masked resize roundtrip").run(test_fold_masked_resize_roundtrip);
   suite.test("fold masked resize without roundtrip").run(test_fold_masked_resize_without_roundtrip);
   suite.test("fold add complement to sub").run(test_fold_add_complement_to_sub);
