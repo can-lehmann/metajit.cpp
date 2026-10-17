@@ -1568,6 +1568,13 @@ namespace metajit {
         if (dynmatch(XorInst, xor_inst, xored)) {
           for (size_t j = 0; j < 2; j++) {
             if (is_always_equal(xor_inst->arg(j), other)) {
+              if (dynmatch(AndInst, subset, other)) {
+                Value* remaining = xor_inst->arg(1 - j);
+                if (is_always_equal(subset->arg(0), remaining) || is_always_equal(subset->arg(1), remaining)) {
+                  // ((x & y) ^ x) & (x & y) => 0
+                  return build_const(a->type(), 0);
+                }
+              }
               if (dynmatch(Const, constant, xor_inst->arg(1 - j))) {
                 // (a ^ C) & a => a & ~C
                 return fold_and(other, build_const(a->type(), ~constant->value()));

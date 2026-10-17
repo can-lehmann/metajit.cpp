@@ -1535,6 +1535,52 @@ void test_fold_and_xor_constant() {
   }
 }
 
+void test_fold_and_xor_subset() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type, type});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    for (Value* y : {(Value*) block->arg(1), (Value*) builder.build_const(type, 3)}) {
+      for (bool swap_inner : {false, true}) {
+        Value* subset = swap_inner ? builder.build_and(y, x) : builder.build_and(x, y);
+        for (bool swap_xor : {false, true}) {
+          Value* xored = swap_xor ? builder.build_xor(x, subset) : builder.build_xor(subset, x);
+          for (bool swap_outer : {false, true}) {
+            Value* result = swap_outer ? builder.fold_and(subset, xored) : builder.fold_and(xored, subset);
+            unittest_assert(dynamic_cast<Const*>(result));
+            unittest_assert(((Const*) result)->value() == 0);
+            unittest_assert(result->type() == type);
+          }
+        }
+      }
+    }
+    Const* constant_x = builder.build_const(type, 3);
+    Const* equal_x = builder.build_const(type, 3);
+    unittest_assert(constant_x != equal_x);
+    for (bool swap_inner : {false, true}) {
+      Value* constant_subset = swap_inner ? builder.build_and(block->arg(1), constant_x) :
+                                           builder.build_and(constant_x, block->arg(1));
+      Value* constant_xor = builder.build_xor(constant_subset, equal_x);
+      Value* constant_result = builder.fold_and(constant_xor, constant_subset);
+      unittest_assert(dynamic_cast<Const*>(constant_result));
+      unittest_assert(((Const*) constant_result)->value() == 0);
+    }
+    Value* subset = builder.build_and(x, block->arg(1));
+    Value* unrelated = builder.build_xor(subset, block->arg(2));
+    Value* different_xor = builder.fold_and(unrelated, subset);
+    unittest_assert(dynamic_cast<AndInst*>(different_xor));
+    unittest_assert(((AndInst*) different_xor)->arg(0) == unrelated);
+    Value* xored = builder.build_xor(subset, x);
+    Value* different_outer = builder.fold_and(xored, block->arg(2));
+    unittest_assert(dynamic_cast<AndInst*>(different_outer));
+    unittest_assert(((AndInst*) different_outer)->arg(0) == xored);
+  }
+}
+
 void test_fold_and_absorption() {
   for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -2362,6 +2408,7 @@ int main(int argc, char** argv) {
   suite.test("fold or complement absorption").run(test_fold_or_complement_absorption);
   suite.test("fold and complement absorption").run(test_fold_and_complement_absorption);
   suite.test("fold and xor constant").run(test_fold_and_xor_constant);
+  suite.test("fold and xor subset").run(test_fold_and_xor_subset);
   suite.test("fold and absorption").run(test_fold_and_absorption);
   suite.test("fold unspecified extension roundtrip").run(test_fold_unspecified_extension_roundtrip);
   suite.test("fold narrowing resize uu").run(test_fold_narrowing_resize_uu);
