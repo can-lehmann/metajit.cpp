@@ -469,6 +469,68 @@ void test_fold_sub_eq_zero() {
   }
 }
 
+void test_fold_mul_power_of_two() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type});
+    builder.move_to_end(block);
+    Value* input = block->arg(0);
+    for (size_t shift = 0; shift < type_width(type); shift++) {
+      Const* factor = builder.build_const(type, uint64_t(1) << shift);
+      for (bool swapped : {false, true}) {
+        Value* result = swapped ? builder.fold_mul(factor, input) : builder.fold_mul(input, factor);
+        unittest_assert(result->type() == type);
+        if (shift == 0) {
+          unittest_assert(result == input);
+        } else {
+          unittest_assert(dynamic_cast<ShlInst*>(result));
+          unittest_assert(((ShlInst*) result)->arg(0) == input);
+          Value* amount = ((ShlInst*) result)->arg(1);
+          unittest_assert(dynamic_cast<Const*>(amount));
+          unittest_assert(amount->type() == type);
+          unittest_assert(((Const*) amount)->value() == shift);
+        }
+        for (uint64_t value : {uint64_t(0), uint64_t(1), uint64_t(3), type_mask(type)}) {
+          Const* constant = builder.build_const(type, value);
+          Value* product = swapped ? builder.fold_mul(factor, constant) : builder.fold_mul(constant, factor);
+          unittest_assert(dynamic_cast<Const*>(product));
+          unittest_assert(product->type() == type);
+          unittest_assert(((Const*) product)->value() == ((constant->value() << shift) & type_mask(type)));
+        }
+      }
+    }
+  }
+}
+
+void test_fold_mul_power_of_two_negative() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type});
+    builder.move_to_end(block);
+    Value* input = block->arg(0);
+    for (bool swapped : {false, true}) {
+      Const* zero = builder.build_const(type, 0);
+      Value* product = swapped ? builder.fold_mul(zero, input) : builder.fold_mul(input, zero);
+      unittest_assert(dynamic_cast<Const*>(product));
+      unittest_assert(((Const*) product)->value() == 0);
+      for (uint64_t value : {uint64_t(3), uint64_t(5), type_mask(type)}) {
+        Const* factor = builder.build_const(type, value);
+        Value* result = swapped ? builder.fold_mul(factor, input) : builder.fold_mul(input, factor);
+        unittest_assert(dynamic_cast<MulInst*>(result));
+        unittest_assert(((MulInst*) result)->arg(0) == input);
+        unittest_assert(((MulInst*) result)->arg(1) == factor);
+      }
+    }
+    unittest_assert(dynamic_cast<MulInst*>(builder.fold_mul(input, block->arg(1))));
+  }
+}
+
 void test_fold_sub_same_operand() {
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -2423,6 +2485,8 @@ int main(int argc, char** argv) {
   suite.test("fold masked resize without roundtrip").run(test_fold_masked_resize_without_roundtrip);
   suite.test("fold add complement to sub").run(test_fold_add_complement_to_sub);
   suite.test("fold sub eq zero").run(test_fold_sub_eq_zero);
+  suite.test("fold mul power of two").run(test_fold_mul_power_of_two);
+  suite.test("fold mul power of two negative").run(test_fold_mul_power_of_two_negative);
   suite.test("fold sub same operand").run(test_fold_sub_same_operand);
   suite.test("simplify overwritten bytes").run(test_simplify_overwritten_bytes);
   suite.test("simplify used bits other use").run(test_simplify_used_bits_other_use);

@@ -1491,6 +1491,9 @@ namespace metajit {
           return b;
         } else if (const_b->value() == 1) {
           return a;
+        } else if (is_power_of_two(const_b->value())) {
+          // x * 2^n => x << n
+          return fold_shl(a, size_t(__builtin_ctzll(const_b->value())));
         }
       }
 
