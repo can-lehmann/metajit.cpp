@@ -1951,6 +1951,8 @@ void check_cse_operand_order(const std::string& opcode, Type type,
   }
   Inst* first = (Inst*) outputs.at(0)->value();
   Inst* second = (Inst*) outputs.at(1)->value();
+  unittest_assert(first->is_commutative() == commutative);
+  unittest_assert(second->is_commutative() == commutative);
   Value* left = first->arg(0);
   Value* right = first->arg(1);
   unittest_assert(!first->equals(second));

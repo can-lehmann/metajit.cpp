@@ -555,6 +555,7 @@ namespace metajit {
 
     bool has_side_effect() const;
     bool is_terminator() const;
+    bool is_commutative() const;
     std::vector<Block*> successor_blocks() const;
 
     bool is_inst() const override { return true; }
@@ -858,6 +859,15 @@ namespace metajit {
   using AliasingGroup = int32_t;
 
   /* ${insts} */
+
+  bool Inst::is_commutative() const {
+    return dynamic_cast<const AndInst*>(this) ||
+           dynamic_cast<const OrInst*>(this) ||
+           dynamic_cast<const XorInst*>(this) ||
+           dynamic_cast<const AddInst*>(this) ||
+           dynamic_cast<const MulInst*>(this) ||
+           dynamic_cast<const EqInst*>(this);
+  }
 
   bool Inst::has_side_effect() const {
     return dynamic_cast<const StoreInst*>(this) ||
@@ -6418,13 +6428,8 @@ private:
         if (typeid(*value) != typeid(*other.value)) {
           return false;
         }
-        if (dynamic_cast<AndInst*>(value) ||
-            dynamic_cast<OrInst*>(value) ||
-            dynamic_cast<XorInst*>(value) ||
-            dynamic_cast<AddInst*>(value) ||
-            dynamic_cast<MulInst*>(value) ||
-            dynamic_cast<EqInst*>(value)) {
-          Inst* inst = (Inst*) value;
+        Inst* inst = dynamic_cast<Inst*>(value);
+        if (inst && inst->is_commutative()) {
           Inst* other_inst = (Inst*) other.value;
           return inst->arg(0) == other_inst->arg(1) &&
                  inst->arg(1) == other_inst->arg(0);
