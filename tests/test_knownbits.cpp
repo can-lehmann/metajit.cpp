@@ -540,6 +540,110 @@ void test_unsigned_comparison_bounds() {
   }
 }
 
+void test_signed_comparison_bounds() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t high = uint64_t(1) << (type_width(type) - 1);
+    Bits nonnegative(type, high, 0);
+    Bits negative(type, high, high);
+    Bits unknown(type, 0, 0);
+    Bits small_positive(type, type_mask(type) & ~uint64_t(3), 0);
+    Bits small_negative(type, type_mask(type) & ~uint64_t(3), type_mask(type) & ~uint64_t(3));
+    Bits even(type, 1, 0);
+    Bits zero = Bits::constant(type, 0);
+    Bits minimum = Bits::constant(type, high);
+    Bits maximum = Bits::constant(type, high - 1);
+    struct Comparison {
+      Bits a;
+      Bits b;
+      int expected;
+    };
+    const Comparison cases[] = {
+      {negative, nonnegative, 1}, {nonnegative, negative, 0},
+      {small_positive, Bits::constant(type, 32), 1},
+      {Bits::constant(type, 32), small_positive, 0},
+      {small_negative, Bits::constant(type, type_mask(type) - 4), 0},
+      {Bits::constant(type, type_mask(type) - 4), small_negative, 1},
+      {small_positive, Bits::constant(type, 3), -1},
+      {small_negative, Bits::constant(type, type_mask(type)), -1},
+      {negative, negative, -1}, {nonnegative, nonnegative, -1},
+      {unknown, unknown, -1}, {unknown, zero, -1},
+      {unknown, minimum, 0}, {maximum, unknown, 0},
+      {minimum, unknown, -1}, {unknown, maximum, -1},
+      {even, maximum, 1}, {maximum, even, 0},
+      {zero, zero, 0}, {minimum, minimum, 0}, {maximum, maximum, 0},
+      {minimum, maximum, 1}, {maximum, minimum, 0}
+    };
+    for (const Comparison& comparison : cases) {
+      Bits result = comparison.a.lt_s(comparison.b);
+      unittest_assert(result.type == Type::Bool);
+      if (comparison.expected < 0) {
+        unittest_assert(!result.is_const());
+      } else {
+        unittest_assert(result.is_const());
+        unittest_assert(result.value == uint64_t(comparison.expected));
+      }
+    }
+  }
+}
+
+void test_signed_comparison_soundness_exhaustive() {
+  struct State {
+    Bits bits;
+    int minimum;
+    int maximum;
+  };
+  std::vector<State> states;
+  for (uint64_t mask = 0; mask < 256; mask++) {
+    for (uint64_t value = 0; value < 256; value++) {
+      if (value & ~mask) {
+        continue;
+      }
+      Bits bits(Type::Int8, mask, value);
+      int minimum = 128;
+      int maximum = -129;
+      for (int concrete = 0; concrete < 256; concrete++) {
+        if (bits.matches_const(concrete)) {
+          int signed_value = concrete < 128 ? concrete : concrete - 256;
+          minimum = std::min(minimum, signed_value);
+          maximum = std::max(maximum, signed_value);
+        }
+      }
+      states.push_back({bits, minimum, maximum});
+    }
+  }
+  unittest_assert(states.size() == 6561);
+  for (const State& a : states) {
+    for (const State& b : states) {
+      Bits result = a.bits.lt_s(b.bits);
+      unittest_assert(result.type == Type::Bool);
+      unittest_assert(result.matches_const(a.minimum < b.maximum));
+      unittest_assert(result.matches_const(a.maximum < b.minimum));
+    }
+  }
+}
+
+void test_signed_comparison_soundness_wide() {
+  for (Type type : {Type::Int16, Type::Int32, Type::Int64}) {
+    for (int i = 0; i < 10000; i++) {
+      uint64_t high = uint64_t(1) << (type_width(type) - 1);
+      uint64_t value_a = (rand64() ^ ((i & 1) ? high : 0)) & type_mask(type);
+      uint64_t value_b = (rand64() ^ ((i & 2) ? high : 0)) & type_mask(type);
+      uint64_t mask_a = rand64() | ((i & 4) ? high : 0);
+      uint64_t mask_b = rand64() | ((i & 8) ? high : 0);
+      Bits bits_a(type, mask_a, value_a);
+      Bits bits_b(type, mask_b, value_b);
+      bool expected = false;
+      switch (type) {
+        case Type::Int16: expected = int16_t(value_a) < int16_t(value_b); break;
+        case Type::Int32: expected = int32_t(value_a) < int32_t(value_b); break;
+        case Type::Int64: expected = int64_t(value_a) < int64_t(value_b); break;
+        default: unittest_assert(false);
+      }
+      unittest_assert(bits_a.lt_s(bits_b).matches_const(expected));
+    }
+  }
+}
+
 void test_unsigned_comparison_after_resize() {
   Context context;
   Allocator allocator;
@@ -574,6 +678,41 @@ b0(%0: Ptr, %1: Int32):
   delete section;
 }
 
+void test_signed_comparison_after_resize() {
+  Context context;
+  Allocator allocator;
+  std::istringstream stream(R"(section {
+b0(%0: Ptr, %1: Int8):
+  %2 = And %1, 3:Int8
+  %7 = ResizeU %2, type=Int32
+  %3 = ResizeU %7, type=Int64
+  %4 = LtS %3, 32:Int64
+  %5 = LtS 32:Int64, %3
+  %6 = LtS %3, 3:Int64
+  Store %0, %4, aliasing=0, offset=0
+  Store %0, %5, aliasing=0, offset=8
+  Store %0, %6, aliasing=0, offset=16
+  Exit
+}
+)");
+  Section* section = SectionReader<Builder>::read_section(context, allocator, stream);
+  std::vector<StoreInst*> outputs;
+  for (Inst* inst : *section->entry()) {
+    if (dynmatch(StoreInst, store, inst)) {
+      outputs.push_back(store);
+    }
+  }
+  section->order_blocks(BlockOrdering::Dominator);
+  Simplify::run(section, 10);
+  unittest_assert(!section->verify(std::cout));
+  unittest_assert(dynamic_cast<Const*>(outputs.at(0)->value()));
+  unittest_assert(((Const*) outputs.at(0)->value())->value() == 1);
+  unittest_assert(dynamic_cast<Const*>(outputs.at(1)->value()));
+  unittest_assert(((Const*) outputs.at(1)->value())->value() == 0);
+  unittest_assert(dynamic_cast<LtSInst*>(outputs.at(2)->value()));
+  delete section;
+}
+
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
 
@@ -581,6 +720,10 @@ int main(int argc, char** argv) {
   suite.test("unsigned bounds").run(test_unsigned_bounds);
   suite.test("unsigned comparison bounds").run(test_unsigned_comparison_bounds);
   suite.test("unsigned comparison after resize").run(test_unsigned_comparison_after_resize);
+  suite.test("signed comparison bounds").run(test_signed_comparison_bounds);
+  suite.test("signed comparison after resize").run(test_signed_comparison_after_resize);
+  suite.test("signed comparison soundness exhaustive").run(test_signed_comparison_soundness_exhaustive);
+  suite.test("signed comparison soundness wide").run(test_signed_comparison_soundness_wide);
 
   suite.test("usedbits_constant_shl").run(test_usedbits_constant_shl);
 

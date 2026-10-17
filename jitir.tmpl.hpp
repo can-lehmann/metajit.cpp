@@ -3458,9 +3458,13 @@ namespace metajit {
       const_binop(mod_u, type, mod_u(type, value, other.value))
       const_binop(mod_s, type, mod_s(type, value, other.value))
 
-      const_binop(lt_s, Type::Bool, lt_s(type, value, other.value))
-
       #undef const_binop
+
+      Bits lt_s(const Bits& other) const {
+        // a <s b => (a ^ sign_bit) <u (b ^ sign_bit)
+        Bits sign = Bits::constant(type, uint64_t(1) << (type_width(type) - 1));
+        return (*this ^ sign).lt_u(other ^ sign);
+      }
 
       Bits lt_u(const Bits& other) const {
         if (umax() < other.umin()) {
