@@ -505,6 +505,115 @@ void test_unsigned_bounds() {
   }
 }
 
+void test_unsigned_remainder_bounds() {
+  struct Bound {
+    uint64_t divisor;
+    uint64_t unknown;
+  };
+  const Bound bounds[] = {
+    {1, 0}, {2, 1}, {3, 3}, {4, 3}, {5, 7}, {7, 7}, {8, 7}, {9, 15},
+    {127, 127}, {128, 127}, {129, 255}, {255, 255}, {256, 255}, {257, 511},
+    {(uint64_t(1) << 63) - 1, (uint64_t(1) << 63) - 1},
+    {uint64_t(1) << 63, (uint64_t(1) << 63) - 1},
+    {(uint64_t(1) << 63) + 1, ~uint64_t(0)}, {~uint64_t(0), ~uint64_t(0)}
+  };
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Bits unknown(type, 0, 0);
+    for (const Bound& bound : bounds) {
+      if (bound.divisor > type_mask(type)) {
+        continue;
+      }
+      Bits result = unknown.mod_u(Bits::constant(type, bound.divisor));
+      unittest_assert(result == Bits(type, ~bound.unknown, 0));
+    }
+    Bits zero = Bits::constant(type, 0);
+    unittest_assert(unknown.mod_u(zero) == unknown);
+    unittest_assert(zero.mod_u(zero) == unknown);
+    unittest_assert(Bits::constant(type, 37).mod_u(Bits::constant(type, 5)) == Bits::constant(type, 2));
+  }
+}
+
+void test_unsigned_remainder_power_of_two_bits() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Bits input(type, 0xaaaaaaaaaaaaaaaaULL, 0x8888888888888888ULL);
+    for (size_t shift = 0; shift < type_width(type); shift++) {
+      uint64_t low_mask = (uint64_t(1) << shift) - 1;
+      Bits expected(type, input.mask | ~low_mask, input.value & low_mask);
+      unittest_assert(input.mod_u(Bits::constant(type, uint64_t(1) << shift)) == expected);
+    }
+  }
+}
+
+void test_unsigned_remainder_soundness_exhaustive() {
+  for (uint64_t mask = 0; mask < 256; mask++) {
+    for (uint64_t value = 0; value < 256; value++) {
+      if (value & ~mask) {
+        continue;
+      }
+      Bits input(Type::Int8, mask, value);
+      std::vector<uint64_t> concrete_values;
+      for (uint64_t concrete = 0; concrete < 256; concrete++) {
+        if (input.matches_const(concrete)) {
+          concrete_values.push_back(concrete);
+        }
+      }
+      for (uint64_t divisor = 1; divisor < 256; divisor++) {
+        Bits result = input.mod_u(Bits::constant(Type::Int8, divisor));
+        unittest_assert(result.type == Type::Int8);
+        for (uint64_t concrete : concrete_values) {
+          unittest_assert(result.matches_const(concrete % divisor));
+        }
+      }
+    }
+  }
+}
+
+void test_unsigned_remainder_soundness_wide() {
+  for (Type type : {Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t high = uint64_t(1) << (type_width(type) - 1);
+    for (int i = 0; i < 10000; i++) {
+      uint64_t concrete = (rand64() ^ ((i & 1) ? high : 0)) & type_mask(type);
+      uint64_t divisor = (rand64() ^ ((i & 2) ? high : 0)) & type_mask(type);
+      if (divisor == 0) {
+        divisor = 1;
+      }
+      Bits input(type, rand64() | ((i & 4) ? high : 0), concrete);
+      unittest_assert(input.mod_u(Bits::constant(type, divisor)).matches_const(concrete % divisor));
+    }
+  }
+}
+
+void test_unsigned_remainder_simplify() {
+  Context context;
+  Allocator allocator;
+  std::istringstream stream(R"(section {
+b0(%0: Ptr, %1: Int64):
+  %2 = ModU %1, 3:Int64
+  %3 = LtU %2, 4:Int64
+  %4 = And %1, 18446744073709551584:Int64
+  %5 = ModU %4, 32:Int64
+  Store %0, %3, aliasing=0, offset=0
+  Store %0, %5, aliasing=0, offset=8
+  Exit
+}
+)");
+  Section* section = SectionReader<Builder>::read_section(context, allocator, stream);
+  std::vector<StoreInst*> outputs;
+  for (Inst* inst : *section->entry()) {
+    if (dynmatch(StoreInst, store, inst)) {
+      outputs.push_back(store);
+    }
+  }
+  section->order_blocks(BlockOrdering::Dominator);
+  Simplify::run(section, 10);
+  unittest_assert(!section->verify(std::cout));
+  unittest_assert(dynamic_cast<Const*>(outputs.at(0)->value()));
+  unittest_assert(((Const*) outputs.at(0)->value())->value() == 1);
+  unittest_assert(dynamic_cast<Const*>(outputs.at(1)->value()));
+  unittest_assert(((Const*) outputs.at(1)->value())->value() == 0);
+  delete section;
+}
+
 void test_unsigned_comparison_bounds() {
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     uint64_t high = uint64_t(1) << (type_width(type) - 1);
@@ -718,6 +827,11 @@ int main(int argc, char** argv) {
 
   suite.test("mask through highest bit").run(test_mask_through_highest_bit);
   suite.test("unsigned bounds").run(test_unsigned_bounds);
+  suite.test("unsigned remainder bounds").run(test_unsigned_remainder_bounds);
+  suite.test("unsigned remainder power of two bits").run(test_unsigned_remainder_power_of_two_bits);
+  suite.test("unsigned remainder soundness exhaustive").run(test_unsigned_remainder_soundness_exhaustive);
+  suite.test("unsigned remainder soundness wide").run(test_unsigned_remainder_soundness_wide);
+  suite.test("unsigned remainder simplify").run(test_unsigned_remainder_simplify);
   suite.test("unsigned comparison bounds").run(test_unsigned_comparison_bounds);
   suite.test("unsigned comparison after resize").run(test_unsigned_comparison_after_resize);
   suite.test("signed comparison bounds").run(test_signed_comparison_bounds);

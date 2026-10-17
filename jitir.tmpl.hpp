@@ -3480,10 +3480,26 @@ namespace metajit {
 
       const_binop(div_u, type, div_u(type, value, other.value))
       const_binop(div_s, type, div_s(type, value, other.value))
-      const_binop(mod_u, type, mod_u(type, value, other.value))
       const_binop(mod_s, type, mod_s(type, value, other.value))
 
       #undef const_binop
+
+      Bits mod_u(const Bits& other) const {
+        if (is_const() && other.is_const()) {
+          return mod_u(type, value, other.value);
+        }
+        if (other.is_const() && other.value != 0) {
+          uint64_t maximum = other.value - 1;
+          if ((other.value & maximum) == 0) {
+            // x %u 2^n => x & (2^n - 1)
+            return *this & Bits::constant(type, maximum);
+          }
+          // x %u C <=u C - 1 for nonzero C
+          uint64_t unknown = mask_through_highest_bit(maximum);
+          return Bits(type, ~unknown, 0);
+        }
+        return Bits(type, 0, 0);
+      }
 
       Bits lt_s(const Bits& other) const {
         // a <s b => (a ^ sign_bit) <u (b ^ sign_bit)
