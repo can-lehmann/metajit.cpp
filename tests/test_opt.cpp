@@ -852,6 +852,39 @@ void test_fold_equal_constants_absorption() {
   }
 }
 
+void test_fold_equal_constants_complement_absorption() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Int8});
+  builder.move_to_end(block);
+  Value* x = block->arg(0);
+  Const* c1 = builder.build_const(Type::Int8, 7);
+  Const* c2 = builder.build_const(Type::Int8, 7);
+  unittest_assert(c1 != c2);
+  Value* complement = builder.build_xor(c2, builder.build_const(Type::Int8, 255));
+  for (Value* inner : {builder.build_or(x, c1), builder.build_or(c1, x)}) {
+    for (Value* result : {builder.fold_and(inner, complement), builder.fold_and(complement, inner)}) {
+      unittest_assert(dynamic_cast<AndInst*>(result));
+      Inst* inst = (Inst*) result;
+      unittest_assert((inst->arg(0) == x && inst->arg(1) == complement) ||
+                      (inst->arg(0) == complement && inst->arg(1) == x));
+    }
+  }
+  for (Value* inner : {builder.build_and(x, c1), builder.build_and(c1, x)}) {
+    for (Value* result : {builder.fold_or(inner, complement), builder.fold_or(complement, inner)}) {
+      unittest_assert(dynamic_cast<OrInst*>(result));
+      Inst* inst = (Inst*) result;
+      unittest_assert((inst->arg(0) == x && inst->arg(1) == complement) ||
+                      (inst->arg(0) == complement && inst->arg(1) == x));
+    }
+  }
+  Value* inner = builder.build_and(c1, x);
+  unittest_assert(builder.fold_and(inner, c2) == inner);
+  unittest_assert(builder.fold_and(c2, inner) == inner);
+}
+
 void test_fold_equal_constants_repeated_or() {
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -2036,6 +2069,7 @@ int main(int argc, char** argv) {
   suite.test("builder is always equal").run(test_builder_is_always_equal);
   suite.test("fold equal constants factoring").run(test_fold_equal_constants_factoring);
   suite.test("fold equal constants absorption").run(test_fold_equal_constants_absorption);
+  suite.test("fold equal constants complement absorption").run(test_fold_equal_constants_complement_absorption);
   suite.test("fold equal constants repeated_or").run(test_fold_equal_constants_repeated_or);
   suite.test("fold equal constants xor_or").run(test_fold_equal_constants_xor_or);
   suite.test("fold equal constants negated_or").run(test_fold_equal_constants_negated_or);

@@ -1294,11 +1294,15 @@ namespace metajit {
     // Folding
 
   private:
-    bool binary_ops_share_operand(Inst* a, Inst* b) {
-      return is_always_equal(a->arg(0), b->arg(0)) ||
-             is_always_equal(a->arg(0), b->arg(1)) ||
-             is_always_equal(a->arg(1), b->arg(0)) ||
-             is_always_equal(a->arg(1), b->arg(1));
+    Value* other_operand(Inst* inst, Value* operand) {
+      assert(inst->arg_count() == 2);
+      if (is_always_equal(inst->arg(0), operand)) {
+        return inst->arg(1);
+      }
+      if (is_always_equal(inst->arg(1), operand)) {
+        return inst->arg(0);
+      }
+      return nullptr;
     }
 
     struct ConstSelect {
@@ -1579,19 +1583,16 @@ namespace metajit {
         Value* xored = i == 0 ? a : b;
         Value* other = i == 0 ? b : a;
         if (dynmatch(XorInst, xor_inst, xored)) {
-          for (size_t j = 0; j < 2; j++) {
-            if (is_always_equal(xor_inst->arg(j), other)) {
-              if (dynmatch(AndInst, subset, other)) {
-                Value* remaining = xor_inst->arg(1 - j);
-                if (is_always_equal(subset->arg(0), remaining) || is_always_equal(subset->arg(1), remaining)) {
-                  // ((x & y) ^ x) & (x & y) => 0
-                  return build_const(a->type(), 0);
-                }
+          if (Value* remaining = other_operand(xor_inst, other)) {
+            if (dynmatch(AndInst, subset, other)) {
+              if (other_operand(subset, remaining)) {
+                // ((x & y) ^ x) & (x & y) => 0
+                return build_const(a->type(), 0);
               }
-              if (dynmatch(Const, constant, xor_inst->arg(1 - j))) {
-                // (a ^ C) & a => a & ~C
-                return fold_and(other, build_const(a->type(), ~constant->value()));
-              }
+            }
+            if (dynmatch(Const, constant, remaining)) {
+              // (a ^ C) & a => a & ~C
+              return fold_and(other, build_const(a->type(), ~constant->value()));
             }
           }
         }
@@ -1604,11 +1605,8 @@ namespace metajit {
         }
         if (dynmatch(OrInst, or_b, b)) {
           // ~x & (x | y) => ~x & y
-          if (or_b->arg(0) == not_a->arg(0)) {
-            return fold_and(a, or_b->arg(1));
-          }
-          if (or_b->arg(1) == not_a->arg(0)) {
-            return fold_and(a, or_b->arg(0));
+          if (Value* other = other_operand(or_b, not_a->arg(0))) {
+            return fold_and(a, other);
           }
         }
       } else if (XorInst* not_b = is_not(b)) {
@@ -1618,45 +1616,40 @@ namespace metajit {
         }
         if (dynmatch(OrInst, or_a, a)) {
           // (x | y) & ~x => y & ~x
-          if (or_a->arg(0) == not_b->arg(0)) {
-            return fold_and(or_a->arg(1), b);
-          }
-          if (or_a->arg(1) == not_b->arg(0)) {
-            return fold_and(or_a->arg(0), b);
+          if (Value* other = other_operand(or_a, not_b->arg(0))) {
+            return fold_and(other, b);
           }
         }
       }
 
       if (dynmatch(OrInst, or_a, a)) {
         // (x | y) & x => x
-        if (is_always_equal(or_a->arg(0), b) || is_always_equal(or_a->arg(1), b)) {
+        if (other_operand(or_a, b)) {
           return b;
         }
         if (dynmatch(AndInst, and_b, b)) {
           // (x | y) & (x & z) => x & z
-          if (binary_ops_share_operand(or_a, and_b)) {
+          if (other_operand(or_a, and_b->arg(0)) || other_operand(or_a, and_b->arg(1))) {
             return b;
           }
         }
         if (dynmatch(OrInst, or_b, b)) {
           // (x | y) & (x | z) => x | (y & z)
           for (size_t i = 0; i < 2; i++) {
-            for (size_t j = 0; j < 2; j++) {
-              if (is_always_equal(or_a->arg(i), or_b->arg(j))) {
-                return fold_or(or_a->arg(i), fold_and(or_a->arg(1 - i), or_b->arg(1 - j)));
-              }
+            if (Value* other = other_operand(or_b, or_a->arg(i))) {
+              return fold_or(or_a->arg(i), fold_and(or_a->arg(1 - i), other));
             }
           }
         }
       }
       if (dynmatch(OrInst, or_b, b)) {
         // x & (x | y) => x
-        if (or_b->arg(0) == a || or_b->arg(1) == a) {
+        if (other_operand(or_b, a)) {
           return a;
         }
         if (dynmatch(AndInst, and_a, a)) {
           // (x & z) & (x | y) => x & z
-          if (binary_ops_share_operand(and_a, or_b)) {
+          if (other_operand(and_a, or_b->arg(0)) || other_operand(and_a, or_b->arg(1))) {
             return a;
           }
         }
@@ -1664,13 +1657,13 @@ namespace metajit {
 
       if (dynmatch(AndInst, and_a, a)) {
         // (x & y) & x => x & y
-        if (and_a->arg(0) == b || and_a->arg(1) == b) {
+        if (other_operand(and_a, b)) {
           return a;
         }
       }
       if (dynmatch(AndInst, and_b, b)) {
         // x & (x & y) => x & y
-        if (and_b->arg(0) == a || and_b->arg(1) == a) {
+        if (other_operand(and_b, a)) {
           return b;
         }
       }
@@ -1700,106 +1693,86 @@ namespace metajit {
         if (dynmatch(AndInst, and_b, b)) {
           // (x & y) | (x & z) => x & (y | z)
           for (size_t i = 0; i < 2; i++) {
-            for (size_t j = 0; j < 2; j++) {
-              if (is_always_equal(and_a->arg(i), and_b->arg(j))) {
-                return fold_and(and_a->arg(i), fold_or(and_a->arg(1 - i), and_b->arg(1 - j)));
-              }
+            if (Value* other = other_operand(and_b, and_a->arg(i))) {
+              return fold_and(and_a->arg(i), fold_or(and_a->arg(1 - i), other));
             }
           }
         }
       }
       if (dynmatch(AndInst, and_a, a)) {
         // (x & y) | x => x
-        if (is_always_equal(and_a->arg(0), b) || is_always_equal(and_a->arg(1), b)) {
+        if (other_operand(and_a, b)) {
           return b;
         }
         if (dynmatch(OrInst, or_b, b)) {
           // (x & y) | (x | z) => x | z
-          if (binary_ops_share_operand(and_a, or_b)) {
+          if (other_operand(and_a, or_b->arg(0)) || other_operand(and_a, or_b->arg(1))) {
             return b;
           }
         }
         if (XorInst* not_b = is_not(b)) {
           // (x & y) | ~x => y | ~x
-          if (and_a->arg(0) == not_b->arg(0)) {
-            return fold_or(and_a->arg(1), b);
-          }
-          if (and_a->arg(1) == not_b->arg(0)) {
-            return fold_or(and_a->arg(0), b);
+          if (Value* other = other_operand(and_a, not_b->arg(0))) {
+            return fold_or(other, b);
           }
         }
       }
       if (dynmatch(AndInst, and_b, b)) {
         // x | (x & y) => x
-        if (and_b->arg(0) == a || and_b->arg(1) == a) {
+        if (other_operand(and_b, a)) {
           return a;
         }
         if (dynmatch(OrInst, or_a, a)) {
           // (x | z) | (x & y) => x | z
-          if (binary_ops_share_operand(or_a, and_b)) {
+          if (other_operand(or_a, and_b->arg(0)) || other_operand(or_a, and_b->arg(1))) {
             return a;
           }
         }
         if (XorInst* not_a = is_not(a)) {
           // ~x | (x & y) => ~x | y
-          if (and_b->arg(0) == not_a->arg(0)) {
-            return fold_or(a, and_b->arg(1));
-          }
-          if (and_b->arg(1) == not_a->arg(0)) {
-            return fold_or(a, and_b->arg(0));
+          if (Value* other = other_operand(and_b, not_a->arg(0))) {
+            return fold_or(a, other);
           }
         }
       }
 
       if (dynmatch(OrInst, or_a, a)) {
         // (x | y) | x => x | y
-        if (is_always_equal(or_a->arg(0), b) || is_always_equal(or_a->arg(1), b)) {
+        if (other_operand(or_a, b)) {
           return a;
         }
       }
       if (dynmatch(OrInst, or_b, b)) {
         // x | (x | y) => x | y
-        if (or_b->arg(0) == a || or_b->arg(1) == a) {
+        if (other_operand(or_b, a)) {
           return b;
         }
       }
 
       if (dynmatch(XorInst, xor_a, a)) {
         // (x ^ y) | x => x | y
-        if (is_always_equal(xor_a->arg(0), b)) {
-          return fold_or(xor_a->arg(1), b);
-        }
-        if (is_always_equal(xor_a->arg(1), b)) {
-          return fold_or(xor_a->arg(0), b);
+        if (Value* other = other_operand(xor_a, b)) {
+          return fold_or(other, b);
         }
         if (is_not(a)) {
           if (dynmatch(OrInst, inner, xor_a->arg(0))) {
             // ~(x | y) | x => x | ~y
-            if (is_always_equal(inner->arg(0), b)) {
-              return fold_or(b, fold_not(inner->arg(1)));
-            }
-            if (is_always_equal(inner->arg(1), b)) {
-              return fold_or(b, fold_not(inner->arg(0)));
+            if (Value* other = other_operand(inner, b)) {
+              return fold_or(b, fold_not(other));
             }
           }
         }
       }
       if (dynmatch(XorInst, xor_b, b)) {
         // x | (x ^ y) => x | y
-        if (xor_b->arg(0) == a) {
-          return fold_or(a, xor_b->arg(1));
-        }
-        if (xor_b->arg(1) == a) {
-          return fold_or(a, xor_b->arg(0));
+        if (Value* other = other_operand(xor_b, a)) {
+          return fold_or(a, other);
         }
         if (is_not(b)) {
           if (dynmatch(OrInst, inner, xor_b->arg(0))) {
             // x | ~(x | y) => x | ~y
-            if (inner->arg(0) == a) {
-              return fold_or(a, fold_not(inner->arg(1)));
-            }
-            if (inner->arg(1) == a) {
-              return fold_or(a, fold_not(inner->arg(0)));
+            if (Value* other = other_operand(inner, a)) {
+              return fold_or(a, fold_not(other));
             }
           }
         }
