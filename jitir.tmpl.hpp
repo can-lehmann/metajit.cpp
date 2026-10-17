@@ -3370,6 +3370,17 @@ namespace metajit {
         return value;
       }
 
+      static Bits unsigned_upper_bound(Type type, uint64_t bound) {
+        assert((bound & ~type_mask(type)) == 0);
+        return Bits(type, ~mask_through_highest_bit(bound), 0);
+      }
+
+      static Bits unsigned_lower_bound(Type type, uint64_t bound) {
+        assert((bound & ~type_mask(type)) == 0);
+        uint64_t mask = ~mask_through_highest_bit(~bound & type_mask(type));
+        return Bits(type, mask, mask);
+      }
+
       uint64_t umin() const {
         return value;
       }
@@ -3495,8 +3506,7 @@ namespace metajit {
             return *this & Bits::constant(type, maximum);
           }
           // x %u C <=u C - 1 for nonzero C
-          uint64_t unknown = mask_through_highest_bit(maximum);
-          return Bits(type, ~unknown, 0);
+          return Bits::unsigned_upper_bound(type, maximum);
         }
         return Bits(type, 0, 0);
       }
@@ -5043,27 +5053,17 @@ private:
     }
   }
 
-  void _enqueue_upper_bound(Value* value, uint64_t bound, uint64_t flip) {
-    uint64_t mask = Bits::mask_through_highest_bit(bound);
-    _enqueue(value, Bits(value->type(), ~mask, flip));
-  }
-
-  void _enqueue_lower_bound(Value* value, uint64_t bound, uint64_t flip) {
-    uint64_t unknown = Bits::mask_through_highest_bit(~bound & type_mask(value->type()));
-    _enqueue(value, Bits(value->type(), ~unknown, ~unknown ^ flip));
-  }
-
   void _propagate_lt(Value* left, Value* right, const Bits& result, uint64_t flip) {
     if (!result.is_const()) {
       return;
     }
     Bits x = Bits::at(_values, left);
     Bits y = Bits::at(_values, right);
-    // Use unsigned bounds directly for known nonnegative operands.
+    // use unsigned bounds directly for known nonnegative operands
     if ((x.mask & y.mask & flip) != 0 && ((x.value | y.value) & flip) == 0) {
       flip = 0;
     }
-    // Flip the sign bit for signed bounds, then flip inferred facts back on enqueue.
+    // flip the sign bit for signed bounds, then flip inferred facts back on enqueue
     Bits bias = Bits::constant(left->type(), flip);
     x = x ^ bias;
     y = y ^ bias;
@@ -5074,15 +5074,15 @@ private:
         _contradiction = true;
         return;
       }
-      _enqueue_upper_bound(left, ymax - 1, flip);
-      _enqueue_lower_bound(right, x.umin() + 1, flip);
+      _enqueue(left, Bits::unsigned_upper_bound(left->type(), ymax - 1) ^ bias);
+      _enqueue(right, Bits::unsigned_lower_bound(right->type(), x.umin() + 1) ^ bias);
     } else {
       if (xmax < y.umin()) {
         _contradiction = true;
         return;
       }
-      _enqueue_lower_bound(left, y.umin(), flip);
-      _enqueue_upper_bound(right, xmax, flip);
+      _enqueue(left, Bits::unsigned_lower_bound(left->type(), y.umin()) ^ bias);
+      _enqueue(right, Bits::unsigned_upper_bound(right->type(), xmax) ^ bias);
     }
   }
 
