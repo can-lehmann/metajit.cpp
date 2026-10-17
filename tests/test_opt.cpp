@@ -514,6 +514,21 @@ void test_fold_lt_u_same_operand() {
   }
 }
 
+void test_fold_lt_s_same_operand() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type});
+    builder.move_to_end(block);
+    Value* result = builder.fold_lt_s(block->arg(0), block->arg(0));
+    unittest_assert(dynamic_cast<Const*>(result));
+    unittest_assert(((Const*) result)->value() == 0);
+    unittest_assert(result->type() == Type::Bool);
+  }
+}
+
 void test_fold_unmasked_shift_pairs() {
   check_fold_text(R"(section {
 b0(%0: Ptr, %1: Int8, %2: Int8, %3: Int8, %4: Int8, %5: Int8, %6: Int8, %7: Int8, %8: Int8, %9: Int8, %10: Int8, %11: Int8, %12: Int8, %13: Int8, %14: Int8, %15: Int8, %16: Int8, %17: Int8, %18: Int8, %19: Int8, %20: Int8, %21: Int8, %22: Int8, %23: Int8, %24: Int8, %25: Int8, %26: Int8):
@@ -2230,6 +2245,7 @@ int main(int argc, char** argv) {
   suite.test("cse commutative after substitution").run(test_cse_commutative_after_substitution);
   suite.test("fold xor same operand").run(test_fold_xor_same_operand);
   suite.test("fold lt_u same operand").run(test_fold_lt_u_same_operand);
+  suite.test("fold lt_s same operand").run(test_fold_lt_s_same_operand);
   suite.test("fold and repeated operand").run(test_fold_and_repeated_operand);
   suite.test("fold or negated or operand").run(test_fold_or_negated_or_operand);
   suite.test("fold or xor operand").run(test_fold_or_xor_operand);

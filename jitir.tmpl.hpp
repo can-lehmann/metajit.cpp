@@ -1845,6 +1845,11 @@ namespace metajit {
     }
 
     Value* fold_lt_s(Value* a, Value* b) {
+      if (a == b) {
+        // x <s x => false
+        return build_const(Type::Bool, 0);
+      }
+
       return build_lt_s(a, b);
     }
 
