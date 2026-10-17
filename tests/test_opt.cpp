@@ -1491,6 +1491,50 @@ void test_fold_or_mixed_absorption() {
   check_fold_mixed_absorption(false);
 }
 
+void test_fold_and_xor_constant() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type});
+    builder.move_to_end(block);
+    Value* input = block->arg(0);
+    for (uint64_t value : {uint64_t(0), uint64_t(1), uint64_t(3), uint64_t(0x5555555555555555),
+                           uint64_t(1) << (type_width(type) - 1), type_mask(type)}) {
+      Const* constant = builder.build_const(type, value);
+      uint64_t complement = type_mask(type) ^ constant->value();
+      for (bool swap_xor : {false, true}) {
+        Value* xored = swap_xor ? builder.build_xor(constant, input) : builder.build_xor(input, constant);
+        for (bool swap_and : {false, true}) {
+          Value* result = swap_and ? builder.fold_and(input, xored) : builder.fold_and(xored, input);
+          unittest_assert(result->type() == type);
+          if (complement == 0) {
+            unittest_assert(dynamic_cast<Const*>(result));
+            unittest_assert(((Const*) result)->value() == 0);
+          } else if (complement == type_mask(type)) {
+            unittest_assert(result == input);
+          } else {
+            unittest_assert(dynamic_cast<AndInst*>(result));
+            unittest_assert(((AndInst*) result)->arg(0) == input);
+            Value* mask = ((AndInst*) result)->arg(1);
+            unittest_assert(dynamic_cast<Const*>(mask));
+            unittest_assert(((Const*) mask)->value() == complement);
+          }
+        }
+      }
+    }
+    Value* xored = builder.build_xor(input, builder.build_const(type, 1));
+    Value* different = builder.fold_and(xored, block->arg(1));
+    unittest_assert(dynamic_cast<AndInst*>(different));
+    unittest_assert(((AndInst*) different)->arg(0) == xored);
+    Value* variable_xor = builder.build_xor(input, block->arg(1));
+    Value* variable_result = builder.fold_and(variable_xor, input);
+    unittest_assert(dynamic_cast<AndInst*>(variable_result));
+    unittest_assert(((AndInst*) variable_result)->arg(0) == variable_xor);
+  }
+}
+
 void test_fold_and_absorption() {
   for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -2317,6 +2361,7 @@ int main(int argc, char** argv) {
   suite.test("fold or absorption").run(test_fold_or_absorption);
   suite.test("fold or complement absorption").run(test_fold_or_complement_absorption);
   suite.test("fold and complement absorption").run(test_fold_and_complement_absorption);
+  suite.test("fold and xor constant").run(test_fold_and_xor_constant);
   suite.test("fold and absorption").run(test_fold_and_absorption);
   suite.test("fold unspecified extension roundtrip").run(test_fold_unspecified_extension_roundtrip);
   suite.test("fold narrowing resize uu").run(test_fold_narrowing_resize_uu);

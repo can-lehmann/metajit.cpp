@@ -1562,6 +1562,21 @@ namespace metajit {
         }
       }
 
+      for (size_t i = 0; i < 2; i++) {
+        Value* xored = i == 0 ? a : b;
+        Value* other = i == 0 ? b : a;
+        if (dynmatch(XorInst, xor_inst, xored)) {
+          for (size_t j = 0; j < 2; j++) {
+            if (is_always_equal(xor_inst->arg(j), other)) {
+              if (dynmatch(Const, constant, xor_inst->arg(1 - j))) {
+                // (a ^ C) & a => a & ~C
+                return fold_and(other, build_const(a->type(), ~constant->value()));
+              }
+            }
+          }
+        }
+      }
+
       if (XorInst* not_a = is_not(a)) {
         // !a & a => 0
         if (not_a->arg(0) == b) {
