@@ -5002,14 +5002,47 @@ private:
     }
   }
 
-  void _enqueue_upper_bound(Value* value, uint64_t bound) {
+  void _enqueue_upper_bound(Value* value, uint64_t bound, uint64_t flip) {
     uint64_t mask = Bits::mask_through_highest_bit(bound);
-    _enqueue(value, Bits(value->type(), ~mask, 0));
+    _enqueue(value, Bits(value->type(), ~mask, flip));
   }
 
-  void _enqueue_lower_bound(Value* value, uint64_t bound) {
+  void _enqueue_lower_bound(Value* value, uint64_t bound, uint64_t flip) {
     uint64_t unknown = Bits::mask_through_highest_bit(~bound & type_mask(value->type()));
-    _enqueue(value, Bits(value->type(), ~unknown, ~unknown));
+    _enqueue(value, Bits(value->type(), ~unknown, ~unknown ^ flip));
+  }
+
+  void _propagate_lt(Value* left, Value* right, const Bits& result, uint64_t flip) {
+    if (!result.is_const()) {
+      return;
+    }
+    Bits x = Bits::at(_values, left);
+    Bits y = Bits::at(_values, right);
+    // Use unsigned bounds directly for known nonnegative operands.
+    if ((x.mask & y.mask & flip) != 0 && ((x.value | y.value) & flip) == 0) {
+      flip = 0;
+    }
+    // Flip the sign bit for signed bounds, then flip inferred facts back on enqueue.
+    Bits bias = Bits::constant(left->type(), flip);
+    x = x ^ bias;
+    y = y ^ bias;
+    uint64_t xmax = x.umax();
+    uint64_t ymax = y.umax();
+    if (result.value == 1) {
+      if (x.umin() >= ymax) {
+        _contradiction = true;
+        return;
+      }
+      _enqueue_upper_bound(left, ymax - 1, flip);
+      _enqueue_lower_bound(right, x.umin() + 1, flip);
+    } else {
+      if (xmax < y.umin()) {
+        _contradiction = true;
+        return;
+      }
+      _enqueue_lower_bound(left, y.umin(), flip);
+      _enqueue_upper_bound(right, xmax, flip);
+    }
   }
 
   void _propagate_one(Value* value, const Bits& newinfo) {
@@ -5049,27 +5082,10 @@ private:
         }
       }
     } else if (dynmatch(LtUInst, lt, value)) {
-      if (bits.is_const()) {
-        Bits x = Bits::at(_values, lt->arg(0));
-        Bits y = Bits::at(_values, lt->arg(1));
-        uint64_t xmax = x.umax();
-        uint64_t ymax = y.umax();
-        if (bits.value == 1) {
-          if (x.umin() >= ymax) {
-            _contradiction = true;
-            return;
-          }
-          _enqueue_upper_bound(lt->arg(0), ymax - 1);
-          _enqueue_lower_bound(lt->arg(1), x.umin() + 1);
-        } else {
-          if (xmax < y.umin()) {
-            _contradiction = true;
-            return;
-          }
-          _enqueue_lower_bound(lt->arg(0), y.umin());
-          _enqueue_upper_bound(lt->arg(1), xmax);
-        }
-      }
+      _propagate_lt(lt->arg(0), lt->arg(1), bits, 0);
+    } else if (dynmatch(LtSInst, lt, value)) {
+      uint64_t sign = uint64_t(1) << (type_width(lt->arg(0)->type()) - 1);
+      _propagate_lt(lt->arg(0), lt->arg(1), bits, sign);
     } else if (dynmatch(AndInst, andinst, value)) {
       auto arg0 = bits.and_backwards(Bits::at(_values, andinst->arg(1)));
       _enqueue(andinst->arg(0), arg0);

@@ -171,17 +171,23 @@ void test_unsigned_guard_remainder() {
   check_opt_differential(&original, &section, data);
 }
 
-bool unsigned_guard_accepts(Type type, const KnownBits::Bits& x_bits,
+bool comparison_guard_accepts(Type type, const KnownBits::Bits& x_bits,
                             const KnownBits::Bits& y_bits, bool truth,
                             size_t operand = 2,
-                            const KnownBits::Bits& probe = KnownBits::Bits()) {
+                            const KnownBits::Bits& probe = KnownBits::Bits(),
+                              bool signed_comparison = false) {
   Context context;
   Allocator allocator;
   Section section(context, allocator);
   Builder builder(&section);
   Block* entry = builder.build_block({type, type});
   builder.move_to_end(entry);
-  Value* cond = builder.build_lt_u(entry->arg(0), entry->arg(1));
+  Value* cond;
+  if (signed_comparison) {
+    cond = builder.build_lt_s(entry->arg(0), entry->arg(1));
+  } else {
+    cond = builder.build_lt_u(entry->arg(0), entry->arg(1));
+  }
   builder.build_exit();
   section.order_blocks(BlockOrdering::Dominator);
   Chain chain({entry});
@@ -203,24 +209,24 @@ void test_unsigned_guard_nonconstant_bounds() {
     Bits low(type, prefix, 0);
     Bits high_value(type, prefix, prefix);
     for (uint64_t bit : {high, high >> 1}) {
-      unittest_assert(!unsigned_guard_accepts(type, unknown, low, true, 0, Bits(type, bit, bit)));
-      unittest_assert(!unsigned_guard_accepts(type, high_value, unknown, true, 1, Bits(type, bit, 0)));
-      unittest_assert(!unsigned_guard_accepts(type, unknown, high_value, false, 0, Bits(type, bit, 0)));
-      unittest_assert(!unsigned_guard_accepts(type, low, unknown, false, 1, Bits(type, bit, bit)));
+      unittest_assert(!comparison_guard_accepts(type, unknown, low, true, 0, Bits(type, bit, bit)));
+      unittest_assert(!comparison_guard_accepts(type, high_value, unknown, true, 1, Bits(type, bit, 0)));
+      unittest_assert(!comparison_guard_accepts(type, unknown, high_value, false, 0, Bits(type, bit, 0)));
+      unittest_assert(!comparison_guard_accepts(type, low, unknown, false, 1, Bits(type, bit, bit)));
     }
     uint64_t free_bit = high >> 2;
-    unittest_assert(unsigned_guard_accepts(type, unknown, low, true, 0, Bits(type, free_bit, free_bit)));
-    unittest_assert(unsigned_guard_accepts(type, high_value, unknown, true, 1, Bits(type, free_bit, 0)));
-    unittest_assert(unsigned_guard_accepts(type, unknown, high_value, false, 0, Bits(type, free_bit, 0)));
-    unittest_assert(unsigned_guard_accepts(type, low, unknown, false, 1, Bits(type, free_bit, free_bit)));
-    unittest_assert(unsigned_guard_accepts(type, unknown, low, true, 0, Bits(type, 1, 1)));
-    unittest_assert(unsigned_guard_accepts(type, high_value, unknown, true, 1, Bits(type, 1, 0)));
+    unittest_assert(comparison_guard_accepts(type, unknown, low, true, 0, Bits(type, free_bit, free_bit)));
+    unittest_assert(comparison_guard_accepts(type, high_value, unknown, true, 1, Bits(type, free_bit, 0)));
+    unittest_assert(comparison_guard_accepts(type, unknown, high_value, false, 0, Bits(type, free_bit, 0)));
+    unittest_assert(comparison_guard_accepts(type, low, unknown, false, 1, Bits(type, free_bit, free_bit)));
+    unittest_assert(comparison_guard_accepts(type, unknown, low, true, 0, Bits(type, 1, 1)));
+    unittest_assert(comparison_guard_accepts(type, high_value, unknown, true, 1, Bits(type, 1, 0)));
     Bits low_bit_set(type, prefix | 1, prefix | 1);
     Bits low_bit_clear(type, 1, 0);
-    unittest_assert(unsigned_guard_accepts(type, unknown, low_bit_set, false, 0, Bits(type, 1, 0)));
-    unittest_assert(unsigned_guard_accepts(type, low_bit_clear, unknown, false, 1, Bits(type, 1, 1)));
-    unittest_assert(unsigned_guard_accepts(type, unknown, unknown, true));
-    unittest_assert(unsigned_guard_accepts(type, unknown, unknown, false));
+    unittest_assert(comparison_guard_accepts(type, unknown, low_bit_set, false, 0, Bits(type, 1, 0)));
+    unittest_assert(comparison_guard_accepts(type, low_bit_clear, unknown, false, 1, Bits(type, 1, 1)));
+    unittest_assert(comparison_guard_accepts(type, unknown, unknown, true));
+    unittest_assert(comparison_guard_accepts(type, unknown, unknown, false));
   }
 }
 
@@ -234,22 +240,159 @@ void test_unsigned_guard_boundaries() {
     Bits maximum = Bits::constant(type, mask);
     Bits low(type, high, 0);
     Bits high_value(type, high, high);
-    unittest_assert(!unsigned_guard_accepts(type, maximum, unknown, true));
-    unittest_assert(!unsigned_guard_accepts(type, unknown, zero, true));
-    unittest_assert(!unsigned_guard_accepts(type, high_value, low, true));
-    unittest_assert(!unsigned_guard_accepts(type, low, high_value, false));
-    unittest_assert(!unsigned_guard_accepts(type, zero, zero, true));
-    unittest_assert(!unsigned_guard_accepts(type, maximum, maximum, true));
-    unittest_assert(unsigned_guard_accepts(type, zero, zero, false));
-    unittest_assert(unsigned_guard_accepts(type, maximum, maximum, false));
-    unittest_assert(unsigned_guard_accepts(type, zero, maximum, true));
-    unittest_assert(!unsigned_guard_accepts(type, zero, maximum, false));
-    unittest_assert(!unsigned_guard_accepts(type, unknown, maximum, false, 0, Bits(type, 1, 0)));
-    unittest_assert(!unsigned_guard_accepts(type, zero, unknown, false, 1, Bits(type, 1, 1)));
+    unittest_assert(!comparison_guard_accepts(type, maximum, unknown, true));
+    unittest_assert(!comparison_guard_accepts(type, unknown, zero, true));
+    unittest_assert(!comparison_guard_accepts(type, high_value, low, true));
+    unittest_assert(!comparison_guard_accepts(type, low, high_value, false));
+    unittest_assert(!comparison_guard_accepts(type, zero, zero, true));
+    unittest_assert(!comparison_guard_accepts(type, maximum, maximum, true));
+    unittest_assert(comparison_guard_accepts(type, zero, zero, false));
+    unittest_assert(comparison_guard_accepts(type, maximum, maximum, false));
+    unittest_assert(comparison_guard_accepts(type, zero, maximum, true));
+    unittest_assert(!comparison_guard_accepts(type, zero, maximum, false));
+    unittest_assert(!comparison_guard_accepts(type, unknown, maximum, false, 0, Bits(type, 1, 0)));
+    unittest_assert(!comparison_guard_accepts(type, zero, unknown, false, 1, Bits(type, 1, 1)));
     Bits near_maximum(type, mask ^ 1, mask ^ 1);
     Bits near_zero(type, mask ^ 1, 0);
-    unittest_assert(!unsigned_guard_accepts(type, near_maximum, unknown, true, 1, Bits(type, 1, 0)));
-    unittest_assert(!unsigned_guard_accepts(type, unknown, near_zero, true, 0, Bits(type, 1, 1)));
+    unittest_assert(!comparison_guard_accepts(type, near_maximum, unknown, true, 1, Bits(type, 1, 0)));
+    unittest_assert(!comparison_guard_accepts(type, unknown, near_zero, true, 0, Bits(type, 1, 1)));
+  }
+}
+
+bool signed_guard_accepts(Type type, const KnownBits::Bits& x_bits,
+                          const KnownBits::Bits& y_bits, bool truth,
+                          size_t operand = 2,
+                          const KnownBits::Bits& probe = KnownBits::Bits()) {
+  return comparison_guard_accepts(type, x_bits, y_bits, truth, operand, probe, true);
+}
+
+void test_signed_guard_boundaries() {
+  using Bits = KnownBits::Bits;
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t mask = type_mask(type);
+    uint64_t high = uint64_t(1) << (type_width(type) - 1);
+    Bits unknown(type, 0, 0);
+    Bits minimum = Bits::constant(type, high);
+    Bits maximum = Bits::constant(type, high - 1);
+    Bits zero = Bits::constant(type, 0);
+    Bits negative(type, high, high);
+    Bits nonnegative(type, high, 0);
+    unittest_assert(!signed_guard_accepts(type, maximum, unknown, true));
+    unittest_assert(!signed_guard_accepts(type, unknown, minimum, true));
+    unittest_assert(!signed_guard_accepts(type, nonnegative, negative, true));
+    unittest_assert(!signed_guard_accepts(type, negative, nonnegative, false));
+    unittest_assert(!signed_guard_accepts(type, minimum, minimum, true));
+    unittest_assert(!signed_guard_accepts(type, maximum, maximum, true));
+    unittest_assert(signed_guard_accepts(type, minimum, minimum, false));
+    unittest_assert(signed_guard_accepts(type, maximum, maximum, false));
+    unittest_assert(signed_guard_accepts(type, minimum, maximum, true));
+    unittest_assert(!signed_guard_accepts(type, minimum, maximum, false));
+    unittest_assert(!signed_guard_accepts(type, unknown, zero, true, 0, nonnegative));
+    unittest_assert(!signed_guard_accepts(type, unknown, zero, false, 0, negative));
+    unittest_assert(!signed_guard_accepts(type, unknown, maximum, false, 0, Bits(type, 1, 0)));
+    unittest_assert(!signed_guard_accepts(type, minimum, unknown, false, 1, Bits(type, 1, 1)));
+    Bits near_maximum(type, mask ^ 1, (high - 1) ^ 1);
+    Bits near_minimum(type, mask ^ 1, high);
+    unittest_assert(!signed_guard_accepts(type, near_maximum, unknown, true, 1, Bits(type, 1, 0)));
+    unittest_assert(!signed_guard_accepts(type, unknown, near_minimum, true, 0, Bits(type, 1, 1)));
+  }
+}
+
+void test_signed_guard_nonconstant_bounds() {
+  using Bits = KnownBits::Bits;
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t high = uint64_t(1) << (type_width(type) - 1);
+    uint64_t next = high >> 1;
+    Bits unknown(type, 0, 0);
+    Bits negative_low(type, high | next, high);
+    Bits positive_high(type, high | next, next);
+    unittest_assert(!signed_guard_accepts(type, unknown, negative_low, true, 0, Bits(type, high, 0)));
+    unittest_assert(!signed_guard_accepts(type, unknown, negative_low, true, 0, Bits(type, next, next)));
+    unittest_assert(!signed_guard_accepts(type, positive_high, unknown, true, 1, Bits(type, high, high)));
+    unittest_assert(!signed_guard_accepts(type, positive_high, unknown, true, 1, Bits(type, next, 0)));
+    unittest_assert(!signed_guard_accepts(type, unknown, positive_high, false, 0, Bits(type, high, high)));
+    unittest_assert(!signed_guard_accepts(type, unknown, positive_high, false, 0, Bits(type, next, 0)));
+    unittest_assert(!signed_guard_accepts(type, negative_low, unknown, false, 1, Bits(type, high, 0)));
+    unittest_assert(!signed_guard_accepts(type, negative_low, unknown, false, 1, Bits(type, next, next)));
+    unittest_assert(signed_guard_accepts(type, unknown, negative_low, true, 0, Bits(type, next >> 1, next >> 1)));
+    unittest_assert(signed_guard_accepts(type, positive_high, unknown, true, 1, Bits(type, next >> 1, 0)));
+    Bits nonnegative(type, high, 0);
+    Bits four = Bits::constant(type, 4);
+    unittest_assert(!signed_guard_accepts(type, nonnegative, four, true, 0, Bits(type, 4, 4)));
+    unittest_assert(signed_guard_accepts(type, nonnegative, four, true, 0, Bits::constant(type, 3)));
+    unittest_assert(signed_guard_accepts(type, unknown, unknown, true));
+    unittest_assert(signed_guard_accepts(type, unknown, unknown, false));
+  }
+}
+
+void test_signed_guard_known_bits() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (bool truth : {false, true}) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* entry = builder.build_block({Type::Ptr, type});
+      Block* success = builder.build_block();
+      Block* failure = builder.build_block();
+      builder.move_to_end(entry);
+      Value* x = entry->arg(1);
+      Value* cond = builder.build_lt_s(x, builder.build_const(type, 0));
+      builder.build_branch(cond, truth ? success : failure, truth ? failure : success);
+      builder.move_to_end(success);
+      Value* sign = builder.build_shr_u(x, builder.build_const(type, type_width(type) - 1));
+      StoreInst* store = builder.build_store(entry->arg(0), sign, AliasingGroup(0), 0);
+      builder.build_exit();
+      builder.move_to_end(failure);
+      builder.build_exit();
+      section.order_blocks(BlockOrdering::Dominator);
+      Chain chain({entry, success});
+      SimplifyTrace::run(&section, &chain);
+      unittest_assert(!section.verify(std::cout));
+      unittest_assert(dynamic_cast<Const*>(store->value()));
+      unittest_assert(((Const*) store->value())->value() == uint64_t(truth));
+    }
+  }
+}
+
+bool signed_concrete_less(Type type, uint64_t a, uint64_t b) {
+  switch (type) {
+    case Type::Int8: return int8_t(a) < int8_t(b);
+    case Type::Int16: return int16_t(a) < int16_t(b);
+    case Type::Int32: return int32_t(a) < int32_t(b);
+    case Type::Int64: return int64_t(a) < int64_t(b);
+    default: unittest_assert(false); return false;
+  }
+}
+
+void test_signed_guard_soundness() {
+  using Bits = KnownBits::Bits;
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t high = uint64_t(1) << (type_width(type) - 1);
+    for (uint64_t free : {high | (high >> 1) | 1, (high >> 1) | 1}) {
+      uint64_t mask = type_mask(type) ^ free;
+      for (uint64_t x_base : {uint64_t(0), uint64_t(2), mask}) {
+        for (uint64_t y_base : {uint64_t(0), uint64_t(2), mask}) {
+          Bits x(type, mask, x_base);
+          Bits y(type, mask, y_base);
+          for (bool truth : {false, true}) {
+            bool possible = false;
+            for (uint64_t a = 0; a < 8; a++) {
+              uint64_t x_value = x_base | ((((a & 1) ? high : 0) | ((a & 2) ? high >> 1 : 0) | ((a & 4) ? 1 : 0)) & free);
+              for (uint64_t b = 0; b < 8; b++) {
+                uint64_t y_value = y_base | ((((b & 1) ? high : 0) | ((b & 2) ? high >> 1 : 0) | ((b & 4) ? 1 : 0)) & free);
+                if (signed_concrete_less(type, x_value, y_value) == truth) {
+                  possible = true;
+                  unittest_assert(signed_guard_accepts(type, x, y, truth, 0, Bits::constant(type, x_value)));
+                  unittest_assert(signed_guard_accepts(type, x, y, truth, 1, Bits::constant(type, y_value)));
+                }
+              }
+            }
+            unittest_assert(signed_guard_accepts(type, x, y, truth) == possible);
+          }
+        }
+      }
+    }
   }
 }
 
@@ -257,6 +400,10 @@ int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
+  suite.test("signed guard boundaries").run(test_signed_guard_boundaries);
+  suite.test("signed guard nonconstant bounds").run(test_signed_guard_nonconstant_bounds);
+  suite.test("signed guard known bits").run(test_signed_guard_known_bits);
+  suite.test("signed guard soundness").run(test_signed_guard_soundness);
   suite.test("unsigned guard nonconstant bounds").run(test_unsigned_guard_nonconstant_bounds);
   suite.test("unsigned guard boundaries").run(test_unsigned_guard_boundaries);
   suite.test("unsigned guard known bits").run(test_unsigned_guard_known_bits);
