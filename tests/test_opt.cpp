@@ -398,6 +398,12 @@ void check_fold_text(const std::string& input, const std::string& expected) {
   delete section;
 }
 
+void check_const(Value* value, Type type, uint64_t expected) {
+  unittest_assert(dynamic_cast<Const*>(value));
+  unittest_assert(value->type() == type);
+  unittest_assert(((Const*) value)->value() == expected);
+}
+
 void test_fold_add_complement_to_sub() {
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -424,8 +430,7 @@ void test_fold_add_complement_to_sub() {
     }
     Value* sum = builder.fold_add(a, builder.fold_not(a));
     Value* zero = builder.fold_add(sum, one);
-    unittest_assert(dynamic_cast<Const*>(zero));
-    unittest_assert(((Const*) zero)->value() == 0);
+    check_const(zero, type, 0);
     Value* different = builder.fold_add(a, builder.fold_xor(b, builder.build_const(type, 2)));
     Value* unchanged = builder.fold_add(different, one);
     unittest_assert(dynamic_cast<AddInst*>(unchanged));
@@ -461,8 +466,7 @@ void test_fold_sub_eq_zero() {
       unittest_assert(eq->arg(1) == b);
     }
     Value* same = builder.fold_eq(builder.build_sub(a, a), zero);
-    unittest_assert(dynamic_cast<Const*>(same));
-    unittest_assert(((Const*) same)->value() == 1);
+    check_const(same, Type::Bool, 1);
     Value* different = builder.fold_eq(difference, builder.build_const(type, 1));
     unittest_assert(dynamic_cast<EqInst*>(different));
     unittest_assert(((EqInst*) different)->arg(0) == difference);
@@ -489,16 +493,12 @@ void test_fold_mul_power_of_two() {
           unittest_assert(dynamic_cast<ShlInst*>(result));
           unittest_assert(((ShlInst*) result)->arg(0) == input);
           Value* amount = ((ShlInst*) result)->arg(1);
-          unittest_assert(dynamic_cast<Const*>(amount));
-          unittest_assert(amount->type() == type);
-          unittest_assert(((Const*) amount)->value() == shift);
+          check_const(amount, type, shift);
         }
         for (uint64_t value : {uint64_t(0), uint64_t(1), uint64_t(3), type_mask(type)}) {
           Const* constant = builder.build_const(type, value);
           Value* product = swapped ? builder.fold_mul(factor, constant) : builder.fold_mul(constant, factor);
-          unittest_assert(dynamic_cast<Const*>(product));
-          unittest_assert(product->type() == type);
-          unittest_assert(((Const*) product)->value() == ((constant->value() << shift) & type_mask(type)));
+          check_const(product, type, ((constant->value() << shift) & type_mask(type)));
         }
       }
     }
@@ -517,8 +517,7 @@ void test_fold_mul_power_of_two_negative() {
     for (bool swapped : {false, true}) {
       Const* zero = builder.build_const(type, 0);
       Value* product = swapped ? builder.fold_mul(zero, input) : builder.fold_mul(input, zero);
-      unittest_assert(dynamic_cast<Const*>(product));
-      unittest_assert(((Const*) product)->value() == 0);
+      check_const(product, type, 0);
       for (uint64_t value : {uint64_t(3), uint64_t(5), type_mask(type)}) {
         Const* factor = builder.build_const(type, value);
         Value* result = swapped ? builder.fold_mul(factor, input) : builder.fold_mul(input, factor);
@@ -540,9 +539,7 @@ void test_fold_sub_same_operand() {
     Block* block = builder.build_block({type});
     builder.move_to_end(block);
     Value* result = builder.fold_sub(block->arg(0), block->arg(0));
-    unittest_assert(dynamic_cast<Const*>(result));
-    unittest_assert(((Const*) result)->value() == 0);
-    unittest_assert(result->type() == type);
+    check_const(result, type, 0);
   }
 }
 
@@ -555,9 +552,7 @@ void test_fold_xor_same_operand() {
     Block* block = builder.build_block({type});
     builder.move_to_end(block);
     Value* result = builder.fold_xor(block->arg(0), block->arg(0));
-    unittest_assert(dynamic_cast<Const*>(result));
-    unittest_assert(((Const*) result)->value() == 0);
-    unittest_assert(result->type() == type);
+    check_const(result, type, 0);
   }
 }
 
@@ -570,9 +565,7 @@ void test_fold_lt_u_same_operand() {
     Block* block = builder.build_block({type});
     builder.move_to_end(block);
     Value* result = builder.fold_lt_u(block->arg(0), block->arg(0));
-    unittest_assert(dynamic_cast<Const*>(result));
-    unittest_assert(((Const*) result)->value() == 0);
-    unittest_assert(result->type() == Type::Bool);
+    check_const(result, Type::Bool, 0);
   }
 }
 
@@ -585,9 +578,7 @@ void test_fold_lt_s_same_operand() {
     Block* block = builder.build_block({type});
     builder.move_to_end(block);
     Value* result = builder.fold_lt_s(block->arg(0), block->arg(0));
-    unittest_assert(dynamic_cast<Const*>(result));
-    unittest_assert(((Const*) result)->value() == 0);
-    unittest_assert(result->type() == Type::Bool);
+    check_const(result, Type::Bool, 0);
   }
 }
 
@@ -824,8 +815,7 @@ void test_fold_equal_constants_factoring() {
             unittest_assert(dual ? dynamic_cast<OrInst*>(result) != nullptr :
                                    dynamic_cast<AndInst*>(result) != nullptr);
             Inst* outer = (Inst*) result;
-            unittest_assert(dynamic_cast<Const*>(outer->arg(1)));
-            unittest_assert(((Const*) outer->arg(1))->value() == 7);
+            check_const(outer->arg(1), type, 7);
             unittest_assert(dual ? dynamic_cast<AndInst*>(outer->arg(0)) != nullptr :
                                    dynamic_cast<OrInst*>(outer->arg(0)) != nullptr);
             Inst* inner = (Inst*) outer->arg(0);
@@ -900,8 +890,7 @@ void test_fold_equal_constants_xor_or() {
         unittest_assert(dynamic_cast<OrInst*>(result));
         OrInst* outer = (OrInst*) result;
         unittest_assert(outer->arg(0) == x);
-        unittest_assert(dynamic_cast<Const*>(outer->arg(1)));
-        unittest_assert(((Const*) outer->arg(1))->value() == 7);
+        check_const(outer->arg(1), type, 7);
       }
     }
   }
@@ -925,8 +914,7 @@ void test_fold_equal_constants_negated_or() {
       for (Value* result : {builder.fold_or(negated, c2), builder.fold_or(c2, negated)}) {
         unittest_assert(dynamic_cast<OrInst*>(result));
         OrInst* outer = (OrInst*) result;
-        unittest_assert(dynamic_cast<Const*>(outer->arg(1)));
-        unittest_assert(((Const*) outer->arg(1))->value() == 7);
+        check_const(outer->arg(1), type, 7);
         unittest_assert(is_not(outer->arg(0)));
         unittest_assert(is_not(outer->arg(0))->arg(0) == x);
       }
@@ -1195,16 +1183,14 @@ void test_fold_and_xor_constant() {
           Value* result = swap_and ? builder.fold_and(input, xored) : builder.fold_and(xored, input);
           unittest_assert(result->type() == type);
           if (complement == 0) {
-            unittest_assert(dynamic_cast<Const*>(result));
-            unittest_assert(((Const*) result)->value() == 0);
+            check_const(result, type, 0);
           } else if (complement == type_mask(type)) {
             unittest_assert(result == input);
           } else {
             unittest_assert(dynamic_cast<AndInst*>(result));
             unittest_assert(((AndInst*) result)->arg(0) == input);
             Value* mask = ((AndInst*) result)->arg(1);
-            unittest_assert(dynamic_cast<Const*>(mask));
-            unittest_assert(((Const*) mask)->value() == complement);
+            check_const(mask, type, complement);
           }
         }
       }
@@ -1236,9 +1222,7 @@ void test_fold_and_xor_subset() {
           Value* xored = swap_xor ? builder.build_xor(x, subset) : builder.build_xor(subset, x);
           for (bool swap_outer : {false, true}) {
             Value* result = swap_outer ? builder.fold_and(subset, xored) : builder.fold_and(xored, subset);
-            unittest_assert(dynamic_cast<Const*>(result));
-            unittest_assert(((Const*) result)->value() == 0);
-            unittest_assert(result->type() == type);
+            check_const(result, type, 0);
           }
         }
       }
@@ -1251,8 +1235,7 @@ void test_fold_and_xor_subset() {
                                            builder.build_and(constant_x, block->arg(1));
       Value* constant_xor = builder.build_xor(constant_subset, equal_x);
       Value* constant_result = builder.fold_and(constant_xor, constant_subset);
-      unittest_assert(dynamic_cast<Const*>(constant_result));
-      unittest_assert(((Const*) constant_result)->value() == 0);
+      check_const(constant_result, type, 0);
     }
     Value* subset = builder.build_and(x, block->arg(1));
     Value* unrelated = builder.build_xor(subset, block->arg(2));
@@ -1764,7 +1747,7 @@ void test_fold_nested_unsigned_resizes() {
   }
 }
 
-void test_fold_unsigned_extension_roundtrip() {
+void check_fold_extension_roundtrip(bool inner_unsigned) {
   for (Type source : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     for (Type intermediate : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
       if (source == intermediate) {
@@ -1777,7 +1760,8 @@ void test_fold_unsigned_extension_roundtrip() {
       Block* block = builder.build_block({source});
       builder.move_to_end(block);
       for (Value* input : { (Value*) block->arg(0), (Value*) builder.build_poison(source) }) {
-        Value* inner = builder.build_resize_u(input, intermediate);
+        Value* inner = inner_unsigned ? (Value*) builder.build_resize_u(input, intermediate) :
+                                        builder.build_resize_x(input, intermediate);
         Value* result = builder.fold_resize_x(inner, source);
         unittest_assert(result->type() == source);
         if (type_width(source) < type_width(intermediate)) {
@@ -1795,47 +1779,19 @@ void test_fold_unsigned_extension_roundtrip() {
   Builder builder(&section);
   Block* block = builder.build_block({Type::Bool});
   builder.move_to_end(block);
-  Value* inner = builder.build_resize_u(block->arg(0), Type::Int64);
+  Value* inner = inner_unsigned ? (Value*) builder.build_resize_u(block->arg(0), Type::Int64) :
+                                  builder.build_resize_x(block->arg(0), Type::Int64);
   Value* different_type = builder.fold_resize_x(inner, Type::Int32);
   unittest_assert(dynamic_cast<ResizeXInst*>(different_type));
   unittest_assert(((ResizeXInst*) different_type)->arg(0) == inner);
 }
 
+void test_fold_unsigned_extension_roundtrip() {
+  check_fold_extension_roundtrip(true);
+}
+
 void test_fold_unspecified_extension_roundtrip() {
-  for (Type source : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
-    for (Type intermediate : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
-      if (source == intermediate) {
-        continue;
-      }
-      Context context;
-      Allocator allocator;
-      Section section(context, allocator);
-      Builder builder(&section);
-      Block* block = builder.build_block({source});
-      builder.move_to_end(block);
-      for (Value* input : { (Value*) block->arg(0), (Value*) builder.build_poison(source) }) {
-        Value* inner = builder.build_resize_x(input, intermediate);
-        Value* result = builder.fold_resize_x(inner, source);
-        unittest_assert(result->type() == source);
-        if (type_width(source) < type_width(intermediate)) {
-          unittest_assert(result == input);
-        } else {
-          unittest_assert(dynamic_cast<ResizeXInst*>(result));
-          unittest_assert(((ResizeXInst*) result)->arg(0) == inner);
-        }
-      }
-    }
-  }
-  Context context;
-  Allocator allocator;
-  Section section(context, allocator);
-  Builder builder(&section);
-  Block* block = builder.build_block({Type::Bool});
-  builder.move_to_end(block);
-  Value* inner = builder.build_resize_x(block->arg(0), Type::Int64);
-  Value* different_type = builder.fold_resize_x(inner, Type::Int32);
-  unittest_assert(dynamic_cast<ResizeXInst*>(different_type));
-  unittest_assert(((ResizeXInst*) different_type)->arg(0) == inner);
+  check_fold_extension_roundtrip(false);
 }
 
 void test_fold_nested_narrowing_resize_x() {
@@ -1882,9 +1838,7 @@ void test_fold_resize_x_sign_bit() {
     unittest_assert(dynamic_cast<LtSInst*>(result));
     unittest_assert(((LtSInst*) result)->arg(0) == input);
     Value* zero = ((LtSInst*) result)->arg(1);
-    unittest_assert(dynamic_cast<Const*>(zero));
-    unittest_assert(((Const*) zero)->value() == 0);
-    unittest_assert(zero->type() == type);
+    check_const(zero, type, 0);
     unittest_assert(result->type() == Type::Bool);
   }
 }
@@ -1942,16 +1896,14 @@ void test_fold_masked_resize_roundtrip() {
           Value* result = builder.fold_resize_u(masked, source);
           uint64_t expected = mask & type_mask(intermediate) & type_mask(source);
           if (expected == 0) {
-            unittest_assert(dynamic_cast<Const*>(result));
-            unittest_assert(((Const*) result)->value() == 0);
+            check_const(result, source, 0);
           } else if (expected == type_mask(source)) {
             unittest_assert(result == x);
           } else {
             unittest_assert(dynamic_cast<AndInst*>(result));
             AndInst* and_inst = (AndInst*) result;
             unittest_assert(and_inst->arg(0) == x);
-            unittest_assert(dynamic_cast<Const*>(and_inst->arg(1)));
-            unittest_assert(((Const*) and_inst->arg(1))->value() == expected);
+            check_const(and_inst->arg(1), source, expected);
           }
           unittest_assert(result->type() == source);
         }
