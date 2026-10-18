@@ -5057,6 +5057,7 @@ private:
     std::map<Value*, Value*> substs;
     std::vector<bool> removed;
     std::vector<bool> scheduled;
+    std::unordered_set<Block*> externally_used_args;
     std::queue<Block*> todo;
     Builder builder;
     bool changes = false;
@@ -5129,6 +5130,9 @@ private:
 
     std::optional<JumpInst*> get_jump_thread_target(Block* block) const {
       assert (!block->empty());
+      if (!block->args().empty() && externally_used_args.find(block) != externally_used_args.end()) {
+        return {};
+      }
       if (dynmatch(JumpInst, jump, *block->begin())) {
         if (jump->block() == block) {
             return {};
@@ -5195,6 +5199,25 @@ private:
         builder(section) {
       assert(_section->ordering() >= BlockOrdering::Dominator);
       _compute_incoming(incoming);
+
+      NameMap<Block*> arg_blocks(section);
+      for (Block* block : *section) {
+        for (Arg* arg : block->args()) {
+          arg_blocks[arg] = block;
+        }
+      }
+      for (Block* block : *section) {
+        for (Inst* inst : *block) {
+          for (Value* value : inst->args()) {
+            if (dynmatch(Arg, arg, value)) {
+              Block* defining_block = arg_blocks[arg];
+              if (defining_block != block) {
+                externally_used_args.insert(defining_block);
+              }
+            }
+          }
+        }
+      }
 
       for (Block* block : *_section) {
         todo.push(block);
@@ -5289,6 +5312,9 @@ private:
             }
             // if the target block only has one incoming edge, we can merge it with the current block
             if (incoming[target->name()].size() == 1) {
+              if (externally_used_args.find(target) != externally_used_args.end()) {
+                externally_used_args.insert(block);
+              }
               for (size_t i = 0; i < target->args().size(); i++) {
                 Value* arg = jump->arg(i);
                 if (substs.find(arg) != substs.end()) {
@@ -5319,10 +5345,6 @@ private:
             }
             // do jump-threading: if the target block only has a single instruction,
             // which is a jump, we can just jump to the final target.
-            // we do that only if the final_target has more than one incoming
-            // link (otherwise block merging happens anyway). if we
-            // jump-threaded to a block with only one incoming link, the args
-            // of target can have uses in other blocks.
             auto jump_opt = get_jump_thread_target(target);
             if (jump_opt.has_value()) {
               JumpInst* target_jump = jump_opt.value();

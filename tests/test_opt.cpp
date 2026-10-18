@@ -678,6 +678,41 @@ b0(%0: Ptr):
   suite.diff_test("simplify removes idempotent And Or ops").run(test_and_or_idempotence_simplify);
 
   // tests for SimplifyCFG
+  suite.test("simplifycfg preserves externally used block arguments").run([]() {
+    Context context;
+    Allocator allocator;
+    std::istringstream input(R"(section {
+b0(%0: Ptr, %1: Bool):
+    Branch %1, true_block=b1, false_block=b2
+b1:
+    Jump 1:Int64, block=b3
+b2:
+    Jump 0:Int64, block=b3
+b3(%2: Int64):
+    Jump block=b4
+b4:
+    Branch 0:Bool, true_block=b4, false_block=b5
+b5:
+    Store %0, %2, aliasing=0, offset=0
+    Exit
+})");
+    Section* section = SectionReader<>::read_section(context, allocator, input);
+    section->set_ordering(BlockOrdering::Natural);
+    unittest_assert(!section->verify(std::cerr));
+    SimplifyCFG::run(section);
+    unittest_assert(!section->verify(std::cerr));
+    for (size_t input = 0; input < 2; input++) {
+      uint64_t output = 0;
+      Interpreter interpreter(section, {
+        Interpreter::Bits::constant(Type::Ptr, (uint64_t) &output),
+        Interpreter::Bits::constant(Type::Bool, input)
+      });
+      interpreter.run_until(Interpreter::Event::Exit);
+      unittest_assert(output == input);
+    }
+    delete section;
+  });
+
   suite.diff_test("simplifycfg unreachable blocks").run([](Builder& builder, TestData& data) {
     Block* unreachable1 = builder.build_block();
     Block* unreachable2 = builder.build_block();
