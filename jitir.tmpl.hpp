@@ -5482,7 +5482,7 @@ private:
       for (size_t it = 0; it < jump1->args().size(); it++) {
         Value* arg1 = jump1->args().at(it);
         Value* arg2 = jump2->args().at(it);
-        if (!arg1->equals(arg2)) {
+        if (arg1 != arg2 && (arg1->is_named() || !arg1->equals(arg2))) {
           return false;
         }
       }
