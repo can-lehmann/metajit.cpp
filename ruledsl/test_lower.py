@@ -47,6 +47,12 @@ class LowerTests(unittest.TestCase):
         calls = [call.function for call in program.functions[0].body.walk(ir.Call)]
         self.assertNotIn(ir.Symbol("fold_and"), calls)
 
+    def test_reuse_matching_input_literal(self):
+        program = self.lower("ones: Or(x, -1)\n    => -1")
+        calls = [call.function for call in program.functions[0].body.walk(ir.Call)]
+        self.assertNotIn(ir.Symbol("build_const"), calls)
+
+
     def test_operation_names(self):
         for name, expected in (("ResizeU", "resize_u"), ("LtS", "lt_s"), ("Popcount", "popcount")):
             self.assertEqual(operation_name(name), expected)

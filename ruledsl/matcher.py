@@ -172,7 +172,26 @@ def result_priority(checked):
         return 0
     if isinstance(replacement, ast.Name):
         return 0 if checked.bindings[replacement.name].kind in {"constant", "condition"} else 1
+    variables = checked.type_representatives
+    target = normalize(replacement, checked, variables)
+    pattern = normalize(checked.rule.pattern, checked, variables)
+    if any(path and equivalent(node, target) for path, node in pattern_positions(pattern)):
+        return 1
     return 2
+
+
+def equivalent(left, right):
+    if type(left) is not type(right):
+        return False
+    if not isinstance(left, Operation):
+        return left == right
+    if left.name != right.name or left.type != right.type:
+        return False
+    if all(equivalent(a, b) for a, b in zip(left.args, right.args)):
+        return True
+    return SIGNATURES[left.name].commutative and all(
+        equivalent(a, b) for a, b in zip(left.args, right.args[::-1])
+    )
 
 
 def specificity(candidate):

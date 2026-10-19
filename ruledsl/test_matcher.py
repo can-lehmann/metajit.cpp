@@ -193,6 +193,16 @@ class MatcherTests(unittest.TestCase):
         root = Value("Add", args=(Value("input"), Value("Const", constant=0)))
         self.assertEqual(first_match(program, root).checked.rule.name, "specific")
 
+    def test_reused_operation_precedes_constant_reassociation(self):
+        program = self.program("combine: Or(Or(x, C1), C2)\n    C = C1 | C2\n    => Or(x, C)\n"
+                               "absorb: Or(Or(x, y), x)\n    => Or(x, y)")
+        x = Value("input")
+        c1 = Value("Const", constant=7)
+        c2 = Value("Const", constant=7)
+        inner = Value("Or", args=(x, c1))
+        self.assertEqual(first_match(program, Value("Or", args=(inner, c2))).checked.rule.name,
+                         "absorb")
+
     def test_file_order_breaks_leaf_ties(self):
         program = self.program("first: Add(x, 0)\n    => x\nsecond: Add(y, 0)\n    => y")
         root = Value("Add", args=(Value("input"), Value("Const", constant=0)))

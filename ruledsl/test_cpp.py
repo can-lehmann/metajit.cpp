@@ -1,8 +1,10 @@
 import contextlib
 import io
+import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -312,6 +314,28 @@ int main() {
 
 
 class GenerationTests(unittest.TestCase):
+    def test_header_regeneration_proves_before_writing_any_outputs(self):
+        root = Path(__file__).resolve().parent.parent
+        lwir = root.parent / "lwir.cpp"
+        if not (lwir / "lwir.py").exists():
+            self.skipTest("lwir.cpp is required for header-generation integration tests")
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            shutil.copyfile(root / "jitir.py", directory / "jitir.py")
+            (directory / "ruledsl").mkdir()
+            (directory / "ruledsl" / "fold.rules").write_text("bad: Add(x, y)\n    => Sub(x, y)")
+            outputs = ("jitir.hpp", "jitir_llvmapi.hpp", "genext.hpp", "doc/jitir.md")
+            (directory / "doc").mkdir()
+            for output in outputs:
+                (directory / output).write_text("original output\n")
+            environment = dict(os.environ, PYTHONPATH=os.pathsep.join((str(root), str(lwir))))
+            result = subprocess.run([sys.executable, "jitir.py"], cwd=directory, env=environment,
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("could not prove refinement", result.stderr)
+            for output in outputs:
+                self.assertEqual((directory / output).read_text(), "original output\n")
+
     def test_deterministic_output(self):
         source = "zero: Add(x, 0)\n    => x"
         self.assertEqual(generate(source), generate(source))

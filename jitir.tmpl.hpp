@@ -1438,7 +1438,7 @@ namespace metajit {
 
   public:
 
-    Value* fold_add(Value* a, Value* b) {
+    Value* _fold_add(Value* a, Value* b) {
       if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
       }
@@ -1475,7 +1475,7 @@ namespace metajit {
       return build_add(a, b);
     }
 
-    Value* fold_sub(Value* a, Value* b) {
+    Value* _fold_sub(Value* a, Value* b) {
       if (a == b) {
         // x - x => 0
         return build_const(a->type(), 0);
@@ -1495,7 +1495,7 @@ namespace metajit {
       return build_sub(a, b);
     }
 
-    Value* fold_mul(Value* a, Value* b) {
+    Value* _fold_mul(Value* a, Value* b) {
       if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
       }
@@ -1546,7 +1546,7 @@ namespace metajit {
       return build_mod_u(a, b);
     }
 
-    Value* fold_and(Value* a, Value* b) {
+    Value* _fold_and(Value* a, Value* b) {
       if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
       }
@@ -1671,7 +1671,7 @@ namespace metajit {
       return build_and(a, b);
     }
 
-    Value* fold_or(Value* a, Value* b) {
+    Value* _fold_or(Value* a, Value* b) {
       if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
       }
@@ -1781,7 +1781,7 @@ namespace metajit {
       return build_or(a, b);
     }
   
-    Value* fold_xor(Value* a, Value* b) {
+    Value* _fold_xor(Value* a, Value* b) {
       if (a == b) {
         // x ^ x => 0
         return build_const(a->type(), 0);
@@ -1810,7 +1810,7 @@ namespace metajit {
       return fold_xor(a, build_const(a->type(), type_mask(a->type())));
     }
 
-    Value* fold_eq(Value* a, Value* b) {
+    Value* _fold_eq(Value* a, Value* b) {
       if (dynamic_cast<Const*>(a)) {
         std::swap(a, b);
       }
@@ -1852,7 +1852,7 @@ namespace metajit {
       return fold_not(fold_eq(a, b));
     }
 
-    Value* fold_lt_s(Value* a, Value* b) {
+    Value* _fold_lt_s(Value* a, Value* b) {
       if (a == b) {
         // x <s x => false
         return build_const(Type::Bool, 0);
@@ -1861,7 +1861,7 @@ namespace metajit {
       return build_lt_s(a, b);
     }
 
-    Value* fold_lt_u(Value* a, Value* b) {
+    Value* _fold_lt_u(Value* a, Value* b) {
       if (a == b) {
         // x <u x => false
         return build_const(Type::Bool, 0);
@@ -1903,7 +1903,7 @@ namespace metajit {
       return fold_le_u(b, a);
     }
 
-    Value* fold_select(Value* cond, Value* true_value, Value* false_value) {
+    Value* _fold_select(Value* cond, Value* true_value, Value* false_value) {
       if (dynmatch(Const, const_cond, cond)) {
         if (const_cond->value() != 0) {
           return true_value;
@@ -1990,7 +1990,7 @@ namespace metajit {
       return fold_add_ptr(ptr, offset);
     }
 
-    Value* fold_resize_u(Value* a, Type type) {
+    Value* _fold_resize_u(Value* a, Type type) {
       if (a->type() == type) {
         return a;
       } else if (dynmatch(Const, constant, a)) {
@@ -2037,7 +2037,7 @@ namespace metajit {
       return build_resize_u(a, type);
     }
 
-    Value* fold_resize_s(Value* a, Type type) {
+    Value* _fold_resize_s(Value* a, Type type) {
       if (a->type() == type) {
         return a;
       }
@@ -2045,7 +2045,7 @@ namespace metajit {
       return build_resize_s(a, type);
     }
 
-    Value* fold_resize_x(Value* a, Type type) {
+    Value* _fold_resize_x(Value* a, Type type) {
       if (a->type() == type) {
         return a;
       }
@@ -2090,7 +2090,7 @@ namespace metajit {
       return build_ptr_to_int(a, type);
     }
 
-    Value* fold_shl(Value* a, Value* b) {
+    Value* _fold_shl(Value* a, Value* b) {
       binop_const_prop(a->type(), const_a->value() << const_b->value());
 
       if (dynmatch(Const, const_b, b)) {
@@ -2155,7 +2155,7 @@ namespace metajit {
       return fold_shl(a, build_const(a->type(), shift));
     }
 
-    Value* fold_shr_u(Value* a, Value* b) {
+    Value* _fold_shr_u(Value* a, Value* b) {
       binop_const_prop(a->type(), const_a->value() >> const_b->value());
       
       if (dynmatch(Const, constant, b)) {
@@ -2172,7 +2172,7 @@ namespace metajit {
       return fold_shr_u(a, build_const(a->type(), shift));
     }
 
-    Value* fold_shr_s(Value* a, Value* b) {
+    Value* _fold_shr_s(Value* a, Value* b) {
       if (dynmatch(Const, constant, b)) {
         if (constant->value() == 0) {
           return a;

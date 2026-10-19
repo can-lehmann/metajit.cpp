@@ -46,20 +46,6 @@ def conjunction(expressions):
     return result
 
 
-def equivalent(left, right):
-    if type(left) is not type(right):
-        return False
-    if not isinstance(left, matcher.Operation):
-        return left == right
-    if left.name != right.name or left.type != right.type:
-        return False
-    if all(equivalent(a, b) for a, b in zip(left.args, right.args)):
-        return True
-    return SIGNATURES[left.name].commutative and all(
-        equivalent(a, b) for a, b in zip(left.args, right.args[::-1])
-    )
-
-
 class Lowerer:
     def __init__(self, name, handwritten):
         self.name = name
@@ -243,11 +229,12 @@ class RuleLowerer:
             return self.replacement(node.value, block)
         if isinstance(node, ast.Name) and node.name in self.values:
             return self.values[node.name]
-        if isinstance(node, ast.Call):
+        if isinstance(node, (ast.Call, ast.Number)):
             target = matcher.normalize(node, self.checked, self.checked.type_representatives)
             for path, pattern in matcher.pattern_positions(self.candidate.pattern):
-                if path and equivalent(pattern, target):
+                if path and matcher.equivalent(pattern, target):
                     return self.paths[path]
+        if isinstance(node, ast.Call):
             args = tuple(self.replacement(arg, block) for arg in node.args)
             if node.name in {"ResizeU", "ResizeS", "ResizeX"}:
                 args += (self.type_of(node),)

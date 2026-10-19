@@ -1,4 +1,6 @@
 LLVM_FLAGS := $(shell llvm-config --cflags --libs)
+PYTHON ?= python3
+RULEDSL_FILES := ruledsl/fold.rules $(filter-out ruledsl/test_%.py,$(wildcard ruledsl/*.py))
 Z3_FLAGS := -I/usr/include/z3 -lz3
 CFLAGS := ${LLVM_FLAGS} -g
 HEADER_FILES := jitir.hpp jitir_llvmapi.hpp genext.hpp $(wildcard *.hpp)
@@ -12,7 +14,12 @@ COVERAGE_TESTS := test_knownbits test_insts test_interpreter test_clone test_cfg
 run: main
 	./main
 
-test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_code_sinking tests/test_simplify_trace tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
+.PHONY: test test-ruledsl
+
+test-ruledsl:
+	$(PYTHON) -m unittest discover -s ruledsl -t .
+
+test: test-ruledsl tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_code_sinking tests/test_simplify_trace tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
 	./tests/test_knownbits
 	./tests/test_insts
 	./tests/test_interpreter
@@ -111,8 +118,8 @@ tests/test_tv: tests/test_tv.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 tests/test_genext: tests/test_genext.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
-jitir.hpp jitir_llvmapi.hpp genext.hpp &: jitir.py jitir.tmpl.hpp jitir_llvmapi.tmpl.hpp genext.tmpl.hpp
-	PYTHONPATH="../lwir.cpp" python3 jitir.py
+jitir.hpp jitir_llvmapi.hpp genext.hpp &: jitir.py jitir.tmpl.hpp jitir_llvmapi.tmpl.hpp genext.tmpl.hpp $(RULEDSL_FILES) ../lwir.cpp/lwir.py
+	PYTHONPATH="../lwir.cpp" $(PYTHON) jitir.py
 
 COVERAGE_PROFRAW_FILES := $(patsubst %,tests/coverage/%.profraw,$(COVERAGE_TESTS))
 COVERAGE_LCOV_FILES := $(patsubst %,tests/coverage/%.lcov,$(COVERAGE_TESTS))

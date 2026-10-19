@@ -676,50 +676,47 @@ b0(%0: Ptr, %1: Int8, %2: Int8, %3: Int8, %4: Int8, %5: Int8, %6: Int8, %7: Int8
   Store %0, %2, aliasing=0, offset=8
   Store %0, %3, aliasing=0, offset=16
   %28 = Shl %4, 2:Int8
-  %29 = And %28, 254:Int8
-  Store %0, %29, aliasing=0, offset=24
-  %30 = Shl %5, 3:Int8
-  %31 = And %30, 240:Int8
-  Store %0, %31, aliasing=0, offset=32
-  %32 = Shl %6, 5:Int8
-  %33 = And %32, 240:Int8
-  Store %0, %33, aliasing=0, offset=40
-  %34 = Shl %7, 6:Int8
-  %35 = And %34, 128:Int8
-  Store %0, %35, aliasing=0, offset=48
+  Store %0, %28, aliasing=0, offset=24
+  %29 = Shl %5, 3:Int8
+  %30 = And %29, 240:Int8
+  Store %0, %30, aliasing=0, offset=32
+  %31 = Shl %6, 5:Int8
+  Store %0, %31, aliasing=0, offset=40
+  %32 = Shl %7, 6:Int8
+  %33 = And %32, 128:Int8
+  Store %0, %33, aliasing=0, offset=48
   Store %0, 0:Int8, aliasing=0, offset=56
-  %36 = ShrU %9, 3:Int8
-  %37 = And %36, 254:Int8
-  Store %0, %37, aliasing=0, offset=64
-  %38 = Shl %10, 5:Int8
-  %39 = And %38, 254:Int8
-  Store %0, %39, aliasing=0, offset=72
-  %40 = And %11, 240:Int8
-  Store %0, %40, aliasing=0, offset=80
+  %34 = ShrU %9, 3:Int8
+  %35 = And %34, 254:Int8
+  Store %0, %35, aliasing=0, offset=64
+  %36 = Shl %10, 5:Int8
+  Store %0, %36, aliasing=0, offset=72
+  %37 = And %11, 240:Int8
+  Store %0, %37, aliasing=0, offset=80
   Store %0, %12, aliasing=0, offset=88
   Store %0, %13, aliasing=0, offset=96
   Store %0, 0:Int8, aliasing=0, offset=104
-  %41 = Shl %15, 3:Int8
-  %42 = And %41, 128:Int8
-  Store %0, %42, aliasing=0, offset=112
+  %38 = Shl %15, 3:Int8
+  %39 = And %38, 128:Int8
+  Store %0, %39, aliasing=0, offset=112
   Store %0, 0:Int8, aliasing=0, offset=120
-  %43 = ShrU %17, 6:Int8
-  %44 = And %43, 254:Int8
-  Store %0, %44, aliasing=0, offset=128
+  %40 = ShrU %17, 6:Int8
+  %41 = And %40, 254:Int8
+  Store %0, %41, aliasing=0, offset=128
   Store %0, 0:Int8, aliasing=0, offset=136
-  %45 = ShrU %19, 3:Int8
-  %46 = And %45, 240:Int8
-  Store %0, %46, aliasing=0, offset=144
+  %42 = ShrU %19, 3:Int8
+  %43 = And %42, 240:Int8
+  Store %0, %43, aliasing=0, offset=144
   Store %0, 0:Int8, aliasing=0, offset=152
-  %47 = And %21, 128:Int8
-  Store %0, %47, aliasing=0, offset=160
+  %44 = And %21, 128:Int8
+  Store %0, %44, aliasing=0, offset=160
   Store %0, %22, aliasing=0, offset=168
   Store %0, %23, aliasing=0, offset=176
   Store %0, 0:Int8, aliasing=0, offset=184
-  %48 = ShrU %25, 1:Int8
-  %49 = And %48, %26
-  %50 = Shl %49, 1:Int8
-  Store %0, %50, aliasing=0, offset=192
+  %45 = ShrU %25, 1:Int8
+  %46 = And %45, %26
+  %47 = Shl %46, 1:Int8
+  Store %0, %47, aliasing=0, offset=192
   Exit
 }
 )");
@@ -759,8 +756,7 @@ b0(%0: Ptr, %1: Int64):
   %6 = And %5, 9223372036854775808:Int64
   Store %0, %6, aliasing=0, offset=16
   %7 = Shl %1, 63:Int64
-  %8 = And %7, 18446744073709551614:Int64
-  Store %0, %8, aliasing=0, offset=24
+  Store %0, %7, aliasing=0, offset=24
   Store %0, 0:Int64, aliasing=0, offset=32
   Store %0, 0:Int64, aliasing=0, offset=40
   Exit
@@ -842,12 +838,12 @@ void test_fold_equal_constants_absorption() {
     Const* c2 = builder.build_const(type, 7);
     unittest_assert(c1 != c2);
     for (Value* inner : {builder.build_or(x, c1), builder.build_or(c1, x)}) {
-      unittest_assert(builder.fold_and(inner, c2) == c2);
-      unittest_assert(builder.fold_and(c2, inner) == c2);
+      unittest_assert(builder.is_always_equal(builder.fold_and(inner, c2), c2));
+      unittest_assert(builder.is_always_equal(builder.fold_and(c2, inner), c2));
     }
     for (Value* inner : {builder.build_and(x, c1), builder.build_and(c1, x)}) {
-      unittest_assert(builder.fold_or(inner, c2) == c2);
-      unittest_assert(builder.fold_or(c2, inner) == c2);
+      unittest_assert(builder.is_always_equal(builder.fold_or(inner, c2), c2));
+      unittest_assert(builder.is_always_equal(builder.fold_or(c2, inner), c2));
     }
   }
 }
@@ -1034,10 +1030,10 @@ b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7
   %34 = Or %8, %9
   %35 = And %7, %34
   Store %0, %35, aliasing=0, offset=16
-  %36 = Or %12, %11
+  %36 = Or %11, %12
   %37 = And %10, %36
   Store %0, %37, aliasing=0, offset=24
-  %38 = Or %14, %15
+  %38 = Or %15, %14
   %39 = And %13, %38
   Store %0, %39, aliasing=0, offset=32
   %40 = Or %18, %17
@@ -1116,10 +1112,10 @@ b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7
   %34 = And %8, %9
   %35 = Or %7, %34
   Store %0, %35, aliasing=0, offset=16
-  %36 = And %12, %11
+  %36 = And %11, %12
   %37 = Or %10, %36
   Store %0, %37, aliasing=0, offset=24
-  %38 = And %14, %15
+  %38 = And %15, %14
   %39 = Or %13, %38
   Store %0, %39, aliasing=0, offset=32
   %40 = And %18, %17
@@ -1357,25 +1353,25 @@ b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7
 )", R"(section {
 b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7: Int32, %8: Int32, %9: Int32, %10: Int32, %11: Int32, %12: Int32, %13: Int32, %14: Int32, %15: Int32, %16: Int32, %17: Int32, %18: Int32, %19: Int32, %20: Int32, %21: Int32, %22: Int32, %23: Int32, %24: Int32, %25: Int32, %26: Int32):
   %27 = Xor %1, 4294967295:Int32
-  %28 = And %2, %27
+  %28 = And %27, %2
   Store %0, %28, aliasing=0, offset=0
   %29 = Xor %3, 4294967295:Int32
   %30 = And %29, %4
   Store %0, %30, aliasing=0, offset=8
   %31 = Xor %6, 4294967295:Int32
-  %32 = And %5, %31
+  %32 = And %31, %5
   Store %0, %32, aliasing=0, offset=16
   %33 = Xor %8, 4294967295:Int32
   %34 = And %33, %7
   Store %0, %34, aliasing=0, offset=24
   %35 = Xor %9, 4294967295:Int32
-  %36 = And %10, %35
+  %36 = And %35, %10
   Store %0, %36, aliasing=0, offset=32
   %37 = Xor %11, 4294967295:Int32
   %38 = And %37, %12
   Store %0, %38, aliasing=0, offset=40
   %39 = Xor %14, 4294967295:Int32
-  %40 = And %13, %39
+  %40 = And %39, %13
   Store %0, %40, aliasing=0, offset=48
   %41 = Xor %16, 4294967295:Int32
   %42 = And %41, %15
@@ -1460,25 +1456,25 @@ b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7
   %28 = Or %2, %27
   Store %0, %28, aliasing=0, offset=0
   %29 = Xor %3, 4294967295:Int32
-  %30 = Or %29, %4
+  %30 = Or %4, %29
   Store %0, %30, aliasing=0, offset=8
   %31 = Xor %6, 4294967295:Int32
   %32 = Or %5, %31
   Store %0, %32, aliasing=0, offset=16
   %33 = Xor %8, 4294967295:Int32
-  %34 = Or %33, %7
+  %34 = Or %7, %33
   Store %0, %34, aliasing=0, offset=24
   %35 = Xor %9, 4294967295:Int32
   %36 = Or %10, %35
   Store %0, %36, aliasing=0, offset=32
   %37 = Xor %11, 4294967295:Int32
-  %38 = Or %37, %12
+  %38 = Or %12, %37
   Store %0, %38, aliasing=0, offset=40
   %39 = Xor %14, 4294967295:Int32
   %40 = Or %13, %39
   Store %0, %40, aliasing=0, offset=48
   %41 = Xor %16, 4294967295:Int32
-  %42 = Or %41, %15
+  %42 = Or %15, %41
   Store %0, %42, aliasing=0, offset=56
   %43 = And %17, %18
   %44 = Xor %19, 4294967295:Int32
@@ -2049,10 +2045,43 @@ void test_cse_commutative_after_substitution() {
   unittest_assert(output1->value() == output2->value());
 }
 
+void test_rule_dsl_builder_integration() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Int8, Type::Int8, Type::Bool, Type::Ptr});
+  builder.move_to_end(block);
+  Value* x = block->arg(0);
+  Value* y = block->arg(1);
+  Value* cond = block->arg(2);
+  Value* pointer = block->arg(3);
+  Value* inner = builder.build_xor(x, y);
+  unittest_assert(builder.fold_xor(inner, y) == x);
+  TraceBuilder trace(&section);
+  trace.move_to_end(block);
+  unittest_assert(trace.build_xor(inner, y) == x);
+  unittest_assert(trace.build_select(cond, pointer, pointer) == pointer);
+  Const* pointer_eq = dynamic_cast<Const*>(builder.fold_eq(pointer, pointer));
+  unittest_assert(pointer_eq && pointer_eq->type() == Type::Bool && pointer_eq->value() == 1);
+  Value* selected = builder.build_select(cond, builder.build_const(Type::Int8, 3),
+                                       builder.build_const(Type::Int8, 5));
+  SelectInst* sum = dynamic_cast<SelectInst*>(trace.build_add(selected, builder.build_const(Type::Int8, 2)));
+  unittest_assert(sum && sum->cond() == cond);
+  Const* true_value = dynamic_cast<Const*>(sum->arg(1));
+  Const* false_value = dynamic_cast<Const*>(sum->arg(2));
+  unittest_assert(true_value && true_value->value() == 5);
+  unittest_assert(false_value && false_value->value() == 7);
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+}
+
 int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
   DiffTestSuite suite("tests/output/test_opt", argc, argv);
+
+  suite.test("rule DSL builder integration").run(test_rule_dsl_builder_integration);
 
   suite.test("cse commutative operands").run(test_cse_commutative_operands);
   suite.test("cse ordered operands").run(test_cse_ordered_operands);

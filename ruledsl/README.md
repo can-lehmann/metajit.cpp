@@ -2,8 +2,8 @@
 
 A standalone Python 3 tokenizer, recursive-descent parser, type checker,
 Z3 proof backend, matcher constructor, imperative code IR, and C++ emitter for
-JITIR rewrite rules. The full standalone pipeline is implemented. Production
-integration with metajit's builder and build system is deliberately deferred.
+JITIR rewrite rules. Header generation integrates the rules into metajit's
+builder while retaining handwritten folding fallbacks.
 Proofs require `z3-solver`; the other Python components use the standard library.
 
 From the metajit repository root, run all tests with a Python environment that
@@ -197,7 +197,8 @@ variants deduplicated. Noncommutative operations retain argument order.
 No associativity rewrites are inferred implicitly.
 
 Each opcode has up to three matching stages: rules returning constants, then
-rules returning existing values, then rules returning operations. Within a
+rules returning existing values or matched operation subtrees, then rules
+building new operations. Within a
 stage, structurally specific candidates are considered before wildcard
 candidates; stable sorting prefers more structural and repeated-value tests,
 with file order breaking ties at leaves. Constant tests and nested opcode tests
@@ -325,26 +326,35 @@ on successful DSL rewrites, and commutative variants share one source-rule ID.
 With statistics disabled, the arrays and increments are omitted by the C++
 preprocessor. No runtime hook is required for counting.
 
-## Deferred production integration
+## Production integration
 
 `TraceBuilder` already routes its relevant `build_*` methods to
 `Builder::fold_*`, so preserving the latter interfaces also preserves trace
-recording and the generated builder API. Those callers have not been changed.
+recording and the generated builder API.
 
-Generated fold definitions can be appended to the allocator builder plugin's
+Generated fold definitions are appended to the allocator builder plugin's
 existing output in `jitir.py`, using its existing insertion point in
 `jitir.tmpl.hpp`. This avoids another generated include and avoids changing
-`lwir.cpp`. Existing handwritten methods would be renamed to `_fold_*` and
-registered with generation. Constant-select propagation and other handwritten
-behavior remain in those methods, and existing convenience overloads should be
-retained. This placement is a proposal; no C++ templates
-or generator hooks have been changed yet.
+`lwir.cpp`. Existing handwritten methods are named `_fold_*` and explicitly
+registered through `handwritten_folds` in `jitir.py`. Constant-select propagation
+and other handwritten behavior remain in those methods. Convenience overloads
+retain their public names and dispatch through generated folds.
 
 Every regeneration must prove the rules before writing generated output.
-The standalone generation entry point already enforces that requirement. Future
-`jitir.py` integration must prove before running output-writing plugins. Both
-metajit's Makefile and RtlTrace's parent Makefile need dependencies on the rule
-file and generator modules, so a rule edit cannot leave `jitir.hpp` stale.
-The first integration should migrate a small family such as addition identities
-and constant reassociation, retaining the remaining handwritten behavior and
-checking both direct builder folding and trace-builder callers.
+Both generation entry points enforce that requirement. `jitir.py` proves and
+generates the folds before invoking any output-writing plugins, so proof errors
+leave all existing outputs untouched. Both Makefiles track the rule file,
+generator modules, and templates, with grouped targets for the generated headers.
+
+Install Python's `z3-solver` package or the distribution's `python3-z3` package.
+Set `PYTHON` to select a Python environment when invoking Make, for example:
+
+```sh
+make PYTHON=/path/to/venv/bin/python3 jitir.hpp
+make PYTHON=/path/to/venv/bin/python3 test-ruledsl
+```
+
+`make test` includes the DSL unittest suite. CI installs the Python Z3 bindings
+for header generation. `tests/test_opt.cpp` exercises generated folds through
+both `Builder` and `TraceBuilder`, including handwritten fallbacks for pointer
+values and constant-select propagation.

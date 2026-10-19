@@ -13,6 +13,9 @@
 # limitations under the License.
 
 from lwir import *
+from pathlib import Path
+
+from ruledsl.generate import generate
 
 class CountVarargsValueType(BaseType):
     def __init__(self):
@@ -128,6 +131,15 @@ class MapSymbolsInstPlugin:
         return {"map_symbols": code}
 
 class AllocatorBuilderPlugin(BuilderPlugin):
+    def __init__(self, folds):
+        super().__init__()
+        self.folds = folds
+
+    def run(self, ir):
+        output = super().run(ir)
+        output["builder"] += self.folds
+        return output
+
     def allocator(self, inst, ir):
         name = inst.format_name(ir)
         arg_count = 0
@@ -579,6 +591,13 @@ jitir = IR(
     ]
 )
 
+handwritten_folds = (
+    "Add", "Sub", "Mul", "And", "Or", "Xor", "Eq", "LtS", "LtU", "Select",
+    "ResizeU", "ResizeS", "ResizeX", "Shl", "ShrU", "ShrS",
+)
+fold_rules = Path(__file__).with_name("ruledsl") / "fold.rules"
+folds = generate(fold_rules.read_text(), str(fold_rules), handwritten=handwritten_folds)
+
 lwir(
     template_path = "jitir.tmpl.hpp",
     output_path = "jitir.hpp",
@@ -593,7 +612,7 @@ lwir(
             InstEqualsPlugin(),
             InstHashPlugin()
         ]),
-        AllocatorBuilderPlugin(),
+        AllocatorBuilderPlugin(folds),
         ClonePlugin(),
         CAPIPlugin(
             prefix = "jitir",
