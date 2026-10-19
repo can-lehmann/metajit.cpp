@@ -1,15 +1,26 @@
 from .cpp import emit
-from .lower import lower
+from . import ast
+from .lower import expression_nodes, lower
 from .matcher import build_matchers
 
 
-def generate(source, filename="<string>", handwritten=(), timeout_ms=120000, include_simplify=False):
+def generate(source, filename="<string>", handwritten=(), timeout_ms=120000, include_simplify=False,
+             simplify_source=None, simplify_filename="<simplify>"):
     from .proof import prove
 
     rules = prove(source, filename, timeout_ms)
-    matchers = build_matchers(rules)
-    code = emit(lower(matchers, handwritten))
+    if simplify_source is not None:
+        if not include_simplify:
+            raise ValueError("simplify_source requires include_simplify")
+        rules += prove(simplify_source, simplify_filename, timeout_ms)
+    names = [checked.rule.name for checked in rules]
+    if len(set(names)) != len(names):
+        raise ValueError("duplicate rule names across rule sources")
+    operations = dict.fromkeys(node.name for checked in rules
+                               for node in expression_nodes(checked.rule.replacement)
+                               if isinstance(node, ast.Call))
+    code = emit(lower(build_matchers(rules, include_facts=False), handwritten, operations))
     if include_simplify:
         from .lower_simplify import lower as lower_simplify
-        code += emit(lower_simplify(matchers), include_statistics=False)
+        code += emit(lower_simplify(build_matchers(rules)), include_statistics=False)
     return code

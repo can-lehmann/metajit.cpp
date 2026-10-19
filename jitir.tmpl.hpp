@@ -3176,6 +3176,22 @@ namespace metajit {
       }
     };
 
+    class View {
+    private:
+      const NameMap<Bits>& _values;
+    public:
+      explicit View(const NameMap<Bits>& values): _values(values) {}
+
+      uint64_t known_zeros(Value* value) const {
+        Bits bits = Bits::at(_values, value);
+        return bits.mask & ~bits.value;
+      }
+
+      uint64_t known_ones(Value* value) const {
+        return Bits::at(_values, value).value;
+      }
+    };
+
   private:
     Section* _section;
     NameMap<Bits> _values;
@@ -3196,6 +3212,8 @@ namespace metajit {
     Bits at(Value* value) const {
       return Bits::at(_values, value);
     }
+
+    View view() const { return View(_values); }
 
     void write(std::ostream& stream) {
       InfoWriter info_writer([&](std::ostream& stream, Inst* inst){
@@ -4025,54 +4043,11 @@ namespace metajit {
             return _builder.build_const(inst->type(), known_bits.at(inst).value);
           }
 
-          if (Value* replacement = _builder.try_simplify(inst)) {
+          if (Value* replacement = _builder.try_simplify(inst, known_bits.view())) {
             return replacement;
           }
 
-          if (dynmatch(AndInst, and_inst, inst)) {
-            if (and_inst->arg(0) == and_inst->arg(1)) {
-              return and_inst->arg(0);
-            }
-            KnownBits::Bits a = known_bits.at(and_inst->arg(0));
-            KnownBits::Bits b = known_bits.at(and_inst->arg(1));
-
-            if (a.and_idempotent_condition(b)) {
-              return and_inst->arg(0);
-            }
-            if (b.and_idempotent_condition(a)) {
-              return and_inst->arg(1);
-            }
-            while (dynmatch(OrInst, or_inst, and_inst->arg(0))) {
-              // (x | y) & b => x & b if y & b == 0
-              Value* x = or_inst->arg(0);
-              Value* y = or_inst->arg(1);
-              KnownBits::Bits bits_x = known_bits.at(x);
-              KnownBits::Bits bits_y = known_bits.at(y);
-              KnownBits::Bits x_and_b = bits_x & b;
-              KnownBits::Bits y_and_b = bits_y & b;
-              if (x_and_b.is_const() and x_and_b.value == 0) {
-                and_inst->set_arg(0, y);
-                continue; // if y is also Or, we can maybe simplify further
-              } else if (y_and_b.is_const() and y_and_b.value == 0) {
-                and_inst->set_arg(0, x);
-                continue;
-              }
-              break;
-            }
-          } else if (dynmatch(OrInst, or_inst, inst)) {
-            if (or_inst->arg(0) == or_inst->arg(1)) {
-              return or_inst->arg(0);
-            }
-            KnownBits::Bits a = known_bits.at(or_inst->arg(0));
-            KnownBits::Bits b = known_bits.at(or_inst->arg(1));
-
-            if (a.or_idempotent_condition(b)) {
-              return or_inst->arg(0);
-            }
-            if (b.or_idempotent_condition(a)) {
-              return or_inst->arg(1);
-            }
-          } else if (dynmatch(ResizeUInst, resize_u, inst)) {
+          if (dynmatch(ResizeUInst, resize_u, inst)) {
             if (dynamic_cast<ResizeXInst*>(resize_u->arg(0)) ||
                 dynamic_cast<ResizeUInst*>(resize_u->arg(0)) ||
                 dynamic_cast<ResizeSInst*>(resize_u->arg(0))) {
@@ -4238,7 +4213,7 @@ public:
         _values[inst] = bits;
         if (bits.is_const()) {
           _add_subst(inst, _builder.build_const(inst->type(), bits.value));
-        } else if (Value* replacement = _builder.try_simplify(inst)) {
+        } else if (Value* replacement = _builder.try_simplify(inst, KnownBits::View(_values))) {
           _add_subst(inst, replacement);
         } else if (dynmatch(SelectInst, select, inst)) {
           KnownBits::Bits cond = Bits::at(_values, select->cond());
@@ -4248,25 +4223,6 @@ public:
             } else {
               _add_subst(inst, select->arg(2));
             }
-          }
-        } else if (dynmatch(AndInst, and_inst, inst)) {
-          Bits a = Bits::at(_values, and_inst->arg(0));
-          Bits b = Bits::at(_values, and_inst->arg(1));
-
-          // If there is no case where b_i is 0 and a_i is 1 or _, then a & b == a
-          if (((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
-            _add_subst(inst, and_inst->arg(0));
-          }
-        } else if (dynmatch(OrInst, or_inst, inst)) {
-          KnownBits::Bits a = Bits::at(_values, or_inst->arg(0));
-          KnownBits::Bits b = Bits::at(_values, or_inst->arg(1));
-
-          // If there is no case where b_i is 0 and a_i is 1 or _, then a | b == b
-          if (((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
-            _add_subst(inst, or_inst->arg(1));
-          }
-          if (((a.value ^ type_mask(a.type)) & (~b.mask | b.value)) == 0) {
-            _add_subst(inst, or_inst->arg(0));
           }
         } else if (dynmatch(EqInst, eqinst, inst)) {
           if (dynmatch(Const, const_b, eqinst->arg(1))) {

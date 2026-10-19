@@ -14,11 +14,14 @@ def main(argv=None):
     parser.add_argument("--handwritten", action="append", choices=sorted(SIGNATURES), default=[])
     parser.add_argument("--timeout-ms", type=int, default=120000)
     parser.add_argument("--include-simplify", action="store_true")
+    parser.add_argument("--simplify-rules", type=Path)
     args = parser.parse_args(argv)
     try:
         source = args.rules.read_text()
         result = generate(source, str(args.rules), args.handwritten, args.timeout_ms,
-                          include_simplify=args.include_simplify)
+                          include_simplify=args.include_simplify,
+                          simplify_source=args.simplify_rules.read_text() if args.simplify_rules else None,
+                          simplify_filename=str(args.simplify_rules))
         if args.output is None:
             sys.stdout.write(result)
         else:

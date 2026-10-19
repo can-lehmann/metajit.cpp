@@ -372,11 +372,21 @@ class GenerationTests(unittest.TestCase):
             shutil.copyfile(root / "jitir.py", directory / "jitir.py")
             (directory / "ruledsl").mkdir()
             (directory / "ruledsl" / "fold.rules").write_text("bad: Add(x, y)\n    => Sub(x, y)")
+            (directory / "ruledsl" / "simplify.rules").write_text("")
             outputs = ("jitir.hpp", "jitir_llvmapi.hpp", "genext.hpp", "doc/jitir.md")
             (directory / "doc").mkdir()
             for output in outputs:
                 (directory / output).write_text("original output\n")
             environment = dict(os.environ, PYTHONPATH=os.pathsep.join((str(root), str(lwir))))
+            result = subprocess.run([sys.executable, "jitir.py"], cwd=directory, env=environment,
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("could not prove refinement", result.stderr)
+            for output in outputs:
+                self.assertEqual((directory / output).read_text(), "original output\n")
+            (directory / "ruledsl" / "fold.rules").write_text("zero: Add(x, 0)\n    => x\n")
+            (directory / "ruledsl" / "simplify.rules").write_text(
+                "bad: Or(x, y)\n    check known_zeros(x) == -1\n    => x\n")
             result = subprocess.run([sys.executable, "jitir.py"], cwd=directory, env=environment,
                                     capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
@@ -426,6 +436,21 @@ class GenerationTests(unittest.TestCase):
             source.write_text("zero: Add(x, 0)\n    => x\n")
             self.assertEqual(main([str(source), "--include-simplify", "-o", str(output)]), 0)
             self.assertIn("Value* try_simplify(Inst*", output.read_text())
+
+    def test_cli_includes_known_bits_rules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "fold.rules"
+            facts = Path(directory) / "simplify.rules"
+            output = Path(directory) / "folds.inc.hpp"
+            source.write_text("zero: Add(x, 0)\n    => x\n")
+            facts.write_text("disjoint: Add(x, y)\n"
+                             "    check known_zeros(x) | known_zeros(y) == -1\n    => Or(x, y)\n")
+            self.assertEqual(main([str(source), "--include-simplify", "--simplify-rules", str(facts),
+                                   "-o", str(output)]), 0)
+            code = output.read_text()
+            self.assertIn("known_zeros", code)
+            self.assertIn('"zero", "disjoint"', code)
+            self.assertIn("Value* fold_or(", code)
 
     def test_cli_preserves_output_on_proof_failure(self):
         with tempfile.TemporaryDirectory() as directory:

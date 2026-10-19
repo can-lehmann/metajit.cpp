@@ -67,6 +67,43 @@ void check_trace_simplify(const std::string& input,
   }
 }
 
+void test_known_bits_rule_guard_facts() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Ptr, Type::Int8, Type::Int8});
+  Block* taken = builder.build_block();
+  Block* other = builder.build_block();
+  builder.move_to_end(entry);
+  Value* x = entry->arg(1);
+  Value* high = builder.build_and(entry->arg(2), builder.build_const(Type::Int8, 240));
+  StoreInst* before = builder.build_store(entry->arg(0), builder.build_add(x, high), 0, 0);
+  builder.build_branch(builder.build_lt_u(x, builder.build_const(Type::Int8, 16)), taken, other);
+  builder.move_to_end(taken);
+  StoreInst* after = builder.build_store(entry->arg(0), builder.build_add(x, high), 0, 1);
+  builder.build_exit();
+  builder.move_to_end(other);
+  builder.build_exit();
+  Chain chain;
+  chain.add(entry);
+  chain.add(taken);
+  SimplifyTrace::run(&section, &chain);
+  unittest_assert(dynamic_cast<AddInst*>(before->value()));
+  OrInst* rewritten = dynamic_cast<OrInst*>(after->value());
+  unittest_assert(rewritten && rewritten->arg(0) == x && rewritten->arg(1) == high);
+  unittest_assert(!section.verify(std::cout));
+  for (uint64_t input : {uint64_t(0), uint64_t(15), uint64_t(16), uint64_t(255)}) {
+    uint8_t output[2] = {42, 42};
+    Interpreter interpreter(&section, {Interpreter::Bits::constant(output),
+                            Interpreter::Bits::constant(Type::Int8, input),
+                            Interpreter::Bits::constant(Type::Int8, 95)});
+    unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+    unittest_assert(output[0] == uint8_t(input + 80));
+    unittest_assert(output[1] == (input < 16 ? input + 80 : 42));
+  }
+}
+
 void test_generated_rewrite_guard_facts() {
   Context context;
   Allocator allocator;
@@ -458,6 +495,7 @@ int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
   suite.test("generated rewrite guard facts").run(test_generated_rewrite_guard_facts);
+  suite.test("known bits rule guard facts").run(test_known_bits_rule_guard_facts);
   suite.test("signed guard boundaries").run(test_signed_guard_boundaries);
   suite.test("signed guard nonconstant bounds").run(test_signed_guard_nonconstant_bounds);
   suite.test("signed guard known bits").run(test_signed_guard_known_bits);

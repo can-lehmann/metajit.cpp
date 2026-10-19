@@ -130,3 +130,85 @@ int main() {
   assert(builder.try_simplify(builder.build_add(&x, &y)) == nullptr);
 }
 """)
+
+    def test_known_bits_matching(self):
+        facts_source = Path(__file__).with_name("simplify.rules").read_text()
+        facts_source += ("materialize: And(x, 0)\n"
+                         "    Facts = known_ones(x) & 0\n    => Facts\n")
+        code = generate(RULES, include_simplify=True, simplify_source=facts_source)
+        main = """
+struct Facts {
+  Value* x;
+  Value* y;
+  uint64_t zeros_x;
+  uint64_t ones_x;
+  uint64_t zeros_y;
+  uint64_t ones_y;
+  uint64_t known_zeros(Value* value) const {
+    return value == x ? zeros_x : value == y ? zeros_y : 0;
+  }
+  uint64_t known_ones(Value* value) const {
+    return value == x ? ones_x : value == y ? ones_y : 0;
+  }
+};
+
+int main() {
+  Generated builder;
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(type), y(type), z(type);
+    uint64_t mask = type_mask(type);
+    Facts unknown{&x, &y, 0, 0, 0, 0};
+    Facts redundant_and{&x, &y, mask ^ 1, 0, 0, 1};
+    Inst* conjunction = builder.build_and(&x, &y);
+    unsigned before = builder.builds;
+    assert(builder.try_simplify(conjunction) == nullptr);
+    assert(builder.try_simplify(conjunction, unknown) == nullptr);
+    assert(builder.try_simplify(conjunction, redundant_and) == &x);
+    assert(builder.builds == before);
+    Facts redundant_or{&x, &y, 0, 1, mask ^ 1, 0};
+    assert(builder.try_simplify(builder.build_or(&x, &y), redundant_or) == &x);
+    Const zero(type, 0);
+    Const* result = dynamic_cast<Const*>(builder.try_simplify(builder.build_and(&x, &zero), unknown));
+    assert(result && result->type() == type && result->value() == 0);
+    Value condition(Type::Bool);
+    Facts same_constants{&x, &y, mask ^ 1, 1, mask ^ 1, 1};
+    Inst* selection = builder.build_select(&condition, &x, &y);
+    before = builder.builds;
+    assert(builder.try_simplify(selection, same_constants) == nullptr);
+    assert(builder.builds == before);
+    if (type == Type::Bool) {
+      continue;
+    }
+    Facts disjoint{&x, &y, mask ^ 1, 0, 1, 0};
+    Inst* addition = builder.build_add(&x, &y);
+    before = builder.builds;
+    assert(builder.try_simplify(addition, unknown) == nullptr);
+    assert(builder.builds == before);
+    OrInst* combined = dynamic_cast<OrInst*>(builder.try_simplify(addition, disjoint));
+    assert(combined && combined->arg(0) == &x && combined->arg(1) == &y);
+    assert(builder.builds == before + 1);
+    Inst* shared = builder.build_or(&x, &y);
+    Inst* subtraction = builder.build_sub(shared, &y);
+    before = builder.builds;
+    assert(builder.try_simplify(subtraction, disjoint) == &x);
+    assert(builder.builds == before);
+    Facts drop_disjoint{&y, &z, mask ^ 1, 0, 1, 0};
+    AndInst* reduced = dynamic_cast<AndInst*>(builder.try_simplify(builder.build_and(shared, &z), drop_disjoint));
+    assert(reduced && reduced->arg(0) == &x && reduced->arg(1) == &z);
+    Const one(type, 1);
+    Facts low_one{&x, &y, 0, 1, 0, 0};
+    AndInst* cleared = dynamic_cast<AndInst*>(builder.try_simplify(builder.build_xor(&x, &one), low_one));
+    assert(cleared && cleared->arg(0) == &x);
+    Const* complement = dynamic_cast<Const*>(cleared->arg(1));
+    assert(complement && complement->type() == type && complement->value() == (mask ^ 1));
+    Inst* opaque_zero = builder.build_and(&y, &zero);
+    Facts constant_fact{opaque_zero, &y, mask, 0, 0, 0};
+    OrInst* analyzed = dynamic_cast<OrInst*>(builder.try_simplify(builder.build_add(&x, opaque_zero), constant_fact));
+    assert(analyzed && analyzed->arg(0) == &x && analyzed->arg(1) == opaque_zero);
+    assert(builder.try_simplify(builder.build_add(&x, &y), redundant_and) == nullptr);
+  }
+}
+"""
+        for statistics in (False, True):
+            with self.subTest(statistics=statistics):
+                self.run_cpp(code, main, statistics)

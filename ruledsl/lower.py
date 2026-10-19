@@ -5,6 +5,7 @@ from . import ast, ir, matcher
 from .signatures import SIGNATURES
 from .types import BIT_TYPES, BOOL, INT_TYPES
 from .typefacts import TypeFacts
+from .typecheck import KNOWN_BITS_FUNCTIONS
 
 
 @dataclass(frozen=True)
@@ -216,6 +217,10 @@ class RuleLowerer:
             expression = conjunction(ir.Binary(operator, left, right)
                                      for operator, left, right in zip(node.operators, operands, operands[1:]))
         elif isinstance(node, ast.Call):
+            if node.name in KNOWN_BITS_FUNCTIONS:
+                if not hasattr(self.parent, "facts"):
+                    raise ValueError("KnownBits queries require the simplification backend")
+                return member_call(self.parent.facts, node.name, self.values[node.args[0].name])
             args = tuple(self.expression(arg, inline) for arg in node.args)
             if node.name == "width":
                 expression = call("uint64_t", call("type_width", *args))
@@ -255,12 +260,14 @@ class RuleLowerer:
         return self.parent.bind(block, "result", expression)
 
 
-def lower(program, handwritten=()):
+def lower(program, handwritten=(), operations=()):
     handwritten = frozenset(handwritten)
     unknown = handwritten.difference(SIGNATURES)
     if unknown:
         raise ValueError(f"unknown handwritten operations: {', '.join(sorted(unknown))}")
     names = dict.fromkeys(program.matchers)
+    for name in operations:
+        names[name] = None
     for name in sorted(handwritten):
         names[name] = None
     for opcode_matcher in program.matchers.values():

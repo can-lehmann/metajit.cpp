@@ -2263,6 +2263,57 @@ void test_fold_non_integer_select_equality() {
   }
 }
 
+void test_rule_dsl_known_bits() {
+  for (bool trace : {false, true}) {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* block = builder.build_block({Type::Ptr, type, type});
+      builder.move_to_end(block);
+      Value* x = block->arg(1);
+      Value* y = block->arg(2);
+      Const* one = builder.build_const(type, 1);
+      Const* other_bits = builder.build_const(type, type_mask(type) ^ 1);
+      Value* low = builder.build_and(x, one);
+      Value* high = builder.build_and(y, other_bits);
+      StoreInst* added = builder.build_store(block->arg(0), builder.build_add(low, high), 0, 0);
+      StoreInst* subtracted = builder.build_store(block->arg(0),
+                                   builder.build_sub(builder.build_or(low, high), high), 0, 8);
+      Value* set = builder.build_or(x, one);
+      StoreInst* cleared = builder.build_store(block->arg(0), builder.build_xor(set, one), 0, 16);
+      StoreInst* disjoint = builder.build_store(block->arg(0),
+                                 builder.build_and(builder.build_or(x, high), low), 0, 24);
+      builder.build_exit();
+      section.order_blocks(BlockOrdering::Dominator);
+      section.autoname();
+      if (trace) {
+        Chain chain;
+        chain.add(block);
+        SimplifyTrace::run(&section, &chain);
+      } else {
+        Simplify::run(&section, 2);
+      }
+      OrInst* combined = dynamic_cast<OrInst*>(added->value());
+      unittest_assert(combined && combined->arg(0) == low && combined->arg(1) == high);
+      unittest_assert(subtracted->value() == low);
+      unittest_assert(dynamic_cast<AndInst*>(cleared->value()));
+      unittest_assert(!section.verify(std::cout));
+      for (uint64_t input : {uint64_t(0), uint64_t(1), type_mask(type)}) {
+        uint64_t output[4] = {};
+        Interpreter interpreter(&section, {Interpreter::Bits::constant(output),
+                                Interpreter::Bits::constant(type, input), Interpreter::Bits::constant(type, 42)});
+        unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+        unittest_assert(output[0] == ((input & 1) | 42));
+        unittest_assert(output[1] == (input & 1));
+        unittest_assert(output[2] == (input & (type_mask(type) ^ 1)));
+        unittest_assert(output[3] == (input & 1));
+      }
+    }
+  }
+}
+
 void test_rule_dsl_resolved_arguments() {
   Context context;
   Allocator allocator;
@@ -2397,6 +2448,7 @@ int main(int argc, char** argv) {
   suite.test("rule DSL builder integration").run(test_rule_dsl_builder_integration);
   suite.test("rule DSL local rewriter").run(test_rule_dsl_local_rewriter);
   suite.test("rule DSL resolved arguments").run(test_rule_dsl_resolved_arguments);
+  suite.test("rule DSL known bits").run(test_rule_dsl_known_bits);
   suite.test("fold constant select propagation").run(test_fold_constant_select_propagation);
   suite.test("fold non integer select equality").run(test_fold_non_integer_select_equality);
   suite.test("fold mod u power of two").run(test_fold_mod_u_power_of_two);

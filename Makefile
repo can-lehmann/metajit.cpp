@@ -1,6 +1,6 @@
 LLVM_FLAGS := $(shell llvm-config --cflags --libs)
 PYTHON ?= python3
-RULEDSL_FILES := ruledsl/fold.rules $(filter-out ruledsl/test_%.py,$(wildcard ruledsl/*.py))
+RULEDSL_FILES := ruledsl/fold.rules ruledsl/simplify.rules $(filter-out ruledsl/test_%.py,$(wildcard ruledsl/*.py))
 Z3_FLAGS := -I/usr/include/z3 -lz3
 CFLAGS := ${LLVM_FLAGS} -g
 HEADER_FILES := jitir.hpp jitir_llvmapi.hpp genext.hpp $(wildcard *.hpp)

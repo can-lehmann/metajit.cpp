@@ -9,6 +9,9 @@ from .source import TypeCheckError
 from .types import BOOL, ConcreteType, CONCRETE_TYPES, INT64, TypeConflict, TypeConstraints, TypeVar
 
 
+KNOWN_BITS_FUNCTIONS = frozenset({"known_zeros", "known_ones"})
+
+
 @dataclass(frozen=True)
 class ExprInfo:
     kind: str
@@ -29,6 +32,11 @@ class CheckedRule:
     def type_of(self, expression, instantiation):
         variable = self.expressions[expression].type
         return instantiation[variable] if variable is not None else None
+
+    @property
+    def requires_facts(self):
+        return any(isinstance(node, ast.Call) and node.name in KNOWN_BITS_FUNCTIONS
+                   for node in self.expressions)
 
 
 BINARY_OPERATORS = {
@@ -176,13 +184,20 @@ class Checker:
         return self.remember(node, info)
 
     def call(self, node):
-        arities = {"width": 1, "bits": 2, "min": 2, "max": 2, "ctz": 1}
+        arities = {"width": 1, "bits": 2, "min": 2, "max": 2, "ctz": 1,
+                   "known_zeros": 1, "known_ones": 1}
         if node.name not in arities:
             self.error(node, f"unknown calculation function {node.name!r}")
         if len(node.args) != arities[node.name]:
             self.error(node, f"{node.name} expects {arities[node.name]} arguments, "
                        f"got {len(node.args)}")
         args = [self.expression(arg) for arg in node.args]
+        if node.name in KNOWN_BITS_FUNCTIONS:
+            argument = node.args[0]
+            if not isinstance(argument, ast.Name) or argument.name not in self.pattern_bindings:
+                self.error(argument, f"{node.name} requires a matched value binding")
+            return ExprInfo("constant", args[0].type,
+                            frozenset((f"{node.name}({argument.name})",)))
         if node.name == "width":
             self.require(args[0], "type", node.args[0])
             return ExprInfo("constant", self.constraints.fresh())
@@ -198,6 +213,7 @@ class Checker:
 
     def check(self):
         root = self.pattern(self.rule.pattern, introduce=True)
+        self.pattern_bindings = frozenset(self.bindings)
         for statement in self.rule.body:
             if isinstance(statement, ast.Binding):
                 self.available_name(statement.name, statement)
@@ -211,7 +227,7 @@ class Checker:
                 self.require(info, "condition", statement)
                 if statement.kind == "where" and info.dependencies:
                     names = ", ".join(sorted(info.dependencies))
-                    self.error(statement, f"where depends on matched constants: {names}; use check")
+                    self.error(statement, f"where depends on matched constants or analysis facts: {names}; use check")
         replacement = self.pattern(self.rule.replacement)
         self.unify(root.type, replacement.type, self.rule.replacement)
         anchors = {self.constraints.resolve(variable) for variable in self.anchors}

@@ -255,10 +255,12 @@ def decision_tree(rows, paths):
     return Terminal(tuple(row.candidate for row in rows))
 
 
-def build_matchers(checked_rules):
+def build_matchers(checked_rules, include_facts=True):
     checked_rules = tuple(checked_rules)
     per_opcode = {}
     for rule_id, checked in enumerate(checked_rules):
+        if checked.requires_facts and not include_facts:
+            continue
         variables = checked.type_representatives
         pattern = normalize(checked.rule.pattern, checked, variables)
         if not isinstance(pattern, Operation):

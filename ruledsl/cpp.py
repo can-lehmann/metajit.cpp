@@ -16,7 +16,8 @@ requires return short signed sizeof static static_assert static_cast struct swit
 synchronized template this thread_local throw true try typedef typeid typename union
 unsigned using virtual void volatile wchar_t while xor xor_eq
 """.split())
-RESERVED = KEYWORDS | {"Type", "Value", "Const", "uint64_t", "ruledsl_rule_counts", "ruledsl_rule_names"}
+RESERVED = KEYWORDS | {"Type", "Value", "Const", "Facts", "RuledslUnknownBits", "uint64_t",
+                       "ruledsl_rule_counts", "ruledsl_rule_names"}
 
 
 class Emitter:
@@ -116,9 +117,13 @@ class Emitter:
         self.used_names.add(function.name)
         ir.validate(function.body, tuple(parameter.value for parameter in function.parameters))
         parameters = []
+        if any(parameter.kind == "facts" for parameter in function.parameters):
+            self.line("template<class Facts = RuledslUnknownBits>")
         for parameter in function.parameters:
-            type_ = {"value": "Value*", "type": "Type", "inst": "Inst*"}[parameter.kind]
-            parameters.append(f"{type_} {self.name_for(parameter.value)}")
+            type_ = {"value": "Value*", "type": "Type", "inst": "Inst*",
+                     "facts": "[[maybe_unused]] const Facts&"}[parameter.kind]
+            default = " = {}" if parameter.kind == "facts" else ""
+            parameters.append(f"{type_} {self.name_for(parameter.value)}{default}")
         self.line(f"Value* {function.name}({', '.join(parameters)}) {{")
         self.indent += 1
         self.block(function.body)
@@ -128,6 +133,13 @@ class Emitter:
 
 def emit(program, include_statistics=True):
     emitter = Emitter()
+    if any(parameter.kind == "facts" for function in program.functions for parameter in function.parameters):
+        emitter.line("struct RuledslUnknownBits {")
+        emitter.indent += 1
+        emitter.line("uint64_t known_zeros(Value*) const { return 0; }")
+        emitter.line("uint64_t known_ones(Value*) const { return 0; }")
+        emitter.indent -= 1
+        emitter.line("};")
     if include_statistics and program.rule_names:
         emitter.line("#ifdef METAJIT_RULE_STATS")
         emitter.line(f"inline static uint64_t ruledsl_rule_counts[{len(program.rule_names)}] = {{}};")

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import warnings
 
 import z3
@@ -6,7 +6,7 @@ import z3
 from . import ast
 from .semantics import Value, emit, resize_bits
 from .source import SourceError
-from .typecheck import check
+from .typecheck import KNOWN_BITS_FUNCTIONS, check
 from .types import ConcreteType
 
 
@@ -22,6 +22,7 @@ class Counterexample:
     inputs: dict[str, ConcreteValue]
     before: ConcreteValue
     after: ConcreteValue | None
+    known_bits: dict[str, tuple[int, int]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,7 @@ class Prover:
         self.solver.set(timeout=timeout_ms)
         self.inputs = {}
         self.calculations = {}
+        self.known_bits = {}
         self.select_condition = None
         self.before = self.pattern(checked.rule.pattern, introduce=True)
         self.after = None
@@ -78,9 +80,14 @@ class Prover:
             inputs = {name: concrete_value(value, model) for name, value in self.inputs.items()}
             before = concrete_value(self.before, model)
             after = concrete_value(self.after, model) if self.after is not None else None
-            counterexample = Counterexample(inputs, before, after)
+            known_bits = {name: tuple(model.eval(mask, model_completion=True).as_long()
+                                     for mask in masks)
+                          for name, masks in self.known_bits.items()}
+            counterexample = Counterexample(inputs, before, after, known_bits)
             lines = [message, "counterexample:"]
             lines.extend(f"  {name}: {format_value(value)}" for name, value in inputs.items())
+            lines.extend(f"  {name}: known_zeros={zeros:#x}, known_ones={ones:#x}"
+                         for name, (zeros, ones) in known_bits.items())
             lines.append(f"  source: {format_value(before)}")
             if after is not None:
                 lines.append(f"  replacement: {format_value(after)}")
@@ -195,6 +202,19 @@ class Prover:
                 value = z3.And(value, condition)
                 left = right
         elif isinstance(node, ast.Call):
+            if node.name in KNOWN_BITS_FUNCTIONS:
+                name = node.args[0].name
+                if name not in self.known_bits:
+                    operand = self.inputs[name]
+                    zeros = z3.FreshConst(operand.bits.sort(), prefix=f"known_zeros_{name}")
+                    ones = z3.FreshConst(operand.bits.sort(), prefix=f"known_ones_{name}")
+                    self.known_bits[name] = zeros, ones
+                    self.solver.add(zeros & ones == 0,
+                                    z3.Implies(z3.Not(operand.poison),
+                                               z3.And(operand.bits & zeros == 0,
+                                                      operand.bits & ones == ones)))
+                masks = self.known_bits[name]
+                return Calculation(masks[0 if node.name == "known_zeros" else 1], valid)
             args = [self.expression(arg) for arg in node.args]
             valid = z3.And(*(arg.valid for arg in args))
             if node.name == "width":

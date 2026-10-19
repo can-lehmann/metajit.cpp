@@ -121,13 +121,26 @@ comparisons, division, and right shifts use unsigned values. Invalid evaluated
 division and shift operations produce diagnostics. Boolean operators and
 chained comparisons short-circuit.
 
-`check` accepts conditions depending on matched constants as well. It is
+`check` accepts conditions depending on matched constants and analysis facts. It is
 type-checked but not evaluated by the type checker; the prover interprets it
 symbolically. Dependencies propagate through calculation bindings, so a
 matched constant cannot be hidden in a `where` condition through an alias.
-Conditions and type references are distinct from JITIR's `Bool` values and
-cannot be used as replacement IR values. Unbounded integer calculations and
-known-bits facts are not part of this implementation.
+Conditions materialize as `Bool` constants when used as replacement IR values;
+type references cannot be used as IR values. Unbounded integer calculations
+are not supported.
+
+`known_zeros(x)` and `known_ones(x)` return compile-time masks with the same
+type as the matched value `x`. Their argument must be a name bound in the input
+pattern, including a matched constant. Masks can be used in calculations and
+`check` conditions, but cannot influence `where`, even through aliases.
+Fact-dependent rules participate only in simplification matching. The initial
+set lives in `simplify.rules`:
+
+```text
+add_disjoint: Add(x, y)
+    check known_zeros(x) | known_zeros(y) == -1
+    => Or(x, y)
+```
 
 ## Proofs
 
@@ -173,6 +186,14 @@ division by zero, and signed division or remainder overflow produce poison.
 Consequently, `Select(c, c, x) => Or(c, x)` and its And counterpart are invalid
 for potentially poisoned `x`. Their active DSL versions require a matched
 constant as the other arm.
+
+KnownBits proofs quantify over arbitrary disjoint zero/one masks. If an operand
+is nonpoison, its known-zero bits must be zero and its known-one bits must be
+one. A potentially poisoned operand remains potentially poisoned; its masks
+need not constrain its bits when it is poison. Repeated queries of the same
+binding share masks, and masks need not contain every discoverable fact. This
+proves the rewrite independently of the analysis implementation. Counterexamples
+include the masks used by the failing proof.
 
 Under the rule's checks, a defined source must produce an equal, non-poison
 replacement. Removing poison is permitted. For every concrete type assignment,
@@ -295,6 +316,10 @@ cpp = generate(source, "folds.rules", handwritten={"Add", "Sub"})
 rewriter alongside the builder folds, using one proof and matcher construction.
 The simplification lowering lives in `lower_simplify.py`; it shares matching,
 guards, replacement lowering, and the imperative IR/C++ emitter with folding.
+`--simplify-rules ruledsl/simplify.rules` supplies the additional rule source;
+the Python API accepts `simplify_source` and `simplify_filename`. Rule names
+must be unique across both sources. Fact-dependent rules are excluded from
+builder matching, while both backends retain common rule IDs and statistics.
 
 Generation always type-checks and proves every rule before lowering or emitting.
 `--timeout-ms` sets the per-query proof timeout. Output goes to stdout unless
@@ -360,7 +385,11 @@ preprocessor. No runtime hook is required for counting.
 
 ## Production integration
 
-`Builder::try_simplify(Inst*)` is shared by Simplify and SimplifyTrace. It returns
+`Builder::try_simplify(Inst*, const Facts&)` is shared by Simplify and SimplifyTrace.
+The facts object supplies `known_zeros(Value*)` and `known_ones(Value*)`; the
+templated interface requires no virtual calls or allocations. `KnownBits::View`
+provides a read-only view of either pass's fact table. Omitting the facts
+argument conservatively supplies zero masks. The rewriter returns
 `nullptr` without constructing IR when no rule matches. Constants and literals
 match only actual `Const` operands, preserving the existing proof contract.
 After a successful match, replacement construction calls `fold_*` and reuses

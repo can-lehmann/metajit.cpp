@@ -1,0 +1,24 @@
+and_redundant_operand: And(x, y)
+    check known_zeros(x) | known_ones(y) == -1
+    => x
+
+or_redundant_operand: Or(x, y)
+    check known_ones(x) | known_zeros(y) == -1
+    => x
+
+and_or_disjoint: And(Or(x, y), z)
+    check known_zeros(y) | known_zeros(z) == -1
+    => And(x, z)
+
+add_disjoint: Add(x, y)
+    check known_zeros(x) | known_zeros(y) == -1
+    => Or(x, y)
+
+sub_or_disjoint: Sub(Or(x, y), y)
+    check known_zeros(x) | known_zeros(y) == -1
+    => x
+
+xor_clear_known_ones: Xor(x, C)
+    check known_ones(x) & C == C
+    Cmask = ~C
+    => And(x, Cmask)
