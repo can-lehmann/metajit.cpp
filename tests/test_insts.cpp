@@ -70,6 +70,9 @@ void test_shift(DiffTestSuite& suite) {
     suite.diff_test(#name "_" #type "_imm").run([](Builder& builder, TestData& data) { \
       Value* by = RandomRange(Type::type, 0, type_size(Type::type) * 8 - 1).gen_const(builder); \
       data.output(builder.build_##name(data.input(Type::type), by)); \
+    }); \
+    suite.diff_test(#name "_" #type "_imm1").run([](Builder& builder, TestData& data) { \
+      data.output(builder.build_##name(data.input(Type::type), builder.build_const(Type::type, 1))); \
     });
 
   #define shift(name) \
