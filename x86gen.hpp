@@ -676,9 +676,9 @@ namespace metajit {
       return true;
     }
 
-    static bool is_sext_imm8(uint64_t value, size_t width) {
-      uint64_t extended = (uint64_t) (int64_t) (int8_t) value;
-      return ((value ^ extended) & (~uint64_t(0) >> (64 - width))) == 0;
+    template <typename T>
+    static bool is_sext_imm8(T value) {
+      return value == (T) (int8_t) value;
     }
 
     static uint64_t sign_extend_imm(Const* constant) {
