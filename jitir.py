@@ -595,7 +595,8 @@ handwritten_folds = (
     "Eq", "Select", "ResizeX",
 )
 fold_rules = Path(__file__).with_name("ruledsl") / "fold.rules"
-folds = generate(fold_rules.read_text(), str(fold_rules), handwritten=handwritten_folds)
+folds = generate(fold_rules.read_text(), str(fold_rules), handwritten=handwritten_folds,
+                 include_simplify=True)
 
 lwir(
     template_path = "jitir.tmpl.hpp",

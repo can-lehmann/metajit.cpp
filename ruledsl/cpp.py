@@ -117,7 +117,7 @@ class Emitter:
         ir.validate(function.body, tuple(parameter.value for parameter in function.parameters))
         parameters = []
         for parameter in function.parameters:
-            type_ = {"value": "Value*", "type": "Type"}[parameter.kind]
+            type_ = {"value": "Value*", "type": "Type", "inst": "Inst*"}[parameter.kind]
             parameters.append(f"{type_} {self.name_for(parameter.value)}")
         self.line(f"Value* {function.name}({', '.join(parameters)}) {{")
         self.indent += 1
@@ -126,9 +126,9 @@ class Emitter:
         self.line("}")
 
 
-def emit(program):
+def emit(program, include_statistics=True):
     emitter = Emitter()
-    if program.rule_names:
+    if include_statistics and program.rule_names:
         emitter.line("#ifdef METAJIT_RULE_STATS")
         emitter.line(f"inline static uint64_t ruledsl_rule_counts[{len(program.rule_names)}] = {{}};")
         names = ", ".join(json.dumps(name) for name in program.rule_names)

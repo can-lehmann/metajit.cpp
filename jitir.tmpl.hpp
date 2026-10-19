@@ -1974,6 +1974,20 @@ namespace metajit {
 
     size_t size() const { return _size; }
 
+    void ensure_size(size_t size) {
+      if (size <= _size) {
+        return;
+      }
+      size = std::max(size, _size * 2);
+      T* data = new T[size]();
+      for (size_t index = 0; index < _size; index++) {
+        data[index] = _data[index];
+      }
+      delete[] _data;
+      _data = data;
+      _size = size;
+    }
+
     T& at(K* key) {
       assert(key->name() < _size);
       return _data[key->name()];
@@ -2028,7 +2042,7 @@ namespace metajit {
   void Inst::substitute_args(NameMap<Value*>& substs) {
     for (size_t it = 0; it < arg_count(); it++) {
       Value* argument = arg(it);
-      if (argument->is_inst()) {
+      if (argument->is_inst() && ((Inst*) argument)->name() < substs.size()) {
         if (substs[(Inst*) argument]) {
           set_arg(it, substs[(Inst*) argument]);
         }
@@ -3047,7 +3061,7 @@ namespace metajit {
           );
         } else if (value->is_named()) {
           NamedValue* named_value = (NamedValue*) value;
-          if (named_value->name() > values.size()) {
+          if (named_value->name() >= values.size() || values.at(named_value).type == Type::Void) {
             return Bits(value->type(), 0, 0);
           }
           return values.at(named_value);
@@ -3986,6 +4000,10 @@ namespace metajit {
             return _builder.build_const(inst->type(), known_bits.at(inst).value);
           }
 
+          if (Value* replacement = _builder.try_simplify(inst)) {
+            return replacement;
+          }
+
           if (dynmatch(AndInst, and_inst, inst)) {
             if (and_inst->arg(0) == and_inst->arg(1)) {
               return and_inst->arg(0);
@@ -4113,6 +4131,8 @@ private:
   bool _contradiction = false;
 
   void _add_subst(Inst* inst, Value* value) {
+    _values.ensure_size(_builder.next_name());
+    _substs.ensure_size(_builder.next_name());
     _substs[inst] = value;
   }
 
@@ -4145,7 +4165,7 @@ private:
 
   Value* _resolve_subst(Value* value) {
     Value* replacement = value;
-    while (replacement->is_named()) {
+    while (replacement->is_named() && ((NamedValue*) replacement)->name() < _substs.size()) {
       Value* next = _substs[(NamedValue*) replacement];
       if (!next) {
         break;
@@ -4177,6 +4197,7 @@ public:
     }
     section->autoname();
 
+    _builder.set_next_name();
     _init_values();
     BlockMap<size_t> incoming(section);
     for (Block* block : *section) {
@@ -4194,6 +4215,7 @@ public:
       Block* block = chain->at(index);
       for (Inst* inst : *block) {
         _substitute_args(inst);
+        _builder.move_before(block, inst);
         if (inst->has_side_effect() ||
             inst->is_terminator() ||
             inst->type() == Type::Void ||
@@ -4207,6 +4229,8 @@ public:
         _values[inst] = bits;
         if (bits.is_const()) {
           _add_subst(inst, _builder.build_const(inst->type(), bits.value));
+        } else if (Value* replacement = _builder.try_simplify(inst)) {
+          _add_subst(inst, replacement);
         } else if (dynmatch(SelectInst, select, inst)) {
           KnownBits::Bits cond = Bits::at(_values, select->cond());
           if (cond.is_const()) {
@@ -4289,6 +4313,9 @@ public:
 private:
   void _enqueue(Value* value, const Bits& bits) {
     if (_contradiction) {
+      return;
+    }
+    if (value->is_named() && ((NamedValue*) value)->name() >= _values.size()) {
       return;
     }
     Bits old_bits = Bits::at(_values, value);

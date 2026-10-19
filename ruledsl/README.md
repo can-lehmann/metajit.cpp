@@ -3,7 +3,8 @@
 A standalone Python 3 tokenizer, recursive-descent parser, type checker,
 Z3 proof backend, matcher constructor, imperative code IR, and C++ emitter for
 JITIR rewrite rules. Header generation integrates the rules into metajit's
-builder while retaining handwritten folding fallbacks.
+builder and a shared local rewriter for Simplify and SimplifyTrace, while
+retaining handwritten folding fallbacks.
 Proofs require `z3-solver`; the other Python components use the standard library.
 
 From the metajit repository root, run all tests with a Python environment that
@@ -290,6 +291,11 @@ from ruledsl.generate import generate
 cpp = generate(source, "folds.rules", handwritten={"Add", "Sub"})
 ```
 
+`--include-simplify` or `include_simplify=True` also emits the existing-instruction
+rewriter alongside the builder folds, using one proof and matcher construction.
+The simplification lowering lives in `lower_simplify.py`; it shares matching,
+guards, replacement lowering, and the imperative IR/C++ emitter with folding.
+
 Generation always type-checks and proves every rule before lowering or emitting.
 `--timeout-ms` sets the per-query proof timeout. Output goes to stdout unless
 `--output` is specified. A proof or generation failure does not overwrite an
@@ -353,6 +359,20 @@ With statistics disabled, the arrays and increments are omitted by the C++
 preprocessor. No runtime hook is required for counting.
 
 ## Production integration
+
+`Builder::try_simplify(Inst*)` is shared by Simplify and SimplifyTrace. It returns
+`nullptr` without constructing IR when no rule matches. Constants and literals
+match only actual `Const` operands, preserving the existing proof contract.
+After a successful match, replacement construction calls `fold_*` and reuses
+matching proper input subtrees. Rules equivalent to returning the root itself
+are ignored. Both entry points increment the same source-rule firing counters.
+
+Each pass retains its traversal, substitution, KnownBits, and guard handling.
+Whole-result replacement from KnownBits still runs before the local rewriter.
+Missing facts for newly constructed instructions are typed unknown values.
+SimplifyTrace grows its fact and substitution tables when rewriting constructs
+new instructions, so later guards can establish facts for those instructions.
+Those facts are used only as the trace walk proceeds beyond the guard.
 
 `TraceBuilder` already routes its relevant `build_*` methods to
 `Builder::fold_*`, so preserving the latter interfaces also preserves trace

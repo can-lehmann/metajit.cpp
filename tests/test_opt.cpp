@@ -2263,6 +2263,70 @@ void test_fold_non_integer_select_equality() {
   }
 }
 
+void test_rule_dsl_local_rewriter() {
+  for (bool trace : {false, true}) {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* block = builder.build_block({Type::Ptr, type, type, Type::Bool});
+      builder.move_to_end(block);
+      Value* x = block->arg(1);
+      Value* y = block->arg(2);
+      Inst* miss = builder.build_add(x, y);
+      size_t before = builder.next_name();
+      unittest_assert(builder.try_simplify(miss) == nullptr);
+      unittest_assert(builder.next_name() == before);
+      Value* inner = builder.build_xor(x, y);
+      StoreInst* canceled = builder.build_store(block->arg(0), builder.build_xor(inner, y), 0, 0);
+      Value* sub = builder.build_sub(x, builder.build_const(type, 7));
+      Value* nested = builder.build_xor(builder.build_xor(sub, y), y);
+      StoreInst* rewritten = builder.build_store(block->arg(0), nested, 0, 8);
+      Value* shared = builder.build_or(x, y);
+      StoreInst* reused = builder.build_store(block->arg(0), builder.build_or(shared, x), 0, 16);
+      Value* zero = builder.build_and(x, builder.build_const(type, 0));
+      StoreInst* constant = builder.build_store(block->arg(0), zero, 0, 24);
+      Value* select = builder.build_select(block->arg(3), builder.build_poison(type), x);
+      StoreInst* selected = builder.build_store(block->arg(0), select, 0, 32);
+      builder.build_exit();
+      section.order_blocks(BlockOrdering::Dominator);
+      section.autoname();
+      KnownBits facts(&section);
+      builder.set_next_name();
+      builder.move_before(block, miss);
+      Value* fresh = builder.build_add(x, y);
+      KnownBits::Bits missing = facts.at(fresh);
+      unittest_assert(missing.type == type && missing.mask == 0 && missing.value == 0);
+      if (trace) {
+        Chain chain;
+        chain.add(block);
+        SimplifyTrace::run(&section, &chain);
+      } else {
+        Simplify::run(&section, 2);
+      }
+      unittest_assert(canceled->value() == x);
+      AddInst* addition = dynamic_cast<AddInst*>(rewritten->value());
+      unittest_assert(addition && addition->arg(0) == x);
+      check_const(addition->arg(1), type, uint64_t(-7) & type_mask(type));
+      unittest_assert(reused->value() == shared);
+      check_const(constant->value(), type, 0);
+      unittest_assert(selected->value() == select);
+      unittest_assert(!section.verify(std::cout));
+      uint64_t output[5] = {};
+      Interpreter interpreter(&section, {Interpreter::Bits::constant(output),
+                              Interpreter::Bits::constant(type, type_mask(type)),
+                              Interpreter::Bits::constant(type, 5), Interpreter::Bits::constant(false)});
+      unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+      unittest_assert(output[0] == type_mask(type));
+      unittest_assert(output[1] == ((type_mask(type) - 7) & type_mask(type)));
+      unittest_assert(output[2] == type_mask(type));
+      unittest_assert(output[3] == 0);
+      unittest_assert(output[4] == type_mask(type));
+    }
+  }
+}
+
 void test_fold_select_unselected_poison() {
   for (bool true_arm : {false, true}) {
     Context context;
@@ -2292,6 +2356,7 @@ int main(int argc, char** argv) {
   DiffTestSuite suite("tests/output/test_opt", argc, argv);
 
   suite.test("rule DSL builder integration").run(test_rule_dsl_builder_integration);
+  suite.test("rule DSL local rewriter").run(test_rule_dsl_local_rewriter);
   suite.test("fold constant select propagation").run(test_fold_constant_select_propagation);
   suite.test("fold non integer select equality").run(test_fold_non_integer_select_equality);
   suite.test("fold mod u power of two").run(test_fold_mod_u_power_of_two);

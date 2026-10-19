@@ -419,6 +419,14 @@ class GenerationTests(unittest.TestCase):
             self.assertIn("Value* fold_add(", code)
             self.assertIn("return _fold_add(", code)
 
+    def test_cli_includes_local_rewriter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "folds.rules"
+            output = Path(directory) / "folds.inc.hpp"
+            source.write_text("zero: Add(x, 0)\n    => x\n")
+            self.assertEqual(main([str(source), "--include-simplify", "-o", str(output)]), 0)
+            self.assertIn("Value* try_simplify(Inst*", output.read_text())
+
     def test_cli_preserves_output_on_proof_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "bad.rules"
