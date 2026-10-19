@@ -474,8 +474,411 @@ void test_shr_u_backwards_random(unittest::Suite& suite) {
   });
 }
 
+void test_mask_through_highest_bit() {
+  unittest_assert(Bits::mask_through_highest_bit(0) == 0);
+  unittest_assert(Bits::mask_through_highest_bit(UINT64_MAX) == UINT64_MAX);
+  unittest_assert(Bits::mask_through_highest_bit(10) == 15);
+  unittest_assert(Bits::mask_through_highest_bit(0x123456789abcdef0ULL) == 0x1fffffffffffffffULL);
+  for (size_t bit = 0; bit < 64; bit++) {
+    uint64_t power = uint64_t(1) << bit;
+    uint64_t expected = power | (power - 1);
+    unittest_assert(Bits::mask_through_highest_bit(power) == expected);
+    unittest_assert(Bits::mask_through_highest_bit(power - 1) == power - 1);
+    unittest_assert(Bits::mask_through_highest_bit(expected) == expected);
+  }
+}
+
+void test_unsigned_bounds() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Bits unknown(type, 0, 0);
+    unittest_assert(unknown.umin() == 0);
+    unittest_assert(unknown.umax() == type_mask(type));
+    const uint64_t values[] = {0, 1, uint64_t(1) << (type_width(type) - 1), type_mask(type)};
+    for (uint64_t value : values) {
+      Bits fixed = Bits::constant(type, value);
+      unittest_assert(fixed.umin() == value);
+      unittest_assert(fixed.umax() == value);
+    }
+    Bits sparse(type, 0xaaaaaaaaaaaaaaaaULL, 0x8888888888888888ULL);
+    unittest_assert(sparse.umin() == (0x8888888888888888ULL & type_mask(type)));
+    unittest_assert(sparse.umax() == (0xddddddddddddddddULL & type_mask(type)));
+  }
+}
+
+void test_unsigned_bound_conversions() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t maximum = type_mask(type);
+    uint64_t high = uint64_t(1) << (type_width(type) - 1);
+    Bits unknown(type, 0, 0);
+    unittest_assert(Bits::unsigned_upper_bound(type, 0) == Bits::constant(type, 0));
+    unittest_assert(Bits::unsigned_upper_bound(type, maximum) == unknown);
+    unittest_assert(Bits::unsigned_upper_bound(type, high - 1) == Bits(type, high, 0));
+    unittest_assert(Bits::unsigned_upper_bound(type, high) == unknown);
+    unittest_assert(Bits::unsigned_lower_bound(type, 0) == unknown);
+    unittest_assert(Bits::unsigned_lower_bound(type, maximum) == Bits::constant(type, maximum));
+    unittest_assert(Bits::unsigned_lower_bound(type, high) == Bits(type, high, high));
+    unittest_assert(Bits::unsigned_lower_bound(type, high - 1) == unknown);
+  }
+}
+
+void test_unsigned_bound_conversions_exhaustive() {
+  for (uint64_t bound = 0; bound < 256; bound++) {
+    uint64_t upper_ones = 255;
+    uint64_t upper_any = 0;
+    uint64_t lower_ones = 255;
+    uint64_t lower_any = 0;
+    for (uint64_t value = 0; value < 256; value++) {
+      if (value <= bound) {
+        upper_ones &= value;
+        upper_any |= value;
+      }
+      if (value >= bound) {
+        lower_ones &= value;
+        lower_any |= value;
+      }
+    }
+    unittest_assert(Bits::unsigned_upper_bound(Type::Int8, bound) ==
+                    Bits(Type::Int8, upper_ones | ~upper_any, upper_ones));
+    unittest_assert(Bits::unsigned_lower_bound(Type::Int8, bound) ==
+                    Bits(Type::Int8, lower_ones | ~lower_any, lower_ones));
+  }
+}
+
+void test_unsigned_remainder_bounds() {
+  struct Bound {
+    uint64_t divisor;
+    uint64_t unknown;
+  };
+  const Bound bounds[] = {
+    {1, 0}, {2, 1}, {3, 3}, {4, 3}, {5, 7}, {7, 7}, {8, 7}, {9, 15},
+    {127, 127}, {128, 127}, {129, 255}, {255, 255}, {256, 255}, {257, 511},
+    {(uint64_t(1) << 63) - 1, (uint64_t(1) << 63) - 1},
+    {uint64_t(1) << 63, (uint64_t(1) << 63) - 1},
+    {(uint64_t(1) << 63) + 1, ~uint64_t(0)}, {~uint64_t(0), ~uint64_t(0)}
+  };
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Bits unknown(type, 0, 0);
+    for (const Bound& bound : bounds) {
+      if (bound.divisor > type_mask(type)) {
+        continue;
+      }
+      Bits result = unknown.mod_u(Bits::constant(type, bound.divisor));
+      unittest_assert(result == Bits(type, ~bound.unknown, 0));
+    }
+    Bits zero = Bits::constant(type, 0);
+    unittest_assert(unknown.mod_u(zero) == unknown);
+    unittest_assert(zero.mod_u(zero) == unknown);
+    unittest_assert(Bits::constant(type, 37).mod_u(Bits::constant(type, 5)) == Bits::constant(type, 2));
+  }
+}
+
+void test_unsigned_remainder_power_of_two_bits() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Bits input(type, 0xaaaaaaaaaaaaaaaaULL, 0x8888888888888888ULL);
+    for (size_t shift = 0; shift < type_width(type); shift++) {
+      uint64_t low_mask = (uint64_t(1) << shift) - 1;
+      Bits expected(type, input.mask | ~low_mask, input.value & low_mask);
+      unittest_assert(input.mod_u(Bits::constant(type, uint64_t(1) << shift)) == expected);
+    }
+  }
+}
+
+void test_unsigned_remainder_soundness_exhaustive() {
+  for (uint64_t mask = 0; mask < 256; mask++) {
+    for (uint64_t value = 0; value < 256; value++) {
+      if (value & ~mask) {
+        continue;
+      }
+      Bits input(Type::Int8, mask, value);
+      std::vector<uint64_t> concrete_values;
+      for (uint64_t concrete = 0; concrete < 256; concrete++) {
+        if (input.matches_const(concrete)) {
+          concrete_values.push_back(concrete);
+        }
+      }
+      for (uint64_t divisor = 1; divisor < 256; divisor++) {
+        Bits result = input.mod_u(Bits::constant(Type::Int8, divisor));
+        unittest_assert(result.type == Type::Int8);
+        for (uint64_t concrete : concrete_values) {
+          unittest_assert(result.matches_const(concrete % divisor));
+        }
+      }
+    }
+  }
+}
+
+void test_unsigned_remainder_soundness_wide() {
+  for (Type type : {Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t high = uint64_t(1) << (type_width(type) - 1);
+    for (int i = 0; i < 10000; i++) {
+      uint64_t concrete = (rand64() ^ ((i & 1) ? high : 0)) & type_mask(type);
+      uint64_t divisor = (rand64() ^ ((i & 2) ? high : 0)) & type_mask(type);
+      if (divisor == 0) {
+        divisor = 1;
+      }
+      Bits input(type, rand64() | ((i & 4) ? high : 0), concrete);
+      unittest_assert(input.mod_u(Bits::constant(type, divisor)).matches_const(concrete % divisor));
+    }
+  }
+}
+
+void test_unsigned_remainder_simplify() {
+  Context context;
+  Allocator allocator;
+  std::istringstream stream(R"(section {
+b0(%0: Ptr, %1: Int64):
+  %2 = ModU %1, 3:Int64
+  %3 = LtU %2, 4:Int64
+  %4 = And %1, 18446744073709551584:Int64
+  %5 = ModU %4, 32:Int64
+  Store %0, %3, aliasing=0, offset=0
+  Store %0, %5, aliasing=0, offset=8
+  Exit
+}
+)");
+  Section* section = SectionReader<Builder>::read_section(context, allocator, stream);
+  std::vector<StoreInst*> outputs;
+  for (Inst* inst : *section->entry()) {
+    if (dynmatch(StoreInst, store, inst)) {
+      outputs.push_back(store);
+    }
+  }
+  section->order_blocks(BlockOrdering::Dominator);
+  Simplify::run(section, 10);
+  unittest_assert(!section->verify(std::cout));
+  unittest_assert(dynamic_cast<Const*>(outputs.at(0)->value()));
+  unittest_assert(((Const*) outputs.at(0)->value())->value() == 1);
+  unittest_assert(dynamic_cast<Const*>(outputs.at(1)->value()));
+  unittest_assert(((Const*) outputs.at(1)->value())->value() == 0);
+  delete section;
+}
+
+void test_unsigned_comparison_bounds() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t high = uint64_t(1) << (type_width(type) - 1);
+    Bits low(type, high, 0);
+    Bits upper(type, high, high);
+    Bits unknown(type, 0, 0);
+    Bits zero = Bits::constant(type, 0);
+    Bits maximum = Bits::constant(type, type_mask(type));
+    Bits boundary = Bits::constant(type, high - 1);
+    Bits even(type, 1, 0);
+    struct Comparison {
+      Bits a;
+      Bits b;
+      int expected;
+    };
+    const Comparison cases[] = {
+      {low, upper, 1}, {upper, low, 0}, {unknown, zero, 0},
+      {maximum, unknown, 0}, {zero, unknown, -1}, {unknown, maximum, -1},
+      {low, boundary, -1}, {boundary, low, 0}, {unknown, unknown, -1},
+      {even, maximum, 1}, {maximum, even, 0},
+      {zero, zero, 0}, {maximum, maximum, 0}, {zero, maximum, 1}
+    };
+    for (const Comparison& comparison : cases) {
+      Bits result = comparison.a.lt_u(comparison.b);
+      unittest_assert(result.type == Type::Bool);
+      if (comparison.expected < 0) {
+        unittest_assert(!result.is_const());
+      } else {
+        unittest_assert(result.is_const());
+        unittest_assert(result.value == uint64_t(comparison.expected));
+      }
+    }
+  }
+}
+
+void test_signed_comparison_bounds() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t high = uint64_t(1) << (type_width(type) - 1);
+    Bits nonnegative(type, high, 0);
+    Bits negative(type, high, high);
+    Bits unknown(type, 0, 0);
+    Bits small_positive(type, type_mask(type) & ~uint64_t(3), 0);
+    Bits small_negative(type, type_mask(type) & ~uint64_t(3), type_mask(type) & ~uint64_t(3));
+    Bits even(type, 1, 0);
+    Bits zero = Bits::constant(type, 0);
+    Bits minimum = Bits::constant(type, high);
+    Bits maximum = Bits::constant(type, high - 1);
+    struct Comparison {
+      Bits a;
+      Bits b;
+      int expected;
+    };
+    const Comparison cases[] = {
+      {negative, nonnegative, 1}, {nonnegative, negative, 0},
+      {small_positive, Bits::constant(type, 32), 1},
+      {Bits::constant(type, 32), small_positive, 0},
+      {small_negative, Bits::constant(type, type_mask(type) - 4), 0},
+      {Bits::constant(type, type_mask(type) - 4), small_negative, 1},
+      {small_positive, Bits::constant(type, 3), -1},
+      {small_negative, Bits::constant(type, type_mask(type)), -1},
+      {negative, negative, -1}, {nonnegative, nonnegative, -1},
+      {unknown, unknown, -1}, {unknown, zero, -1},
+      {unknown, minimum, 0}, {maximum, unknown, 0},
+      {minimum, unknown, -1}, {unknown, maximum, -1},
+      {even, maximum, 1}, {maximum, even, 0},
+      {zero, zero, 0}, {minimum, minimum, 0}, {maximum, maximum, 0},
+      {minimum, maximum, 1}, {maximum, minimum, 0}
+    };
+    for (const Comparison& comparison : cases) {
+      Bits result = comparison.a.lt_s(comparison.b);
+      unittest_assert(result.type == Type::Bool);
+      if (comparison.expected < 0) {
+        unittest_assert(!result.is_const());
+      } else {
+        unittest_assert(result.is_const());
+        unittest_assert(result.value == uint64_t(comparison.expected));
+      }
+    }
+  }
+}
+
+void test_signed_comparison_soundness_exhaustive() {
+  struct State {
+    Bits bits;
+    int minimum;
+    int maximum;
+  };
+  std::vector<State> states;
+  for (uint64_t mask = 0; mask < 256; mask++) {
+    for (uint64_t value = 0; value < 256; value++) {
+      if (value & ~mask) {
+        continue;
+      }
+      Bits bits(Type::Int8, mask, value);
+      int minimum = 128;
+      int maximum = -129;
+      for (int concrete = 0; concrete < 256; concrete++) {
+        if (bits.matches_const(concrete)) {
+          int signed_value = concrete < 128 ? concrete : concrete - 256;
+          minimum = std::min(minimum, signed_value);
+          maximum = std::max(maximum, signed_value);
+        }
+      }
+      states.push_back({bits, minimum, maximum});
+    }
+  }
+  unittest_assert(states.size() == 6561);
+  for (const State& a : states) {
+    for (const State& b : states) {
+      Bits result = a.bits.lt_s(b.bits);
+      unittest_assert(result.type == Type::Bool);
+      unittest_assert(result.matches_const(a.minimum < b.maximum));
+      unittest_assert(result.matches_const(a.maximum < b.minimum));
+    }
+  }
+}
+
+void test_signed_comparison_soundness_wide() {
+  for (Type type : {Type::Int16, Type::Int32, Type::Int64}) {
+    for (int i = 0; i < 10000; i++) {
+      uint64_t high = uint64_t(1) << (type_width(type) - 1);
+      uint64_t value_a = (rand64() ^ ((i & 1) ? high : 0)) & type_mask(type);
+      uint64_t value_b = (rand64() ^ ((i & 2) ? high : 0)) & type_mask(type);
+      uint64_t mask_a = rand64() | ((i & 4) ? high : 0);
+      uint64_t mask_b = rand64() | ((i & 8) ? high : 0);
+      Bits bits_a(type, mask_a, value_a);
+      Bits bits_b(type, mask_b, value_b);
+      bool expected = false;
+      switch (type) {
+        case Type::Int16: expected = int16_t(value_a) < int16_t(value_b); break;
+        case Type::Int32: expected = int32_t(value_a) < int32_t(value_b); break;
+        case Type::Int64: expected = int64_t(value_a) < int64_t(value_b); break;
+        default: unittest_assert(false);
+      }
+      unittest_assert(bits_a.lt_s(bits_b).matches_const(expected));
+    }
+  }
+}
+
+void test_unsigned_comparison_after_resize() {
+  Context context;
+  Allocator allocator;
+  std::istringstream stream(R"(section {
+b0(%0: Ptr, %1: Int32):
+  %2 = And %1, 16777215:Int32
+  %3 = ResizeU %2, type=Int64
+  %4 = LtU %3, 16777216:Int64
+  %5 = LtU 16777216:Int64, %3
+  %6 = LtU %3, 16777215:Int64
+  Store %0, %4, aliasing=0, offset=0
+  Store %0, %5, aliasing=0, offset=8
+  Store %0, %6, aliasing=0, offset=16
+  Exit
+}
+)");
+  Section* section = SectionReader<Builder>::read_section(context, allocator, stream);
+  std::vector<StoreInst*> outputs;
+  for (Inst* inst : *section->entry()) {
+    if (dynmatch(StoreInst, store, inst)) {
+      outputs.push_back(store);
+    }
+  }
+  section->order_blocks(BlockOrdering::Dominator);
+  Simplify::run(section, 10);
+  unittest_assert(!section->verify(std::cout));
+  unittest_assert(dynamic_cast<Const*>(outputs.at(0)->value()));
+  unittest_assert(((Const*) outputs.at(0)->value())->value() == 1);
+  unittest_assert(dynamic_cast<Const*>(outputs.at(1)->value()));
+  unittest_assert(((Const*) outputs.at(1)->value())->value() == 0);
+  unittest_assert(dynamic_cast<LtUInst*>(outputs.at(2)->value()));
+  delete section;
+}
+
+void test_signed_comparison_after_resize() {
+  Context context;
+  Allocator allocator;
+  std::istringstream stream(R"(section {
+b0(%0: Ptr, %1: Int8):
+  %2 = And %1, 3:Int8
+  %7 = ResizeU %2, type=Int32
+  %3 = ResizeU %7, type=Int64
+  %4 = LtS %3, 32:Int64
+  %5 = LtS 32:Int64, %3
+  %6 = LtS %3, 3:Int64
+  Store %0, %4, aliasing=0, offset=0
+  Store %0, %5, aliasing=0, offset=8
+  Store %0, %6, aliasing=0, offset=16
+  Exit
+}
+)");
+  Section* section = SectionReader<Builder>::read_section(context, allocator, stream);
+  std::vector<StoreInst*> outputs;
+  for (Inst* inst : *section->entry()) {
+    if (dynmatch(StoreInst, store, inst)) {
+      outputs.push_back(store);
+    }
+  }
+  section->order_blocks(BlockOrdering::Dominator);
+  Simplify::run(section, 10);
+  unittest_assert(!section->verify(std::cout));
+  unittest_assert(dynamic_cast<Const*>(outputs.at(0)->value()));
+  unittest_assert(((Const*) outputs.at(0)->value())->value() == 1);
+  unittest_assert(dynamic_cast<Const*>(outputs.at(1)->value()));
+  unittest_assert(((Const*) outputs.at(1)->value())->value() == 0);
+  unittest_assert(dynamic_cast<LtSInst*>(outputs.at(2)->value()));
+  delete section;
+}
+
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
+
+  suite.test("mask through highest bit").run(test_mask_through_highest_bit);
+  suite.test("unsigned bounds").run(test_unsigned_bounds);
+  suite.test("unsigned bound conversions").run(test_unsigned_bound_conversions);
+  suite.test("unsigned bound conversions exhaustive").run(test_unsigned_bound_conversions_exhaustive);
+  suite.test("unsigned remainder bounds").run(test_unsigned_remainder_bounds);
+  suite.test("unsigned remainder power of two bits").run(test_unsigned_remainder_power_of_two_bits);
+  suite.test("unsigned remainder soundness exhaustive").run(test_unsigned_remainder_soundness_exhaustive);
+  suite.test("unsigned remainder soundness wide").run(test_unsigned_remainder_soundness_wide);
+  suite.test("unsigned remainder simplify").run(test_unsigned_remainder_simplify);
+  suite.test("unsigned comparison bounds").run(test_unsigned_comparison_bounds);
+  suite.test("unsigned comparison after resize").run(test_unsigned_comparison_after_resize);
+  suite.test("signed comparison bounds").run(test_signed_comparison_bounds);
+  suite.test("signed comparison after resize").run(test_signed_comparison_after_resize);
+  suite.test("signed comparison soundness exhaustive").run(test_signed_comparison_soundness_exhaustive);
+  suite.test("signed comparison soundness wide").run(test_signed_comparison_soundness_wide);
 
   suite.test("usedbits_constant_shl").run(test_usedbits_constant_shl);
 
@@ -608,8 +1011,6 @@ int main(int argc, char** argv) {
             unittest_assert(result.type == Type::Bool);
             if (a.is_const() && b.is_const()) {
               unittest_assert(result == Bits::constant(true));
-            } else {
-              unittest_assert(result == Bits(Type::Bool, 0, 0));
             }
             unittest_assert((result & Bits::constant(false)) == Bits::constant(false));
           }
