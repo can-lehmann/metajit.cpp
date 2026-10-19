@@ -5054,9 +5054,7 @@ private:
   }
 
   void _propagate_lt(Value* left, Value* right, const Bits& result, uint64_t flip) {
-    if (!result.is_const()) {
-      return;
-    }
+    assert(result.is_const());
     Bits x = Bits::at(_values, left);
     Bits y = Bits::at(_values, right);
     // Use unsigned bounds directly for known nonnegative operands.
