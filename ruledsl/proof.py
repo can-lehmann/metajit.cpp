@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import warnings
 
 import z3
 
@@ -34,6 +35,10 @@ class ProofError(SourceError):
         self.instantiation = instantiation
         self.counterexample = counterexample
         super().__init__(message, node.span, source, filename)
+
+
+class UnprovedWidthsWarning(UserWarning):
+    pass
 
 
 def concrete_value(value, model):
@@ -228,7 +233,7 @@ class Prover:
             return z3.UGE(left, right)
         raise ValueError(op)
 
-    def prove(self):
+    def prove(self, refinement=True):
         for statement in self.checked.rule.body:
             if isinstance(statement, ast.Condition) and statement.kind == "where":
                 continue
@@ -245,6 +250,8 @@ class Prover:
         if self.query(self.checked.rule, self.conditions, z3.Not(self.before.poison)) == z3.unsat:
             self.error(self.checked.rule, "source is always poison under its checks for this type "
                        "instantiation; restrict the types with where")
+        if not refinement:
+            return
         self.after = self.pattern(self.checked.rule.replacement)
         violation = z3.Or(self.after.poison, self.before.bits != self.after.bits)
         if self.query(self.checked.rule, self.conditions, z3.Not(self.before.poison), violation,
@@ -252,11 +259,32 @@ class Prover:
             self.error(self.checked.rule, "could not prove refinement", self.solver.model())
 
 
+def ir_types(checked, assignment):
+    spans = (checked.rule.pattern.span, checked.rule.replacement.span)
+    return {assignment[info.type] for node, info in checked.expressions.items()
+            if info.type is not None and any(span.start <= node.span.start and node.span.end <= span.end
+                                            for span in spans)}
+
+
 def prove(source, filename="<string>", timeout_ms=120000):
     if timeout_ms <= 0:
         raise ValueError("proof timeout must be positive")
     checked_rules = check(source, filename)
     for checked in checked_rules:
+        unproved = []
         for assignment in checked.instantiations:
-            Prover(checked, assignment, source, filename, timeout_ms).prove()
+            refinement = not checked.rule.small_widths_only or all(
+                type_.width <= 16 for type_ in ir_types(checked, assignment))
+            Prover(checked, assignment, source, filename, timeout_ms).prove(refinement)
+            if not refinement:
+                unproved.append(assignment)
+        if unproved:
+            if len(unproved) == len(checked.instantiations):
+                raise ProofError("SORRY_Z3_SMALL_WIDTHS requires an instantiation with all widths "
+                                 "at most 16 bits", checked.rule, source, filename, unproved[0])
+            types = sorted({type_.name for assignment in unproved for type_ in ir_types(checked, assignment)
+                            if type_.width > 16})
+            warnings.warn(f"{filename}: rule {checked.rule.name!r}: SORRY_Z3_SMALL_WIDTHS leaves "
+                          f"{len(unproved)} instantiations involving {', '.join(types)} unproved",
+                          UnprovedWidthsWarning, stacklevel=2)
     return checked_rules

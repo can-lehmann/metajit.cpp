@@ -1433,24 +1433,6 @@ namespace metajit {
       return build_mod_s(a, b);
     }
   
-  private:
-    bool is_power_of_two(uint64_t value) {
-      return value != 0 && (value & (value - 1)) == 0;
-    }
-
-  public:
-    Value* fold_mod_u(Value* a, Value* b) {
-      if (dynmatch(Const, const_b, b)) {
-        if (is_power_of_two(const_b->value())) {
-          // x %u 2^n => x & (2^n - 1)
-          uint64_t mask = const_b->value() - 1;
-          return fold_and(a, build_const(a->type(), mask));
-        }
-      }
-
-      return build_mod_u(a, b);
-    }
-
     Value* fold_not(Value* a) {
       return fold_xor(a, build_const(a->type(), type_mask(a->type())));
     }

@@ -61,6 +61,9 @@ class Parser:
                              self.source, self.filename)
         self.expect("NEWLINE")
         self.expect("INDENT")
+        small_widths_only = self.accept("SORRY_Z3_SMALL_WIDTHS") is not None
+        if small_widths_only:
+            self.expect("NEWLINE")
         body = []
         while self.current.kind != "=>":
             start = self.current.span
@@ -85,7 +88,7 @@ class Parser:
         end = self.tokens[self.position - 2].span.end
         self.expect("DEDENT")
         return ast.Rule(Span(name.span.start, end, name.span.line, name.span.column),
-                        name.text, pattern, tuple(body), replacement)
+                        name.text, pattern, tuple(body), replacement, small_widths_only)
 
     def annotation(self, value):
         if self.accept(":"):

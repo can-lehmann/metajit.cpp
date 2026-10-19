@@ -12,7 +12,7 @@ from unittest.mock import patch
 from .__main__ import main
 from .generate import generate
 from .parser import parse
-from .proof import ProofError
+from .proof import ProofError, UnprovedWidthsWarning
 
 
 RULES = """add_zero: Add(x, 0)
@@ -393,6 +393,21 @@ class GenerationTests(unittest.TestCase):
             with self.assertRaises(ProofError):
                 generate("bad: Add(x, y)\n    => Sub(x, y)")
             emitter.assert_not_called()
+
+    def test_small_widths_annotation_still_rejects_invalid_emission(self):
+        with patch("ruledsl.generate.emit") as emitter:
+            with self.assertRaises(ProofError):
+                generate("bad: Add(x, y)\n    SORRY_Z3_SMALL_WIDTHS\n    => x\n")
+            emitter.assert_not_called()
+
+    def test_cli_reports_unproved_widths_and_emits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "folds.rules"
+            output = Path(directory) / "folds.inc.hpp"
+            source.write_text("id: Add(x, 0)\n    SORRY_Z3_SMALL_WIDTHS\n    => x\n")
+            with self.assertWarnsRegex(UnprovedWidthsWarning, "2 instantiations.*Int32, Int64 unproved"):
+                self.assertEqual(main([str(source), "-o", str(output)]), 0)
+            self.assertIn("Value* fold_add(", output.read_text())
 
     def test_cli_proves_and_emits_with_handwritten_fallback(self):
         with tempfile.TemporaryDirectory() as directory:

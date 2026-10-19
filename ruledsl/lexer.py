@@ -11,7 +11,7 @@ TOKEN_RE = re.compile(
     r"|(?P<OP>=>|<<|>>|<=|>=|==|!=|//|[():,=+\-*/%&|^~<>])"
     r"|(?P<COMMENT>\#.*)"
 )
-KEYWORDS = {"check", "where", "and", "or", "not"}
+KEYWORDS = {"check", "where", "and", "or", "not", "SORRY_Z3_SMALL_WIDTHS"}
 
 
 @dataclass(frozen=True)

@@ -505,6 +505,45 @@ void test_fold_mul_power_of_two() {
   }
 }
 
+void test_fold_mod_u_power_of_two() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type, type});
+    builder.move_to_end(block);
+    Value* input = block->arg(0);
+    for (size_t bit = 0; bit < type_width(type); bit++) {
+      uint64_t divisor = uint64_t(1) << bit;
+      Value* constant = builder.build_const(type, divisor);
+      Value* result = builder.fold_mod_u(input, constant);
+      if (bit == 0) {
+        check_const(result, type, 0);
+      } else {
+        AndInst* mask = dynamic_cast<AndInst*>(result);
+        unittest_assert(mask && mask->arg(0) == input);
+        check_const(mask->arg(1), type, divisor - 1);
+      }
+      for (uint64_t value : {uint64_t(0), uint64_t(1), uint64_t(3), type_mask(type)}) {
+        Value* folded = builder.fold_mod_u(builder.build_const(type, value), constant);
+        check_const(folded, type, value % divisor);
+      }
+    }
+    for (uint64_t divisor : {uint64_t(0), uint64_t(3), uint64_t(5), type_mask(type)}) {
+      unittest_assert(dynamic_cast<ModUInst*>(builder.fold_mod_u(input, builder.build_const(type, divisor))));
+    }
+    unittest_assert(dynamic_cast<ModUInst*>(builder.fold_mod_u(input, block->arg(1))));
+    TraceBuilder trace(&section);
+    trace.move_to_end(block);
+    AndInst* traced = dynamic_cast<AndInst*>(trace.build_mod_u(input, builder.build_const(type, 8)));
+    unittest_assert(traced && traced->arg(0) == input);
+    check_const(traced->arg(1), type, 7);
+    builder.build_exit();
+    unittest_assert(!section.verify(std::cout));
+  }
+}
+
 void test_fold_mul_power_of_two_negative() {
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -2190,6 +2229,7 @@ int main(int argc, char** argv) {
 
   suite.test("rule DSL builder integration").run(test_rule_dsl_builder_integration);
   suite.test("fold constant select propagation").run(test_fold_constant_select_propagation);
+  suite.test("fold mod u power of two").run(test_fold_mod_u_power_of_two);
   suite.test("fold select unselected poison").run(test_fold_select_unselected_poison);
 
   suite.test("cse commutative operands").run(test_cse_commutative_operands);

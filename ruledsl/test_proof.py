@@ -3,7 +3,8 @@ from unittest.mock import patch
 
 import z3
 
-from .proof import ProofError, prove
+from .proof import ProofError, UnprovedWidthsWarning, prove
+from .source import TypeCheckError
 from .semantics import Value, emit
 from .types import BOOL, INT8, INT16
 
@@ -71,6 +72,50 @@ class SemanticsTests(unittest.TestCase):
 
 
 class ProofTests(unittest.TestCase):
+    def test_small_widths_annotation_proves_modulo(self):
+        source = ("modulo: ModU(x, C)\n    SORRY_Z3_SMALL_WIDTHS\n"
+                  "    check C != 0 and C & (C - 1) == 0\n"
+                  "    Cmask = C - 1\n    => And(x, Cmask)\n")
+        with self.assertWarnsRegex(UnprovedWidthsWarning, "2 instantiations.*Int32, Int64 unproved"):
+            rules = prove(source)
+        self.assertEqual(len(rules[0].instantiations), 4)
+
+    def test_small_widths_annotation_checks_operand_types(self):
+        source = ("equal: Eq(x: T, x)\n    SORRY_Z3_SMALL_WIDTHS\n"
+                  "    where T != Bool\n    C = width(T) <= 16\n    => C\n")
+        with self.assertWarnsRegex(UnprovedWidthsWarning, "2 instantiations.*Int32, Int64 unproved"):
+            self.assertEqual(len(prove(source)[0].instantiations), 4)
+        with self.assertRaisesRegex(ProofError, "could not prove refinement"):
+            prove(source.replace("    SORRY_Z3_SMALL_WIDTHS\n", ""))
+
+    def test_small_widths_annotation_checks_intermediate_types(self):
+        source = ("roundtrip: ResizeX(ResizeU(x: S): U): S\n"
+                  "    SORRY_Z3_SMALL_WIDTHS\n    where width(S) < width(U)\n    => x\n")
+        with self.assertWarnsRegex(UnprovedWidthsWarning, "7 instantiations.*Int32, Int64 unproved"):
+            self.assertEqual(len(prove(source)[0].instantiations), 10)
+
+    def test_small_widths_annotation_still_rejects_bad_rules(self):
+        with self.assertRaisesRegex(ProofError, "could not prove refinement"):
+            prove("bad: Add(x, y)\n    SORRY_Z3_SMALL_WIDTHS\n    => x\n")
+        with self.assertRaises(TypeCheckError):
+            prove("bad: Add(x, y)\n    SORRY_Z3_SMALL_WIDTHS\n    => 0: Bool\n")
+
+    def test_small_widths_annotation_checks_wide_calculations_and_guards(self):
+        for source, message in (
+            ("bad: Add(x: T, 0)\n    SORRY_Z3_SMALL_WIDTHS\n"
+             "    C = 1 // (32 - width(T))\n    => x\n", "calculation may be undefined"),
+            ("bad: Add(x: T, 0)\n    SORRY_Z3_SMALL_WIDTHS\n"
+             "    check width(T) < 32\n    => x\n", "checks cannot hold"),
+            ("bad: Shl(x: T, C)\n    SORRY_Z3_SMALL_WIDTHS\n"
+             "    check C == width(T) & 32\n    => x\n", "source is always poison"),
+        ):
+            with self.subTest(message=message), self.assertRaisesRegex(ProofError, f"result=Int32.*{message}"):
+                prove(source)
+
+    def test_small_widths_annotation_requires_a_small_instantiation(self):
+        with self.assertRaisesRegex(ProofError, "requires an instantiation"):
+            prove("id: Add(x: Int32, 0)\n    SORRY_Z3_SMALL_WIDTHS\n    => x\n")
+
     def test_basic_rules_all_instantiations(self):
         rules = prove(
             "add_zero: Add(x, 0)\n    => x\n"

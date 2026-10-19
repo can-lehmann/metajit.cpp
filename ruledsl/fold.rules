@@ -76,6 +76,12 @@ mul_power_of_two: Mul(x, C)
     Cshift = ctz(C)
     => Shl(x, Cshift)
 
+mod_u_power_of_two: ModU(x, C)
+    SORRY_Z3_SMALL_WIDTHS
+    check C != 0 and C & (C - 1) == 0
+    Cmask = C - 1
+    => And(x, Cmask)
+
 and_self: And(x, x)
     => x
 

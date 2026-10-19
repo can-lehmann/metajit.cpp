@@ -140,11 +140,28 @@ rules = prove("""add_reassoc: Add(Add(x, C1), C2)
 ```
 
 `prove` returns the checked rules after proving every legal concrete type
-instantiation. `ProofError` contains source locations and the failing type
-assignment. A refinement failure also includes a concrete counterexample with
-input values, poison flags, and source and replacement results. Each Z3 query
+instantiation, subject to explicit proof annotations. `ProofError` contains source
+locations and the failing type assignment. A refinement failure also includes a
+concrete counterexample with input values, poison flags, and source and replacement results. Each Z3 query
 has a two-minute timeout by default, configurable with `timeout_ms`. Unknown
 results and timeouts fail the proof.
+
+Place `SORRY_Z3_SMALL_WIDTHS` first in a rule body to prove refinement only for
+instantiations where every IR type in the input and replacement patterns is at
+most 16 bits. This includes operands and intermediate operations, even when the
+result is `Bool`. Wider instantiations remain enabled in generated code and are
+reported with `UnprovedWidthsWarning`. At least one small-width instantiation
+must exist. Type checking, calculation-definedness checks, guard satisfiability,
+and the requirement for a defined source execution still apply at every width.
+Unannotated rules continue to require full proofs.
+
+```text
+mod_u_power_of_two: ModU(x, C)
+    SORRY_Z3_SMALL_WIDTHS
+    check C != 0 and C & (C - 1) == 0
+    Cmask = C - 1
+    => And(x, Cmask)
+```
 
 The instruction semantics are adapted from RtlTrace's `tools/find_redundant.py`,
 with additional support for `Popcount`. Each value has fixed-width bits and a
@@ -356,7 +373,8 @@ before invoking either a handwritten fallback or a raw builder. Matching runs
 before this normalization and supports both operand orders, including nested
 operations created through raw builders.
 
-Every regeneration must prove the rules before writing generated output.
+Every regeneration must verify the rules under their proof annotations before
+writing generated output.
 Both generation entry points enforce that requirement. `jitir.py` proves and
 generates the folds before invoking any output-writing plugins, so proof errors
 leave all existing outputs untouched. Both Makefiles track the rule file,

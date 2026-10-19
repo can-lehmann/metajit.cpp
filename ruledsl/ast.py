@@ -70,6 +70,7 @@ class Rule:
     pattern: Expr
     body: tuple[Binding | Condition, ...]
     replacement: Expr
+    small_widths_only: bool = False
 
 
 def format_pattern(node):

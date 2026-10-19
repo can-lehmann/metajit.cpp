@@ -52,6 +52,18 @@ class ParserTests(unittest.TestCase):
     def calculation(self, expression):
         return parse(f"example: Add(x, C)\n    R = {expression}\n    => R\n")[0].body[0].value
 
+    def test_small_widths_annotation(self):
+        rule = parse("id: Add(x, 0)\n    SORRY_Z3_SMALL_WIDTHS\n    => x\n")[0]
+        self.assertTrue(rule.small_widths_only)
+        self.assertEqual(rule.body, ())
+        self.assertFalse(parse("id: Add(x, 0)\n    => x\n")[0].small_widths_only)
+
+    def test_small_widths_annotation_must_be_first_and_unique(self):
+        for body in ("    check C != 0\n    SORRY_Z3_SMALL_WIDTHS\n",
+                     "    SORRY_Z3_SMALL_WIDTHS\n    SORRY_Z3_SMALL_WIDTHS\n"):
+            with self.subTest(body=body), self.assertRaises(ParseError):
+                parse("id: Add(x, C)\n" + body + "    => x\n")
+
     def test_simple_rules_and_final_newline(self):
         for ending in ("", "\n", "\r\n"):
             with self.subTest(ending=ending):
