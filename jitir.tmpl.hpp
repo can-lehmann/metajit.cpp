@@ -490,6 +490,7 @@ namespace metajit {
     }
 
     void substitute_args(NameMap<Value*>& substs);
+    void substitute_args_resolved(NameMap<Value*>& substs);
 
     void substitute_blocks(BlockMap<Block*>& substs);
     void substitute_blocks(const std::map<Block*, Block*>& substs);
@@ -2038,6 +2039,30 @@ namespace metajit {
       BaseNameMap<Block, T, BlockMap<T>>::init_size(section->block_count());
     }
   };
+
+  Value* resolve_substitution(Value* value, NameMap<Value*>& substs) {
+    Value* replacement = value;
+    while (replacement->is_named() && ((NamedValue*) replacement)->name() < substs.size()) {
+      Value* next = substs[(NamedValue*) replacement];
+      if (!next) {
+        break;
+      }
+      replacement = next;
+    }
+    while (value != replacement) {
+      Value*& next = substs[(NamedValue*) value];
+      Value* old_next = next;
+      next = replacement;
+      value = old_next;
+    }
+    return replacement;
+  }
+
+  void Inst::substitute_args_resolved(NameMap<Value*>& substs) {
+    for (size_t index = 0; index < arg_count(); index++) {
+      set_arg(index, resolve_substitution(arg(index), substs));
+    }
+  }
 
   void Inst::substitute_args(NameMap<Value*>& substs) {
     for (size_t it = 0; it < arg_count(); it++) {
@@ -3961,7 +3986,7 @@ namespace metajit {
       for (Block* block : *_section) {
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
-          inst->substitute_args(substs);
+          inst->substitute_args_resolved(substs);
 
           _builder.move_before(block, inst);
           Value* subst = fn(inst);
@@ -4164,27 +4189,11 @@ private:
   }
 
   Value* _resolve_subst(Value* value) {
-    Value* replacement = value;
-    while (replacement->is_named() && ((NamedValue*) replacement)->name() < _substs.size()) {
-      Value* next = _substs[(NamedValue*) replacement];
-      if (!next) {
-        break;
-      }
-      replacement = next;
-    }
-    while (value != replacement) {
-      Value*& next = _substs[(NamedValue*) value];
-      Value* old_next = next;
-      next = replacement;
-      value = old_next;
-    }
-    return replacement;
+    return resolve_substitution(value, _substs);
   }
 
   void _substitute_args(Inst* inst) {
-    for (size_t arg_index = 0; arg_index < inst->arg_count(); arg_index++) {
-      inst->set_arg(arg_index, _resolve_subst(inst->arg(arg_index)));
-    }
+    inst->substitute_args_resolved(_substs);
   }
 
 public:

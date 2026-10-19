@@ -2263,6 +2263,42 @@ void test_fold_non_integer_select_equality() {
   }
 }
 
+void test_rule_dsl_resolved_arguments() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Int32, Type::Int32});
+  builder.move_to_end(block);
+  Value* x = block->arg(0);
+  Value* y = block->arg(1);
+  Inst* first = builder.build_add(x, y);
+  Inst* second = builder.build_sub(x, y);
+  Inst* root = builder.build_add(x, first);
+  builder.build_exit();
+  section.autoname();
+  NameMap<Value*> substs(&section);
+  Const* zero = builder.build_const(Type::Int32, 0);
+  substs[first] = second;
+  substs[second] = zero;
+  root->substitute_args_resolved(substs);
+  unittest_assert(root->arg(0) == x && root->arg(1) == zero);
+  unittest_assert(substs[first] == zero && substs[second] == zero);
+  size_t before = builder.next_name();
+  unittest_assert(builder.try_simplify(root) == x);
+  unittest_assert(builder.next_name() == before);
+  substs[(NamedValue*) x] = y;
+  root->substitute_args_resolved(substs);
+  unittest_assert(builder.try_simplify(root) == y);
+  builder.set_next_name();
+  builder.move_before(block, root);
+  Inst* fresh = builder.build_add(x, y);
+  root->set_arg(0, fresh);
+  root->substitute_args_resolved(substs);
+  unittest_assert(root->arg(0) == fresh);
+  unittest_assert(builder.try_simplify(root) == fresh);
+}
+
 void test_rule_dsl_local_rewriter() {
   for (bool trace : {false, true}) {
     for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
@@ -2287,6 +2323,7 @@ void test_rule_dsl_local_rewriter() {
       StoreInst* reused = builder.build_store(block->arg(0), builder.build_or(shared, x), 0, 16);
       Value* zero = builder.build_and(x, builder.build_const(type, 0));
       StoreInst* constant = builder.build_store(block->arg(0), zero, 0, 24);
+      StoreInst* forwarded = builder.build_store(block->arg(0), builder.build_add(x, zero), 0, 40);
       Value* select = builder.build_select(block->arg(3), builder.build_poison(type), x);
       StoreInst* selected = builder.build_store(block->arg(0), select, 0, 32);
       builder.build_exit();
@@ -2311,9 +2348,10 @@ void test_rule_dsl_local_rewriter() {
       check_const(addition->arg(1), type, uint64_t(-7) & type_mask(type));
       unittest_assert(reused->value() == shared);
       check_const(constant->value(), type, 0);
+      unittest_assert(forwarded->value() == x);
       unittest_assert(selected->value() == select);
       unittest_assert(!section.verify(std::cout));
-      uint64_t output[5] = {};
+      uint64_t output[6] = {};
       Interpreter interpreter(&section, {Interpreter::Bits::constant(output),
                               Interpreter::Bits::constant(type, type_mask(type)),
                               Interpreter::Bits::constant(type, 5), Interpreter::Bits::constant(false)});
@@ -2323,6 +2361,7 @@ void test_rule_dsl_local_rewriter() {
       unittest_assert(output[2] == type_mask(type));
       unittest_assert(output[3] == 0);
       unittest_assert(output[4] == type_mask(type));
+      unittest_assert(output[5] == type_mask(type));
     }
   }
 }
@@ -2357,6 +2396,7 @@ int main(int argc, char** argv) {
 
   suite.test("rule DSL builder integration").run(test_rule_dsl_builder_integration);
   suite.test("rule DSL local rewriter").run(test_rule_dsl_local_rewriter);
+  suite.test("rule DSL resolved arguments").run(test_rule_dsl_resolved_arguments);
   suite.test("fold constant select propagation").run(test_fold_constant_select_propagation);
   suite.test("fold non integer select equality").run(test_fold_non_integer_select_equality);
   suite.test("fold mod u power of two").run(test_fold_mod_u_power_of_two);
