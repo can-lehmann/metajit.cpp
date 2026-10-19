@@ -300,3 +300,50 @@ int main() {
         for statistics in (False, True):
             with self.subTest(statistics=statistics):
                 self.run_cpp(code, main, statistics)
+
+    def test_migrated_select_and_resize_rules(self):
+        facts_source = Path(__file__).with_name("simplify.rules").read_text()
+        code = generate(RULES, include_simplify=True, simplify_source=facts_source)
+        main = """
+struct Facts {
+  Value* value;
+  uint64_t zeros;
+  uint64_t ones;
+  uint64_t known_zeros(Value* operand) const { return operand == value ? zeros : 0; }
+  uint64_t known_ones(Value* operand) const { return operand == value ? ones : 0; }
+};
+
+int main() {
+  Generated builder;
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value c(Type::Bool), x(type), y(type);
+    Inst* select = builder.build_select(&c, &x, &y);
+    unsigned before = builder.builds;
+    assert(builder.try_simplify(select, Facts{&c, 0, 1}) == &x);
+    assert(builder.try_simplify(select, Facts{&c, 1, 0}) == &y);
+    assert(builder.try_simplify(select, Facts{&c, 0, 0}) == nullptr);
+    assert(builder.builds == before);
+    for (Type narrow : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      if (type_width(narrow) >= type_width(type)) {
+        continue;
+      }
+      uint64_t upper = type_mask(type) ^ type_mask(narrow);
+      for (unsigned kind = 0; kind < 3; ++kind) {
+        Inst* inner = kind == 0 ? (Inst*) builder.build_resize_x(&x, narrow) :
+                      kind == 1 ? (Inst*) builder.build_resize_u(&x, narrow) : builder.build_resize_s(&x, narrow);
+        Inst* outer = builder.build_resize_u(inner, type);
+        before = builder.builds;
+        assert(builder.try_simplify(outer, Facts{&x, upper, 0}) == &x);
+        assert(builder.try_simplify(outer, Facts{&x, 0, 0}) == nullptr);
+        assert(builder.try_simplify(outer, Facts{&x, 0, upper}) == nullptr);
+        uint64_t incomplete = upper & ~(uint64_t(1) << type_width(narrow));
+        assert(builder.try_simplify(outer, Facts{&x, incomplete, 0}) == nullptr);
+        assert(builder.builds == before);
+      }
+    }
+  }
+}
+"""
+        for statistics in (False, True):
+            with self.subTest(statistics=statistics):
+                self.run_cpp(code, main, statistics)

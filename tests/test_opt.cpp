@@ -2263,6 +2263,99 @@ void test_fold_non_integer_select_equality() {
   }
 }
 
+void test_rule_dsl_known_select() {
+  for (bool trace : {false, true}) {
+    for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64,
+                      Type::Float32, Type::Float64, Type::Ptr}) {
+      if (trace && type == Type::Ptr) {
+        continue;
+      }
+      for (bool taken : {false, true}) {
+        Context context;
+        Allocator allocator;
+        Section section(context, allocator);
+        Builder builder(&section);
+        Block* block = builder.build_block({Type::Ptr, type, Type::Bool});
+        builder.move_to_end(block);
+        Value* x = block->arg(1);
+        Value* c = block->arg(2);
+        Value* condition = taken ? (Value*) builder.build_or(c, builder.build_const(Type::Bool, 1)) :
+                                  (Value*) builder.build_and(c, builder.build_const(Type::Bool, 0));
+        Value* poison = builder.build_poison(type);
+        SelectInst* select = builder.build_select(condition, taken ? x : poison, taken ? poison : x);
+        StoreInst* store = builder.build_store(block->arg(0), select, 0, 0);
+        builder.build_exit();
+        section.order_blocks(BlockOrdering::Dominator);
+        section.autoname();
+        builder.set_next_name();
+        KnownBits facts(&section);
+        size_t before = builder.next_name();
+        unittest_assert(builder.try_simplify(select, facts.view()) == (is_int_or_bool(type) ? x : nullptr));
+        unittest_assert(builder.next_name() == before);
+        if (trace) {
+          Chain chain;
+          chain.add(block);
+          SimplifyTrace::run(&section, &chain);
+        } else {
+          Simplify::run(&section, 2);
+        }
+        unittest_assert(store->value() == x);
+        unittest_assert(!section.verify(std::cout));
+        uint64_t output = 0;
+        uint64_t input = type == Type::Bool ? 1 : 42;
+        Interpreter interpreter(&section, {Interpreter::Bits::constant(&output),
+                                Interpreter::Bits::constant(type, input), Interpreter::Bits::constant(false)});
+        unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+        unittest_assert(output == input);
+      }
+    }
+  }
+}
+
+void test_rule_dsl_known_resize_roundtrip() {
+  for (bool trace : {false, true}) {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      for (Type narrow : {Type::Bool, Type::Int8, Type::Int16, Type::Int32}) {
+        if (type_width(narrow) >= type_width(type)) {
+          continue;
+        }
+        for (size_t kind = 0; kind < 3; kind++) {
+          Context context;
+          Allocator allocator;
+          Section section(context, allocator);
+          Builder builder(&section);
+          Block* block = builder.build_block({Type::Ptr, type});
+          builder.move_to_end(block);
+          Value* masked = builder.build_and(block->arg(1), builder.build_const(type, type_mask(narrow)));
+          Value* inner = kind == 0 ? (Value*) builder.build_resize_x(masked, narrow) :
+                        kind == 1 ? (Value*) builder.build_resize_u(masked, narrow) :
+                                    (Value*) builder.build_resize_s(masked, narrow);
+          StoreInst* store = builder.build_store(block->arg(0), builder.build_resize_u(inner, type), 0, 0);
+          builder.build_exit();
+          section.order_blocks(BlockOrdering::Dominator);
+          section.autoname();
+          if (trace) {
+            Chain chain;
+            chain.add(block);
+            SimplifyTrace::run(&section, &chain);
+          } else {
+            Simplify::run(&section, 2);
+          }
+          unittest_assert(store->value() == masked);
+          unittest_assert(!section.verify(std::cout));
+          for (uint64_t input : {uint64_t(0), uint64_t(1), type_mask(type)}) {
+            uint64_t output = 0;
+            Interpreter interpreter(&section, {Interpreter::Bits::constant(&output),
+                                    Interpreter::Bits::constant(type, input)});
+            unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+            unittest_assert(output == (input & type_mask(narrow)));
+          }
+        }
+      }
+    }
+  }
+}
+
 void test_rule_dsl_known_bits() {
   for (bool trace : {false, true}) {
     for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
@@ -2449,6 +2542,8 @@ int main(int argc, char** argv) {
   suite.test("rule DSL local rewriter").run(test_rule_dsl_local_rewriter);
   suite.test("rule DSL resolved arguments").run(test_rule_dsl_resolved_arguments);
   suite.test("rule DSL known bits").run(test_rule_dsl_known_bits);
+  suite.test("rule DSL known select").run(test_rule_dsl_known_select);
+  suite.test("rule DSL known resize roundtrip").run(test_rule_dsl_known_resize_roundtrip);
   suite.test("fold constant select propagation").run(test_fold_constant_select_propagation);
   suite.test("fold non integer select equality").run(test_fold_non_integer_select_equality);
   suite.test("fold mod u power of two").run(test_fold_mod_u_power_of_two);

@@ -2074,6 +2074,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And %1, 15:Int8
   %3 = And %1, 6:Int8
+  %4 = And %2, 6:Int8
   Store %0, %2, aliasing=0, offset=1
   Store %0, %3, aliasing=0, offset=2
   Exit
@@ -2096,6 +2097,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And %1, 15:Int8
   %3 = And %1, 6:Int8
+  %4 = And 6:Int8, %2
   Store %0, %2, aliasing=0, offset=1
   Store %0, %3, aliasing=0, offset=2
   Exit
@@ -2118,6 +2120,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And 15:Int8, %1
   %3 = And %1, 6:Int8
+  %4 = And %2, 6:Int8
   Store %0, %2, aliasing=0, offset=1
   Store %0, %3, aliasing=0, offset=2
   Exit
@@ -2140,6 +2143,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And 15:Int8, %1
   %3 = And %1, 6:Int8
+  %4 = And 6:Int8, %2
   Store %0, %2, aliasing=0, offset=1
   Store %0, %3, aliasing=0, offset=2
   Exit
@@ -2162,8 +2166,10 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And %1, 63:Int8
   %3 = And %1, 30:Int8
-  %4 = And %1, 20:Int8
-  Store %0, %4, aliasing=0, offset=1
+  %4 = And %2, 30:Int8
+  %5 = And %1, 20:Int8
+  %6 = And %3, 21:Int8
+  Store %0, %5, aliasing=0, offset=1
   Exit
 }
 )");
@@ -2182,7 +2188,7 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And %1, 15:Int8
-  %3 = And %1, 0:Int8
+  %3 = And %2, 240:Int8
   Store %0, 0:Int8, aliasing=0, offset=1
   Exit
 }
@@ -2203,6 +2209,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
   %2 = And %1, 9223372036854775823:Int64
   %3 = And %1, 9223372036854775814:Int64
+  %4 = And %2, 9223372036854775814:Int64
   Store %0, %3, aliasing=0, offset=8
   Exit
 }

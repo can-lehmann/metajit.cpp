@@ -4047,28 +4047,11 @@ namespace metajit {
             return replacement;
           }
 
-          if (dynmatch(ResizeUInst, resize_u, inst)) {
-            if (dynamic_cast<ResizeXInst*>(resize_u->arg(0)) ||
-                dynamic_cast<ResizeUInst*>(resize_u->arg(0)) ||
-                dynamic_cast<ResizeSInst*>(resize_u->arg(0))) {
-
-              // ResizeU(ResizeX/U/S(arg)) => arg if all upper bits of arg are known
-              // to be zero and the source type is equal to the target type
-              Value* arg = ((Inst*) resize_u->arg(0))->arg(0);
-              KnownBits::Bits arg_bits = known_bits.at(arg);
-              if (arg->type() == resize_u->type() &&
-                  type_width(resize_u->type()) > type_width(resize_u->arg(0)->type()) &&
-                  ((~arg_bits.mask | arg_bits.value) & ~type_mask(resize_u->arg(0)->type()) & type_mask(resize_u->type())) == 0) {
-                return arg;
-              }
-            }
-          } else if (dynmatch(SelectInst, select, inst)) {
-            KnownBits::Bits cond = known_bits.at(select->cond());
-            if (cond.is_const()) {
-              if (cond.value != 0) {
-                return select->arg(1);
-              } else {
-                return select->arg(2);
+          if (!is_int_or_bool(inst->type())) {
+            if (dynmatch(SelectInst, select, inst)) {
+              KnownBits::Bits cond = known_bits.at(select->cond());
+              if (cond.is_const()) {
+                return select->arg(cond.value ? 1 : 2);
               }
             }
           }
@@ -4136,33 +4119,6 @@ private:
     _substs[inst] = value;
   }
 
-  void _reassociate_and(AndInst* inst) {
-    Value* value = inst->arg(0);
-    Const* mask = dynamic_cast<Const*>(inst->arg(1));
-    if (!mask) {
-      mask = dynamic_cast<Const*>(inst->arg(0));
-      value = inst->arg(1);
-    }
-    if (!mask) {
-      return;
-    }
-    while (dynmatch(AndInst, inner, value)) {
-      Value* base = inner->arg(0);
-      Const* inner_mask = dynamic_cast<Const*>(inner->arg(1));
-      if (!inner_mask) {
-        inner_mask = dynamic_cast<Const*>(inner->arg(0));
-        base = inner->arg(1);
-      }
-      if (!inner_mask) {
-        break;
-      }
-      mask = _builder.build_const(inst->type(), mask->value() & inner_mask->value());
-      value = base;
-      inst->set_arg(0, value);
-      inst->set_arg(1, mask);
-    }
-  }
-
   Value* _resolve_subst(Value* value) {
     return resolve_substitution(value, _substs);
   }
@@ -4206,32 +4162,17 @@ public:
             inst->type() == Type::Ptr) {
           continue;
         }
-        if (dynmatch(AndInst, and_inst, inst)) {
-          _reassociate_and(and_inst);
-        }
         Bits bits = Bits::eval(inst, _values);
         _values[inst] = bits;
         if (bits.is_const()) {
           _add_subst(inst, _builder.build_const(inst->type(), bits.value));
         } else if (Value* replacement = _builder.try_simplify(inst, KnownBits::View(_values))) {
           _add_subst(inst, replacement);
-        } else if (dynmatch(SelectInst, select, inst)) {
-          KnownBits::Bits cond = Bits::at(_values, select->cond());
-          if (cond.is_const()) {
-            if (cond.value != 0) {
-              _add_subst(inst, select->arg(1));
-            } else {
-              _add_subst(inst, select->arg(2));
-            }
-          }
-        } else if (dynmatch(EqInst, eqinst, inst)) {
-          if (dynmatch(Const, const_b, eqinst->arg(1))) {
-            if (const_b->value() == 1) {
-              if (dynmatch(ResizeUInst, resizeu, eqinst->arg(0))) {
-                if (resizeu->arg(0)->type() == Type::Bool) {
-                  _add_subst(inst, resizeu->arg(0));
-                }
-              }
+        } else if (!is_int_or_bool(inst->type())) {
+          if (dynmatch(SelectInst, select, inst)) {
+            KnownBits::Bits cond = Bits::at(_values, select->cond());
+            if (cond.is_const()) {
+              _add_subst(inst, select->arg(cond.value ? 1 : 2));
             }
           }
         }

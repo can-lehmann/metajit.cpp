@@ -397,6 +397,14 @@ matching proper input subtrees. Rules equivalent to returning the root itself
 are ignored. Both entry points increment the same source-rule firing counters.
 
 Each pass retains its traversal, substitution, KnownBits, and guard handling.
+Known-condition Select rewrites and known-zero narrowing/zero-extension
+roundtrips are expressed in `simplify.rules`. And constant reassociation and
+extended-Bool equality use the existing folding rules through the shared
+rewriter. SimplifyTrace retains replaced instructions until later cleanup,
+including reassociated And instructions; it no longer mutates those roots in
+place. Handwritten Select fallbacks cover result types outside the DSL's
+integer/Boolean domain. UsedBits rewrites need a different proof contract and
+remain handwritten.
 Whole-result replacement from KnownBits still runs before the local rewriter.
 Missing facts for newly constructed instructions are typed unknown values.
 SimplifyTrace grows its fact and substitution tables when rewriting constructs
