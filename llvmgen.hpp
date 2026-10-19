@@ -23,6 +23,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/PassManager.h"
 
 #include "llvm/Passes/OptimizationLevel.h"
@@ -200,10 +201,14 @@ namespace metajit {
           emit_type(ptr_to_int->type())
         );
       } else if (dynmatch(LoadInst, load, inst)) {
-        return _builder.CreateLoad(
+        llvm::LoadInst* result = _builder.CreateLoad(
           emit_type(load->type()),
           emit_add_offset(emit_arg(load->arg(0)), load->offset())
         );
+        if (load->flags().has(LoadFlags::Pure)) {
+          result->setMetadata(llvm::LLVMContext::MD_invariant_load, llvm::MDNode::get(_context, {}));
+        }
+        return result;
       } else if (dynmatch(StoreInst, store, inst)) {
         return _builder.CreateStore(
           emit_arg(store->arg(1)),
