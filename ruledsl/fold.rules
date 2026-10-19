@@ -402,6 +402,9 @@ resize_x_constant_truncate: ResizeX(C: S): T
 shl_zero: Shl(x, 0)
     => x
 
+shl_zero_value: Shl(0, x)
+    => 0
+
 shl_constants: Shl(C1: T, C2)
     check C2 < width(T)
     C = C1 << C2
@@ -487,6 +490,9 @@ shl_masked_shl_in_range: Shl(And(Shl(x: T, C1), Cmask), C2)
 shr_u_zero: ShrU(x, 0)
     => x
 
+shr_u_zero_value: ShrU(0, x)
+    => 0
+
 shr_u_constants: ShrU(C1: T, C2)
     check C2 < width(T)
     C = C1 >> C2
@@ -512,3 +518,6 @@ shr_u_constant_select: ShrU(C1: T, Select(c, C2, C3))
 
 shr_s_zero: ShrS(x, 0)
     => x
+
+shr_s_zero_value: ShrS(0, x)
+    => 0

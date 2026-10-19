@@ -2156,6 +2156,22 @@ void check_fold_constant_select(Value* result, Value* cond, Type type, uint64_t 
   }
 }
 
+void test_fold_shift_zero_value() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Int32});
+  builder.move_to_end(block);
+  Value* zero = builder.build_const(Type::Int32, 0);
+  Value* shift = block->arg(0);
+  check_const(builder.fold_shl(zero, shift), Type::Int32, 0);
+  check_const(builder.fold_shr_u(zero, shift), Type::Int32, 0);
+  check_const(builder.fold_shr_s(zero, shift), Type::Int32, 0);
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+}
+
 void test_fold_constant_select_propagation() {
   for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -2545,6 +2561,7 @@ int main(int argc, char** argv) {
   suite.test("rule DSL known select").run(test_rule_dsl_known_select);
   suite.test("rule DSL known resize roundtrip").run(test_rule_dsl_known_resize_roundtrip);
   suite.test("fold constant select propagation").run(test_fold_constant_select_propagation);
+  suite.test("fold shift zero value").run(test_fold_shift_zero_value);
   suite.test("fold non integer select equality").run(test_fold_non_integer_select_equality);
   suite.test("fold mod u power of two").run(test_fold_mod_u_power_of_two);
   suite.test("fold select unselected poison").run(test_fold_select_unselected_poison);
