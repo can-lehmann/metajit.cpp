@@ -76,6 +76,9 @@ mul_power_of_two: Mul(x, C)
     Cshift = ctz(C)
     => Shl(x, Cshift)
 
+mul_shift_one: Mul(x, Shl(1, y))
+    => Shl(x, y)
+
 mod_u_power_of_two: ModU(x, C)
     SORRY_Z3_SMALL_WIDTHS
     check C != 0 and C & (C - 1) == 0

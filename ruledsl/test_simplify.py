@@ -8,6 +8,7 @@ from .cpp import emit
 from .generate import generate
 from .lower_simplify import lower
 from .matcher import build_matchers
+from .parser import parse
 from .proof import prove
 
 
@@ -206,6 +207,93 @@ int main() {
     OrInst* analyzed = dynamic_cast<OrInst*>(builder.try_simplify(builder.build_add(&x, opaque_zero), constant_fact));
     assert(analyzed && analyzed->arg(0) == &x && analyzed->arg(1) == opaque_zero);
     assert(builder.try_simplify(builder.build_add(&x, &y), redundant_and) == nullptr);
+  }
+}
+"""
+        for statistics in (False, True):
+            with self.subTest(statistics=statistics):
+                self.run_cpp(code, main, statistics)
+
+    def test_known_bits_candidates(self):
+        source = Path(__file__).with_name("fold.rules").read_text()
+        rule, = [rule for rule in parse(source) if rule.name == "mul_shift_one"]
+        folds = RULES + source[rule.span.start:rule.span.end] + "\n"
+        facts_source = Path(__file__).with_name("simplify.rules").read_text()
+        code = generate(folds, include_simplify=True, simplify_source=facts_source)
+        main = """
+struct Masks {
+  Value* x;
+  Value* y;
+  uint64_t zeros_x;
+  uint64_t ones_x;
+  uint64_t zeros_y;
+  uint64_t known_zeros(Value* value) const {
+    return value == x ? zeros_x : value == y ? zeros_y : 0;
+  }
+  uint64_t known_ones(Value* value) const { return value == x ? ones_x : 0; }
+};
+
+int main() {
+  Generated builder;
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(type), y(type), z(type), shift(type);
+    uint64_t mask = type_mask(type);
+    uint64_t width = type_width(type);
+    Masks disjoint{&x, &y, mask ^ 1, 0, 1};
+    Inst* subtraction = builder.build_sub(builder.build_xor(&x, &y), &y);
+    unsigned before = builder.builds;
+    assert(builder.try_simplify(subtraction, disjoint) == &x);
+    assert(builder.builds == before);
+    Const zero(type, 0), one(type, 1);
+    Inst* comparison = builder.build_eq(builder.build_or(&x, &y), &zero);
+    EqInst* reduced = dynamic_cast<EqInst*>(builder.try_simplify(comparison, disjoint));
+    assert(reduced && reduced->arg(0) == &x && reduced->arg(1) == &y);
+    Inst* bool_comparison = builder.build_eq(&x, &one);
+    ResizeXInst* truncated = dynamic_cast<ResizeXInst*>(builder.try_simplify(bool_comparison, disjoint));
+    assert(truncated && truncated->type() == Type::Bool && truncated->arg(0) == &x);
+    before = builder.builds;
+    assert(builder.try_simplify(bool_comparison) == nullptr);
+    assert(builder.builds == before);
+    Masks separate{&y, &z, mask ^ 1, 0, 1};
+    Inst* masked = builder.build_and(builder.build_xor(&x, &y), &z);
+    AndInst* filtered = dynamic_cast<AndInst*>(builder.try_simplify(masked, separate));
+    assert(filtered && filtered->arg(0) == &x && filtered->arg(1) == &z);
+    Masks nonnegative{&x, &y, uint64_t(1) << (width - 1), 0, 0};
+    Inst* arithmetic = builder.build_shr_s(&x, &shift);
+    ShrUInst* logical = dynamic_cast<ShrUInst*>(builder.try_simplify(arithmetic, nonnegative));
+    assert(logical && logical->arg(0) == &x && logical->arg(1) == &shift);
+    assert(builder.try_simplify(arithmetic) == nullptr);
+    for (uint64_t count : {uint64_t(0), uint64_t(1), width - 1, width}) {
+      Const amount(type, count);
+      Inst* left = builder.build_shl(&x, &amount);
+      Inst* unsigned_root = builder.build_shr_u(left, &amount);
+      Inst* signed_root = builder.build_shr_s(left, &amount);
+      before = builder.builds;
+      if (count == width) {
+        assert(builder.try_simplify(unsigned_root, nonnegative) == nullptr);
+        assert(builder.try_simplify(signed_root, nonnegative) == nullptr);
+      } else {
+        uint64_t lost = mask ^ (mask >> count);
+        Masks no_loss{&x, &y, lost, 0, 0};
+        assert(builder.try_simplify(unsigned_root, no_loss) == &x);
+        uint64_t top = mask & (UINT64_MAX << (width - 1 - count));
+        Masks positive{&x, &y, top, 0, 0};
+        Masks negative{&x, &y, 0, top, 0};
+        assert(builder.try_simplify(signed_root, positive) == &x);
+        assert(builder.try_simplify(signed_root, negative) == &x);
+        if (count != 0) {
+          assert(builder.try_simplify(unsigned_root) == nullptr);
+          assert(builder.try_simplify(signed_root) == nullptr);
+        }
+      }
+      assert(builder.builds == before);
+    }
+    Inst* power = builder.build_shl(&one, &shift);
+    for (bool swapped : {false, true}) {
+      ShlInst* product = dynamic_cast<ShlInst*>(swapped ? builder.fold_mul(power, &x)
+                                                     : builder.fold_mul(&x, power));
+      assert(product && product->arg(0) == &x && product->arg(1) == &shift);
+    }
   }
 }
 """
