@@ -505,6 +505,45 @@ void test_unsigned_bounds() {
   }
 }
 
+void test_unsigned_bound_conversions() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t maximum = type_mask(type);
+    uint64_t high = uint64_t(1) << (type_width(type) - 1);
+    Bits unknown(type, 0, 0);
+    unittest_assert(Bits::unsigned_upper_bound(type, 0) == Bits::constant(type, 0));
+    unittest_assert(Bits::unsigned_upper_bound(type, maximum) == unknown);
+    unittest_assert(Bits::unsigned_upper_bound(type, high - 1) == Bits(type, high, 0));
+    unittest_assert(Bits::unsigned_upper_bound(type, high) == unknown);
+    unittest_assert(Bits::unsigned_lower_bound(type, 0) == unknown);
+    unittest_assert(Bits::unsigned_lower_bound(type, maximum) == Bits::constant(type, maximum));
+    unittest_assert(Bits::unsigned_lower_bound(type, high) == Bits(type, high, high));
+    unittest_assert(Bits::unsigned_lower_bound(type, high - 1) == unknown);
+  }
+}
+
+void test_unsigned_bound_conversions_exhaustive() {
+  for (uint64_t bound = 0; bound < 256; bound++) {
+    uint64_t upper_ones = 255;
+    uint64_t upper_any = 0;
+    uint64_t lower_ones = 255;
+    uint64_t lower_any = 0;
+    for (uint64_t value = 0; value < 256; value++) {
+      if (value <= bound) {
+        upper_ones &= value;
+        upper_any |= value;
+      }
+      if (value >= bound) {
+        lower_ones &= value;
+        lower_any |= value;
+      }
+    }
+    unittest_assert(Bits::unsigned_upper_bound(Type::Int8, bound) ==
+                    Bits(Type::Int8, upper_ones | ~upper_any, upper_ones));
+    unittest_assert(Bits::unsigned_lower_bound(Type::Int8, bound) ==
+                    Bits(Type::Int8, lower_ones | ~lower_any, lower_ones));
+  }
+}
+
 void test_unsigned_remainder_bounds() {
   struct Bound {
     uint64_t divisor;
@@ -827,6 +866,8 @@ int main(int argc, char** argv) {
 
   suite.test("mask through highest bit").run(test_mask_through_highest_bit);
   suite.test("unsigned bounds").run(test_unsigned_bounds);
+  suite.test("unsigned bound conversions").run(test_unsigned_bound_conversions);
+  suite.test("unsigned bound conversions exhaustive").run(test_unsigned_bound_conversions_exhaustive);
   suite.test("unsigned remainder bounds").run(test_unsigned_remainder_bounds);
   suite.test("unsigned remainder power of two bits").run(test_unsigned_remainder_power_of_two_bits);
   suite.test("unsigned remainder soundness exhaustive").run(test_unsigned_remainder_soundness_exhaustive);

@@ -398,6 +398,12 @@ void check_fold_text(const std::string& input, const std::string& expected) {
   delete section;
 }
 
+void check_const(Value* value, Type type, uint64_t expected) {
+  unittest_assert(dynamic_cast<Const*>(value));
+  unittest_assert(value->type() == type);
+  unittest_assert(((Const*) value)->value() == expected);
+}
+
 void test_fold_add_complement_to_sub() {
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -424,8 +430,7 @@ void test_fold_add_complement_to_sub() {
     }
     Value* sum = builder.fold_add(a, builder.fold_not(a));
     Value* zero = builder.fold_add(sum, one);
-    unittest_assert(dynamic_cast<Const*>(zero));
-    unittest_assert(((Const*) zero)->value() == 0);
+    check_const(zero, type, 0);
     Value* different = builder.fold_add(a, builder.fold_xor(b, builder.build_const(type, 2)));
     Value* unchanged = builder.fold_add(different, one);
     unittest_assert(dynamic_cast<AddInst*>(unchanged));
@@ -461,8 +466,7 @@ void test_fold_sub_eq_zero() {
       unittest_assert(eq->arg(1) == b);
     }
     Value* same = builder.fold_eq(builder.build_sub(a, a), zero);
-    unittest_assert(dynamic_cast<Const*>(same));
-    unittest_assert(((Const*) same)->value() == 1);
+    check_const(same, Type::Bool, 1);
     Value* different = builder.fold_eq(difference, builder.build_const(type, 1));
     unittest_assert(dynamic_cast<EqInst*>(different));
     unittest_assert(((EqInst*) different)->arg(0) == difference);
@@ -489,16 +493,12 @@ void test_fold_mul_power_of_two() {
           unittest_assert(dynamic_cast<ShlInst*>(result));
           unittest_assert(((ShlInst*) result)->arg(0) == input);
           Value* amount = ((ShlInst*) result)->arg(1);
-          unittest_assert(dynamic_cast<Const*>(amount));
-          unittest_assert(amount->type() == type);
-          unittest_assert(((Const*) amount)->value() == shift);
+          check_const(amount, type, shift);
         }
         for (uint64_t value : {uint64_t(0), uint64_t(1), uint64_t(3), type_mask(type)}) {
           Const* constant = builder.build_const(type, value);
           Value* product = swapped ? builder.fold_mul(factor, constant) : builder.fold_mul(constant, factor);
-          unittest_assert(dynamic_cast<Const*>(product));
-          unittest_assert(product->type() == type);
-          unittest_assert(((Const*) product)->value() == ((constant->value() << shift) & type_mask(type)));
+          check_const(product, type, ((constant->value() << shift) & type_mask(type)));
         }
       }
     }
@@ -517,8 +517,7 @@ void test_fold_mul_power_of_two_negative() {
     for (bool swapped : {false, true}) {
       Const* zero = builder.build_const(type, 0);
       Value* product = swapped ? builder.fold_mul(zero, input) : builder.fold_mul(input, zero);
-      unittest_assert(dynamic_cast<Const*>(product));
-      unittest_assert(((Const*) product)->value() == 0);
+      check_const(product, type, 0);
       for (uint64_t value : {uint64_t(3), uint64_t(5), type_mask(type)}) {
         Const* factor = builder.build_const(type, value);
         Value* result = swapped ? builder.fold_mul(factor, input) : builder.fold_mul(input, factor);
@@ -540,9 +539,7 @@ void test_fold_sub_same_operand() {
     Block* block = builder.build_block({type});
     builder.move_to_end(block);
     Value* result = builder.fold_sub(block->arg(0), block->arg(0));
-    unittest_assert(dynamic_cast<Const*>(result));
-    unittest_assert(((Const*) result)->value() == 0);
-    unittest_assert(result->type() == type);
+    check_const(result, type, 0);
   }
 }
 
@@ -555,9 +552,7 @@ void test_fold_xor_same_operand() {
     Block* block = builder.build_block({type});
     builder.move_to_end(block);
     Value* result = builder.fold_xor(block->arg(0), block->arg(0));
-    unittest_assert(dynamic_cast<Const*>(result));
-    unittest_assert(((Const*) result)->value() == 0);
-    unittest_assert(result->type() == type);
+    check_const(result, type, 0);
   }
 }
 
@@ -570,9 +565,7 @@ void test_fold_lt_u_same_operand() {
     Block* block = builder.build_block({type});
     builder.move_to_end(block);
     Value* result = builder.fold_lt_u(block->arg(0), block->arg(0));
-    unittest_assert(dynamic_cast<Const*>(result));
-    unittest_assert(((Const*) result)->value() == 0);
-    unittest_assert(result->type() == Type::Bool);
+    check_const(result, Type::Bool, 0);
   }
 }
 
@@ -585,9 +578,7 @@ void test_fold_lt_s_same_operand() {
     Block* block = builder.build_block({type});
     builder.move_to_end(block);
     Value* result = builder.fold_lt_s(block->arg(0), block->arg(0));
-    unittest_assert(dynamic_cast<Const*>(result));
-    unittest_assert(((Const*) result)->value() == 0);
-    unittest_assert(result->type() == Type::Bool);
+    check_const(result, Type::Bool, 0);
   }
 }
 
@@ -732,423 +723,46 @@ b0(%0: Ptr, %1: Int8, %2: Int8, %3: Int8, %4: Int8, %5: Int8, %6: Int8, %7: Int8
   Exit
 }
 )");
+}
+
+void test_fold_shift_pairs_int64_boundaries() {
   check_fold_text(R"(section {
-b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16, %5: Int16, %6: Int16, %7: Int16, %8: Int16, %9: Int16, %10: Int16, %11: Int16, %12: Int16, %13: Int16, %14: Int16, %15: Int16, %16: Int16, %17: Int16, %18: Int16, %19: Int16, %20: Int16, %21: Int16, %22: Int16, %23: Int16, %24: Int16, %25: Int16, %26: Int16):
-  %27 = ShrU %1, 1:Int16
-  %28 = Shl %27, 1:Int16
-  Store %0, %28, aliasing=0, offset=0
-  %29 = ShrU %2, 1:Int16
-  %30 = Shl %29, 1:Int16
-  %31 = Or %2, %30
-  Store %0, %31, aliasing=0, offset=8
-  %32 = ShrU %3, 1:Int16
-  %33 = Shl %32, 1:Int16
-  %34 = Or %33, %3
-  Store %0, %34, aliasing=0, offset=16
-  %35 = Shl %4, 1:Int16
-  %36 = Shl %35, 1:Int16
-  Store %0, %36, aliasing=0, offset=24
-  %37 = ShrU %5, 1:Int16
-  %38 = Shl %37, 8:Int16
-  Store %0, %38, aliasing=0, offset=32
-  %39 = Shl %6, 1:Int16
-  %40 = Shl %39, 8:Int16
-  Store %0, %40, aliasing=0, offset=40
-  %41 = ShrU %7, 1:Int16
-  %42 = Shl %41, 15:Int16
-  Store %0, %42, aliasing=0, offset=48
-  %43 = Shl %8, 1:Int16
-  %44 = Shl %43, 15:Int16
-  Store %0, %44, aliasing=0, offset=56
-  %45 = ShrU %9, 8:Int16
-  %46 = Shl %45, 1:Int16
-  Store %0, %46, aliasing=0, offset=64
-  %47 = Shl %10, 8:Int16
-  %48 = Shl %47, 1:Int16
-  Store %0, %48, aliasing=0, offset=72
-  %49 = ShrU %11, 8:Int16
-  %50 = Shl %49, 8:Int16
-  Store %0, %50, aliasing=0, offset=80
-  %51 = ShrU %12, 8:Int16
-  %52 = Shl %51, 8:Int16
-  %53 = Or %12, %52
-  Store %0, %53, aliasing=0, offset=88
-  %54 = ShrU %13, 8:Int16
-  %55 = Shl %54, 8:Int16
-  %56 = Or %55, %13
-  Store %0, %56, aliasing=0, offset=96
-  %57 = Shl %14, 8:Int16
-  %58 = Shl %57, 8:Int16
-  Store %0, %58, aliasing=0, offset=104
-  %59 = ShrU %15, 8:Int16
-  %60 = Shl %59, 15:Int16
-  Store %0, %60, aliasing=0, offset=112
-  %61 = Shl %16, 8:Int16
-  %62 = Shl %61, 15:Int16
-  Store %0, %62, aliasing=0, offset=120
-  %63 = ShrU %17, 15:Int16
-  %64 = Shl %63, 1:Int16
-  Store %0, %64, aliasing=0, offset=128
-  %65 = Shl %18, 15:Int16
-  %66 = Shl %65, 1:Int16
-  Store %0, %66, aliasing=0, offset=136
-  %67 = ShrU %19, 15:Int16
-  %68 = Shl %67, 8:Int16
-  Store %0, %68, aliasing=0, offset=144
-  %69 = Shl %20, 15:Int16
-  %70 = Shl %69, 8:Int16
-  Store %0, %70, aliasing=0, offset=152
-  %71 = ShrU %21, 15:Int16
-  %72 = Shl %71, 15:Int16
-  Store %0, %72, aliasing=0, offset=160
-  %73 = ShrU %22, 15:Int16
-  %74 = Shl %73, 15:Int16
-  %75 = Or %22, %74
-  Store %0, %75, aliasing=0, offset=168
-  %76 = ShrU %23, 15:Int16
-  %77 = Shl %76, 15:Int16
-  %78 = Or %77, %23
-  Store %0, %78, aliasing=0, offset=176
-  %79 = Shl %24, 15:Int16
-  %80 = Shl %79, 15:Int16
-  Store %0, %80, aliasing=0, offset=184
-  %81 = ShrU %25, 1:Int16
-  %82 = And %81, %26
-  %83 = Shl %82, 1:Int16
-  Store %0, %83, aliasing=0, offset=192
+b0(%0: Ptr, %1: Int64):
+  %2 = ShrU %1, 63:Int64
+  %3 = Shl %2, 63:Int64
+  Store %0, %3, aliasing=0, offset=0
+  %4 = ShrU %1, 63:Int64
+  %5 = Shl %4, 1:Int64
+  Store %0, %5, aliasing=0, offset=8
+  %6 = ShrU %1, 1:Int64
+  %7 = Shl %6, 63:Int64
+  Store %0, %7, aliasing=0, offset=16
+  %8 = Shl %1, 62:Int64
+  %9 = Shl %8, 1:Int64
+  Store %0, %9, aliasing=0, offset=24
+  %10 = Shl %1, 1:Int64
+  %11 = Shl %10, 63:Int64
+  Store %0, %11, aliasing=0, offset=32
+  %12 = Shl %1, 63:Int64
+  %13 = Shl %12, 63:Int64
+  Store %0, %13, aliasing=0, offset=40
   Exit
 }
 )", R"(section {
-b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16, %5: Int16, %6: Int16, %7: Int16, %8: Int16, %9: Int16, %10: Int16, %11: Int16, %12: Int16, %13: Int16, %14: Int16, %15: Int16, %16: Int16, %17: Int16, %18: Int16, %19: Int16, %20: Int16, %21: Int16, %22: Int16, %23: Int16, %24: Int16, %25: Int16, %26: Int16):
-  %27 = And %1, 65534:Int16
-  Store %0, %27, aliasing=0, offset=0
-  Store %0, %2, aliasing=0, offset=8
-  Store %0, %3, aliasing=0, offset=16
-  %28 = Shl %4, 2:Int16
-  %29 = And %28, 65534:Int16
-  Store %0, %29, aliasing=0, offset=24
-  %30 = Shl %5, 7:Int16
-  %31 = And %30, 65280:Int16
-  Store %0, %31, aliasing=0, offset=32
-  %32 = Shl %6, 9:Int16
-  %33 = And %32, 65280:Int16
-  Store %0, %33, aliasing=0, offset=40
-  %34 = Shl %7, 14:Int16
-  %35 = And %34, 32768:Int16
-  Store %0, %35, aliasing=0, offset=48
-  Store %0, 0:Int16, aliasing=0, offset=56
-  %36 = ShrU %9, 7:Int16
-  %37 = And %36, 65534:Int16
-  Store %0, %37, aliasing=0, offset=64
-  %38 = Shl %10, 9:Int16
-  %39 = And %38, 65534:Int16
-  Store %0, %39, aliasing=0, offset=72
-  %40 = And %11, 65280:Int16
-  Store %0, %40, aliasing=0, offset=80
-  Store %0, %12, aliasing=0, offset=88
-  Store %0, %13, aliasing=0, offset=96
-  Store %0, 0:Int16, aliasing=0, offset=104
-  %41 = Shl %15, 7:Int16
-  %42 = And %41, 32768:Int16
-  Store %0, %42, aliasing=0, offset=112
-  Store %0, 0:Int16, aliasing=0, offset=120
-  %43 = ShrU %17, 14:Int16
-  %44 = And %43, 65534:Int16
-  Store %0, %44, aliasing=0, offset=128
-  Store %0, 0:Int16, aliasing=0, offset=136
-  %45 = ShrU %19, 7:Int16
-  %46 = And %45, 65280:Int16
-  Store %0, %46, aliasing=0, offset=144
-  Store %0, 0:Int16, aliasing=0, offset=152
-  %47 = And %21, 32768:Int16
-  Store %0, %47, aliasing=0, offset=160
-  Store %0, %22, aliasing=0, offset=168
-  Store %0, %23, aliasing=0, offset=176
-  Store %0, 0:Int16, aliasing=0, offset=184
-  %48 = ShrU %25, 1:Int16
-  %49 = And %48, %26
-  %50 = Shl %49, 1:Int16
-  Store %0, %50, aliasing=0, offset=192
-  Exit
-}
-)");
-  check_fold_text(R"(section {
-b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7: Int32, %8: Int32, %9: Int32, %10: Int32, %11: Int32, %12: Int32, %13: Int32, %14: Int32, %15: Int32, %16: Int32, %17: Int32, %18: Int32, %19: Int32, %20: Int32, %21: Int32, %22: Int32, %23: Int32, %24: Int32, %25: Int32, %26: Int32):
-  %27 = ShrU %1, 1:Int32
-  %28 = Shl %27, 1:Int32
-  Store %0, %28, aliasing=0, offset=0
-  %29 = ShrU %2, 1:Int32
-  %30 = Shl %29, 1:Int32
-  %31 = Or %2, %30
-  Store %0, %31, aliasing=0, offset=8
-  %32 = ShrU %3, 1:Int32
-  %33 = Shl %32, 1:Int32
-  %34 = Or %33, %3
-  Store %0, %34, aliasing=0, offset=16
-  %35 = Shl %4, 1:Int32
-  %36 = Shl %35, 1:Int32
-  Store %0, %36, aliasing=0, offset=24
-  %37 = ShrU %5, 1:Int32
-  %38 = Shl %37, 16:Int32
-  Store %0, %38, aliasing=0, offset=32
-  %39 = Shl %6, 1:Int32
-  %40 = Shl %39, 16:Int32
-  Store %0, %40, aliasing=0, offset=40
-  %41 = ShrU %7, 1:Int32
-  %42 = Shl %41, 31:Int32
-  Store %0, %42, aliasing=0, offset=48
-  %43 = Shl %8, 1:Int32
-  %44 = Shl %43, 31:Int32
-  Store %0, %44, aliasing=0, offset=56
-  %45 = ShrU %9, 16:Int32
-  %46 = Shl %45, 1:Int32
-  Store %0, %46, aliasing=0, offset=64
-  %47 = Shl %10, 16:Int32
-  %48 = Shl %47, 1:Int32
-  Store %0, %48, aliasing=0, offset=72
-  %49 = ShrU %11, 16:Int32
-  %50 = Shl %49, 16:Int32
-  Store %0, %50, aliasing=0, offset=80
-  %51 = ShrU %12, 16:Int32
-  %52 = Shl %51, 16:Int32
-  %53 = Or %12, %52
-  Store %0, %53, aliasing=0, offset=88
-  %54 = ShrU %13, 16:Int32
-  %55 = Shl %54, 16:Int32
-  %56 = Or %55, %13
-  Store %0, %56, aliasing=0, offset=96
-  %57 = Shl %14, 16:Int32
-  %58 = Shl %57, 16:Int32
-  Store %0, %58, aliasing=0, offset=104
-  %59 = ShrU %15, 16:Int32
-  %60 = Shl %59, 31:Int32
-  Store %0, %60, aliasing=0, offset=112
-  %61 = Shl %16, 16:Int32
-  %62 = Shl %61, 31:Int32
-  Store %0, %62, aliasing=0, offset=120
-  %63 = ShrU %17, 31:Int32
-  %64 = Shl %63, 1:Int32
-  Store %0, %64, aliasing=0, offset=128
-  %65 = Shl %18, 31:Int32
-  %66 = Shl %65, 1:Int32
-  Store %0, %66, aliasing=0, offset=136
-  %67 = ShrU %19, 31:Int32
-  %68 = Shl %67, 16:Int32
-  Store %0, %68, aliasing=0, offset=144
-  %69 = Shl %20, 31:Int32
-  %70 = Shl %69, 16:Int32
-  Store %0, %70, aliasing=0, offset=152
-  %71 = ShrU %21, 31:Int32
-  %72 = Shl %71, 31:Int32
-  Store %0, %72, aliasing=0, offset=160
-  %73 = ShrU %22, 31:Int32
-  %74 = Shl %73, 31:Int32
-  %75 = Or %22, %74
-  Store %0, %75, aliasing=0, offset=168
-  %76 = ShrU %23, 31:Int32
-  %77 = Shl %76, 31:Int32
-  %78 = Or %77, %23
-  Store %0, %78, aliasing=0, offset=176
-  %79 = Shl %24, 31:Int32
-  %80 = Shl %79, 31:Int32
-  Store %0, %80, aliasing=0, offset=184
-  %81 = ShrU %25, 1:Int32
-  %82 = And %81, %26
-  %83 = Shl %82, 1:Int32
-  Store %0, %83, aliasing=0, offset=192
-  Exit
-}
-)", R"(section {
-b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7: Int32, %8: Int32, %9: Int32, %10: Int32, %11: Int32, %12: Int32, %13: Int32, %14: Int32, %15: Int32, %16: Int32, %17: Int32, %18: Int32, %19: Int32, %20: Int32, %21: Int32, %22: Int32, %23: Int32, %24: Int32, %25: Int32, %26: Int32):
-  %27 = And %1, 4294967294:Int32
-  Store %0, %27, aliasing=0, offset=0
-  Store %0, %2, aliasing=0, offset=8
-  Store %0, %3, aliasing=0, offset=16
-  %28 = Shl %4, 2:Int32
-  %29 = And %28, 4294967294:Int32
-  Store %0, %29, aliasing=0, offset=24
-  %30 = Shl %5, 15:Int32
-  %31 = And %30, 4294901760:Int32
-  Store %0, %31, aliasing=0, offset=32
-  %32 = Shl %6, 17:Int32
-  %33 = And %32, 4294901760:Int32
-  Store %0, %33, aliasing=0, offset=40
-  %34 = Shl %7, 30:Int32
-  %35 = And %34, 2147483648:Int32
-  Store %0, %35, aliasing=0, offset=48
-  Store %0, 0:Int32, aliasing=0, offset=56
-  %36 = ShrU %9, 15:Int32
-  %37 = And %36, 4294967294:Int32
-  Store %0, %37, aliasing=0, offset=64
-  %38 = Shl %10, 17:Int32
-  %39 = And %38, 4294967294:Int32
-  Store %0, %39, aliasing=0, offset=72
-  %40 = And %11, 4294901760:Int32
-  Store %0, %40, aliasing=0, offset=80
-  Store %0, %12, aliasing=0, offset=88
-  Store %0, %13, aliasing=0, offset=96
-  Store %0, 0:Int32, aliasing=0, offset=104
-  %41 = Shl %15, 15:Int32
-  %42 = And %41, 2147483648:Int32
-  Store %0, %42, aliasing=0, offset=112
-  Store %0, 0:Int32, aliasing=0, offset=120
-  %43 = ShrU %17, 30:Int32
-  %44 = And %43, 4294967294:Int32
-  Store %0, %44, aliasing=0, offset=128
-  Store %0, 0:Int32, aliasing=0, offset=136
-  %45 = ShrU %19, 15:Int32
-  %46 = And %45, 4294901760:Int32
-  Store %0, %46, aliasing=0, offset=144
-  Store %0, 0:Int32, aliasing=0, offset=152
-  %47 = And %21, 2147483648:Int32
-  Store %0, %47, aliasing=0, offset=160
-  Store %0, %22, aliasing=0, offset=168
-  Store %0, %23, aliasing=0, offset=176
-  Store %0, 0:Int32, aliasing=0, offset=184
-  %48 = ShrU %25, 1:Int32
-  %49 = And %48, %26
-  %50 = Shl %49, 1:Int32
-  Store %0, %50, aliasing=0, offset=192
-  Exit
-}
-)");
-  check_fold_text(R"(section {
-b0(%0: Ptr, %1: Int64, %2: Int64, %3: Int64, %4: Int64, %5: Int64, %6: Int64, %7: Int64, %8: Int64, %9: Int64, %10: Int64, %11: Int64, %12: Int64, %13: Int64, %14: Int64, %15: Int64, %16: Int64, %17: Int64, %18: Int64, %19: Int64, %20: Int64, %21: Int64, %22: Int64, %23: Int64, %24: Int64, %25: Int64, %26: Int64):
-  %27 = ShrU %1, 1:Int64
-  %28 = Shl %27, 1:Int64
-  Store %0, %28, aliasing=0, offset=0
-  %29 = ShrU %2, 1:Int64
-  %30 = Shl %29, 1:Int64
-  %31 = Or %2, %30
-  Store %0, %31, aliasing=0, offset=8
-  %32 = ShrU %3, 1:Int64
-  %33 = Shl %32, 1:Int64
-  %34 = Or %33, %3
-  Store %0, %34, aliasing=0, offset=16
-  %35 = Shl %4, 1:Int64
-  %36 = Shl %35, 1:Int64
-  Store %0, %36, aliasing=0, offset=24
-  %37 = ShrU %5, 1:Int64
-  %38 = Shl %37, 32:Int64
-  Store %0, %38, aliasing=0, offset=32
-  %39 = Shl %6, 1:Int64
-  %40 = Shl %39, 32:Int64
-  Store %0, %40, aliasing=0, offset=40
-  %41 = ShrU %7, 1:Int64
-  %42 = Shl %41, 63:Int64
-  Store %0, %42, aliasing=0, offset=48
-  %43 = Shl %8, 1:Int64
-  %44 = Shl %43, 63:Int64
-  Store %0, %44, aliasing=0, offset=56
-  %45 = ShrU %9, 32:Int64
-  %46 = Shl %45, 1:Int64
-  Store %0, %46, aliasing=0, offset=64
-  %47 = Shl %10, 32:Int64
-  %48 = Shl %47, 1:Int64
-  Store %0, %48, aliasing=0, offset=72
-  %49 = ShrU %11, 32:Int64
-  %50 = Shl %49, 32:Int64
-  Store %0, %50, aliasing=0, offset=80
-  %51 = ShrU %12, 32:Int64
-  %52 = Shl %51, 32:Int64
-  %53 = Or %12, %52
-  Store %0, %53, aliasing=0, offset=88
-  %54 = ShrU %13, 32:Int64
-  %55 = Shl %54, 32:Int64
-  %56 = Or %55, %13
-  Store %0, %56, aliasing=0, offset=96
-  %57 = Shl %14, 32:Int64
-  %58 = Shl %57, 32:Int64
-  Store %0, %58, aliasing=0, offset=104
-  %59 = ShrU %15, 32:Int64
-  %60 = Shl %59, 63:Int64
-  Store %0, %60, aliasing=0, offset=112
-  %61 = Shl %16, 32:Int64
-  %62 = Shl %61, 63:Int64
-  Store %0, %62, aliasing=0, offset=120
-  %63 = ShrU %17, 63:Int64
-  %64 = Shl %63, 1:Int64
-  Store %0, %64, aliasing=0, offset=128
-  %65 = Shl %18, 63:Int64
-  %66 = Shl %65, 1:Int64
-  Store %0, %66, aliasing=0, offset=136
-  %67 = ShrU %19, 63:Int64
-  %68 = Shl %67, 32:Int64
-  Store %0, %68, aliasing=0, offset=144
-  %69 = Shl %20, 63:Int64
-  %70 = Shl %69, 32:Int64
-  Store %0, %70, aliasing=0, offset=152
-  %71 = ShrU %21, 63:Int64
-  %72 = Shl %71, 63:Int64
-  Store %0, %72, aliasing=0, offset=160
-  %73 = ShrU %22, 63:Int64
-  %74 = Shl %73, 63:Int64
-  %75 = Or %22, %74
-  Store %0, %75, aliasing=0, offset=168
-  %76 = ShrU %23, 63:Int64
-  %77 = Shl %76, 63:Int64
-  %78 = Or %77, %23
-  Store %0, %78, aliasing=0, offset=176
-  %79 = Shl %24, 63:Int64
-  %80 = Shl %79, 63:Int64
-  Store %0, %80, aliasing=0, offset=184
-  %81 = ShrU %25, 1:Int64
-  %82 = And %81, %26
-  %83 = Shl %82, 1:Int64
-  Store %0, %83, aliasing=0, offset=192
-  Exit
-}
-)", R"(section {
-b0(%0: Ptr, %1: Int64, %2: Int64, %3: Int64, %4: Int64, %5: Int64, %6: Int64, %7: Int64, %8: Int64, %9: Int64, %10: Int64, %11: Int64, %12: Int64, %13: Int64, %14: Int64, %15: Int64, %16: Int64, %17: Int64, %18: Int64, %19: Int64, %20: Int64, %21: Int64, %22: Int64, %23: Int64, %24: Int64, %25: Int64, %26: Int64):
-  %27 = And %1, 18446744073709551614:Int64
-  Store %0, %27, aliasing=0, offset=0
-  Store %0, %2, aliasing=0, offset=8
-  Store %0, %3, aliasing=0, offset=16
-  %28 = Shl %4, 2:Int64
-  %29 = And %28, 18446744073709551614:Int64
-  Store %0, %29, aliasing=0, offset=24
-  %30 = Shl %5, 31:Int64
-  %31 = And %30, 18446744069414584320:Int64
-  Store %0, %31, aliasing=0, offset=32
-  %32 = Shl %6, 33:Int64
-  %33 = And %32, 18446744069414584320:Int64
-  Store %0, %33, aliasing=0, offset=40
-  %34 = Shl %7, 62:Int64
-  %35 = And %34, 9223372036854775808:Int64
-  Store %0, %35, aliasing=0, offset=48
-  Store %0, 0:Int64, aliasing=0, offset=56
-  %36 = ShrU %9, 31:Int64
-  %37 = And %36, 18446744073709551614:Int64
-  Store %0, %37, aliasing=0, offset=64
-  %38 = Shl %10, 33:Int64
-  %39 = And %38, 18446744073709551614:Int64
-  Store %0, %39, aliasing=0, offset=72
-  %40 = And %11, 18446744069414584320:Int64
-  Store %0, %40, aliasing=0, offset=80
-  Store %0, %12, aliasing=0, offset=88
-  Store %0, %13, aliasing=0, offset=96
-  Store %0, 0:Int64, aliasing=0, offset=104
-  %41 = Shl %15, 31:Int64
-  %42 = And %41, 9223372036854775808:Int64
-  Store %0, %42, aliasing=0, offset=112
-  Store %0, 0:Int64, aliasing=0, offset=120
-  %43 = ShrU %17, 62:Int64
-  %44 = And %43, 18446744073709551614:Int64
-  Store %0, %44, aliasing=0, offset=128
-  Store %0, 0:Int64, aliasing=0, offset=136
-  %45 = ShrU %19, 31:Int64
-  %46 = And %45, 18446744069414584320:Int64
-  Store %0, %46, aliasing=0, offset=144
-  Store %0, 0:Int64, aliasing=0, offset=152
-  %47 = And %21, 9223372036854775808:Int64
-  Store %0, %47, aliasing=0, offset=160
-  Store %0, %22, aliasing=0, offset=168
-  Store %0, %23, aliasing=0, offset=176
-  Store %0, 0:Int64, aliasing=0, offset=184
-  %48 = ShrU %25, 1:Int64
-  %49 = And %48, %26
-  %50 = Shl %49, 1:Int64
-  Store %0, %50, aliasing=0, offset=192
+b0(%0: Ptr, %1: Int64):
+  %2 = And %1, 9223372036854775808:Int64
+  Store %0, %2, aliasing=0, offset=0
+  %3 = ShrU %1, 62:Int64
+  %4 = And %3, 18446744073709551614:Int64
+  Store %0, %4, aliasing=0, offset=8
+  %5 = Shl %1, 62:Int64
+  %6 = And %5, 9223372036854775808:Int64
+  Store %0, %6, aliasing=0, offset=16
+  %7 = Shl %1, 63:Int64
+  %8 = And %7, 18446744073709551614:Int64
+  Store %0, %8, aliasing=0, offset=24
+  Store %0, 0:Int64, aliasing=0, offset=32
+  Store %0, 0:Int64, aliasing=0, offset=40
   Exit
 }
 )");
@@ -1201,8 +815,7 @@ void test_fold_equal_constants_factoring() {
             unittest_assert(dual ? dynamic_cast<OrInst*>(result) != nullptr :
                                    dynamic_cast<AndInst*>(result) != nullptr);
             Inst* outer = (Inst*) result;
-            unittest_assert(dynamic_cast<Const*>(outer->arg(1)));
-            unittest_assert(((Const*) outer->arg(1))->value() == 7);
+            check_const(outer->arg(1), type, 7);
             unittest_assert(dual ? dynamic_cast<AndInst*>(outer->arg(0)) != nullptr :
                                    dynamic_cast<OrInst*>(outer->arg(0)) != nullptr);
             Inst* inner = (Inst*) outer->arg(0);
@@ -1237,6 +850,39 @@ void test_fold_equal_constants_absorption() {
       unittest_assert(builder.fold_or(c2, inner) == c2);
     }
   }
+}
+
+void test_fold_equal_constants_complement_absorption() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Int8});
+  builder.move_to_end(block);
+  Value* x = block->arg(0);
+  Const* c1 = builder.build_const(Type::Int8, 7);
+  Const* c2 = builder.build_const(Type::Int8, 7);
+  unittest_assert(c1 != c2);
+  Value* complement = builder.build_xor(c2, builder.build_const(Type::Int8, 255));
+  for (Value* inner : {builder.build_or(x, c1), builder.build_or(c1, x)}) {
+    for (Value* result : {builder.fold_and(inner, complement), builder.fold_and(complement, inner)}) {
+      unittest_assert(dynamic_cast<AndInst*>(result));
+      Inst* inst = (Inst*) result;
+      unittest_assert((inst->arg(0) == x && inst->arg(1) == complement) ||
+                      (inst->arg(0) == complement && inst->arg(1) == x));
+    }
+  }
+  for (Value* inner : {builder.build_and(x, c1), builder.build_and(c1, x)}) {
+    for (Value* result : {builder.fold_or(inner, complement), builder.fold_or(complement, inner)}) {
+      unittest_assert(dynamic_cast<OrInst*>(result));
+      Inst* inst = (Inst*) result;
+      unittest_assert((inst->arg(0) == x && inst->arg(1) == complement) ||
+                      (inst->arg(0) == complement && inst->arg(1) == x));
+    }
+  }
+  Value* inner = builder.build_and(c1, x);
+  unittest_assert(builder.fold_and(inner, c2) == inner);
+  unittest_assert(builder.fold_and(c2, inner) == inner);
 }
 
 void test_fold_equal_constants_repeated_or() {
@@ -1277,8 +923,7 @@ void test_fold_equal_constants_xor_or() {
         unittest_assert(dynamic_cast<OrInst*>(result));
         OrInst* outer = (OrInst*) result;
         unittest_assert(outer->arg(0) == x);
-        unittest_assert(dynamic_cast<Const*>(outer->arg(1)));
-        unittest_assert(((Const*) outer->arg(1))->value() == 7);
+        check_const(outer->arg(1), type, 7);
       }
     }
   }
@@ -1302,8 +947,7 @@ void test_fold_equal_constants_negated_or() {
       for (Value* result : {builder.fold_or(negated, c2), builder.fold_or(c2, negated)}) {
         unittest_assert(dynamic_cast<OrInst*>(result));
         OrInst* outer = (OrInst*) result;
-        unittest_assert(dynamic_cast<Const*>(outer->arg(1)));
-        unittest_assert(((Const*) outer->arg(1))->value() == 7);
+        check_const(outer->arg(1), type, 7);
         unittest_assert(is_not(outer->arg(0)));
         unittest_assert(is_not(outer->arg(0))->arg(0) == x);
       }
@@ -1572,16 +1216,14 @@ void test_fold_and_xor_constant() {
           Value* result = swap_and ? builder.fold_and(input, xored) : builder.fold_and(xored, input);
           unittest_assert(result->type() == type);
           if (complement == 0) {
-            unittest_assert(dynamic_cast<Const*>(result));
-            unittest_assert(((Const*) result)->value() == 0);
+            check_const(result, type, 0);
           } else if (complement == type_mask(type)) {
             unittest_assert(result == input);
           } else {
             unittest_assert(dynamic_cast<AndInst*>(result));
             unittest_assert(((AndInst*) result)->arg(0) == input);
             Value* mask = ((AndInst*) result)->arg(1);
-            unittest_assert(dynamic_cast<Const*>(mask));
-            unittest_assert(((Const*) mask)->value() == complement);
+            check_const(mask, type, complement);
           }
         }
       }
@@ -1613,9 +1255,7 @@ void test_fold_and_xor_subset() {
           Value* xored = swap_xor ? builder.build_xor(x, subset) : builder.build_xor(subset, x);
           for (bool swap_outer : {false, true}) {
             Value* result = swap_outer ? builder.fold_and(subset, xored) : builder.fold_and(xored, subset);
-            unittest_assert(dynamic_cast<Const*>(result));
-            unittest_assert(((Const*) result)->value() == 0);
-            unittest_assert(result->type() == type);
+            check_const(result, type, 0);
           }
         }
       }
@@ -1628,8 +1268,7 @@ void test_fold_and_xor_subset() {
                                            builder.build_and(constant_x, block->arg(1));
       Value* constant_xor = builder.build_xor(constant_subset, equal_x);
       Value* constant_result = builder.fold_and(constant_xor, constant_subset);
-      unittest_assert(dynamic_cast<Const*>(constant_result));
-      unittest_assert(((Const*) constant_result)->value() == 0);
+      check_const(constant_result, type, 0);
     }
     Value* subset = builder.build_and(x, block->arg(1));
     Value* unrelated = builder.build_xor(subset, block->arg(2));
@@ -2141,7 +1780,7 @@ void test_fold_nested_unsigned_resizes() {
   }
 }
 
-void test_fold_unsigned_extension_roundtrip() {
+void check_fold_extension_roundtrip(bool inner_unsigned) {
   for (Type source : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     for (Type intermediate : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
       if (source == intermediate) {
@@ -2154,7 +1793,8 @@ void test_fold_unsigned_extension_roundtrip() {
       Block* block = builder.build_block({source});
       builder.move_to_end(block);
       for (Value* input : { (Value*) block->arg(0), (Value*) builder.build_poison(source) }) {
-        Value* inner = builder.build_resize_u(input, intermediate);
+        Value* inner = inner_unsigned ? (Value*) builder.build_resize_u(input, intermediate) :
+                                        builder.build_resize_x(input, intermediate);
         Value* result = builder.fold_resize_x(inner, source);
         unittest_assert(result->type() == source);
         if (type_width(source) < type_width(intermediate)) {
@@ -2172,47 +1812,19 @@ void test_fold_unsigned_extension_roundtrip() {
   Builder builder(&section);
   Block* block = builder.build_block({Type::Bool});
   builder.move_to_end(block);
-  Value* inner = builder.build_resize_u(block->arg(0), Type::Int64);
+  Value* inner = inner_unsigned ? (Value*) builder.build_resize_u(block->arg(0), Type::Int64) :
+                                  builder.build_resize_x(block->arg(0), Type::Int64);
   Value* different_type = builder.fold_resize_x(inner, Type::Int32);
   unittest_assert(dynamic_cast<ResizeXInst*>(different_type));
   unittest_assert(((ResizeXInst*) different_type)->arg(0) == inner);
 }
 
+void test_fold_unsigned_extension_roundtrip() {
+  check_fold_extension_roundtrip(true);
+}
+
 void test_fold_unspecified_extension_roundtrip() {
-  for (Type source : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
-    for (Type intermediate : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
-      if (source == intermediate) {
-        continue;
-      }
-      Context context;
-      Allocator allocator;
-      Section section(context, allocator);
-      Builder builder(&section);
-      Block* block = builder.build_block({source});
-      builder.move_to_end(block);
-      for (Value* input : { (Value*) block->arg(0), (Value*) builder.build_poison(source) }) {
-        Value* inner = builder.build_resize_x(input, intermediate);
-        Value* result = builder.fold_resize_x(inner, source);
-        unittest_assert(result->type() == source);
-        if (type_width(source) < type_width(intermediate)) {
-          unittest_assert(result == input);
-        } else {
-          unittest_assert(dynamic_cast<ResizeXInst*>(result));
-          unittest_assert(((ResizeXInst*) result)->arg(0) == inner);
-        }
-      }
-    }
-  }
-  Context context;
-  Allocator allocator;
-  Section section(context, allocator);
-  Builder builder(&section);
-  Block* block = builder.build_block({Type::Bool});
-  builder.move_to_end(block);
-  Value* inner = builder.build_resize_x(block->arg(0), Type::Int64);
-  Value* different_type = builder.fold_resize_x(inner, Type::Int32);
-  unittest_assert(dynamic_cast<ResizeXInst*>(different_type));
-  unittest_assert(((ResizeXInst*) different_type)->arg(0) == inner);
+  check_fold_extension_roundtrip(false);
 }
 
 void test_fold_nested_narrowing_resize_x() {
@@ -2259,9 +1871,7 @@ void test_fold_resize_x_sign_bit() {
     unittest_assert(dynamic_cast<LtSInst*>(result));
     unittest_assert(((LtSInst*) result)->arg(0) == input);
     Value* zero = ((LtSInst*) result)->arg(1);
-    unittest_assert(dynamic_cast<Const*>(zero));
-    unittest_assert(((Const*) zero)->value() == 0);
-    unittest_assert(zero->type() == type);
+    check_const(zero, type, 0);
     unittest_assert(result->type() == Type::Bool);
   }
 }
@@ -2319,16 +1929,14 @@ void test_fold_masked_resize_roundtrip() {
           Value* result = builder.fold_resize_u(masked, source);
           uint64_t expected = mask & type_mask(intermediate) & type_mask(source);
           if (expected == 0) {
-            unittest_assert(dynamic_cast<Const*>(result));
-            unittest_assert(((Const*) result)->value() == 0);
+            check_const(result, source, 0);
           } else if (expected == type_mask(source)) {
             unittest_assert(result == x);
           } else {
             unittest_assert(dynamic_cast<AndInst*>(result));
             AndInst* and_inst = (AndInst*) result;
             unittest_assert(and_inst->arg(0) == x);
-            unittest_assert(dynamic_cast<Const*>(and_inst->arg(1)));
-            unittest_assert(((Const*) and_inst->arg(1))->value() == expected);
+            check_const(and_inst->arg(1), source, expected);
           }
           unittest_assert(result->type() == source);
         }
@@ -2376,6 +1984,8 @@ void check_cse_operand_order(const std::string& opcode, Type type,
   }
   Inst* first = (Inst*) outputs.at(0)->value();
   Inst* second = (Inst*) outputs.at(1)->value();
+  unittest_assert(first->is_commutative() == commutative);
+  unittest_assert(second->is_commutative() == commutative);
   Value* left = first->arg(0);
   Value* right = first->arg(1);
   unittest_assert(!first->equals(second));
@@ -2455,9 +2065,11 @@ int main(int argc, char** argv) {
   suite.test("fold or xor operand").run(test_fold_or_xor_operand);
   suite.test("fold or repeated operand").run(test_fold_or_repeated_operand);
   suite.test("fold unmasked shift pairs").run(test_fold_unmasked_shift_pairs);
+  suite.test("fold shift pairs int64 boundaries").run(test_fold_shift_pairs_int64_boundaries);
   suite.test("builder is always equal").run(test_builder_is_always_equal);
   suite.test("fold equal constants factoring").run(test_fold_equal_constants_factoring);
   suite.test("fold equal constants absorption").run(test_fold_equal_constants_absorption);
+  suite.test("fold equal constants complement absorption").run(test_fold_equal_constants_complement_absorption);
   suite.test("fold equal constants repeated_or").run(test_fold_equal_constants_repeated_or);
   suite.test("fold equal constants xor_or").run(test_fold_equal_constants_xor_or);
   suite.test("fold equal constants negated_or").run(test_fold_equal_constants_negated_or);

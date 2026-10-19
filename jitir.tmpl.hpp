@@ -555,6 +555,7 @@ namespace metajit {
 
     bool has_side_effect() const;
     bool is_terminator() const;
+    bool is_commutative() const;
     std::vector<Block*> successor_blocks() const;
 
     bool is_inst() const override { return true; }
@@ -858,6 +859,15 @@ namespace metajit {
   using AliasingGroup = int32_t;
 
   /* ${insts} */
+
+  bool Inst::is_commutative() const {
+    return dynamic_cast<const AndInst*>(this) ||
+           dynamic_cast<const OrInst*>(this) ||
+           dynamic_cast<const XorInst*>(this) ||
+           dynamic_cast<const AddInst*>(this) ||
+           dynamic_cast<const MulInst*>(this) ||
+           dynamic_cast<const EqInst*>(this);
+  }
 
   bool Inst::has_side_effect() const {
     return dynamic_cast<const StoreInst*>(this) ||
@@ -1284,11 +1294,15 @@ namespace metajit {
     // Folding
 
   private:
-    bool binary_ops_share_operand(Inst* a, Inst* b) {
-      return is_always_equal(a->arg(0), b->arg(0)) ||
-             is_always_equal(a->arg(0), b->arg(1)) ||
-             is_always_equal(a->arg(1), b->arg(0)) ||
-             is_always_equal(a->arg(1), b->arg(1));
+    Value* other_operand(Inst* inst, Value* operand) {
+      assert(inst->arg_count() == 2);
+      if (is_always_equal(inst->arg(0), operand)) {
+        return inst->arg(1);
+      }
+      if (is_always_equal(inst->arg(1), operand)) {
+        return inst->arg(0);
+      }
+      return nullptr;
     }
 
     struct ConstSelect {
@@ -1569,19 +1583,16 @@ namespace metajit {
         Value* xored = i == 0 ? a : b;
         Value* other = i == 0 ? b : a;
         if (dynmatch(XorInst, xor_inst, xored)) {
-          for (size_t j = 0; j < 2; j++) {
-            if (is_always_equal(xor_inst->arg(j), other)) {
-              if (dynmatch(AndInst, subset, other)) {
-                Value* remaining = xor_inst->arg(1 - j);
-                if (is_always_equal(subset->arg(0), remaining) || is_always_equal(subset->arg(1), remaining)) {
-                  // ((x & y) ^ x) & (x & y) => 0
-                  return build_const(a->type(), 0);
-                }
+          if (Value* remaining = other_operand(xor_inst, other)) {
+            if (dynmatch(AndInst, subset, other)) {
+              if (other_operand(subset, remaining)) {
+                // ((x & y) ^ x) & (x & y) => 0
+                return build_const(a->type(), 0);
               }
-              if (dynmatch(Const, constant, xor_inst->arg(1 - j))) {
-                // (a ^ C) & a => a & ~C
-                return fold_and(other, build_const(a->type(), ~constant->value()));
-              }
+            }
+            if (dynmatch(Const, constant, remaining)) {
+              // (a ^ C) & a => a & ~C
+              return fold_and(other, build_const(a->type(), ~constant->value()));
             }
           }
         }
@@ -1594,11 +1605,8 @@ namespace metajit {
         }
         if (dynmatch(OrInst, or_b, b)) {
           // ~x & (x | y) => ~x & y
-          if (or_b->arg(0) == not_a->arg(0)) {
-            return fold_and(a, or_b->arg(1));
-          }
-          if (or_b->arg(1) == not_a->arg(0)) {
-            return fold_and(a, or_b->arg(0));
+          if (Value* other = other_operand(or_b, not_a->arg(0))) {
+            return fold_and(a, other);
           }
         }
       } else if (XorInst* not_b = is_not(b)) {
@@ -1608,45 +1616,40 @@ namespace metajit {
         }
         if (dynmatch(OrInst, or_a, a)) {
           // (x | y) & ~x => y & ~x
-          if (or_a->arg(0) == not_b->arg(0)) {
-            return fold_and(or_a->arg(1), b);
-          }
-          if (or_a->arg(1) == not_b->arg(0)) {
-            return fold_and(or_a->arg(0), b);
+          if (Value* other = other_operand(or_a, not_b->arg(0))) {
+            return fold_and(other, b);
           }
         }
       }
 
       if (dynmatch(OrInst, or_a, a)) {
         // (x | y) & x => x
-        if (is_always_equal(or_a->arg(0), b) || is_always_equal(or_a->arg(1), b)) {
+        if (other_operand(or_a, b)) {
           return b;
         }
         if (dynmatch(AndInst, and_b, b)) {
           // (x | y) & (x & z) => x & z
-          if (binary_ops_share_operand(or_a, and_b)) {
+          if (other_operand(or_a, and_b->arg(0)) || other_operand(or_a, and_b->arg(1))) {
             return b;
           }
         }
         if (dynmatch(OrInst, or_b, b)) {
           // (x | y) & (x | z) => x | (y & z)
           for (size_t i = 0; i < 2; i++) {
-            for (size_t j = 0; j < 2; j++) {
-              if (is_always_equal(or_a->arg(i), or_b->arg(j))) {
-                return fold_or(or_a->arg(i), fold_and(or_a->arg(1 - i), or_b->arg(1 - j)));
-              }
+            if (Value* other = other_operand(or_b, or_a->arg(i))) {
+              return fold_or(or_a->arg(i), fold_and(or_a->arg(1 - i), other));
             }
           }
         }
       }
       if (dynmatch(OrInst, or_b, b)) {
         // x & (x | y) => x
-        if (or_b->arg(0) == a || or_b->arg(1) == a) {
+        if (other_operand(or_b, a)) {
           return a;
         }
         if (dynmatch(AndInst, and_a, a)) {
           // (x & z) & (x | y) => x & z
-          if (binary_ops_share_operand(and_a, or_b)) {
+          if (other_operand(and_a, or_b->arg(0)) || other_operand(and_a, or_b->arg(1))) {
             return a;
           }
         }
@@ -1654,13 +1657,13 @@ namespace metajit {
 
       if (dynmatch(AndInst, and_a, a)) {
         // (x & y) & x => x & y
-        if (and_a->arg(0) == b || and_a->arg(1) == b) {
+        if (other_operand(and_a, b)) {
           return a;
         }
       }
       if (dynmatch(AndInst, and_b, b)) {
         // x & (x & y) => x & y
-        if (and_b->arg(0) == a || and_b->arg(1) == a) {
+        if (other_operand(and_b, a)) {
           return b;
         }
       }
@@ -1690,106 +1693,86 @@ namespace metajit {
         if (dynmatch(AndInst, and_b, b)) {
           // (x & y) | (x & z) => x & (y | z)
           for (size_t i = 0; i < 2; i++) {
-            for (size_t j = 0; j < 2; j++) {
-              if (is_always_equal(and_a->arg(i), and_b->arg(j))) {
-                return fold_and(and_a->arg(i), fold_or(and_a->arg(1 - i), and_b->arg(1 - j)));
-              }
+            if (Value* other = other_operand(and_b, and_a->arg(i))) {
+              return fold_and(and_a->arg(i), fold_or(and_a->arg(1 - i), other));
             }
           }
         }
       }
       if (dynmatch(AndInst, and_a, a)) {
         // (x & y) | x => x
-        if (is_always_equal(and_a->arg(0), b) || is_always_equal(and_a->arg(1), b)) {
+        if (other_operand(and_a, b)) {
           return b;
         }
         if (dynmatch(OrInst, or_b, b)) {
           // (x & y) | (x | z) => x | z
-          if (binary_ops_share_operand(and_a, or_b)) {
+          if (other_operand(and_a, or_b->arg(0)) || other_operand(and_a, or_b->arg(1))) {
             return b;
           }
         }
         if (XorInst* not_b = is_not(b)) {
           // (x & y) | ~x => y | ~x
-          if (and_a->arg(0) == not_b->arg(0)) {
-            return fold_or(and_a->arg(1), b);
-          }
-          if (and_a->arg(1) == not_b->arg(0)) {
-            return fold_or(and_a->arg(0), b);
+          if (Value* other = other_operand(and_a, not_b->arg(0))) {
+            return fold_or(other, b);
           }
         }
       }
       if (dynmatch(AndInst, and_b, b)) {
         // x | (x & y) => x
-        if (and_b->arg(0) == a || and_b->arg(1) == a) {
+        if (other_operand(and_b, a)) {
           return a;
         }
         if (dynmatch(OrInst, or_a, a)) {
           // (x | z) | (x & y) => x | z
-          if (binary_ops_share_operand(or_a, and_b)) {
+          if (other_operand(or_a, and_b->arg(0)) || other_operand(or_a, and_b->arg(1))) {
             return a;
           }
         }
         if (XorInst* not_a = is_not(a)) {
           // ~x | (x & y) => ~x | y
-          if (and_b->arg(0) == not_a->arg(0)) {
-            return fold_or(a, and_b->arg(1));
-          }
-          if (and_b->arg(1) == not_a->arg(0)) {
-            return fold_or(a, and_b->arg(0));
+          if (Value* other = other_operand(and_b, not_a->arg(0))) {
+            return fold_or(a, other);
           }
         }
       }
 
       if (dynmatch(OrInst, or_a, a)) {
         // (x | y) | x => x | y
-        if (is_always_equal(or_a->arg(0), b) || is_always_equal(or_a->arg(1), b)) {
+        if (other_operand(or_a, b)) {
           return a;
         }
       }
       if (dynmatch(OrInst, or_b, b)) {
         // x | (x | y) => x | y
-        if (or_b->arg(0) == a || or_b->arg(1) == a) {
+        if (other_operand(or_b, a)) {
           return b;
         }
       }
 
       if (dynmatch(XorInst, xor_a, a)) {
         // (x ^ y) | x => x | y
-        if (is_always_equal(xor_a->arg(0), b)) {
-          return fold_or(xor_a->arg(1), b);
-        }
-        if (is_always_equal(xor_a->arg(1), b)) {
-          return fold_or(xor_a->arg(0), b);
+        if (Value* other = other_operand(xor_a, b)) {
+          return fold_or(other, b);
         }
         if (is_not(a)) {
           if (dynmatch(OrInst, inner, xor_a->arg(0))) {
             // ~(x | y) | x => x | ~y
-            if (is_always_equal(inner->arg(0), b)) {
-              return fold_or(b, fold_not(inner->arg(1)));
-            }
-            if (is_always_equal(inner->arg(1), b)) {
-              return fold_or(b, fold_not(inner->arg(0)));
+            if (Value* other = other_operand(inner, b)) {
+              return fold_or(b, fold_not(other));
             }
           }
         }
       }
       if (dynmatch(XorInst, xor_b, b)) {
         // x | (x ^ y) => x | y
-        if (xor_b->arg(0) == a) {
-          return fold_or(a, xor_b->arg(1));
-        }
-        if (xor_b->arg(1) == a) {
-          return fold_or(a, xor_b->arg(0));
+        if (Value* other = other_operand(xor_b, a)) {
+          return fold_or(a, other);
         }
         if (is_not(b)) {
           if (dynmatch(OrInst, inner, xor_b->arg(0))) {
             // x | ~(x | y) => x | ~y
-            if (inner->arg(0) == a) {
-              return fold_or(a, fold_not(inner->arg(1)));
-            }
-            if (inner->arg(1) == a) {
-              return fold_or(a, fold_not(inner->arg(0)));
+            if (Value* other = other_operand(inner, a)) {
+              return fold_or(a, fold_not(other));
             }
           }
         }
@@ -3370,6 +3353,17 @@ namespace metajit {
         return value;
       }
 
+      static Bits unsigned_upper_bound(Type type, uint64_t bound) {
+        assert((bound & ~type_mask(type)) == 0);
+        return Bits(type, ~mask_through_highest_bit(bound), 0);
+      }
+
+      static Bits unsigned_lower_bound(Type type, uint64_t bound) {
+        assert((bound & ~type_mask(type)) == 0);
+        uint64_t mask = ~mask_through_highest_bit(~bound & type_mask(type));
+        return Bits(type, mask, mask);
+      }
+
       uint64_t umin() const {
         return value;
       }
@@ -3495,8 +3489,7 @@ namespace metajit {
             return *this & Bits::constant(type, maximum);
           }
           // x %u C <=u C - 1 for nonzero C
-          uint64_t unknown = mask_through_highest_bit(maximum);
-          return Bits(type, ~unknown, 0);
+          return Bits::unsigned_upper_bound(type, maximum);
         }
         return Bits(type, 0, 0);
       }
@@ -5043,25 +5036,15 @@ private:
     }
   }
 
-  void _enqueue_upper_bound(Value* value, uint64_t bound, uint64_t flip) {
-    uint64_t mask = Bits::mask_through_highest_bit(bound);
-    _enqueue(value, Bits(value->type(), ~mask, flip));
-  }
-
-  void _enqueue_lower_bound(Value* value, uint64_t bound, uint64_t flip) {
-    uint64_t unknown = Bits::mask_through_highest_bit(~bound & type_mask(value->type()));
-    _enqueue(value, Bits(value->type(), ~unknown, ~unknown ^ flip));
-  }
-
   void _propagate_lt(Value* left, Value* right, const Bits& result, uint64_t flip) {
     assert(result.is_const());
     Bits x = Bits::at(_values, left);
     Bits y = Bits::at(_values, right);
-    // Use unsigned bounds directly for known nonnegative operands.
+    // use unsigned bounds directly for known nonnegative operands
     if ((x.mask & y.mask & flip) != 0 && ((x.value | y.value) & flip) == 0) {
       flip = 0;
     }
-    // Flip the sign bit for signed bounds, then flip inferred facts back on enqueue.
+    // flip the sign bit for signed bounds, then flip inferred facts back on enqueue
     Bits bias = Bits::constant(left->type(), flip);
     x = x ^ bias;
     y = y ^ bias;
@@ -5072,15 +5055,15 @@ private:
         _contradiction = true;
         return;
       }
-      _enqueue_upper_bound(left, ymax - 1, flip);
-      _enqueue_lower_bound(right, x.umin() + 1, flip);
+      _enqueue(left, Bits::unsigned_upper_bound(left->type(), ymax - 1) ^ bias);
+      _enqueue(right, Bits::unsigned_lower_bound(right->type(), x.umin() + 1) ^ bias);
     } else {
       if (xmax < y.umin()) {
         _contradiction = true;
         return;
       }
-      _enqueue_lower_bound(left, y.umin(), flip);
-      _enqueue_upper_bound(right, xmax, flip);
+      _enqueue(left, Bits::unsigned_lower_bound(left->type(), y.umin()) ^ bias);
+      _enqueue(right, Bits::unsigned_upper_bound(right->type(), xmax) ^ bias);
     }
   }
 
@@ -6416,13 +6399,8 @@ private:
         if (typeid(*value) != typeid(*other.value)) {
           return false;
         }
-        if (dynamic_cast<AndInst*>(value) ||
-            dynamic_cast<OrInst*>(value) ||
-            dynamic_cast<XorInst*>(value) ||
-            dynamic_cast<AddInst*>(value) ||
-            dynamic_cast<MulInst*>(value) ||
-            dynamic_cast<EqInst*>(value)) {
-          Inst* inst = (Inst*) value;
+        Inst* inst = dynamic_cast<Inst*>(value);
+        if (inst && inst->is_commutative()) {
           Inst* other_inst = (Inst*) other.value;
           return inst->arg(0) == other_inst->arg(1) &&
                  inst->arg(1) == other_inst->arg(0);
