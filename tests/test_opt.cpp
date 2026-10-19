@@ -2076,12 +2076,36 @@ void test_rule_dsl_builder_integration() {
   unittest_assert(!section.verify(std::cout));
 }
 
+void test_fold_select_unselected_poison() {
+  for (bool true_arm : {false, true}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({Type::Ptr, Type::Bool});
+    builder.move_to_end(block);
+    Value* cond = block->arg(1);
+    Value* poison = builder.build_poison(Type::Bool);
+    Value* result = true_arm ? builder.fold_select(cond, cond, poison)
+                             : builder.fold_select(cond, poison, cond);
+    unittest_assert(dynamic_cast<SelectInst*>(result));
+    builder.build_store(block->arg(0), result, 0, 0);
+    builder.build_exit();
+    unittest_assert(!section.verify(std::cout));
+    uint8_t output = 42;
+    Interpreter interpreter(&section, {Interpreter::Bits::constant(&output), Interpreter::Bits::constant(true_arm)});
+    unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+    unittest_assert(output == uint8_t(true_arm));
+  }
+}
+
 int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
   DiffTestSuite suite("tests/output/test_opt", argc, argv);
 
   suite.test("rule DSL builder integration").run(test_rule_dsl_builder_integration);
+  suite.test("fold select unselected poison").run(test_fold_select_unselected_poison);
 
   suite.test("cse commutative operands").run(test_cse_commutative_operands);
   suite.test("cse ordered operands").run(test_cse_ordered_operands);

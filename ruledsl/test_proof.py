@@ -99,6 +99,17 @@ class ProofTests(unittest.TestCase):
                 )[0]
                 self.assertEqual(len(rule.instantiations), 15)
 
+    def test_select_to_bitwise_rejects_new_poison(self):
+        for pattern, replacement in (("Select(c, c, x)", "Or(c, x)"),
+                                     ("Select(c, x, c)", "And(c, x)")):
+            with self.subTest(pattern=pattern):
+                with self.assertRaises(ProofError) as raised:
+                    prove(f"bad: {pattern}\n    => {replacement}")
+                example = raised.exception.counterexample
+                self.assertFalse(example.before.poison)
+                self.assertTrue(example.after.poison)
+                self.assertTrue(example.inputs["x"].poison)
+
     def test_poison_removal_is_valid_refinement(self):
         prove("remove_poison: And(x, 0)\n    => 0")
 

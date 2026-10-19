@@ -152,6 +152,9 @@ poison flag. Matched constants cannot be poison; other matched values can.
 Repeated names denote the same value. Arithmetic wraps. Oversized shifts,
 division by zero, and signed division or remainder overflow produce poison.
 `Select` propagates poison from its condition and its selected arm only.
+Consequently, `Select(c, c, x) => Or(c, x)` and its And counterpart are invalid
+for potentially poisoned `x`. Their active DSL versions require a matched
+constant as the other arm.
 
 Under the rule's checks, a defined source must produce an equal, non-poison
 replacement. Removing poison is permitted. For every concrete type assignment,

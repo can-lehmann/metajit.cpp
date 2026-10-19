@@ -219,6 +219,12 @@ select_bool_identity: Select(c, 1: Bool, 0)
 select_bool_complement: Select(c, 0: Bool, 1)
     => Xor(c, 1)
 
+select_bool_true_operand_constant: Select(c, c, C)
+    => Or(c, C)
+
+select_bool_false_operand_constant: Select(c, C, c)
+    => And(c, C)
+
 select_nested_true: Select(c, Select(c, x, y), z)
     => Select(c, x, z)
 
@@ -238,6 +244,14 @@ resize_u_resize_x_roundtrip: ResizeU(ResizeX(x: T): U): T
 
 resize_u_resize_u_widen: ResizeU(ResizeU(x: S): U): T
     where width(S) < width(U) < width(T)
+    => ResizeU(x): T
+
+resize_u_resize_u_truncate: ResizeU(ResizeU(x: S): U): T
+    where width(T) < width(U) < width(S)
+    => ResizeU(x): T
+
+resize_u_resize_x_truncate: ResizeU(ResizeX(x: S): U): T
+    where width(T) < width(U) < width(S)
     => ResizeU(x): T
 
 resize_u_masked_resize_x_roundtrip: ResizeU(And(ResizeX(x: T): U, C)): T
@@ -265,6 +279,10 @@ resize_x_resize_x_truncate: ResizeX(ResizeX(x: S): U): T
 resize_x_resize_u_roundtrip: ResizeX(ResizeU(x: T): U): T
     where width(T) < width(U)
     => x
+
+resize_x_resize_u_truncate: ResizeX(ResizeU(x: S): U): T
+    where width(T) < width(U) < width(S)
+    => ResizeX(x): T
 
 resize_x_constant_truncate: ResizeX(C: S): T
     where width(T) <= width(S)

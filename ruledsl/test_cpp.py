@@ -97,12 +97,25 @@ lts_self: LtS(x, x)
     => 0
 select_same: Select(cond, x, x)
     => x
+select_bool_true_operand_constant: Select(c, c, C)
+    => Or(c, C)
+select_bool_false_operand_constant: Select(c, C, c)
+    => And(c, C)
 resize_roundtrip: ResizeU(ResizeU(x: T): U): T
     where width(U) >= width(T)
     => x
 resize_constant: ResizeU(C: T): U
     C2 = bits(C, U)
     => C2
+resize_u_resize_u_truncate: ResizeU(ResizeU(x: S): U): T
+    where width(T) < width(U) < width(S)
+    => ResizeU(x): T
+resize_u_resize_x_truncate: ResizeU(ResizeX(x: S): U): T
+    where width(T) < width(U) < width(S)
+    => ResizeU(x): T
+resize_x_resize_u_truncate: ResizeX(ResizeU(x: S): U): T
+    where width(T) < width(U) < width(S)
+    => ResizeX(x): T
 resize_s_same: ResizeS(x: T): T
     quotient = 1 // (width(T) - 1)
     n = width(T)
@@ -206,6 +219,26 @@ int main() {
       }
     }
   }
+  for (Type source: bit_types) {
+    for (Type intermediate: bit_types) {
+      for (Type target: bit_types) {
+        if (type_width(target) >= type_width(intermediate) || type_width(intermediate) >= type_width(source)) {
+          continue;
+        }
+        Value input(source);
+        Value* inner_u = builder.build_resize_u(&input, intermediate);
+        Value* inner_x = builder.build_resize_x(&input, intermediate);
+        Value* results[] = {builder.fold_resize_u(inner_u, target), builder.fold_resize_u(inner_x, target),
+                            builder.fold_resize_x(inner_u, target)};
+        for (unsigned index = 0; index < 3; ++index) {
+          Inst* result = dynamic_cast<Inst*>(results[index]);
+          assert(result && result->type() == target && result->arg(0) == &input);
+          assert(index == 2 ? dynamic_cast<ResizeXInst*>(result) != nullptr
+                            : dynamic_cast<ResizeUInst*>(result) != nullptr);
+        }
+      }
+    }
+  }
   for (Type type: types) {
     Value input(type);
     for (unsigned bit = 0; bit < type_width(type); ++bit) {
@@ -288,6 +321,12 @@ int main() {
   assert(converted && converted->type() == Type::Int64 && converted->value() == 250);
   Value boolean(Type::Bool);
   Const bool_zero(Type::Bool, 0), bool_one(Type::Bool, 1);
+  assert(builder.fold_select(&boolean, &boolean, &bool_zero) == &boolean);
+  OrInst* bool_or = dynamic_cast<OrInst*>(builder.fold_select(&boolean, &boolean, &bool_one));
+  assert(bool_or && bool_or->arg(0) == &boolean && bool_or->arg(1) == &bool_one);
+  assert(builder.fold_select(&boolean, &bool_one, &boolean) == &boolean);
+  AndInst* bool_and = dynamic_cast<AndInst*>(builder.fold_select(&boolean, &bool_zero, &boolean));
+  assert(bool_and && bool_and->arg(0) == &boolean && bool_and->arg(1) == &bool_zero);
   assert(dynamic_cast<Const*>(builder.fold_eq(&bool_zero, &bool_one))->value() == 0);
   assert(dynamic_cast<Const*>(builder.fold_eq(&bool_one, &bool_one))->value() == 1);
   EqInst* comparison = builder.build_eq(&two, &three);

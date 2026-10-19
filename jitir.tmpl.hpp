@@ -1932,14 +1932,6 @@ namespace metajit {
             return fold_xor(cond, build_const(Type::Bool, 1));
           }
         }
-        if (cond == true_value) {
-          // (cond ? cond : x) => cond | x
-          return fold_or(cond, false_value);
-        }
-        if (cond == false_value) {
-          // (cond ? x : cond) => cond & x
-          return fold_and(cond, true_value);
-        }
       }
 
       if (dynmatch(SelectInst, true_select, true_value)) {
@@ -2001,20 +1993,10 @@ namespace metajit {
           // ResizeU(ResizeX(x, M), N) => x & mask(M), where x has type N
           return fold_and(resize_a->arg(0), build_const(type, type_mask(resize_a->type())));
         }
-        if (type_width(type) < type_width(a->type()) &&
-            type_width(a->type()) < type_width(resize_a->arg(0)->type())) {
-          // ResizeU(ResizeX(x, M), N) => ResizeU(x, N) if N < M < width(x)
-          return fold_resize_u(resize_a->arg(0), type);
-        }
       } else if (dynmatch(ResizeUInst, resize_a, a)) {
         if (type_width(resize_a->arg(0)->type()) < type_width(a->type()) &&
             type_width(a->type()) < type_width(type)) {
           // ResizeU(ResizeU(x, M), N) => ResizeU(x, N) if width(x) < M < N
-          return fold_resize_u(resize_a->arg(0), type);
-        }
-        if (type_width(type) < type_width(a->type()) &&
-            type_width(a->type()) < type_width(resize_a->arg(0)->type())) {
-          // ResizeU(ResizeU(x, M), N) => ResizeU(x, N) if N < M < width(x)
           return fold_resize_u(resize_a->arg(0), type);
         }
       } else if (dynmatch(AndInst, and_a, a)) {
@@ -2064,11 +2046,6 @@ namespace metajit {
         if (resize->arg(0)->type() == type && type_width(type) < type_width(a->type())) {
           // ResizeX(ResizeU(x, M), N) => x if width(x) == N < M
           return resize->arg(0);
-        }
-        if (type_width(type) < type_width(a->type()) &&
-            type_width(a->type()) < type_width(resize->arg(0)->type())) {
-          // ResizeX(ResizeU(x, M), N) => ResizeX(x, N) if N < M < width(x)
-          return fold_resize_x(resize->arg(0), type);
         }
       } else if (dynmatch(ShrUInst, shift, a)) {
         if (type == Type::Bool) {
