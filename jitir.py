@@ -592,8 +592,8 @@ jitir = IR(
 )
 
 handwritten_folds = (
-    "Add", "Sub", "Mul", "And", "Or", "Xor", "Eq", "LtS", "LtU", "Select",
-    "ResizeU", "ResizeS", "ResizeX", "Shl", "ShrU", "ShrS",
+    "Add", "Sub", "Mul", "And", "Or", "Xor", "Eq", "LtU", "Select",
+    "ResizeU", "ResizeX", "Shl", "ShrU",
 )
 fold_rules = Path(__file__).with_name("ruledsl") / "fold.rules"
 folds = generate(fold_rules.read_text(), str(fold_rules), handwritten=handwritten_folds)

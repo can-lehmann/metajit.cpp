@@ -2072,6 +2072,29 @@ void test_rule_dsl_builder_integration() {
   Const* false_value = dynamic_cast<Const*>(sum->arg(2));
   unittest_assert(true_value && true_value->value() == 5);
   unittest_assert(false_value && false_value->value() == 7);
+  SelectInst* reversed_sum = dynamic_cast<SelectInst*>(builder.fold_add(builder.build_const(Type::Int8, 2), selected));
+  unittest_assert(reversed_sum && reversed_sum->cond() == cond);
+  unittest_assert(builder.is_always_equal(reversed_sum->arg(1), true_value));
+  unittest_assert(builder.is_always_equal(reversed_sum->arg(2), false_value));
+  for (Type type : {Type::Float32, Type::Float64, Type::Ptr}) {
+    Value* value = builder.build_poison(type);
+    unittest_assert(builder.fold_select(cond, value, value) == value);
+    unittest_assert(builder.fold_select(builder.build_const(Type::Bool, 1), value,
+                                        builder.build_const(type, 0)) == value);
+    Const* equal = dynamic_cast<Const*>(builder.fold_eq(value, value));
+    unittest_assert(equal && equal->value() == 1);
+  }
+  for (bool unspecified : {false, true}) {
+    Value* resized = unspecified ? builder.fold_resize_x(selected, Type::Int64)
+                                : builder.fold_resize_u(selected, Type::Int64);
+    SelectInst* resized_select = dynamic_cast<SelectInst*>(resized);
+    unittest_assert(resized_select && resized_select->cond() == cond);
+    unittest_assert(resized_select->type() == Type::Int64);
+    unittest_assert(builder.is_always_equal(resized_select->arg(1), builder.build_const(Type::Int64, 3)));
+    unittest_assert(builder.is_always_equal(resized_select->arg(2), builder.build_const(Type::Int64, 5)));
+  }
+  Const* widened = dynamic_cast<Const*>(builder.fold_resize_x(builder.build_const(Type::Int8, 255), Type::Int64));
+  unittest_assert(widened && widened->type() == Type::Int64 && widened->value() == 255);
   builder.build_exit();
   unittest_assert(!section.verify(std::cout));
 }
