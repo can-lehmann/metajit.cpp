@@ -403,13 +403,15 @@ namespace metajit {
       llvm::InitializeNativeTargetAsmPrinter();
     }
 
-    static void optimize_llvm(llvm::Module& module, llvm::OptimizationLevel level) {
+    static void optimize_llvm(llvm::Module& module, llvm::OptimizationLevel level,
+                              const llvm::PipelineTuningOptions& tuning = llvm::PipelineTuningOptions(),
+                              llvm::TargetMachine* target_machine = nullptr) {
       llvm::LoopAnalysisManager loop_analysis_manager;
       llvm::FunctionAnalysisManager function_analysis_manager;
       llvm::CGSCCAnalysisManager cgscc_analysis_manager;
       llvm::ModuleAnalysisManager module_analysis_manager;
 
-      llvm::PassBuilder pass_builder;
+      llvm::PassBuilder pass_builder(target_machine, tuning);
       pass_builder.registerModuleAnalyses(module_analysis_manager);
       pass_builder.registerCGSCCAnalyses(cgscc_analysis_manager);
       pass_builder.registerFunctionAnalyses(function_analysis_manager);
