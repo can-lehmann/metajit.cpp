@@ -1,0 +1,4 @@
+mod_u_power_of_two: ModU(x, C)
+    check C != 0 and C & (C - 1) == 0
+    Cmask = C - 1
+    => And(x, Cmask)
