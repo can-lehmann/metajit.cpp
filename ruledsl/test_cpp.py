@@ -452,9 +452,11 @@ class NativeCppTests(unittest.TestCase):
 
     def test_constant_select_propagation_from_fold_rules(self):
         source = Path(__file__).with_name("fold.rules").read_text()
-        names = {f"{name}_{form}" for name in ("add", "sub", "mul", "and", "or", "xor")
+        names = {f"{name}_{form}" for name in ("add", "sub", "mul", "and", "or", "xor",
+                                               "eq", "lt_u", "shl", "shr_u")
                  for form in ("select_constant", "selects")}
-        names.update(("sub_constant_select", "select_same"))
+        names.update(("sub_constant_select", "lt_u_constant_select", "shl_constant_select",
+                      "shr_u_constant_select", "resize_u_select", "resize_x_select", "select_same"))
         rules = [rule for rule in parse(source) if rule.name in names]
         self.assertEqual({rule.name for rule in rules}, names)
         code = generate("\n".join(source[rule.span.start:rule.span.end] for rule in rules) + "\n",
@@ -503,6 +505,43 @@ int main() {
             main += f"    assert(dynamic_cast<{class_name}*>(builder.fold_{name}(nonconstant, &k)));\n"
             if name in ("add", "sub", "mul"):
                 main += "    }\n"
+        for name, symbol in (("eq", "=="), ("lt_u", "<")):
+            if name == "lt_u":
+                main += "    if (type != Type::Bool) {\n"
+            for left, right, t, f in (
+                ("left", "&k", f"a.value() {symbol} k.value()", f"b.value() {symbol} k.value()"),
+                ("&k", "left", f"k.value() {symbol} a.value()", f"k.value() {symbol} b.value()"),
+                ("left", "right", f"a.value() {symbol} c.value()", f"b.value() {symbol} d.value()"),
+            ):
+                main += (f"    check_result(builder.fold_{name}({left}, {right}), &condition, Type::Bool, "
+                         f"{t}, {f});\n")
+            if name == "lt_u":
+                main += "    }\n"
+        main += """
+    for (Type target : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      check_result(builder.fold_resize_u(left, target), &condition, target, a.value(), b.value());
+      if (type_width(target) <= type_width(type)) {
+        check_result(builder.fold_resize_x(left, target), &condition, target, a.value(), b.value());
+      }
+    }
+    if (type != Type::Bool) {
+      Const one(type, 1), last(type, type_width(type) - 1), invalid(type, type_width(type));
+      Const sixty_four(type, 64);
+      Value* counts = builder.build_select(&condition, &one, &last);
+      Value* invalid_counts = builder.build_select(&condition, &one, &invalid);
+"""
+        for name, symbol, class_name in (("shl", "<<", "ShlInst"), ("shr_u", ">>", "ShrUInst")):
+            for left, right, t, f in (
+                ("left", "&one", f"a.value() {symbol} 1", f"b.value() {symbol} 1"),
+                ("&k", "counts", f"k.value() {symbol} 1", f"k.value() {symbol} last.value()"),
+                ("left", "counts", f"a.value() {symbol} 1", f"b.value() {symbol} last.value()"),
+            ):
+                main += (f"      check_result(builder.fold_{name}({left}, {right}), &condition, type, "
+                         f"{t}, {f});\n")
+            for left, right in (("left", "&invalid"), ("left", "&sixty_four"),
+                                ("&k", "invalid_counts"), ("left", "invalid_counts")):
+                main += f"      assert(dynamic_cast<{class_name}*>(builder.fold_{name}({left}, {right})));\n"
+        main += "    }\n"
         main += "  }\n}\n"
         fixture = Path(__file__).with_name("test_runtime.hpp")
         with tempfile.TemporaryDirectory() as directory:

@@ -244,6 +244,16 @@ eq_constants: Eq(C1, C2)
     C = C1 == C2
     => C
 
+eq_select_constant: Eq(Select(c, C1, C2), C3)
+    Ctrue = C1 == C3
+    Cfalse = C2 == C3
+    => Select(c, Ctrue, Cfalse)
+
+eq_selects: Eq(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 == C3
+    Cfalse = C2 == C4
+    => Select(c, Ctrue, Cfalse)
+
 eq_bool_one: Eq(x: Bool, 1)
     => x
 
@@ -271,6 +281,21 @@ lt_u_zero: LtU(x, 0)
 lt_u_constants: LtU(C1, C2)
     C = C1 < C2
     => C
+
+lt_u_select_constant: LtU(Select(c, C1, C2), C3)
+    Ctrue = C1 < C3
+    Cfalse = C2 < C3
+    => Select(c, Ctrue, Cfalse)
+
+lt_u_selects: LtU(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 < C3
+    Cfalse = C2 < C4
+    => Select(c, Ctrue, Cfalse)
+
+lt_u_constant_select: LtU(C1, Select(c, C2, C3))
+    Ctrue = C1 < C2
+    Cfalse = C1 < C3
+    => Select(c, Ctrue, Cfalse)
 
 select_true: Select(1, x, y)
     => x
@@ -305,6 +330,11 @@ select_nested_false: Select(c, x, Select(c, y, z))
 resize_u_identity: ResizeU(x: T): T
     => x
 
+resize_u_select: ResizeU(Select(c, C1: S, C2)): T
+    Ctrue = bits(C1, T)
+    Cfalse = bits(C2, T)
+    => Select(c, Ctrue, Cfalse)
+
 resize_u_constant: ResizeU(C: S): T
     Cresult = bits(C, T)
     => Cresult
@@ -334,6 +364,12 @@ resize_s_identity: ResizeS(x: T): T
 
 resize_x_identity: ResizeX(x: T): T
     => x
+
+resize_x_select: ResizeX(Select(c, C1: S, C2)): T
+    where width(T) <= width(S)
+    Ctrue = bits(C1, T)
+    Cfalse = bits(C2, T)
+    => Select(c, Ctrue, Cfalse)
 
 resize_x_sign_bit: ResizeX(ShrU(x: T, C)): Bool
     check C == width(T) - 1
@@ -367,6 +403,24 @@ shl_constants: Shl(C1: T, C2)
     check C2 < width(T)
     C = C1 << C2
     => C
+
+shl_select_constant: Shl(Select(c, C1, C2): T, C3)
+    check C3 < width(T)
+    Ctrue = C1 << C3
+    Cfalse = C2 << C3
+    => Select(c, Ctrue, Cfalse)
+
+shl_selects: Shl(Select(c, C1, C2): T, Select(c, C3, C4))
+    check C3 < width(T) and C4 < width(T)
+    Ctrue = C1 << C3
+    Cfalse = C2 << C4
+    => Select(c, Ctrue, Cfalse)
+
+shl_constant_select: Shl(C1: T, Select(c, C2, C3))
+    check C2 < width(T) and C3 < width(T)
+    Ctrue = C1 << C2
+    Cfalse = C1 << C3
+    => Select(c, Ctrue, Cfalse)
 
 shl_shr_u_equal: Shl(ShrU(x: T, C1), C2)
     check C1 < width(T) and C2 < width(T) and C1 == C2
@@ -434,6 +488,24 @@ shr_u_constants: ShrU(C1: T, C2)
     check C2 < width(T)
     C = C1 >> C2
     => C
+
+shr_u_select_constant: ShrU(Select(c, C1, C2): T, C3)
+    check C3 < width(T)
+    Ctrue = C1 >> C3
+    Cfalse = C2 >> C3
+    => Select(c, Ctrue, Cfalse)
+
+shr_u_selects: ShrU(Select(c, C1, C2): T, Select(c, C3, C4))
+    check C3 < width(T) and C4 < width(T)
+    Ctrue = C1 >> C3
+    Cfalse = C2 >> C4
+    => Select(c, Ctrue, Cfalse)
+
+shr_u_constant_select: ShrU(C1: T, Select(c, C2, C3))
+    check C2 < width(T) and C3 < width(T)
+    Ctrue = C1 >> C2
+    Cfalse = C1 >> C3
+    => Select(c, Ctrue, Cfalse)
 
 shr_s_zero: ShrS(x, 0)
     => x

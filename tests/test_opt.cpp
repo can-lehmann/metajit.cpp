@@ -2141,7 +2141,11 @@ void test_rule_dsl_builder_integration() {
 void check_fold_constant_select(Value* result, Value* cond, Type type, uint64_t t, uint64_t f) {
   t &= type_mask(type);
   f &= type_mask(type);
-  if (dynamic_cast<Const*>(result)) {
+  if (result == cond) {
+    unittest_assert(type == Type::Bool && t == 1 && f == 0);
+  } else if (is_not(result) && is_not(result)->arg(0) == cond) {
+    unittest_assert(type == Type::Bool && t == 0 && f == 1);
+  } else if (dynamic_cast<Const*>(result)) {
     check_const(result, type, t);
     unittest_assert(t == f);
   } else {
@@ -2173,20 +2177,52 @@ void test_fold_constant_select_propagation() {
       check_fold_constant_select(builder.fold_and(a, b), cond, type, mask & 7, 5 & 7);
       check_fold_constant_select(builder.fold_or(a, b), cond, type, mask | 7, 5 | 7);
       check_fold_constant_select(builder.fold_xor(a, b), cond, type, mask ^ 7, 5 ^ 7);
+      check_fold_constant_select(builder.fold_eq(a, b), cond, Type::Bool, mask == (7 & mask),
+                                (5 & mask) == (7 & mask));
       if (type != Type::Bool) {
         check_fold_constant_select(builder.fold_add(a, b), cond, type, mask + 7, 12);
         check_fold_constant_select(builder.fold_sub(a, b), cond, type,
                                   reversed ? 7 - mask : mask - 7, reversed ? 2 : uint64_t(5) - 7);
         check_fold_constant_select(builder.fold_mul(a, b), cond, type, mask * 7, 35);
+        check_fold_constant_select(builder.fold_lt_u(a, b), cond, Type::Bool,
+                                  reversed ? 7 < mask : mask < 7, reversed ? 7 < 5 : 5 < 7);
       }
     }
     check_fold_constant_select(builder.fold_and(left, right), cond, type, mask & 3, 5 & 9);
     check_fold_constant_select(builder.fold_or(left, right), cond, type, mask | 3, 5 | 9);
     check_fold_constant_select(builder.fold_xor(left, right), cond, type, mask ^ 3, 5 ^ 9);
+    check_fold_constant_select(builder.fold_eq(left, right), cond, Type::Bool, mask == (3 & mask),
+                              (5 & mask) == (9 & mask));
+    check_fold_constant_select(builder.fold_eq(left, builder.build_const(type, 5)), cond,
+                              Type::Bool, mask == (5 & mask), 1);
+    for (Type target : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      check_fold_constant_select(builder.fold_resize_u(left, target), cond, target, mask, 5 & mask);
+      check_fold_constant_select(builder.fold_resize_x(left, target), cond, target, mask, 5 & mask);
+    }
     if (type != Type::Bool) {
       check_fold_constant_select(builder.fold_add(left, right), cond, type, mask + 3, 14);
       check_fold_constant_select(builder.fold_sub(left, right), cond, type, mask - 3, uint64_t(5) - 9);
       check_fold_constant_select(builder.fold_mul(left, right), cond, type, mask * 3, 45);
+      check_fold_constant_select(builder.fold_lt_u(left, right), cond, Type::Bool, mask < 3, 5 < 9);
+      Value* one = builder.build_const(type, 1);
+      uint64_t last = type_width(type) - 1;
+      Value* counts = builder.build_select(cond, one, builder.build_const(type, last));
+      check_fold_constant_select(builder.fold_shl(left, one), cond, type, mask << 1, 5 << 1);
+      check_fold_constant_select(builder.fold_shr_u(left, one), cond, type, mask >> 1, 5 >> 1);
+      check_fold_constant_select(builder.fold_shl(constant, counts), cond, type, 7 << 1, uint64_t(7) << last);
+      check_fold_constant_select(builder.fold_shr_u(constant, counts), cond, type, 7 >> 1, uint64_t(7) >> last);
+      check_fold_constant_select(builder.fold_shl(left, counts), cond, type, mask << 1, uint64_t(5) << last);
+      check_fold_constant_select(builder.fold_shr_u(left, counts), cond, type, mask >> 1, uint64_t(5) >> last);
+      for (uint64_t invalid : {uint64_t(type_width(type)), uint64_t(64), type_mask(type)}) {
+        Value* amount = builder.build_const(type, invalid);
+        Value* bad_counts = builder.build_select(cond, one, amount);
+        unittest_assert(dynamic_cast<ShlInst*>(builder.fold_shl(left, amount)));
+        unittest_assert(dynamic_cast<ShrUInst*>(builder.fold_shr_u(left, amount)));
+        unittest_assert(dynamic_cast<ShlInst*>(builder.fold_shl(constant, bad_counts)));
+        unittest_assert(dynamic_cast<ShrUInst*>(builder.fold_shr_u(constant, bad_counts)));
+        unittest_assert(dynamic_cast<ShlInst*>(builder.fold_shl(left, bad_counts)));
+        unittest_assert(dynamic_cast<ShrUInst*>(builder.fold_shr_u(left, bad_counts)));
+      }
       unittest_assert(dynamic_cast<AddInst*>(builder.fold_add(left, unrelated)));
       unittest_assert(dynamic_cast<SubInst*>(builder.fold_sub(left, unrelated)));
       unittest_assert(dynamic_cast<MulInst*>(builder.fold_mul(left, unrelated)));
@@ -2194,6 +2230,34 @@ void test_fold_constant_select_propagation() {
       unittest_assert(dynamic_cast<OrInst*>(builder.fold_or(left, unrelated)));
       unittest_assert(dynamic_cast<XorInst*>(builder.fold_xor(left, unrelated)));
     }
+    builder.build_exit();
+    unittest_assert(!section.verify(std::cout));
+  }
+}
+
+void test_fold_non_integer_select_equality() {
+  for (Type type : {Type::Ptr, Type::Float32, Type::Float64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({Type::Bool, Type::Bool, type});
+    builder.move_to_end(block);
+    Value* cond = block->arg(0);
+    Value* three = builder.build_const(type, 3);
+    Value* five = builder.build_const(type, 5);
+    Value* seven = builder.build_const(type, 7);
+    Value* left = builder.build_select(cond, three, five);
+    Value* right = builder.build_select(cond, three, seven);
+    Value* unrelated = builder.build_select(block->arg(1), three, seven);
+    Value* nonconstant = builder.build_select(cond, three, block->arg(2));
+    check_fold_constant_select(builder.fold_eq(left, five), cond, Type::Bool, 0, 1);
+    check_fold_constant_select(builder.fold_eq(five, left), cond, Type::Bool, 0, 1);
+    check_fold_constant_select(builder.fold_eq(left, right), cond, Type::Bool, 1, 0);
+    check_fold_constant_select(builder.fold_eq(right, left), cond, Type::Bool, 1, 0);
+    unittest_assert(dynamic_cast<EqInst*>(builder.fold_eq(left, unrelated)));
+    unittest_assert(dynamic_cast<EqInst*>(builder.fold_eq(nonconstant, five)));
+    unittest_assert(dynamic_cast<EqInst*>(builder.fold_eq(block->arg(2), right)));
     builder.build_exit();
     unittest_assert(!section.verify(std::cout));
   }
@@ -2229,6 +2293,7 @@ int main(int argc, char** argv) {
 
   suite.test("rule DSL builder integration").run(test_rule_dsl_builder_integration);
   suite.test("fold constant select propagation").run(test_fold_constant_select_propagation);
+  suite.test("fold non integer select equality").run(test_fold_non_integer_select_equality);
   suite.test("fold mod u power of two").run(test_fold_mod_u_power_of_two);
   suite.test("fold select unselected poison").run(test_fold_select_unselected_poison);
 

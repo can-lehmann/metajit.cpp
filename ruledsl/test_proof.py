@@ -142,6 +142,14 @@ class ProofTests(unittest.TestCase):
             "    => Select(c, Ctrue, Cfalse)\n", timeout_ms=1000)
         self.assertEqual(len(rules[0].instantiations), 4)
 
+    def test_select_shift_calculations_require_guards(self):
+        for operation, symbol in (("Shl", "<<"), ("ShrU", ">>")):
+            with self.subTest(operation=operation):
+                with self.assertRaisesRegex(ProofError, "calculation may be undefined"):
+                    prove(f"bad: {operation}(Select(c, C1, C2), C3)\n"
+                          f"    Ctrue = C1 {symbol} C3\n    Cfalse = C2 {symbol} C3\n"
+                          "    => Select(c, Ctrue, Cfalse)\n")
+
     def test_select_case_split_preserves_counterexamples(self):
         for t, f, condition in (("+", "-", 0), ("-", "+", 1)):
             with self.subTest(condition=condition):

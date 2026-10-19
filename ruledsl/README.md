@@ -362,10 +362,14 @@ Generated fold definitions are appended to the allocator builder plugin's
 existing output in `jitir.py`, using its existing insertion point in
 `jitir.tmpl.hpp`. This avoids another generated include and avoids changing
 `lwir.cpp`. Existing handwritten methods are named `_fold_*` and explicitly
-registered through `handwritten_folds` in `jitir.py`. Arithmetic and bitwise
-constant-select propagation is expressed in `fold.rules`, including two selects
-sharing a condition. Comparison, shift, and resize propagation remains in the
-handwritten methods. Convenience overloads
+registered through `handwritten_folds` in `jitir.py`. Constant-select propagation
+for arithmetic, bitwise operations, integer/Boolean equality, unsigned comparison,
+unsigned resizing, truncating `ResizeX`, and left/unsigned-right shifts is
+expressed in `fold.rules`. Shift rules require every calculated count to be
+in range. Pointer/float equality and widening `ResizeX` retain small handwritten
+fallbacks; widening `ResizeX` chooses zero upper bits, which the current
+pointwise proof model cannot prove against arbitrary upper bits. The shared
+constant-propagation helpers and macros have been removed. Convenience overloads
 retain their public names and dispatch through generated folds.
 
 Generated folds place a lone constant on the right of commutative operations
