@@ -158,6 +158,14 @@ class Lowerer:
                 self.decision(stage, block, self.paths, {})
         prefix = "_fold_" if self.name in self.handwritten else "build_"
         arguments = tuple(ir.Ref(parameter.value) for parameter in self.parameters)
+        if SIGNATURES[self.name].commutative:
+            left, right = arguments
+            constant_left = call("dynamic_cast<Const*>", left)
+            constant_right = call("dynamic_cast<Const*>", right)
+            condition = conjunction((ir.Binary("!=", constant_left, ir.Literal(None)),
+                                     ir.Binary("==", constant_right, ir.Literal(None))))
+            fallback = self.guard(block, condition)
+            fallback.statements.append(ir.Return(call(prefix + operation_name(self.name), right, left)))
         block.statements.append(ir.Return(call(prefix + operation_name(self.name), *arguments)))
         ir.validate(block, tuple(parameter.value for parameter in self.parameters))
         return Function("fold_" + operation_name(self.name), self.parameters, block)

@@ -1422,10 +1422,6 @@ namespace metajit {
   public:
 
     Value* _fold_add(Value* a, Value* b) {
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-
       binop_const_prop(a->type(), const_a->value() + const_b->value());
       return build_add(a, b);
     }
@@ -1436,10 +1432,6 @@ namespace metajit {
     }
 
     Value* _fold_mul(Value* a, Value* b) {
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-
       binop_const_prop(a->type(), const_a->value() * const_b->value());
       return build_mul(a, b);
     }
@@ -1475,28 +1467,16 @@ namespace metajit {
     }
 
     Value* _fold_and(Value* a, Value* b) {
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-
       binop_const_prop(a->type(), const_a->value() & const_b->value());
       return build_and(a, b);
     }
 
     Value* _fold_or(Value* a, Value* b) {
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-
       binop_const_prop(a->type(), const_a->value() | const_b->value());
       return build_or(a, b);
     }
   
     Value* _fold_xor(Value* a, Value* b) {
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-
       binop_const_prop(a->type(), const_a->value() ^ const_b->value());
       return build_xor(a, b);
     }
@@ -1506,10 +1486,6 @@ namespace metajit {
     }
 
     Value* _fold_eq(Value* a, Value* b) {
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-
       if (a == b) {
         return build_const(Type::Bool, 1);
       }

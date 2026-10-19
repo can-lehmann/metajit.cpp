@@ -68,8 +68,9 @@ class LowerTests(unittest.TestCase):
         code = emit(program)
         self.assertNotIn("is_int(", code)
         self.assertNotIn("is_int_or_bool(", code)
-        self.assertEqual(list(program.functions[0].body.walk(ir.If)),
-                         [branch for branch in program.functions[0].body.walk(ir.If)
+        matching = ir.Block(program.functions[0].body.statements[:-2])
+        self.assertEqual(list(matching.walk(ir.If)),
+                         [branch for branch in matching.walk(ir.If)
                           if isinstance(branch.condition, ir.Binary) and branch.condition.operator == "!="])
 
     def test_unrestricted_jitir_domains_keep_dsl_domain_guard(self):

@@ -343,6 +343,11 @@ registered through `handwritten_folds` in `jitir.py`. Constant-select propagatio
 and other handwritten behavior remain in those methods. Convenience overloads
 retain their public names and dispatch through generated folds.
 
+Generated folds place a lone constant on the right of commutative operations
+before invoking either a handwritten fallback or a raw builder. Matching runs
+before this normalization and supports both operand orders, including nested
+operations created through raw builders.
+
 Every regeneration must prove the rules before writing generated output.
 Both generation entry points enforce that requirement. `jitir.py` proves and
 generates the folds before invoking any output-writing plugins, so proof errors

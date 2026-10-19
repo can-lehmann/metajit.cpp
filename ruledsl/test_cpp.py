@@ -149,6 +149,14 @@ int main() {
   assert(builder.builds == builds);
   assert(dynamic_cast<AddInst*>(builder.fold_add(&x, &y)));
   assert(builder.handwritten_calls == 1);
+  for (Value* result : {builder.fold_add(&three, &x), builder.fold_mul(&three, &x),
+                        builder.fold_and(&three, &x), builder.fold_or(&three, &x),
+                        builder.fold_xor(&three, &x), builder.fold_eq(&three, &x)}) {
+    Inst* operation = dynamic_cast<Inst*>(result);
+    assert(operation && operation->arg(0) == &x && operation->arg(1) == &three);
+  }
+  SubInst* difference = dynamic_cast<SubInst*>(builder.fold_sub(&three, &x));
+  assert(difference && difference->arg(0) == &three && difference->arg(1) == &x);
   for (unsigned inner_order = 0; inner_order < 2; ++inner_order) {
     Value* inner = builder.build_add(inner_order ? &large : &x, inner_order ? &x : &large);
     for (unsigned outer_order = 0; outer_order < 2; ++outer_order) {
