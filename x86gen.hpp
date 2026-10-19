@@ -681,6 +681,15 @@ namespace metajit {
       return ((value ^ extended) & (~uint64_t(0) >> (64 - width))) == 0;
     }
 
+    static uint64_t sign_extend_imm(Const* constant) {
+      switch (constant->type()) {
+        case Type::Int8: return (uint64_t) (int64_t) (int8_t) constant->value();
+        case Type::Int16: return (uint64_t) (int64_t) (int16_t) constant->value();
+        case Type::Int32: return (uint64_t) (int64_t) (int32_t) constant->value();
+        default: return constant->value();
+      }
+    }
+
     bool is_sext_imm32(Const* constant) {
       return is_sext_imm32(constant->type(), constant->value());
     }
@@ -766,7 +775,7 @@ namespace metajit {
         if (is_sext_imm32(constant_b)) {
           mem = X86Inst::Mem(
             vreg(a),
-            constant_b->value()
+            sign_extend_imm(constant_b)
           );
         }
       } else if (dynmatch(MulInst, mul, b)) {
@@ -1045,7 +1054,7 @@ namespace metajit {
 
         if (dynmatch(Const, constant_b, sub->arg(1))) {
           if (is_sext_imm32(constant_b)) {
-            _builder.sub64_imm(vreg(inst), constant_b->value());
+            _builder.sub64_imm(vreg(inst), sign_extend_imm(constant_b));
             return;
           }
         }
@@ -1116,7 +1125,7 @@ namespace metajit {
 
         if (dynmatch(Const, constant_b, and_inst->arg(1))) {
           if (is_sext_imm32(constant_b)) {
-            _builder.and64_imm(vreg(inst), constant_b->value());
+            _builder.and64_imm(vreg(inst), sign_extend_imm(constant_b));
             return;
           }
         }
@@ -1127,7 +1136,7 @@ namespace metajit {
 
         if (dynmatch(Const, constant_b, or_inst->arg(1))) {
           if (is_sext_imm32(constant_b)) {
-            _builder.or64_imm(vreg(inst), constant_b->value());
+            _builder.or64_imm(vreg(inst), sign_extend_imm(constant_b));
             return;
           }
         }
@@ -1138,7 +1147,7 @@ namespace metajit {
 
         if (dynmatch(Const, constant_b, xor_inst->arg(1))) {
           if (is_sext_imm32(constant_b)) {
-            _builder.xor64_imm(vreg(inst), constant_b->value());
+            _builder.xor64_imm(vreg(inst), sign_extend_imm(constant_b));
             return;
           }
         }
