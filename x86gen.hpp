@@ -676,6 +676,11 @@ namespace metajit {
       return true;
     }
 
+    static bool is_sext_imm8(uint64_t value, size_t width) {
+      uint64_t extended = (uint64_t) (int64_t) (int8_t) value;
+      return ((value ^ extended) & (~uint64_t(0) >> (64 - width))) == 0;
+    }
+
     bool is_sext_imm32(Const* constant) {
       return is_sext_imm32(constant->type(), constant->value());
     }
