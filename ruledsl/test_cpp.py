@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from .__main__ import main
 from .generate import generate
+from .parser import parse
 from .proof import ProofError
 
 
@@ -433,6 +434,74 @@ class NativeCppTests(unittest.TestCase):
         if cls.compiler is None:
             raise unittest.SkipTest("a C++17 compiler is required for native emission tests")
         cls.code = generate(RULES, handwritten=("Add", "Sub"))
+
+    def test_constant_select_propagation_from_fold_rules(self):
+        source = Path(__file__).with_name("fold.rules").read_text()
+        names = {f"{name}_{form}" for name in ("add", "sub", "mul", "and", "or", "xor")
+                 for form in ("select_constant", "selects")}
+        names.update(("sub_constant_select", "select_same"))
+        rules = [rule for rule in parse(source) if rule.name in names]
+        self.assertEqual({rule.name for rule in rules}, names)
+        code = generate("\n".join(source[rule.span.start:rule.span.end] for rule in rules) + "\n",
+                        timeout_ms=1000)
+        main = """
+void check_result(Value* result, Value* condition, Type type, uint64_t t, uint64_t f) {
+  t &= type_mask(type);
+  f &= type_mask(type);
+  assert(result->type() == type);
+  if (Const* constant = dynamic_cast<Const*>(result)) {
+    assert(constant->value() == t && constant->value() == f);
+  } else {
+    SelectInst* select = dynamic_cast<SelectInst*>(result);
+    assert(select && select->arg(0) == condition);
+    Const* true_value = dynamic_cast<Const*>(select->arg(1));
+    Const* false_value = dynamic_cast<Const*>(select->arg(2));
+    assert(true_value && true_value->value() == t);
+    assert(false_value && false_value->value() == f);
+  }
+}
+int main() {
+  Generated builder;
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value condition(Type::Bool), other_condition(Type::Bool), unknown(type);
+    Const a(type, type_mask(type)), b(type, 5), c(type, 3), d(type, 9), k(type, 7);
+    Value* left = builder.build_select(&condition, &a, &b);
+    Value* right = builder.build_select(&condition, &c, &d);
+    Value* unrelated = builder.build_select(&other_condition, &c, &d);
+    Value* nonconstant = builder.build_select(&condition, &a, &unknown);
+"""
+        for name, symbol in (("add", "+"), ("sub", "-"), ("mul", "*"),
+                             ("and", "&"), ("or", "|"), ("xor", "^")):
+            cases = [
+                ("left", "&k", f"a.value() {symbol} k.value()", f"b.value() {symbol} k.value()"),
+                ("&k", "left", f"k.value() {symbol} a.value()", f"k.value() {symbol} b.value()"),
+                ("left", "right", f"a.value() {symbol} c.value()", f"b.value() {symbol} d.value()"),
+                ("right", "left", f"c.value() {symbol} a.value()", f"d.value() {symbol} b.value()"),
+            ]
+            if name in ("add", "sub", "mul"):
+                main += "    if (type != Type::Bool) {\n"
+            for left, right, t, f in cases:
+                main += (f"    check_result(builder.fold_{name}({left}, {right}), &condition, type, "
+                         f"{t}, {f});\n")
+            class_name = name.capitalize() + "Inst"
+            main += f"    assert(dynamic_cast<{class_name}*>(builder.fold_{name}(left, unrelated)));\n"
+            main += f"    assert(dynamic_cast<{class_name}*>(builder.fold_{name}(nonconstant, &k)));\n"
+            if name in ("add", "sub", "mul"):
+                main += "    }\n"
+        main += "  }\n}\n"
+        fixture = Path(__file__).with_name("test_runtime.hpp")
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = Path(directory) / "selects.cpp"
+            executable = Path(directory) / "selects"
+            source_path.write_text(f'#include "{fixture}"\nstruct Generated: RawBuilder {{\n'
+                                   + code + "};\n" + main)
+            compiled = subprocess.run(
+                [self.compiler, "-std=c++17", "-O1", "-Wall", "-Wextra", "-Werror",
+                 "-fsanitize=undefined", "-fno-sanitize-recover=undefined",
+                 str(source_path), "-o", str(executable)], capture_output=True, text=True, timeout=60)
+            self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+            executed = subprocess.run([str(executable)], capture_output=True, text=True, timeout=60)
+            self.assertEqual(executed.returncode, 0, executed.stdout + executed.stderr)
 
     def test_generated_folds_compile_and_run_with_and_without_statistics(self):
         fixture = Path(__file__).with_name("test_runtime.hpp")

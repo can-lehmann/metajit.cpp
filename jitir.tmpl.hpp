@@ -1421,21 +1421,6 @@ namespace metajit {
 
   public:
 
-    Value* _fold_add(Value* a, Value* b) {
-      binop_const_prop(a->type(), const_a->value() + const_b->value());
-      return build_add(a, b);
-    }
-
-    Value* _fold_sub(Value* a, Value* b) {
-      binop_const_prop(a->type(), const_a->value() - const_b->value());
-      return build_sub(a, b);
-    }
-
-    Value* _fold_mul(Value* a, Value* b) {
-      binop_const_prop(a->type(), const_a->value() * const_b->value());
-      return build_mul(a, b);
-    }
-
     Value* fold_div_s(Value* a, Value* b) {
       return build_div_s(a, b);
     }
@@ -1464,21 +1449,6 @@ namespace metajit {
       }
 
       return build_mod_u(a, b);
-    }
-
-    Value* _fold_and(Value* a, Value* b) {
-      binop_const_prop(a->type(), const_a->value() & const_b->value());
-      return build_and(a, b);
-    }
-
-    Value* _fold_or(Value* a, Value* b) {
-      binop_const_prop(a->type(), const_a->value() | const_b->value());
-      return build_or(a, b);
-    }
-  
-    Value* _fold_xor(Value* a, Value* b) {
-      binop_const_prop(a->type(), const_a->value() ^ const_b->value());
-      return build_xor(a, b);
     }
 
     Value* fold_not(Value* a) {

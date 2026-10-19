@@ -90,6 +90,25 @@ class ProofTests(unittest.TestCase):
         rules = prove("reassoc: Add(Add(x, C1), C2)\n    C = C1 + C2\n    => Add(x, C)")
         self.assertEqual(len(rules[0].instantiations), 4)
 
+    def test_multiply_constant_selects(self):
+        rules = prove(
+            "multiply: Mul(Select(c, C1, C2), Select(c, C3, C4))\n"
+            "    Ctrue = C1 * C3\n    Cfalse = C2 * C4\n"
+            "    => Select(c, Ctrue, Cfalse)\n", timeout_ms=1000)
+        self.assertEqual(len(rules[0].instantiations), 4)
+
+    def test_select_case_split_preserves_counterexamples(self):
+        for t, f, condition in (("+", "-", 0), ("-", "+", 1)):
+            with self.subTest(condition=condition):
+                with self.assertRaises(ProofError) as raised:
+                    prove("bad: Add(Select(c, C1, C2), C3)\n"
+                          f"    Ctrue = C1 {t} C3\n    Cfalse = C2 {f} C3\n"
+                          "    => Select(c, Ctrue, Cfalse)\n")
+                example = raised.exception.counterexample
+                self.assertEqual(example.inputs["c"].value, condition)
+                self.assertFalse(example.before.poison)
+                self.assertNotEqual(example.before.value, example.after.value)
+
     def test_resize_roundtrips(self):
         for kind in ("ResizeU", "ResizeS", "ResizeX"):
             with self.subTest(kind=kind):

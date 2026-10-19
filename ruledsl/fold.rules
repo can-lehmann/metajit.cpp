@@ -5,6 +5,16 @@ add_constants: Add(C1, C2)
     C = C1 + C2
     => C
 
+add_select_constant: Add(Select(c, C1, C2), C3)
+    Ctrue = C1 + C3
+    Cfalse = C2 + C3
+    => Select(c, Ctrue, Cfalse)
+
+add_selects: Add(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 + C3
+    Cfalse = C2 + C4
+    => Select(c, Ctrue, Cfalse)
+
 add_reassoc_constants: Add(Add(x, C1), C2)
     C = C1 + C2
     => Add(x, C)
@@ -26,6 +36,21 @@ sub_constants: Sub(C1, C2)
     C = C1 - C2
     => C
 
+sub_select_constant: Sub(Select(c, C1, C2), C3)
+    Ctrue = C1 - C3
+    Cfalse = C2 - C3
+    => Select(c, Ctrue, Cfalse)
+
+sub_selects: Sub(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 - C3
+    Cfalse = C2 - C4
+    => Select(c, Ctrue, Cfalse)
+
+sub_constant_select: Sub(C1, Select(c, C2, C3))
+    Ctrue = C1 - C2
+    Cfalse = C1 - C3
+    => Select(c, Ctrue, Cfalse)
+
 mul_zero: Mul(x, 0)
     => 0
 
@@ -35,6 +60,16 @@ mul_one: Mul(x, 1)
 mul_constants: Mul(C1, C2)
     C = C1 * C2
     => C
+
+mul_select_constant: Mul(Select(c, C1, C2), C3)
+    Ctrue = C1 * C3
+    Cfalse = C2 * C3
+    => Select(c, Ctrue, Cfalse)
+
+mul_selects: Mul(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 * C3
+    Cfalse = C2 * C4
+    => Select(c, Ctrue, Cfalse)
 
 mul_power_of_two: Mul(x, C)
     check C != 0 and C & (C - 1) == 0
@@ -53,6 +88,16 @@ and_all_ones: And(x, -1)
 and_constants: And(C1, C2)
     C = C1 & C2
     => C
+
+and_select_constant: And(Select(c, C1, C2), C3)
+    Ctrue = C1 & C3
+    Cfalse = C2 & C3
+    => Select(c, Ctrue, Cfalse)
+
+and_selects: And(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 & C3
+    Cfalse = C2 & C4
+    => Select(c, Ctrue, Cfalse)
 
 and_reassoc_constants: And(And(x, C1), C2)
     C = C1 & C2
@@ -109,6 +154,16 @@ or_constants: Or(C1, C2)
     C = C1 | C2
     => C
 
+or_select_constant: Or(Select(c, C1, C2), C3)
+    Ctrue = C1 | C3
+    Cfalse = C2 | C3
+    => Select(c, Ctrue, Cfalse)
+
+or_selects: Or(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 | C3
+    Cfalse = C2 | C4
+    => Select(c, Ctrue, Cfalse)
+
 or_reassoc_constants: Or(Or(x, C1), C2)
     C = C1 | C2
     => Or(x, C)
@@ -152,6 +207,16 @@ xor_zero: Xor(x, 0)
 xor_constants: Xor(C1, C2)
     C = C1 ^ C2
     => C
+
+xor_select_constant: Xor(Select(c, C1, C2), C3)
+    Ctrue = C1 ^ C3
+    Cfalse = C2 ^ C3
+    => Select(c, Ctrue, Cfalse)
+
+xor_selects: Xor(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 ^ C3
+    Cfalse = C2 ^ C4
+    => Select(c, Ctrue, Cfalse)
 
 xor_reassoc_constants: Xor(Xor(x, C1), C2)
     C = C1 ^ C2

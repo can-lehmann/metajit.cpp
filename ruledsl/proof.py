@@ -55,6 +55,7 @@ class Prover:
         self.solver.set(timeout=timeout_ms)
         self.inputs = {}
         self.calculations = {}
+        self.select_condition = None
         self.before = self.pattern(checked.rule.pattern, introduce=True)
         self.after = None
         self.conditions = z3.BoolVal(True)
@@ -82,7 +83,16 @@ class Prover:
         raise ProofError(message, node, self.source, self.filename,
                          self.assignment, counterexample)
 
-    def query(self, node, *conditions):
+    def query(self, node, *conditions, split=None):
+        if split is not None:
+            for value in (0, 1):
+                concrete = z3.BitVecVal(value, 1)
+                specialized = [z3.simplify(z3.substitute(condition, (split, concrete)))
+                               for condition in conditions]
+                result = self.query(node, split == concrete, *specialized)
+                if result != z3.unsat:
+                    return result
+            return z3.unsat
         result = self.solver.check(*conditions)
         if result == z3.unknown:
             self.error(node, f"Z3 could not decide the proof: {self.solver.reason_unknown()}")
@@ -105,6 +115,8 @@ class Prover:
                 bits = z3.If(bits, z3.BitVecVal(1, 1), z3.BitVecVal(0, 1))
             return Value(bits, z3.BoolVal(False), self.type_of(node))
         args = [self.pattern(arg, introduce) for arg in node.args]
+        if introduce and node.name == "Select" and self.select_condition is None:
+            self.select_condition = args[0].bits
         return emit(node.name, args, self.type_of(node))
 
     def expression(self, node):
@@ -235,7 +247,8 @@ class Prover:
                        "instantiation; restrict the types with where")
         self.after = self.pattern(self.checked.rule.replacement)
         violation = z3.Or(self.after.poison, self.before.bits != self.after.bits)
-        if self.query(self.checked.rule, self.conditions, z3.Not(self.before.poison), violation) == z3.sat:
+        if self.query(self.checked.rule, self.conditions, z3.Not(self.before.poison), violation,
+                      split=self.select_condition) == z3.sat:
             self.error(self.checked.rule, "could not prove refinement", self.solver.model())
 
 

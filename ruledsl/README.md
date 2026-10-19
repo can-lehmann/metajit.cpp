@@ -162,6 +162,12 @@ the checks must be satisfiable and there must be a defined source execution.
 An unreachable assignment produces an error suggesting an explicit `where`
 restriction rather than silently omitting that assignment.
 
+For patterns containing `Select`, refinement is checked separately with the
+first encountered select condition set to zero and one. This exhaustive split
+keeps multiplication of constant-select arms tractable without enumerating all
+combinations of independent conditions. Counterexamples retain the selected
+condition value. A timeout or any other unknown solver result rejects the proof.
+
 DSL constant calculations use unsigned comparisons, division, remainder, and
 right shifts. Division by zero and shifts outside the operand width are invalid
 calculations. The prover checks that each calculation is valid under preceding
@@ -339,8 +345,10 @@ Generated fold definitions are appended to the allocator builder plugin's
 existing output in `jitir.py`, using its existing insertion point in
 `jitir.tmpl.hpp`. This avoids another generated include and avoids changing
 `lwir.cpp`. Existing handwritten methods are named `_fold_*` and explicitly
-registered through `handwritten_folds` in `jitir.py`. Constant-select propagation
-and other handwritten behavior remain in those methods. Convenience overloads
+registered through `handwritten_folds` in `jitir.py`. Arithmetic and bitwise
+constant-select propagation is expressed in `fold.rules`, including two selects
+sharing a condition. Comparison, shift, and resize propagation remains in the
+handwritten methods. Convenience overloads
 retain their public names and dispatch through generated folds.
 
 Generated folds place a lone constant on the right of commutative operations
