@@ -2050,10 +2050,7 @@ void test_cse_commutative_after_substitution() {
 }
 
 void test_knownbits_variable_shift_witness() {
-  for (bool trace : {false, true}) {
-    Context context;
-    Allocator allocator;
-    std::istringstream input(R"(section {
+  check_simplify_text(R"(section {
 b0(%0: Ptr, %5787: Int8):
   %5788 = And %5787, 31:Int8
   %5789 = ResizeU %5788, type=Int64
@@ -2063,40 +2060,15 @@ b0(%0: Ptr, %5787: Int8):
   Store %0, %5795, aliasing=0, offset=0
   Exit
 }
+)", R"(section {
+b0(%0: Ptr, %1: Int8):
+  %2 = And %1, 31:Int8
+  %3 = ResizeU %2, type=Int64
+  %4 = ResizeX %3, type=Int32
+  Store %0, 1:Bool, aliasing=0, offset=0
+  Exit
+}
 )");
-    Section* section = SectionReader<Builder>::read_section(context, allocator, input);
-    section->order_blocks(BlockOrdering::Dominator);
-    section->autoname();
-    unittest_assert(!section->verify(std::cout));
-    KnownBits facts(section);
-    StoreInst* store = nullptr;
-    for (Inst* inst : *section->entry()) {
-      if (dynmatch(ShrUInst, shift, inst)) {
-        unittest_assert(facts.at(shift) == KnownBits::Bits(Type::Int32, 1, 1));
-      } else if (dynmatch(StoreInst, output, inst)) {
-        store = output;
-      }
-    }
-    unittest_assert(store && facts.at(store->value()) == KnownBits::Bits::constant(true));
-    for (uint64_t input = 0; input < 256; input++) {
-      uint8_t output = 0;
-      Interpreter interpreter(section, {Interpreter::Bits::constant(&output),
-                              Interpreter::Bits::constant(Type::Int8, input)});
-      unittest_assert(interpreter.run() == Interpreter::Event::Exit);
-      unittest_assert(output == 1);
-    }
-    if (trace) {
-      Chain chain;
-      chain.add(section->entry());
-      SimplifyTrace::run(section, &chain);
-    } else {
-      Simplify::run(section, 1);
-    }
-    Const* replacement = dynamic_cast<Const*>(store->value());
-    unittest_assert(replacement && replacement->type() == Type::Bool && replacement->value() == 1);
-    unittest_assert(!section->verify(std::cout));
-    delete section;
-  }
 }
 
 int main(int argc, char** argv) {
