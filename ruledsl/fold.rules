@@ -309,6 +309,9 @@ select_false: Select(0, x, y)
 select_same: Select(c, x, x)
     => x
 
+select_equal_arms: Select(Eq(x, y), x, y)
+    => y
+
 select_complement_condition: Select(Xor(c, 1), x, y)
     => Select(c, y, x)
 

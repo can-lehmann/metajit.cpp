@@ -2156,6 +2156,26 @@ void check_fold_constant_select(Value* result, Value* cond, Type type, uint64_t 
   }
 }
 
+void test_fold_select_equal_arms() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Int32, Type::Int32});
+  builder.move_to_end(block);
+  Value* x = block->arg(0);
+  Value* y = block->arg(1);
+  for (bool reversed : {false, true}) {
+    Value* cond = builder.build_eq(reversed ? y : x, reversed ? x : y);
+    unittest_assert(builder.fold_select(cond, x, y) == y);
+    unittest_assert(builder.fold_select(cond, y, x) == x);
+  }
+  Value* zero = builder.build_const(Type::Int32, 0);
+  check_const(builder.fold_select(builder.build_eq(x, zero), x, zero), Type::Int32, 0);
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+}
+
 void test_fold_shift_zero_value() {
   Context context;
   Allocator allocator;
@@ -2562,6 +2582,7 @@ int main(int argc, char** argv) {
   suite.test("rule DSL known resize roundtrip").run(test_rule_dsl_known_resize_roundtrip);
   suite.test("fold constant select propagation").run(test_fold_constant_select_propagation);
   suite.test("fold shift zero value").run(test_fold_shift_zero_value);
+  suite.test("fold select equal arms").run(test_fold_select_equal_arms);
   suite.test("fold non integer select equality").run(test_fold_non_integer_select_equality);
   suite.test("fold mod u power of two").run(test_fold_mod_u_power_of_two);
   suite.test("fold select unselected poison").run(test_fold_select_unselected_poison);
