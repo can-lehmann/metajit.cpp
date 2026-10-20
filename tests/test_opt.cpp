@@ -2569,10 +2569,33 @@ void test_fold_select_unselected_poison() {
   }
 }
 
+void test_knownbits_variable_shift_witness() {
+  check_simplify_text(R"(section {
+b0(%0: Ptr, %5787: Int8):
+  %5788 = And %5787, 31:Int8
+  %5789 = ResizeU %5788, type=Int64
+  %5791 = ResizeX %5789, type=Int32
+  %5794 = ShrU 4294967295:Int32, %5791
+  %5795 = ResizeX %5794, type=Bool
+  Store %0, %5795, aliasing=0, offset=0
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr, %1: Int8):
+  %2 = And %1, 31:Int8
+  %3 = ResizeU %2, type=Int64
+  %4 = ResizeX %3, type=Int32
+  Store %0, 1:Bool, aliasing=0, offset=0
+  Exit
+}
+)");
+}
+
 int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
   DiffTestSuite suite("tests/output/test_opt", argc, argv);
+  suite.test("knownbits variable shift witness").run(test_knownbits_variable_shift_witness);
 
   suite.test("rule DSL builder integration").run(test_rule_dsl_builder_integration);
   suite.test("rule DSL local rewriter").run(test_rule_dsl_local_rewriter);

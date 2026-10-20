@@ -111,6 +111,65 @@ void test_random_shifts(unittest::Suite& suite) {
   });
 }
 
+void test_variable_shifts() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t width = type_width(type);
+    uint64_t mask = type_mask(type);
+    Bits ones = Bits::constant(type, mask);
+    Bits zero = Bits::constant(type, 0);
+    Bits count(type, mask & ~(width - 1), 0);
+    unittest_assert(ones.shr_u(count) == Bits(type, 1, 1));
+    uint64_t sign = uint64_t(1) << (width - 1);
+    unittest_assert(ones.shl(count) == Bits(type, sign, sign));
+    unittest_assert(ones.shr_s(count) == ones);
+    unittest_assert(zero.shl(count) == zero);
+    unittest_assert(zero.shr_u(count) == zero);
+    unittest_assert(zero.shr_s(count) == zero);
+    Bits unknown(type, 0, 0);
+    unittest_assert(ones.shr_u(unknown) == ones.shr_u(count));
+    unittest_assert(ones.shl(unknown) == ones.shl(count));
+    unittest_assert(ones.shr_s(unknown) == ones);
+    for (Bits operand : {Bits(type, 0, 0), Bits(type, sign | 1, 1), ones, zero}) {
+      Bits zero_or_invalid(type, width - 1, 0);
+      unittest_assert(operand.shl(zero_or_invalid) == operand);
+      unittest_assert(operand.shr_u(zero_or_invalid) == operand);
+      unittest_assert(operand.shr_s(zero_or_invalid) == operand);
+      Bits maximum_or_invalid(type, width - 1, width - 1);
+      unittest_assert(operand.shl(maximum_or_invalid) == operand.shl(width - 1));
+      unittest_assert(operand.shr_u(maximum_or_invalid) == operand.shr_u(width - 1));
+      unittest_assert(operand.shr_s(maximum_or_invalid) == operand.shr_s(width - 1));
+      Bits invalid(type, width, width);
+      unittest_assert(operand.shl(invalid) == unknown);
+      unittest_assert(operand.shr_u(invalid) == unknown);
+      unittest_assert(operand.shr_s(invalid) == unknown);
+    }
+  }
+}
+
+void test_random_variable_shifts() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t width = type_width(type);
+    for (int example = 0; example < num_examples / 100; example++) {
+      auto [value, bits] = random_value_and_bits(type);
+      uint64_t mask = rand64();
+      Bits counts(type, mask, (rand64() % width) & mask);
+      Bits left = bits.shl(counts);
+      Bits right = bits.shr_u(counts);
+      Bits signed_right = bits.shr_s(counts);
+      Interpreter::Bits concrete = Interpreter::Bits::constant(type, value);
+      for (uint64_t count = 0; count < width; count++) {
+        if (!counts.matches_const(count)) {
+          continue;
+        }
+        Interpreter::Bits amount = Interpreter::Bits::constant(type, count);
+        unittest_assert(left.matches_const(concrete.shl(amount).value));
+        unittest_assert(right.matches_const(concrete.shr_u(amount).value));
+        unittest_assert(signed_right.matches_const(concrete.shr_s(amount).value));
+      }
+    }
+  }
+}
+
 void test_random_resize(unittest::Suite& suite) {
   suite.test("random_resize").run([]() {
     for (int i = 0; i < num_examples; i++) {
@@ -1119,6 +1178,8 @@ int main(int argc, char** argv) {
   test_random_add(suite);
   test_random_sub(suite);
   test_random_shifts(suite);
+  suite.test("variable shifts").run(test_variable_shifts);
+  suite.test("random variable shifts").run(test_random_variable_shifts);
   test_random_resize(suite);
   test_idempotent_conditions(suite);
   test_usedbits_shr_s_bug(suite);
