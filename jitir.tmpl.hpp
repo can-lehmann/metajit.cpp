@@ -3616,19 +3616,36 @@ namespace metajit {
         return result;
       }
 
-      #define shift_by_const(name) \
+      Bits join(const Bits& other) const {
+        assert(type == other.type);
+        return Bits(type, mask & other.mask & ~(value ^ other.value), value);
+      }
+
+      #define shift_by_bits(name) \
         Bits name(const Bits& other) const { \
           if (other.is_const()) { \
             return name(other.value); \
           } \
-          return Bits(type, 0, 0); \
+          size_t width = type_width(type); \
+          if (other.umin() >= width) { \
+            return Bits(type, 0, 0); \
+          } \
+          Bits result = *this; \
+          for (size_t shift = 1; shift < width; shift *= 2) { \
+            if ((other.mask & shift) == 0) { \
+              result = result.join(result.name(shift)); \
+            } else if (other.value & shift) { \
+              result = result.name(shift); \
+            } \
+          } \
+          return result; \
         }
       
-      shift_by_const(shl)
-      shift_by_const(shr_u)
-      shift_by_const(shr_s)
+      shift_by_bits(shl)
+      shift_by_bits(shr_u)
+      shift_by_bits(shr_s)
 
-      #undef shift_by_const
+      #undef shift_by_bits
 
       Bits resize_u(Type to) const {
         return Bits(
@@ -3674,11 +3691,7 @@ namespace metajit {
           }
         }
 
-        return Bits(
-          a.type,
-          a.mask & b.mask & ~(a.value ^ b.value),
-          a.value
-        );
+        return a.join(b);
       }
 
       std::optional<Bits> and_backwards(const Bits& argument) const {
