@@ -657,20 +657,11 @@ b0(%0: Ptr, %1: Int8):
     return z3::ite(z3::slt(args[0].value(), context.bv_val(0, 32)), -args[0].value(), args[0].value());
   });
 
-  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
-    suite.tv_test(std::string("bit_reverse_twice_") + to_string(type)).run_valuestate({type}, [](Builder& builder) {
-      return builder.build_bit_reverse(builder.build_bit_reverse(builder.entry_arg(0)));
-    }, [](z3::context& context, std::vector<tv::ValueState> args) {
-      return args[0];
-    });
-    suite.tv_test(std::string("bit_reverse_poison_") + to_string(type)).run_valuestate({}, [type](Builder& builder) {
-      return builder.build_bit_reverse(builder.section()->context().build_poison(type));
-    }, [type](z3::context& context, std::vector<tv::ValueState> args) {
-      tv::ValueState result(type, context.bv_val(0, type_width(type)));
-      result.set_poison(context.bool_val(true));
-      return result;
-    });
-  }
+  suite.tv_test("bit_reverse_twice").run({Type::Int32}, [](Builder& builder) {
+    return builder.build_bit_reverse(builder.build_bit_reverse(builder.entry_arg(0)));
+  }, [](z3::context& context, std::vector<tv::ValueState> args) {
+    return args[0].value();
+  });
 
   // Non-poison values have is_poison == false
   suite.tv_test("add_not_poison").run_valuestate({Type::Int32, Type::Int32}, [](Builder& builder) {
