@@ -671,7 +671,7 @@ namespace metajit {
 
     bool is_sext_imm32(Type type, uint64_t value) {
       if (type_size(type) == 8) {
-        return (value >> 31) == 0 || (value >> 31) == 0x1fffffffULL;
+        return (value >> 31) == 0 || (value >> 31) == 0x1ffffffffULL;
       }
       return true;
     }
