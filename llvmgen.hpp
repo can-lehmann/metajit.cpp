@@ -265,6 +265,13 @@ namespace metajit {
         }
 
         return call_inst;
+      } else if (dynmatch(MulHighUInst, mul, inst)) {
+        size_t width = type_width(mul->type());
+        llvm::Type* wide_type = _builder.getIntNTy(width * 2);
+        llvm::Value* a = _builder.CreateZExt(emit_arg(mul->arg(0)), wide_type);
+        llvm::Value* b = _builder.CreateZExt(emit_arg(mul->arg(1)), wide_type);
+        llvm::Value* product = _builder.CreateMul(a, b);
+        return _builder.CreateTrunc(_builder.CreateLShr(product, width), _builder.getIntNTy(width));
       } else if (dynmatch(EqInst, eq, inst)) {
         if (is_float(eq->arg(0)->type())) {
           llvm::Type* bits_type = _builder.getIntNTy(type_size(eq->arg(0)->type()) * 8);

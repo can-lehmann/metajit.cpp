@@ -103,6 +103,7 @@ namespace metajit {
           case 0: binop(add)
           case 1: binop(sub)
           case 2: binop(mul)
+          case 15: binop(mul_high_u)
           case 3: binop(and)
           case 4: binop(or)
           case 5: binop(xor)

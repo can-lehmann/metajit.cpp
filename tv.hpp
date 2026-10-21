@@ -477,6 +477,7 @@ namespace metajit {
         binop(AddInst, a + b)
         binop(SubInst, a - b)
         binop(MulInst, a * b)
+        binop(MulHighUInst, (z3::zext(a, type_width(inst->type())) * z3::zext(b, type_width(inst->type()))).extract(type_width(inst->type()) * 2 - 1, type_width(inst->type())))
         binop_divmod(DivSInst, a / b, true)
         binop_divmod(DivUInst, z3::udiv(a, b), false)
         binop_divmod(ModSInst, z3::srem(a, b), true)

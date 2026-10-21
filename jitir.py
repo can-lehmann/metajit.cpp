@@ -519,6 +519,7 @@ jitir = IR(
         binop("Add"),
         binop("Sub"),
         binop("Mul"),
+        binop("MulHighU"),
         binop("DivS"),
         binop("DivU"),
         binop("ModS"),

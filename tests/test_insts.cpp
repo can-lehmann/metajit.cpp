@@ -19,6 +19,66 @@
 using namespace metajit;
 using namespace metajit::test;
 
+void mul_high_u_boundaries(Builder& builder, TestData& data) {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t mask = type_mask(type);
+    for (uint64_t bits : {uint64_t(0), uint64_t(1), mask >> 1, (mask >> 1) + 1, mask}) {
+      Value* a = data.input(RandomRange(type, bits, bits));
+      Value* b = data.input(RandomRange(type));
+      Value* dirty = builder.build_add(a, builder.build_const(type, mask));
+      data.output(builder.build_mul_high_u(a, b));
+      data.output(builder.build_mul_high_u(b, a));
+      data.output(builder.build_mul_high_u(dirty, b));
+      data.output(builder.build_add(builder.build_mul_high_u(a, b), a));
+    }
+  }
+}
+
+void mul_high_u_semantics() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type});
+    builder.move_to_end(block);
+    size_t width = type_width(type);
+    uint64_t mask = type_mask(type);
+    for (uint64_t a : {uint64_t(0), uint64_t(1), uint64_t(3), (mask >> 1) + 1, mask}) {
+      for (uint64_t b : {uint64_t(0), uint64_t(1), uint64_t(3), (mask >> 1) + 1, mask}) {
+        uint64_t expected = uint64_t((__uint128_t(a) * b) >> width);
+        Value* folded = builder.fold_mul_high_u(builder.build_const(type, a), builder.build_const(type, b));
+        unittest_assert(dynamic_cast<Const*>(folded));
+        unittest_assert(((Const*) folded)->value() == expected);
+        Interpreter::Bits actual = Interpreter::Bits::constant(type, a).mul_high_u(Interpreter::Bits::constant(type, b));
+        unittest_assert(!actual.is_poison && actual.value == expected);
+        KnownBits::Bits known = KnownBits::Bits::constant(type, a).mul_high_u(KnownBits::Bits::constant(type, b));
+        unittest_assert(known.is_const() && known.value == expected);
+      }
+    }
+    for (size_t bit = 0; bit < width; bit++) {
+      Value* factor = builder.build_const(type, uint64_t(1) << bit);
+      for (bool swapped : {false, true}) {
+        Value* result = swapped ? builder.fold_mul_high_u(factor, block->arg(0)) : builder.fold_mul_high_u(block->arg(0), factor);
+        if (bit == 0) {
+          unittest_assert(dynamic_cast<Const*>(result));
+          unittest_assert(((Const*) result)->value() == 0);
+        } else {
+          unittest_assert(dynamic_cast<ShrUInst*>(result));
+          unittest_assert(((ShrUInst*) result)->arg(0) == block->arg(0));
+          unittest_assert(((Const*) ((ShrUInst*) result)->arg(1))->value() == width - bit);
+        }
+      }
+    }
+    Interpreter::Bits poison = Interpreter::Bits::poison(type);
+    Interpreter::Bits zero = Interpreter::Bits::constant(type, 0);
+    unittest_assert(poison.mul_high_u(zero).is_poison);
+    unittest_assert(zero.mul_high_u(poison).is_poison);
+    KnownBits::Bits unknown(type, 0, 0);
+    unittest_assert(!unknown.mul_high_u(unknown).is_const());
+  }
+}
+
 void test_binop(DiffTestSuite& suite) {
   #define binop_type(name, type) \
     suite.diff_test(#name "_" #type).run([](Builder& builder, TestData& data) { \
@@ -38,6 +98,7 @@ void test_binop(DiffTestSuite& suite) {
   binop(add, false)
   binop(sub, false)
   binop(mul, false)
+  binop(mul_high_u, false)
 
   binop(and, true)
   binop(or, true)
@@ -677,6 +738,9 @@ int main(int argc, char** argv) {
   LLVMCodeGen::initilize_llvm_jit();
 
   DiffTestSuite suite("tests/output/test_insts", argc, argv);
+
+  suite.test("mul_high_u_semantics").run(mul_high_u_semantics);
+  suite.diff_test("mul_high_u_boundaries").run(mul_high_u_boundaries);
 
   test_binop(suite);
   test_shift(suite);
