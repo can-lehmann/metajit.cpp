@@ -2379,10 +2379,35 @@ namespace metajit {
       }
     }
 
+    static std::optional<X86Inst::Kind> invert_branch(X86Inst::Kind kind) {
+      switch (kind) {
+        case X86Inst::Kind::JE: return X86Inst::Kind::JNE;
+        case X86Inst::Kind::JNE: return X86Inst::Kind::JE;
+        case X86Inst::Kind::JL: return X86Inst::Kind::JGE;
+        case X86Inst::Kind::JGE: return X86Inst::Kind::JL;
+        case X86Inst::Kind::JB: return X86Inst::Kind::JAE;
+        case X86Inst::Kind::JAE: return X86Inst::Kind::JB;
+        default: return std::nullopt;
+      }
+    }
+
     void peephole() {
       for (X86Block* block : _blocks) {
         for (auto it = block->begin(); it != block->end(); ) {
           X86Inst* inst = *it;
+
+          std::optional<X86Inst::Kind> inverted = invert_branch(inst->kind());
+          if (inverted &&
+              std::holds_alternative<X86Block*>(inst->imm()) &&
+              block->name() + 1 < _blocks.size() &&
+              std::get<X86Block*>(inst->imm()) == _blocks[block->name() + 1]) {
+            X86Inst* next = inst->next();
+            if (next && next->kind() == X86Inst::Kind::Jmp && !next->next()) {
+              inst->set_kind(*inverted);
+              inst->set_imm(next->imm());
+              block->insts().remove(next);
+            }
+          }
 
           if (((inst->kind() == X86Inst::Kind::Mov8Imm ||
                 inst->kind() == X86Inst::Kind::Mov32Imm ||
