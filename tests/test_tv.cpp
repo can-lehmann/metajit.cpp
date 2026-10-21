@@ -489,8 +489,36 @@ void test_simplify_unused_load_address_refinement() {
   unittest_assert(result == z3::unsat);
 }
 
+Value* build_mul_high_u(Builder& builder) {
+  return builder.build_mul_high_u(builder.entry_arg(0), builder.entry_arg(1));
+}
+
+z3::expr expected_mul_high_u(z3::context& context, std::vector<tv::ValueState> args) {
+  unsigned width = args[0].value().get_sort().bv_size();
+  z3::expr product = z3::zext(args[0].value(), width) * z3::zext(args[1].value(), width);
+  return z3::lshr(product, width).extract(width - 1, 0);
+}
+
+Value* build_poison_mul_high_u(Builder& builder) {
+  Type type = builder.entry_arg(0)->type();
+  Value* poison = builder.build_shl(builder.entry_arg(0), builder.build_const(type, type_width(type)));
+  return builder.build_mul_high_u(poison, builder.entry_arg(1));
+}
+
+tv::ValueState expected_poison_mul_high_u(z3::context& context, std::vector<tv::ValueState> args) {
+  unsigned width = args[0].value().get_sort().bv_size();
+  tv::ValueState result(args[0].type(), context.bv_val(0, width));
+  result.set_poison(context.bool_val(true));
+  return result;
+}
+
 int main(int argc, char** argv) {
   TVTestSuite suite(argc, argv);
+
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    suite.tv_test(std::string("mul_high_u_") + to_string(type)).run({type, type}, build_mul_high_u, expected_mul_high_u);
+    suite.tv_test(std::string("mul_high_u_poison_") + to_string(type)).run_valuestate({type, type}, build_poison_mul_high_u, expected_poison_mul_high_u);
+  }
 
   suite.test("simplify overwritten bytes refinement").run(test_simplify_overwritten_bytes_refinement);
   suite.test("simplify unused load address refinement").run(test_simplify_unused_load_address_refinement);
