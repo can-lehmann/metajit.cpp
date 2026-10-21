@@ -6510,24 +6510,26 @@ private:
       }
     };
 
-    using Canon = std::unordered_map<Lookup, Value*, LookupHash>;
+    using Canon = std::unordered_set<Lookup, LookupHash>;
     using ValidLoads = std::unordered_map<AliasingGroup, std::vector<LoadInst*>>;
 
     struct CanonUndo {
       Lookup lookup;
-      Value* old_value;
+      bool inserted;
     };
 
-    static void canon_insert(Canon& canon, std::vector<CanonUndo>& undo, const Lookup& lookup, Value* value) {
-      Value* old_value = (canon.find(lookup) != canon.end()) ? canon.at(lookup) : nullptr;
-      undo.push_back({lookup, old_value});
-      canon[lookup] = value;
+    Canon _canon;
+    std::vector<CanonUndo> _undo;
+
+    void canon_insert(const Lookup& lookup) {
+      _undo.push_back({lookup, true});
+      _canon.insert(lookup);
     }
 
-    static void canon_erase(Canon& canon, std::vector<CanonUndo>& undo, const Lookup& lookup) {
-      if (canon.find(lookup) != canon.end()) {
-        undo.push_back({lookup, canon.at(lookup)});
-        canon.erase(lookup);
+    void canon_erase(const Lookup& lookup) {
+      if (_canon.find(lookup) != _canon.end()) {
+        _undo.push_back({*_canon.find(lookup), false});
+        _canon.erase(lookup);
       }
     }
   public:
@@ -6538,27 +6540,25 @@ private:
       std::unordered_map<Value*, Value*> substs;
       std::unordered_map<Lookup, Const*, LookupHash> consts;
 
-      Canon canon;
-      std::vector<CanonUndo> undo;
       std::vector<size_t> marks;
 
       for (auto [event, block] : children) {
         if (event == DominatorTree::Children::Event::Close) {
           size_t mark = marks.back();
           marks.pop_back();
-          while (undo.size() > mark) {
-            CanonUndo entry = undo.back();
-            undo.pop_back();
-            if (entry.old_value) {
-              canon[entry.lookup] = entry.old_value;
+          while (_undo.size() > mark) {
+            CanonUndo entry = _undo.back();
+            _undo.pop_back();
+            if (entry.inserted) {
+              _canon.erase(entry.lookup);
             } else {
-              canon.erase(entry.lookup);
+              _canon.insert(entry.lookup);
             }
           }
           continue;
         }
 
-        marks.push_back(undo.size());
+        marks.push_back(_undo.size());
         ValidLoads valid_loads;
 
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
@@ -6583,8 +6583,8 @@ private:
             std::vector<LoadInst*> remaining_loads;
             for (LoadInst* load : valid_loads[store->aliasing()]) {
               if (could_alias(load, store)) {
-                assert(canon.find(Lookup(load)) != canon.end());
-                canon_erase(canon, undo, Lookup(load));
+                assert(_canon.find(Lookup(load)) != _canon.end());
+                canon_erase(Lookup(load));
               } else {
                 remaining_loads.push_back(load);
               }
@@ -6594,7 +6594,7 @@ private:
             // Calls can invalidate any cached memory-derived value.
             for (auto& [group, loads] : valid_loads) {
               for (LoadInst* load : loads) {
-                canon_erase(canon, undo, Lookup(load));
+                canon_erase(Lookup(load));
               }
             }
             valid_loads.clear();
@@ -6609,21 +6609,21 @@ private:
           }
 
           Lookup lookup(inst);
-          if (canon.find(lookup) == canon.end()) {
-            canon_insert(canon, undo, lookup, inst);
+          if (_canon.find(lookup) == _canon.end()) {
+            canon_insert(lookup);
             if (dynmatch(LoadInst, load, inst)) {
               valid_loads[load->aliasing()].push_back(load);
             }
             inst_it++;
           } else {
-            substs[inst] = canon.at(lookup);
+            substs[inst] = _canon.find(lookup)->value;
             inst_it = inst_it.erase();
           }
         }
 
         for (auto& [group, loads] : valid_loads) {
           for (LoadInst* load : loads) {
-            canon_erase(canon, undo, Lookup(load));
+            canon_erase(Lookup(load));
           }
         }
       }
