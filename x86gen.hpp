@@ -1270,8 +1270,10 @@ namespace metajit {
             _builder.shr32_imm(result, 32 - width);
           }
         }
-        for (size_t shift : {4, 2, 1}) {
-          uint64_t mask = (UINT64_MAX / ((uint64_t(1) << shift) + 1)) & type_mask(inst->type());
+        for (auto [shift, mask] : {std::pair<size_t, uint64_t>{4, 0x0f0f0f0f0f0f0f0full},
+                                  {2, 0x3333333333333333ull},
+                                  {1, 0x5555555555555555ull}}) {
+          mask &= type_mask(inst->type());
           Reg other = vreg();
           _builder.mov64(other, result);
           _builder.shr64_imm(result, shift);
