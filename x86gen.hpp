@@ -1264,7 +1264,7 @@ namespace metajit {
         _builder.mov64(result, vreg(bit_reverse->arg(0)));
         if (width == 64) {
           _builder.bswap64(result);
-        } else {
+        } else if (width > 8) {
           _builder.bswap32(result);
           if (width < 32) {
             _builder.shr32_imm(result, 32 - width);
@@ -1286,8 +1286,12 @@ namespace metajit {
             _builder.and64_imm(result, mask);
             _builder.and64_imm(other, mask);
           }
-          _builder.shl64_imm(other, shift);
-          _builder.or64(result, other);
+          if (shift <= 2) {
+            _builder.lea64(result, X86Inst::Mem(result, size_t(1) << shift, other, 0));
+          } else {
+            _builder.shl64_imm(other, shift);
+            _builder.or64(result, other);
+          }
         }
       } else if (dynmatch(PopcountInst, popcount, inst)) {
         switch (type_size(popcount->type())) {
