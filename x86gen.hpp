@@ -1225,6 +1225,35 @@ namespace metajit {
         } else {
           assert(false);
         }
+      } else if (dynmatch(BitReverseInst, bit_reverse, inst)) {
+        Reg result = vreg(inst);
+        size_t width = type_width(inst->type());
+        _builder.mov64(result, vreg(bit_reverse->arg(0)));
+        if (width == 64) {
+          _builder.bswap64(result);
+        } else {
+          _builder.bswap32(result);
+          if (width < 32) {
+            _builder.shr32_imm(result, 32 - width);
+          }
+        }
+        for (size_t shift : {4, 2, 1}) {
+          uint64_t mask = (UINT64_MAX / ((uint64_t(1) << shift) + 1)) & type_mask(inst->type());
+          Reg other = vreg();
+          _builder.mov64(other, result);
+          _builder.shr64_imm(result, shift);
+          if (width == 64) {
+            Reg mask_reg = vreg();
+            _builder.mov64_imm64(mask_reg, mask);
+            _builder.and64(result, mask_reg);
+            _builder.and64(other, mask_reg);
+          } else {
+            _builder.and64_imm(result, mask);
+            _builder.and64_imm(other, mask);
+          }
+          _builder.shl64_imm(other, shift);
+          _builder.or64(result, other);
+        }
       } else if (dynmatch(PopcountInst, popcount, inst)) {
         switch (type_size(popcount->type())) {
           case 1: {

@@ -1172,6 +1172,38 @@ int main(int argc, char** argv) {
     }
   });
 
+  suite.test("bit_reverse").run([]() {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      for (size_t bit = 0; bit < type_width(type); bit++) {
+        uint64_t input_mask = uint64_t(1) << bit;
+        uint64_t output_mask = uint64_t(1) << (type_width(type) - bit - 1);
+        for (uint64_t value : {uint64_t(0), input_mask}) {
+          Bits result = Bits(type, input_mask, value).bit_reverse();
+          unittest_assert(result == Bits(type, output_mask, value ? output_mask : 0));
+        }
+        Context context;
+        Allocator allocator;
+        Section section(context, allocator);
+        Builder builder(&section);
+        Block* entry = builder.build_block({Type::Ptr});
+        builder.move_to_end(entry);
+        Value* input = builder.build_load(entry->arg(0), type, LoadFlags::None, AliasingGroup(0), 0);
+        Value* masked = builder.build_and(input, builder.build_const(type, input_mask));
+        Value* reversed = builder.build_bit_reverse(masked);
+        Value* result = builder.build_and(reversed, builder.build_const(type, output_mask));
+        builder.build_store(entry->arg(0), result, AliasingGroup(0), 8);
+        builder.build_exit();
+        section.order_blocks(BlockOrdering::Dominator);
+        section.autoname();
+        KnownBits known(&section);
+        unittest_assert(known.at(reversed) == Bits(type, type_mask(type) ^ output_mask, 0));
+        UsedBits used(&section);
+        unittest_assert(used.at(masked).used == input_mask);
+        unittest_assert(used.at(input).used == input_mask);
+      }
+    }
+  });
+
   test_add_example(suite);
   test_sub_example(suite);
   test_random(suite);

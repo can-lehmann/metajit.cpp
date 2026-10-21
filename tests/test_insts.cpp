@@ -643,6 +643,36 @@ void test_popcount(DiffTestSuite& suite) {
   popcount_type(Int64)
 }
 
+void test_bit_reverse(DiffTestSuite& suite) {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    suite.test(std::string("fold_bit_reverse_") + to_string(type)).run([type]() {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* entry = builder.build_block({type});
+      builder.move_to_end(entry);
+      Value* input = entry->arg(0);
+      unittest_assert(builder.fold_bit_reverse(builder.build_bit_reverse(input)) == input);
+      for (uint64_t value : {uint64_t(0), uint64_t(1), type_mask(type), uint64_t(0x123456789abcdef)}) {
+        uint64_t expected = 0;
+        for (size_t bit = 0; bit < type_width(type); bit++) {
+          expected |= ((value >> bit) & 1) << (type_width(type) - bit - 1);
+        }
+        Value* folded = builder.fold_bit_reverse(builder.build_const(type, value));
+        unittest_assert(dynamic_cast<Const*>(folded));
+        unittest_assert(((Const*) folded)->value() == expected);
+      }
+      builder.build_exit();
+    });
+    suite.diff_test(std::string("bit_reverse_") + to_string(type)).run([type](Builder& builder, TestData& data) {
+      Value* input = data.input(type);
+      data.output(builder.build_bit_reverse(input));
+      data.output(builder.build_bit_reverse(builder.build_bit_reverse(input)));
+    });
+  }
+}
+
 int main(int argc, char** argv) {
   LLVMCodeGen::initilize_llvm_jit();
 
@@ -663,6 +693,7 @@ int main(int argc, char** argv) {
   test_convert_f(suite);
   test_ptr_to_int(suite);
   test_popcount(suite);
+  test_bit_reverse(suite);
 
   return suite.finish();
 }

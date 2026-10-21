@@ -193,6 +193,14 @@ namespace metajit {
     }
   }
 
+  inline uint64_t bit_reverse(Type type, uint64_t value) {
+    value = __builtin_bswap64(value);
+    value = ((value >> 4) & 0x0f0f0f0f0f0f0f0full) | ((value & 0x0f0f0f0f0f0f0f0full) << 4);
+    value = ((value >> 2) & 0x3333333333333333ull) | ((value & 0x3333333333333333ull) << 2);
+    value = ((value >> 1) & 0x5555555555555555ull) | ((value & 0x5555555555555555ull) << 1);
+    return value >> (64 - type_width(type));
+  }
+
   inline Type int_type_of_width(size_t width) {
     switch (width) {
       case 1: return Type::Bool;
@@ -2230,6 +2238,14 @@ namespace metajit {
       return build_promote(a);
     }
 
+    Value* fold_bit_reverse(Value* a) {
+      unop_const_prop(a->type(), metajit::bit_reverse(const_a->type(), const_a->value()));
+      if (dynmatch(BitReverseInst, bit_reverse, a)) {
+        return bit_reverse->arg(0);
+      }
+      return build_bit_reverse(a);
+    }
+
     Value* fold_popcount(Value* a) {
       return build_popcount(a);
     }
@@ -3807,6 +3823,10 @@ namespace metajit {
         return {};
       }
 
+      Bits bit_reverse() const {
+        return Bits(type, metajit::bit_reverse(type, mask), metajit::bit_reverse(type, value));
+      }
+
       bool and_idempotent_condition(const Bits& b) const {
         // If there is no case where b_i is 0 and a_i is 1 or _, then a & b == a
         return ((b.value ^ type_mask(b.type)) & (~mask | value)) == 0;
@@ -3828,6 +3848,8 @@ namespace metajit {
           Bits a = at(values, select->arg(1));
           Bits b = at(values, select->arg(2));
           return cond.select(a, b);
+        } else if (dynmatch(BitReverseInst, bit_reverse, inst)) {
+          return at(values, bit_reverse->arg(0)).bit_reverse();
         } else if (dynmatch(ResizeUInst, resize_u, inst)) {
           Bits a = at(values, resize_u->arg(0));
           return a.resize_u(resize_u->type());
@@ -4185,6 +4207,13 @@ namespace metajit {
         return Bits::constant(to, (uint64_t) result);
       }
 
+      Bits bit_reverse() const {
+        if (is_poison) {
+          return Bits::poison(type);
+        }
+        return Bits::constant(type, metajit::bit_reverse(type, value));
+      }
+
       Bits popcount() const {
         if (is_poison) {
           return Bits::poison(type);
@@ -4369,6 +4398,8 @@ namespace metajit {
       } else if (dynmatch(PtrToIntInst, ptr_to_int, _inst)) {
         Bits a = at(ptr_to_int->arg(0));
         _values[_inst] = a.ptr_to_int(ptr_to_int->type());
+      } else if (dynmatch(BitReverseInst, bit_reverse, _inst)) {
+        _values[_inst] = at(bit_reverse->arg(0)).bit_reverse();
       } else if (dynmatch(PopcountInst, popcount, _inst)) {
         Bits a = at(popcount->arg(0));
         _values[_inst] = a.popcount();
@@ -4538,7 +4569,9 @@ namespace metajit {
             _values[inst] = Bits(inst->type(), 0);
           }
           
-          if (dynmatch(ResizeUInst, resize_u, inst)) {
+          if (dynmatch(BitReverseInst, bit_reverse, inst)) {
+            use(bit_reverse->arg(0), metajit::bit_reverse(inst->type(), _values[inst].used));
+          } else if (dynmatch(ResizeUInst, resize_u, inst)) {
             use(resize_u->arg(0), _values[inst].used);
           } else if (dynmatch(ResizeXInst, resize_x, inst)) {
             use(resize_x->arg(0), _values[inst].used);
@@ -4724,7 +4757,11 @@ namespace metajit {
             return _builder.build_const(inst->type(), known_bits.at(inst).value);
           }
 
-          if (dynmatch(AndInst, and_inst, inst)) {
+          if (dynmatch(BitReverseInst, bit_reverse, inst)) {
+            if (dynmatch(BitReverseInst, inner, bit_reverse->arg(0))) {
+              return inner->arg(0);
+            }
+          } else if (dynmatch(AndInst, and_inst, inst)) {
             if (and_inst->arg(0) == and_inst->arg(1)) {
               return and_inst->arg(0);
             }
