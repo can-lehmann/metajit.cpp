@@ -375,7 +375,10 @@ must avoid recursive rewrite cycles; proofs do not establish termination.
 
 The emitter allocates local names by value identity, avoiding C++ keywords,
 external symbols, and reserved generated names. It emits unused bindings with
-`[[maybe_unused]]` rather than optimizing them away. There is no IR optimizer.
+`[[maybe_unused]]` rather than optimizing them away. Before emission, both
+backends use `optimize.optimize` to remove statements following a `Return` in
+each block recursively. This cleanup does not infer termination from branches
+or deduplicate guarded commutative candidates.
 
 Define `METAJIT_RULE_STATS` to enable the generated public static
 `ruledsl_rule_counts` and `ruledsl_rule_names` arrays. Counters are incremented
