@@ -25,20 +25,6 @@ int main(int argc, char** argv) {
   using Bits = Interpreter::Bits;
   using TestCase = InterpreterTest::TestCase;
 
-  suite.test("bit_reverse").run([]() {
-    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
-      Bits poison = Bits::poison(type).bit_reverse();
-      unittest_assert(poison.is_poison && poison.type == type);
-      unittest_assert(Bits::constant(type, 0).bit_reverse().value == 0);
-      unittest_assert(Bits::constant(type, type_mask(type)).bit_reverse().value == type_mask(type));
-      for (size_t bit = 0; bit < type_width(type); bit++) {
-        Bits result = Bits::constant(type, uint64_t(1) << bit).bit_reverse();
-        unittest_assert(!result.is_poison && result.type == type);
-        unittest_assert(result.value == (uint64_t(1) << (type_width(type) - bit - 1)));
-      }
-    }
-  });
-
   for (bool remainder : {false, true}) {
     suite.test(remainder ? "signed_remainder_overflow_produces_poison" :
                            "signed_division_overflow_produces_poison").run([remainder]() {

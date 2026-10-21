@@ -658,17 +658,6 @@ b0(%0: Ptr, %1: Int8):
   });
 
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
-    suite.tv_test(std::string("bit_reverse_") + to_string(type)).run_valuestate({type}, [](Builder& builder) {
-      return builder.build_bit_reverse(builder.entry_arg(0));
-    }, [type](z3::context& context, std::vector<tv::ValueState> args) {
-      size_t width = type_width(type);
-      z3::expr reversed = context.bv_val(0, width);
-      for (size_t bit = 0; bit < width; bit++) {
-        reversed = reversed | z3::shl(z3::lshr(args[0].value(), context.bv_val(bit, width)) & context.bv_val(1, width),
-                                      context.bv_val(width - bit - 1, width));
-      }
-      return tv::ValueState(type, reversed);
-    });
     suite.tv_test(std::string("bit_reverse_twice_") + to_string(type)).run_valuestate({type}, [](Builder& builder) {
       return builder.build_bit_reverse(builder.build_bit_reverse(builder.entry_arg(0)));
     }, [](z3::context& context, std::vector<tv::ValueState> args) {

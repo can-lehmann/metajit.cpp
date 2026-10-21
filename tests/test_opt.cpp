@@ -2123,7 +2123,7 @@ int main(int argc, char** argv) {
   suite.test("fold mul power of two").run(test_fold_mul_power_of_two);
   suite.test("fold mul power of two negative").run(test_fold_mul_power_of_two_negative);
   suite.test("fold sub same operand").run(test_fold_sub_same_operand);
-  suite.test("simplify bit reverse twice").run([]() {
+  suite.test("fold and simplify bit reverse").run([]() {
     for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
       Context context;
       Allocator allocator;
@@ -2131,7 +2131,12 @@ int main(int argc, char** argv) {
       Builder builder(&section);
       Block* entry = builder.build_block({Type::Ptr, type});
       builder.move_to_end(entry);
-      Value* reversed = builder.build_bit_reverse(builder.build_bit_reverse(entry->arg(1)));
+      Value* input = entry->arg(1);
+      unittest_assert(builder.fold_bit_reverse(builder.build_bit_reverse(input)) == input);
+      Value* folded = builder.fold_bit_reverse(builder.build_const(type, 1));
+      unittest_assert(dynamic_cast<Const*>(folded));
+      unittest_assert(((Const*) folded)->value() == (uint64_t(1) << (type_width(type) - 1)));
+      Value* reversed = builder.build_bit_reverse(builder.build_bit_reverse(input));
       StoreInst* store = builder.build_store(entry->arg(0), reversed, AliasingGroup(0), 0);
       builder.build_exit();
       section.order_blocks(BlockOrdering::Dominator);
