@@ -866,6 +866,7 @@ namespace metajit {
            dynamic_cast<const XorInst*>(this) ||
            dynamic_cast<const AddInst*>(this) ||
            dynamic_cast<const MulInst*>(this) ||
+           dynamic_cast<const MulHighUInst*>(this) ||
            dynamic_cast<const EqInst*>(this);
   }
 
@@ -1514,6 +1515,24 @@ namespace metajit {
       binop_const_prop(a->type(), const_a->value() * const_b->value());
 
       return build_mul(a, b);
+    }
+
+    Value* fold_mul_high_u(Value* a, Value* b) {
+      if (dynamic_cast<Const*>(a)) {
+        std::swap(a, b);
+      }
+
+      if (dynmatch(Const, const_b, b)) {
+        if (const_b->value() <= 1) {
+          return build_const(a->type(), 0);
+        } else if (is_power_of_two(const_b->value())) {
+          return fold_shr_u(a, type_width(a->type()) - __builtin_ctzll(const_b->value()));
+        }
+      }
+
+      binop_const_prop(a->type(), uint64_t((__uint128_t(const_a->value()) * const_b->value()) >> type_width(const_a->type())));
+
+      return build_mul_high_u(a, b);
     }
 
     Value* fold_div_s(Value* a, Value* b) {
@@ -2430,6 +2449,10 @@ namespace metajit {
 
     Value* build_mul(Value* a, Value* b) {
       return Builder::fold_mul(a, b);
+    }
+
+    Value* build_mul_high_u(Value* a, Value* b) {
+      return Builder::fold_mul_high_u(a, b);
     }
 
     Value* build_mod_s(Value* a, Value* b) {
@@ -3471,6 +3494,7 @@ namespace metajit {
         }
       
       const_binop(operator*, type, Bits::constant(type, value * other.value))
+      const_binop(mul_high_u, type, Bits::constant(type, uint64_t((__uint128_t(value) * other.value) >> type_width(type))))
 
       const_binop(div_u, type, div_u(type, value, other.value))
       const_binop(div_s, type, div_s(type, value, other.value))
@@ -3850,6 +3874,7 @@ namespace metajit {
         binop(AddInst, a + b)
         binop(SubInst, a - b)
         binop(MulInst, a * b)
+        binop(MulHighUInst, a.mul_high_u(b))
         binop(DivSInst, a.div_s(b))
         binop(DivUInst, a.div_u(b))
         binop(ModSInst, a.mod_s(b))
@@ -4062,6 +4087,7 @@ namespace metajit {
       propagating_binop(operator+, type, Bits::constant(type, value + other.value))
       propagating_binop(operator-, type, Bits::constant(type, value - other.value))
       propagating_binop(operator*, type, Bits::constant(type, value * other.value))
+      propagating_binop(mul_high_u, type, Bits::constant(type, uint64_t((__uint128_t(value) * other.value) >> type_width(type))))
 
       propagating_binop(div_u, type, div_u(type, value, other.value))
       propagating_binop(div_s, type, div_s(type, value, other.value))
@@ -4395,6 +4421,7 @@ namespace metajit {
       binop(AddInst, a + b)
       binop(SubInst, a - b)
       binop(MulInst, a * b)
+      binop(MulHighUInst, a.mul_high_u(b))
       binop(DivSInst, a.div_s(b))
       binop(DivUInst, a.div_u(b))
       binop(ModSInst, a.mod_s(b))

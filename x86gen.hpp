@@ -1060,6 +1060,39 @@ namespace metajit {
         }
 
         _builder.sub64(vreg(inst), vreg(sub->arg(1)));
+      } else if (dynmatch(MulHighUInst, mul, inst)) {
+        if (mul->type() != Type::Int64) {
+          Reg a = vreg();
+          Reg b = vreg();
+          switch (mul->type()) {
+            case Type::Int8:
+              _builder.movzx8to64(a, vreg(mul->arg(0)));
+              _builder.movzx8to64(b, vreg(mul->arg(1)));
+              break;
+            case Type::Int16:
+              _builder.movzx16to64(a, vreg(mul->arg(0)));
+              _builder.movzx16to64(b, vreg(mul->arg(1)));
+              break;
+            case Type::Int32:
+              _builder.mov32(a, vreg(mul->arg(0)));
+              _builder.mov32(b, vreg(mul->arg(1)));
+              break;
+            default:
+              assert(false && "Unsupported multiply type");
+          }
+          _builder.mov64(vreg(inst), a);
+          _builder.imul64(vreg(inst), b);
+          _builder.shr64_imm(vreg(inst), type_width(mul->type()));
+          return;
+        }
+
+        Reg rdx = fix_to_preg(vreg(), Reg::X86_RDX());
+        Reg rax = fix_to_preg(vreg(), Reg::X86_RAX());
+        _builder.mov64_imm(rdx, (uint64_t) 0);
+        _builder.mov64(rax, vreg(mul->arg(0)));
+        _builder.mul64(vreg(mul->arg(1)));
+        _builder.mov64(vreg(inst), rdx);
+        _builder.pseudo_use(rax);
       } else if (dynmatch(MulInst, mul, inst)) {
         _builder.mov64(vreg(inst), vreg(mul->arg(0)));
         _builder.imul64(vreg(inst), vreg(mul->arg(1)));

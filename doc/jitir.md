@@ -282,6 +282,20 @@ Type Checks:
 - `a->type() == b->type()`
 - `is_int(a->type())`
 
+### MulHighU
+
+Arguments
+
+- **a**: `Value*`
+- **b**: `Value*`
+
+Return Type: `a->type()`
+
+Type Checks:
+
+- `a->type() == b->type()`
+- `is_int(a->type())`
+
 ### DivS
 
 Arguments
