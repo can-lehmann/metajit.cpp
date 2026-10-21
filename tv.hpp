@@ -390,6 +390,16 @@ namespace metajit {
           result.set_poison(cond_state.is_poison() ||
                             z3::ite(cond, true_val.is_poison(), false_val.is_poison()));
           return result;
+        } else if (dynmatch(BitReverseInst, bit_reverse, inst)) {
+          ValueState input = emit(bit_reverse->arg(0));
+          z3::expr value = input.value();
+          z3::expr reversed = value.extract(0, 0);
+          for (size_t bit = 1; bit < type_width(inst->type()); bit++) {
+            reversed = z3::concat(reversed, value.extract(bit, bit));
+          }
+          ValueState result(inst->type(), reversed);
+          result.set_poison(input.is_poison());
+          return result;
         } else if (dynmatch(ResizeUInst, resize_u, inst)) {
           ValueState result = resize(emit(resize_u->arg(0)), resize_u->type(), false);
           result.set_poison(input_poison(inst));

@@ -657,6 +657,12 @@ b0(%0: Ptr, %1: Int8):
     return z3::ite(z3::slt(args[0].value(), context.bv_val(0, 32)), -args[0].value(), args[0].value());
   });
 
+  suite.tv_test("bit_reverse_twice").run({Type::Int32}, [](Builder& builder) {
+    return builder.build_bit_reverse(builder.build_bit_reverse(builder.entry_arg(0)));
+  }, [](z3::context& context, std::vector<tv::ValueState> args) {
+    return args[0].value();
+  });
+
   // Non-poison values have is_poison == false
   suite.tv_test("add_not_poison").run_valuestate({Type::Int32, Type::Int32}, [](Builder& builder) {
     return builder.build_add(builder.entry_arg(0), builder.entry_arg(1));

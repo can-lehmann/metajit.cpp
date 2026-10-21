@@ -227,6 +227,12 @@ namespace metajit {
           {emit_type(popcount->arg(0)->type())},
           {emit_arg(popcount->arg(0))}
         );
+      } else if (dynmatch(BitReverseInst, bit_reverse, inst)) {
+        return _builder.CreateIntrinsic(
+          llvm::Intrinsic::bitreverse,
+          {emit_type(bit_reverse->arg(0)->type())},
+          {emit_arg(bit_reverse->arg(0))}
+        );
       } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
         return _builder.CreateGEP(
           llvm::Type::getInt8Ty(_context),

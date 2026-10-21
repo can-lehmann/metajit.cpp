@@ -704,6 +704,14 @@ void test_popcount(DiffTestSuite& suite) {
   popcount_type(Int64)
 }
 
+void test_bit_reverse(DiffTestSuite& suite) {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    suite.diff_test(std::string("bit_reverse_") + to_string(type)).run([type](Builder& builder, TestData& data) {
+      data.output(builder.build_bit_reverse(data.input(type)));
+    });
+  }
+}
+
 int main(int argc, char** argv) {
   LLVMCodeGen::initilize_llvm_jit();
 
@@ -727,6 +735,7 @@ int main(int argc, char** argv) {
   test_convert_f(suite);
   test_ptr_to_int(suite);
   test_popcount(suite);
+  test_bit_reverse(suite);
 
   return suite.finish();
 }

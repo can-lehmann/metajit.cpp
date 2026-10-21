@@ -165,6 +165,18 @@ Type Checks:
 
 - `is_int(a->type())`
 
+### BitReverse
+
+Arguments
+
+- **a**: `Value*`
+
+Return Type: `a->type()`
+
+Type Checks:
+
+- `is_int(a->type())`
+
 ### PtrToInt
 
 Arguments
