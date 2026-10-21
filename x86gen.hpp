@@ -805,7 +805,42 @@ namespace metajit {
       _builder.lea64(dst, mem);
     }
 
-    void build_cmp(Value* a, Value* b) {
+    void build_bool_test(Value* cond) {
+      if (dynmatch(ResizeXInst, resize, cond)) {
+        Value* value = resize->arg(0);
+        uint64_t bit = 0;
+        if (dynmatch(ShrUInst, shift, value)) {
+          if (dynmatch(Const, amount, shift->arg(1))) {
+            value = shift->arg(0);
+            bit = amount->value();
+          }
+        }
+        if (bit < 32 && bit < type_width(value->type())) {
+          _builder.test32_imm(vreg(value), uint64_t(1) << bit);
+          return;
+        }
+      }
+      _builder.test8_imm(vreg(cond), (uint64_t) 1);
+    }
+
+    void build_cmp(Value* a, Value* b, bool equality = false) {
+      if (equality) {
+        if (dynmatch(Const, zero, b)) {
+          if (zero->value() == 0) {
+            if (dynmatch(AndInst, masked, a)) {
+              if (dynmatch(Const, mask, masked->arg(1))) {
+                if (type_size(a->type()) <= 4) {
+                  _builder.test32_imm(vreg(masked->arg(0)), mask->value());
+                  return;
+                } else if (is_sext_imm32(mask)) {
+                  _builder.test64_imm(vreg(masked->arg(0)), mask->value());
+                  return;
+                }
+              }
+            }
+          }
+        }
+      }
       if (is_float(a->type())) {
         Reg bits_a = vreg();
         Reg bits_b = vreg();
@@ -847,7 +882,7 @@ namespace metajit {
         if (dynamic_cast<EqInst*>(pred_inst) ||
             dynamic_cast<LtSInst*>(pred_inst) ||
             dynamic_cast<LtUInst*>(pred_inst)) {
-          build_cmp(pred_inst->arg(0), pred_inst->arg(1));
+          build_cmp(pred_inst->arg(0), pred_inst->arg(1), dynamic_cast<EqInst*>(pred_inst));
           if (dynamic_cast<EqInst*>(pred_inst)) {
             _builder.cmove64(res, then);
           } else if (dynamic_cast<LtSInst*>(pred_inst)) {
@@ -861,7 +896,7 @@ namespace metajit {
         }
       }
       
-      _builder.test8_imm(vreg(cond), (uint64_t) 1);
+      build_bool_test(cond);
       _builder.cmovnz64(res, then);
     }
 
@@ -1248,7 +1283,7 @@ namespace metajit {
       } else if (dynamic_cast<EqInst*>(inst) ||
                  dynamic_cast<LtSInst*>(inst) ||
                  dynamic_cast<LtUInst*>(inst)) {
-        build_cmp(inst->arg(0), inst->arg(1));
+        build_cmp(inst->arg(0), inst->arg(1), dynamic_cast<EqInst*>(inst));
         if (dynamic_cast<EqInst*>(inst)) {
           _builder.sete8(vreg(inst));
         } else if (dynamic_cast<LtSInst*>(inst)) {
@@ -1420,7 +1455,7 @@ namespace metajit {
           if (dynamic_cast<EqInst*>(pred_inst) ||
               dynamic_cast<LtSInst*>(pred_inst) ||
               dynamic_cast<LtUInst*>(pred_inst)) {
-            build_cmp(pred_inst->arg(0), pred_inst->arg(1));
+            build_cmp(pred_inst->arg(0), pred_inst->arg(1), dynamic_cast<EqInst*>(pred_inst));
             if (dynamic_cast<EqInst*>(pred_inst)) {
               if (is_negated) {
                 _builder.jne(_blocks[true_block->name()]);
@@ -1447,7 +1482,7 @@ namespace metajit {
           }
         }
 
-        _builder.test8_imm(vreg(branch->cond()), (uint64_t) 1);
+        build_bool_test(branch->cond());
         _builder.jne(_blocks[branch->true_block()->name()]);
         _builder.jmp(_blocks[branch->false_block()->name()]);
       } else if (dynmatch(JumpInst, jump, inst)) {

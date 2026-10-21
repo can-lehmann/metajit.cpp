@@ -211,6 +211,9 @@ binop_x86_inst(CvtSI2SS, cvtsi2ss, mov_usedef, true, { byte(0xf3); rex_w(); byte
 binop_x86_inst(CvtTSD2SI, cvttsd2si, mov_usedef, true, { byte(0xf2); rex_w(); byte(0x0f); byte(0x2c); modrm(); })
 binop_x86_inst(CvtTSS2SI, cvttss2si, mov_usedef, true, { byte(0xf3); rex_w(); byte(0x0f); byte(0x2c); modrm(); })
 
+imm_binop_x86_inst(Test32Imm, test32_imm, cmp_imm_usedef, false, { reg = Reg::phys(0); rex_opt(); byte(0xf7); modrm(); imm_n(4); })
+imm_binop_x86_inst(Test64Imm, test64_imm, cmp_imm_usedef, true, { reg = Reg::phys(0); rex_w(); byte(0xf7); modrm(); imm_n(4); })
+
 #undef x86_inst
 #undef binop_x86_inst
 #undef rev_binop_x86_inst
