@@ -4784,11 +4784,7 @@ namespace metajit {
             return _builder.build_const(inst->type(), known_bits.at(inst).value);
           }
 
-          if (dynmatch(BitReverseInst, bit_reverse, inst)) {
-            if (dynmatch(BitReverseInst, inner, bit_reverse->arg(0))) {
-              return inner->arg(0);
-            }
-          } else if (dynmatch(AndInst, and_inst, inst)) {
+          if (dynmatch(AndInst, and_inst, inst)) {
             if (and_inst->arg(0) == and_inst->arg(1)) {
               return and_inst->arg(0);
             }
