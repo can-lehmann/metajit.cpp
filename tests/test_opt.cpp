@@ -2096,10 +2096,58 @@ void test_cse_pure_loads_across_guards() {
   unittest_assert(!section.verify(std::cout));
 }
 
+void test_cse_normalized_addresses() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block(std::vector<Type>{Type::Ptr, Type::Ptr, Type::Ptr});
+  builder.move_to_end(entry);
+  Value* input = entry->arg(0);
+  Value* output = entry->arg(2);
+  Value* address = builder.build_add_ptr(input, builder.build_const(Type::Int64, 8));
+  address = builder.build_add_ptr(address, builder.build_const(Type::Int64, uint64_t(-4)));
+  LoadInst* first = builder.build_load(address, Type::Int32, LoadFlags(), 1, 0);
+  Value* second = builder.build_load(input, Type::Int32, LoadFlags(), 1, 4);
+  StoreInst* first_output = builder.build_store(output, second, 2, 0);
+  builder.build_store(input, builder.build_const(Type::Int8, 0), 1, 5);
+  Value* partial = builder.build_load(address, Type::Int32, LoadFlags(), 1, 0);
+  builder.build_store(output, partial, 2, 4);
+  builder.build_store(entry->arg(1), builder.build_const(Type::Int32, 9), 1, 4);
+  Value* aliased = builder.build_load(input, Type::Int32, LoadFlags(), 1, 4);
+  builder.build_store(output, aliased, 2, 8);
+  builder.build_exit();
+  OrderBlocks::run(&section, BlockOrdering::Natural);
+  Section original(context, allocator);
+  Clone::run(&section, &original);
+  CommonSubexprElim::run(&section);
+  unittest_assert(first_output->value() == first);
+  unittest_assert(first->ptr() == input && first->offset() == 4);
+  unittest_assert(!section.verify(std::cout));
+  for (bool aliases : {false, true}) {
+    uint32_t before[] = {0, 0x11223344};
+    uint32_t after[] = {0, 0x11223344};
+    uint32_t before_other[] = {0, 7};
+    uint32_t after_other[] = {0, 7};
+    uint32_t expected[3] = {};
+    uint32_t actual[3] = {};
+    Interpreter reference(&original, {Interpreter::Bits::constant(before),
+      Interpreter::Bits::constant(aliases ? before : before_other), Interpreter::Bits::constant(expected)});
+    Interpreter optimized(&section, {Interpreter::Bits::constant(after),
+      Interpreter::Bits::constant(aliases ? after : after_other), Interpreter::Bits::constant(actual)});
+    unittest_assert(reference.run() == Interpreter::Event::Exit);
+    unittest_assert(optimized.run() == Interpreter::Event::Exit);
+    for (size_t index = 0; index < 3; index++) unittest_assert(actual[index] == expected[index]);
+    unittest_assert(before[1] == after[1]);
+    unittest_assert(before_other[1] == after_other[1]);
+  }
+}
+
 int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
   DiffTestSuite suite("tests/output/test_opt", argc, argv);
+  suite.test("cse normalized addresses preserve overlapping and aliased stores").run(test_cse_normalized_addresses);
   suite.test("knownbits variable shift witness").run(test_knownbits_variable_shift_witness);
 
   suite.test("cse commutative operands").run(test_cse_commutative_operands);

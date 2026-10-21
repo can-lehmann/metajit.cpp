@@ -6521,6 +6521,23 @@ private:
     Canon _canon;
     std::vector<CanonUndo> _undo;
 
+    static void normalize_address(Inst* inst) {
+      LoadInst* load = dynamic_cast<LoadInst*>(inst);
+      StoreInst* store = dynamic_cast<StoreInst*>(inst);
+      if (!load && !store) return;
+      Value* ptr = inst->arg(0);
+      uint64_t offset = load ? load->offset() : store->offset();
+      while (dynmatch(AddPtrInst, add, ptr)) {
+        Const* constant = dynamic_cast<Const*>(add->offset());
+        if (!constant) break;
+        offset += constant->value();
+        ptr = add->ptr();
+      }
+      inst->set_arg(0, ptr);
+      if (load) load->set_offset(offset);
+      else store->set_offset(offset);
+    }
+
     void canon_insert(const Lookup& lookup) {
       _undo.push_back({lookup, true});
       _canon.insert(lookup);
@@ -6579,6 +6596,7 @@ private:
             }
           }
 
+          normalize_address(inst);
           if (dynmatch(StoreInst, store, inst)) {
             std::vector<LoadInst*> remaining_loads;
             for (LoadInst* load : valid_loads[store->aliasing()]) {
