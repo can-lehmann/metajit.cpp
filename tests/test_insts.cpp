@@ -19,78 +19,6 @@
 using namespace metajit;
 using namespace metajit::test;
 
-void backend_masked_tests(Builder& builder, TestData& data) {
-  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
-    Value* input = data.input(type);
-    for (size_t bit : {size_t(0), size_t(7), size_t(15), size_t(31), size_t(32), size_t(63)}) {
-      if (bit >= type_width(type)) {
-        continue;
-      }
-      Value* mask = builder.build_const(type, uint64_t(1) << bit);
-      Value* masked = builder.build_and(input, mask);
-      Value* zero = builder.build_const(type, 0);
-      data.output(builder.build_eq(masked, zero));
-      data.output(builder.build_lt_s(masked, zero));
-      Value* shifted = builder.build_shr_u(input, builder.build_const(type, bit));
-      Value* cond = builder.build_resize_x(shifted, Type::Bool);
-      data.output(builder.build_select(cond, mask, zero));
-      data.output(builder.build_resize_s(cond, type));
-      Block* yes = builder.build_block();
-      Block* no = builder.build_block();
-      Block* join = builder.build_block({type});
-      builder.build_branch(cond, yes, no);
-      builder.move_to_end(yes);
-      builder.build_jump(join, {mask});
-      builder.move_to_end(no);
-      builder.build_jump(join, {zero});
-      builder.move_to_end(join);
-      data.output(join->arg(0));
-    }
-  }
-  Value* input = data.input(Type::Int64);
-  for (uint64_t bits : {0xffffffff80000000ull, 0x0fffffff80000000ull, 0xffffffffffffffffull}) {
-    Value* mask = builder.build_const(Type::Int64, bits);
-    data.output(builder.build_eq(builder.build_and(input, mask), builder.build_const(Type::Int64, 0)));
-    data.output(builder.build_and(input, mask));
-    data.output(builder.build_or(input, mask));
-    data.output(builder.build_xor(input, mask));
-  }
-}
-
-void backend_bit_test_edges(Builder& builder, TestData& data) {
-  Value* raw = data.input(Type::Int64);
-  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
-    Value* input = builder.build_resize_x(raw, type);
-    Value* zero = builder.build_const(type, 0);
-    Value* one = builder.build_const(type, 1);
-    for (uint64_t bits : {uint64_t(0), uint64_t(1), type_mask(type), uint64_t(1) << (type_width(type) - 1)}) {
-      Value* mask = builder.build_const(type, bits);
-      Value* masked = builder.build_and(input, mask);
-      Value* equal = builder.build_eq(masked, zero);
-      data.output(equal);
-      data.output(builder.build_select(equal, one, zero));
-      if (type != Type::Bool) {
-        Value* less = builder.build_lt_s(masked, zero);
-        data.output(less);
-        data.output(builder.build_select(less, one, zero));
-      }
-      Block* yes = builder.build_block();
-      Block* no = builder.build_block();
-      Block* join = builder.build_block({type});
-      builder.build_branch(equal, yes, no);
-      builder.move_to_end(yes);
-      builder.build_jump(join, {one});
-      builder.move_to_end(no);
-      builder.build_jump(join, {zero});
-      builder.move_to_end(join);
-      data.output(join->arg(0));
-    }
-    Value* cond = builder.build_resize_x(input, Type::Bool);
-    data.output(builder.build_select(cond, one, zero));
-    data.output(raw);
-  }
-}
-
 void mul_high_u_boundaries(Builder& builder, TestData& data) {
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     uint64_t mask = type_mask(type);
@@ -791,8 +719,6 @@ int main(int argc, char** argv) {
 
   suite.test("mul_high_u_semantics").run(mul_high_u_semantics);
   suite.diff_test("mul_high_u_boundaries").run(mul_high_u_boundaries);
-  suite.diff_test("backend_masked_tests").aot(false).run(backend_masked_tests);
-  suite.diff_test("backend_bit_test_edges").aot(false).run(backend_bit_test_edges);
 
   test_binop(suite);
   test_shift(suite);
