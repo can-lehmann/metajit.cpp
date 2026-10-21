@@ -6612,7 +6612,9 @@ private:
           if (_canon.find(lookup) == _canon.end()) {
             canon_insert(lookup);
             if (dynmatch(LoadInst, load, inst)) {
-              valid_loads[load->aliasing()].push_back(load);
+              if (!load->flags().has(LoadFlags::Pure)) {
+                valid_loads[load->aliasing()].push_back(load);
+              }
             }
             inst_it++;
           } else {
