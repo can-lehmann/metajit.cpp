@@ -7276,6 +7276,11 @@ private:
       collect_captured();
     }
 
+    void refresh_captured() {
+      _captured.clear();
+      collect_captured();
+    }
+
     auto begin() const { return _closures.begin(); }
     auto end() const { return _closures.end(); }
 
@@ -7371,6 +7376,9 @@ private:
 
     Builder _builder;
     Block* _original_entry;
+    AliasingGroup _closure_aliasing;
+    bool _update_captures;
+    std::unordered_set<Value*> _static_values;
     std::unordered_map<Inst*, Block*> _entry_blocks;
     std::unordered_map<Block*, std::map<Value*, Value*>> _substs_at_entry;
 
@@ -7392,10 +7400,11 @@ private:
         std::map<Value*, Value*> substs;
         if (_closures.is_frontier(block)) {
           ReentryClosures::Frontier& frontier = _closures.frontier(block);
+          _builder.move_before(block, *block->begin());
           std::vector<Arg*> args;
           for (NamedValue* value : frontier.values) {
             Arg* arg = _builder.alloc_arg(value->type(), args.size() + block->args().size());
-            substs.emplace(value, arg);
+            substs.emplace(value, _static_values.find(value) != _static_values.end() ? _builder.build_assume_const(arg) : (Value*) arg);
             args.push_back(arg);
           }
           _builder.add_args_to_block(block, args);
@@ -7431,8 +7440,18 @@ private:
 
             _builder.build_jump(new_block, jump_args)->substitute_args(substs);
             _builder.move_to_end(new_block);
+            for (const ReentryClosures::Capture& capture : closure.captures) {
+              if (_static_values.find(capture.value) != _static_values.end()) {
+                new_substs.at(capture.value) = _builder.build_assume_const(new_substs.at(capture.value));
+              }
+            }
 
             _entry_blocks.emplace(inst, new_block);
+            if (_update_captures) {
+              for (size_t index = 0; index < closure.captures.size(); index++) {
+                closure.captures[index].value = args[index];
+              }
+            }
 
             substs = new_substs;
           }
@@ -7484,10 +7503,13 @@ private:
         _builder.entry_arg(0),
         Type::Int32,
         LoadFlags::None,
-        AliasingGroup(0),
+        _closure_aliasing,
         0
       );
 
+      if (_update_captures) {
+        id = _builder.build_assume_const(id);
+      }
       Block* invalid_id = _builder.build_block_before(original_entry, {});
       _builder.move_to_end(invalid_id);
       _builder.build_exit(); // Unreachable
@@ -7512,7 +7534,7 @@ private:
               _builder.entry_arg(0),
               capture.value->type(),
               LoadFlags::None,
-              AliasingGroup(0),
+              _closure_aliasing,
               capture.offset
             ));
           }
@@ -7528,14 +7550,35 @@ private:
       _builder.build_jump(else_block);
     }
   public:
-    SliceReentryClosures(Section* section, ReentryClosures& closures):
+    SliceReentryClosures(Section* section, ReentryClosures& closures,
+                        AliasingGroup closure_aliasing = AliasingGroup(0),
+                        bool update_captures = false):
         Pass(section),
         _section(section),
         _closures(closures),
-        _builder(section) {
-      
+        _builder(section),
+        _closure_aliasing(closure_aliasing),
+        _update_captures(update_captures) {
+      if (_update_captures) {
+        BindingTimeGroups groups(section);
+        for (Block* block : *section) {
+          for (Arg* arg : block->args()) {
+            if (groups.is_static(arg)) {
+              _static_values.insert(arg);
+            }
+          }
+          for (Inst* inst : *block) {
+            if (groups.is_static(inst)) {
+              _static_values.insert(inst);
+            }
+          }
+        }
+      }
       slice_blocks();
       build_dispatcher();
+      if (_update_captures) {
+        _closures.refresh_captured();
+      }
     }
   };
 

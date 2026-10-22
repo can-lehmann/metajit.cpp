@@ -544,6 +544,7 @@ namespace metajit {
     struct Config {
       std::optional<AddRecord::Config> record;
       bool comments;
+      size_t entry_arg_offset = 0;
 
       constexpr Config():
         record(),
@@ -1083,7 +1084,7 @@ namespace metajit {
         });
 
         std::vector<ActionGroup*> build_deps = {const_group, used_group, last_build_group};
-        if (dynamic_cast<PromoteInst*>(inst)) {
+        if (dynamic_cast<PromoteInst*>(inst) || dynamic_cast<AssumeConstInst*>(inst)) {
           build_deps.push_back(emit_group);
           if (const_groups.find(inst->arg(0)) != const_groups.end()) {
             build_deps.push_back(const_groups.at(inst->arg(0)));
@@ -1272,7 +1273,7 @@ namespace metajit {
           _syms.entry_arg, Type::Ptr,
           {
             _jitir_builder,
-            _builder.build_const(Type::Int64, arg->index())
+            _builder.build_const(Type::Int64, arg->index() + _config.entry_arg_offset)
           }
         ));
       }

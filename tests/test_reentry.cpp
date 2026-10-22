@@ -119,6 +119,38 @@ using namespace metajit::test;
 int main(int argc, char** argv) {
   ReentryTestSuite suite(argc, argv);
 
+  suite.test("sliced continuation supports generating another guard").run([]() {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    builder.move_to_end(builder.build_block({Type::Ptr}));
+    Value* value = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, 0, 0);
+    Value* fixed = builder.build_assume_const(value);
+    builder.build_store(builder.entry_arg(0), fixed, 0, 12);
+    Value* dynamic = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, 0, 8);
+    Value* promoted = builder.build_promote(dynamic);
+    builder.build_store(builder.entry_arg(0), builder.build_add(promoted, builder.build_promote(fixed)), 0, 4);
+    Block* yes = builder.build_block();
+    Block* no = builder.build_block();
+    builder.build_branch(builder.build_eq(fixed, builder.build_const(Type::Int32, 7)), yes, no);
+    builder.move_to_end(yes);
+    builder.build_exit();
+    builder.move_to_end(no);
+    builder.build_exit();
+    OrderBlocks::run(&section, BlockOrdering::Topological);
+    BindingTimeGroups groups(&section);
+    ReentryClosures closures(&section, groups);
+    SliceReentryClosures::run(&section, closures, AliasingGroup(12345), true);
+    OrderBlocks::run(&section, BlockOrdering::Topological);
+    Section genext(context, allocator);
+    CreateGenExt::Config config;
+    config.entry_arg_offset = 1;
+    CreateGenExt::run(&section, &genext, config, &closures);
+    std::ostringstream errors;
+    unittest_assert(!genext.verify(errors));
+  });
+
   using Bits = Interpreter::Bits;
   using TestCase = ReentryTest::TestCase;
 

@@ -113,10 +113,34 @@ void mul_high_u_promoted(Builder& builder, TraceTestData& data) {
   data.output(builder.build_mul_high_u(b, b));
 }
 
+void assumed_constants_are_emitted_before_building() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  std::vector<Type> types(64, Type::Int32);
+  types.push_back(Type::Ptr);
+  builder.move_to_end(builder.build_block(types));
+  std::vector<Value*> values;
+  for (size_t index = 0; index < 64; index++) {
+    values.push_back(builder.build_assume_const(builder.build_add(builder.entry_arg(index), builder.build_const(Type::Int32, index))));
+  }
+  for (size_t index = 0; index < 64; index++) {
+    builder.build_store(builder.entry_arg(64), values[index], 0, index * 4);
+  }
+  builder.build_exit();
+  OrderBlocks::run(&section, BlockOrdering::Topological);
+  Section genext(context, allocator);
+  CreateGenExt::run(&section, &genext);
+  std::ostringstream errors;
+  unittest_assert(!genext.verify(errors));
+}
+
 int main(int argc, char** argv) {
   LLVMCodeGen::initilize_llvm_jit();
 
   GenExtTestSuite suite("tests/output/test_genext", argc, argv);
+  suite.test("assumed constants emitted before building").run(assumed_constants_are_emitted_before_building);
 
   for (bool record_replay : {false, true}) {
     suite.set_record_replay(record_replay);

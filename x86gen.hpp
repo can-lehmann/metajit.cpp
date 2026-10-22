@@ -613,6 +613,9 @@ namespace metajit {
     std::vector<X86Block*> _blocks;
     X86InstBuilder _builder;
 
+    std::unordered_map<X86Inst*, const CallInst*> _tail_patch_insts;
+    std::unordered_map<const CallInst*, size_t> _tail_patch_offsets;
+
     NameMap<void*> _memory_deps;
 
     NameMap<Reg> _vregs;
@@ -1398,7 +1401,12 @@ namespace metajit {
         RegClass ret_class = reg_class(call->type());
         Reg ret_reg = fix_to_preg(vreg(call->type()), info.ret(ret_class));
         Reg callee_reg = fix_to_preg(vreg(), Reg::X86_R10());
-        _builder.mov64(callee_reg, vreg(call->callee()));
+        if (call->flags().has(CallFlags::Tail) && dynamic_cast<Const*>(call->callee())) {
+          X86Inst* target = _builder.mov64_imm64(callee_reg, ((Const*) call->callee())->value());
+          _tail_patch_insts.emplace(target, call);
+        } else {
+          _builder.mov64(callee_reg, vreg(call->callee()));
+        }
         X86Inst* call_inst = _builder.call(callee_reg, ret_reg, call->call_conv(), args);
         ((X86CallData*) call_inst->data())->tail = call->flags().has(CallFlags::Tail);
 
@@ -1937,6 +1945,23 @@ namespace metajit {
             reg_file.touch(src_info.current_reg);
             src_info.current_reg = Reg();
 
+            it = it.erase();
+            continue;
+          } else if (is_reg_mov(inst) &&
+                     _vreg_info[inst->reg().id()].fixed.is_physical() &&
+                     _vreg_info[inst->reg().id()].fixed == _vreg_info[std::get<Reg>(inst->rm()).id()].fixed) {
+            Reg src = std::get<Reg>(inst->rm());
+            Reg dst = inst->reg();
+            VRegInfo& src_info = _vreg_info[src.id()];
+            VRegInfo& dst_info = _vreg_info[dst.id()];
+            Reg preg = dst_info.fixed;
+            if (src_info.current_reg != preg) {
+              spill_and_unspill(reg_file, preg, src, false, false);
+            }
+            spill(reg_file, preg, false);
+            dst_info.current_reg = preg;
+            reg_file.set(preg, dst);
+            reg_file.touch(preg);
             it = it.erase();
             continue;
           } else if (inst->kind() == X86Inst::Kind::Call) {
@@ -2530,6 +2555,10 @@ namespace metajit {
       for (X86Block* block : _blocks) {
         offsets[block->name()] = buffer.size();
         for (X86Inst* inst : *block) {
+          if (_tail_patch_insts.find(inst) != _tail_patch_insts.end()) {
+            assert(inst->kind() == X86Inst::Kind::Mov64Imm64);
+            _tail_patch_offsets[_tail_patch_insts.at(inst)] = buffer.size() + 2;
+          }
           emit(inst, buffer, labels);
         }
       }
@@ -2704,6 +2733,25 @@ namespace metajit {
     void write(std::ostream& stream) {
       for (X86Block* block : _blocks) {
         block->write(stream);
+      }
+    }
+
+    size_t tail_patch_offset(const CallInst* call) const {
+      return _tail_patch_offsets.at(call);
+    }
+
+    static void patch_tail(void* code, size_t offset, void* target) {
+      uint8_t* address = (uint8_t*) code + offset;
+      size_t page_size = sysconf(_SC_PAGESIZE);
+      uintptr_t start = (uintptr_t) address & ~(page_size - 1);
+      uintptr_t end = ((uintptr_t) address + sizeof(target) + page_size - 1) & ~(page_size - 1);
+      if (mprotect((void*) start, end - start, PROT_READ | PROT_WRITE) != 0) {
+        throw std::runtime_error("Cannot make tail patch writable");
+      }
+      std::memcpy(address, &target, sizeof(target));
+      __builtin___clear_cache((char*) start, (char*) end);
+      if (mprotect((void*) start, end - start, PROT_READ | PROT_EXEC) != 0) {
+        throw std::runtime_error("Cannot make tail patch executable");
       }
     }
 

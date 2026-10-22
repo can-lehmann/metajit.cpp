@@ -15,8 +15,50 @@ struct TailState {
   uint64_t values[24];
 };
 
+__attribute__((preserve_none)) void replacement_tail(uint64_t* result, uint64_t* value) {
+  *result = *value + 70;
+}
+
+void tail_exit_with_values_live_in_other_branch() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Ptr, Type::Ptr});
+  builder.move_to_end(entry);
+  std::vector<Value*> values;
+  for (size_t index = 0; index < 32; index++) {
+    values.push_back(builder.build_load(entry->arg(0), Type::Int64, LoadFlags::None, 0, index * 8));
+  }
+  Block* transfer = builder.build_block();
+  Block* finish = builder.build_block();
+  builder.build_branch(builder.build_eq(values[0], builder.build_const(Type::Int64, 0)), transfer, finish);
+  builder.move_to_end(transfer);
+  builder.build_call(builder.build_const(Type::Ptr, (uint64_t) replacement_tail), Type::Void,
+    {entry->arg(0), entry->arg(1)}, CallConv::PreserveNone, CallFlags::Tail);
+  builder.build_exit();
+  builder.move_to_end(finish);
+  Value* sum = values[0];
+  for (size_t index = 1; index < values.size(); index++) {
+    sum = builder.build_add(sum, values[index]);
+  }
+  builder.build_store(entry->arg(1), sum, 0, 0);
+  builder.build_exit();
+  OrderBlocks::run(&section, BlockOrdering::Natural);
+  X86CodeGen codegen(&section, {Reg::X86_R12(), Reg::X86_R13()});
+  using Function = void(* [[clang::preserve_none]])(uint64_t*, uint64_t*);
+  Function function = (Function) codegen.deploy();
+  uint64_t data[32] = {};
+  uint64_t result = 5;
+  function(data, &result);
+  unittest_assert(data[0] == 75);
+  function(data, &result);
+  unittest_assert(result == 75);
+}
+
 int main(int argc, char** argv) {
   Suite suite(argc, argv);
+  suite.test("tail exit with values live in another branch").run(tail_exit_with_values_live_in_other_branch);
   suite.test("tail transfer preserves spilled values and bounds stack growth").run([]() {
     Context context;
     Allocator allocator;
@@ -89,7 +131,7 @@ int main(int argc, char** argv) {
     Builder builder(&source);
     Block* entry = builder.build_block({Type::Ptr, Type::Ptr});
     builder.move_to_end(entry);
-    builder.build_call(builder.build_const(Type::Ptr, reinterpret_cast<uint64_t>(target)), Type::Void,
+    CallInst* transfer = builder.build_call(builder.build_const(Type::Ptr, reinterpret_cast<uint64_t>(target)), Type::Void,
       {entry->arg(1), entry->arg(0)}, CallConv::PreserveNone, CallFlags::Tail);
     builder.build_exit();
     OrderBlocks::run(&source, BlockOrdering::Natural);
@@ -99,9 +141,13 @@ int main(int argc, char** argv) {
     using Function = void(* [[clang::preserve_none]])(uint64_t*, uint64_t*);
     uint64_t value = 35;
     uint64_t result = 0;
-    reinterpret_cast<Function>(codegen.deploy())(&value, &result);
+    void* source_code = codegen.deploy();
+    reinterpret_cast<Function>(source_code)(&value, &result);
     unittest_assert(value == 35);
     unittest_assert(result == 42);
+    X86CodeGen::patch_tail(source_code, codegen.tail_patch_offset(transfer), reinterpret_cast<void*>(replacement_tail));
+    reinterpret_cast<Function>(source_code)(&value, &result);
+    unittest_assert(result == 105);
   });
   suite.test("tail call verifier rejects invalid call shapes").run([]() {
     for (int invalid = 0; invalid < 5; invalid++) {
