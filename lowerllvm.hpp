@@ -184,6 +184,8 @@ namespace metajit {
           case llvm::Instruction::SExt: return _builder.fold_resize_s(a, type);
           default: fail_lowering("Unknown cast instruction");
         }
+      } else if (llvm::FreezeInst* freeze = llvm::dyn_cast<llvm::FreezeInst>(inst)) {
+        return _builder.build_freeze(lower_operand(freeze->getOperand(0)));
       } else if (llvm::SelectInst* select = llvm::dyn_cast<llvm::SelectInst>(inst)) {
         Value* cond = lower_operand(select->getCondition());
         Value* true_value = lower_operand(select->getTrueValue());
@@ -234,7 +236,28 @@ namespace metajit {
       } else if (llvm::ReturnInst* ret = llvm::dyn_cast<llvm::ReturnInst>(inst)) {
         return _builder.build_exit();
       } else if (llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(inst)) {
-        if (call->getIntrinsicID() == llvm::Intrinsic::bitreverse) {
+        if (call->getIntrinsicID() == llvm::Intrinsic::fshl ||
+            call->getIntrinsicID() == llvm::Intrinsic::fshr) {
+          Value* a = lower_operand(call->getArgOperand(0));
+          Value* b = lower_operand(call->getArgOperand(1));
+          Value* amount = lower_operand(call->getArgOperand(2));
+          size_t width = type_width(a->type());
+          Value* shift = _builder.fold_and(amount, _builder.build_const(amount->type(), width - 1));
+          Value* complement = _builder.fold_and(
+            _builder.fold_sub(_builder.build_const(amount->type(), 0), shift),
+            _builder.build_const(amount->type(), width - 1));
+          Value* result;
+          Value* unchanged;
+          if (call->getIntrinsicID() == llvm::Intrinsic::fshl) {
+            result = _builder.fold_or(_builder.fold_shl(a, shift), _builder.fold_shr_u(b, complement));
+            unchanged = a;
+          } else {
+            result = _builder.fold_or(_builder.fold_shl(a, complement), _builder.fold_shr_u(b, shift));
+            unchanged = b;
+          }
+          return _builder.fold_select(
+            _builder.fold_eq(shift, _builder.build_const(amount->type(), 0)), unchanged, result);
+        } else if (call->getIntrinsicID() == llvm::Intrinsic::bitreverse) {
           return _builder.fold_bit_reverse(lower_operand(call->getArgOperand(0)));
         } else if (call->getIntrinsicID() == llvm::Intrinsic::ctpop) {
           return _builder.fold_popcount(lower_operand(call->getArgOperand(0)));
