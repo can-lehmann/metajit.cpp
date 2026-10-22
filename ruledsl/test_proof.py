@@ -6,10 +6,30 @@ import z3
 from .proof import ProofError, UnprovedWidthsWarning, prove
 from .source import TypeCheckError
 from .semantics import Value, emit
-from .types import BOOL, INT8, INT16
+from .types import BOOL, INT8, INT16, INT_TYPES
 
 
 class SemanticsTests(unittest.TestCase):
+    def test_bit_reverse_and_mul_high_u(self):
+        for type_ in INT_TYPES:
+            width = type_.width
+            mask = (1 << width) - 1
+            for value in (0, 1, 5, 1 << (width - 1), mask):
+                operand = Value.constant(value, type_)
+                reversed_ = emit("BitReverse", [operand], type_)
+                expected = int(f"{value:0{width}b}"[::-1], 2)
+                self.assertEqual(reversed_.bits.as_long(), expected)
+                self.assertTrue(z3.is_false(reversed_.poison))
+                for multiplier in (0, 1, 2, mask):
+                    result = emit("MulHighU", [operand, Value.constant(multiplier, type_)], type_)
+                    self.assertEqual(result.bits.as_long(), (value * multiplier) >> width)
+                    self.assertTrue(z3.is_false(result.poison))
+            poison = Value(z3.BitVecVal(0, width), z3.BoolVal(True), type_)
+            zero = Value.constant(0, type_)
+            for kind, args in (("BitReverse", [poison]), ("MulHighU", [poison, zero]),
+                               ("MulHighU", [zero, poison])):
+                self.assertTrue(z3.is_true(emit(kind, args, type_).poison))
+
     def test_signed_operations_and_wraparound(self):
         examples = [
             ("Add", 255, 1, 0), ("Sub", 0, 1, 255), ("Mul", 128, 2, 0),
@@ -72,6 +92,13 @@ class SemanticsTests(unittest.TestCase):
 
 
 class ProofTests(unittest.TestCase):
+    def test_bit_operations_reject_incorrect_rewrites(self):
+        for source in ("bad: BitReverse(x)\n    => x",
+                       "bad: MulHighU(x, 1)\n    => x",
+                       "bad: BitReverse(Shl(BitReverse(x), y))\n    => ShrS(x, y)"):
+            with self.subTest(source=source), self.assertRaises(ProofError):
+                prove(source)
+
     def test_small_widths_annotation_proves_modulo(self):
         source = ("modulo: ModU(x, C)\n    SORRY_Z3_SMALL_WIDTHS\n"
                   "    check C != 0 and C & (C - 1) == 0\n"

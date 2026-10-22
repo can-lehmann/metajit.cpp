@@ -101,6 +101,13 @@ bit width for zero. Its result has an independently inferred numeric type.
 Generated C++ uses a ternary expression to handle zero before evaluating
 `__builtin_ctzll`.
 
+`bit_reverse(C)` reverses the bits at the inferred width of `C` and preserves
+its type. `mul_high_u(C1, C2)` returns the upper half of the full unsigned
+product, with both arguments and the result sharing a type. Unlike ordinary
+DSL multiplication, it retains the full product before extracting the high
+half. C++ emission uses `metajit::bit_reverse` and a 128-bit product respectively.
+Both helpers also work in type conditions with literal arguments.
+
 Compile-time Boolean results remain conditions in calculations and guards.
 When used as IR values, including operands of replacement operations, they
 materialize as `0: Bool` or `1: Bool`. They cannot be used as integer constants

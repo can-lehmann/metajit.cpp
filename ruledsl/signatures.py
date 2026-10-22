@@ -14,9 +14,9 @@ class Signature:
 
 SIGNATURES = {}
 
-for name in ("Add", "Sub", "Mul", "DivS", "DivU", "ModS", "ModU", "Shl", "ShrU", "ShrS"):
+for name in ("Add", "Sub", "Mul", "MulHighU", "DivS", "DivU", "ModS", "ModU", "Shl", "ShrU", "ShrS"):
     SIGNATURES[name] = Signature(("T", "T"), "T", (("T", INT_TYPES),),
-                                 name in {"Add", "Mul"})
+                                 name in {"Add", "Mul", "MulHighU"})
 
 for name in ("And", "Or", "Xor"):
     SIGNATURES[name] = Signature(("T", "T"), "T", (("T", BIT_TYPES),), True)
@@ -32,5 +32,6 @@ SIGNATURES["Select"] = Signature(("B", "T", "T"), "T", (("B", (BOOL,)), ("T", BI
 for name in ("ResizeU", "ResizeS", "ResizeX"):
     SIGNATURES[name] = Signature(("S",), "T", (("S", BIT_TYPES), ("T", BIT_TYPES)))
 
-SIGNATURES["Popcount"] = Signature(("T",), "T", (("T", INT_TYPES),))
+for name in ("Popcount", "BitReverse"):
+    SIGNATURES[name] = Signature(("T",), "T", (("T", INT_TYPES),))
 SIGNATURES["Freeze"] = Signature(("T",), "T", (("T", BIT_TYPES),), unrestricted_types=("T",))

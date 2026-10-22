@@ -5,6 +5,30 @@ from .types import BIT_TYPES, BOOL, INT8, INT16, INT32, INT64, INT_TYPES
 
 
 class TypeCheckTests(unittest.TestCase):
+    def test_bit_operation_calculations_preserve_types_and_dependencies(self):
+        for operation, calculation, dependencies in (
+                ("BitReverse(C)", "bit_reverse(C)", {"C"}),
+                ("MulHighU(C1, C2)", "mul_high_u(C1, C2)", {"C1", "C2"})):
+            checked = check(f"constant: {operation}\n    Cresult = {calculation}\n    => Cresult")[0]
+            self.assertEqual(self.root_types(checked), list(INT_TYPES))
+            self.assertEqual(checked.bindings["Cresult"].dependencies, frozenset(dependencies))
+            for assignment in checked.instantiations:
+                self.assertEqual(assignment[checked.bindings["Cresult"].type],
+                                 checked.type_of(checked.rule.pattern, assignment))
+
+    def test_bit_operation_helpers_in_type_conditions(self):
+        checked = check("same: Add(x: T, 0)\n"
+                        "    where bit_reverse(bits(1, T)) == 1 << (width(T) - 1)\n"
+                        "    where mul_high_u(bits(-1, T), bits(-1, T)) == bits(-2, T)\n"
+                        "    => x")[0]
+        self.assertEqual(self.root_types(checked), list(INT_TYPES))
+
+    def test_bit_operation_helpers_reject_wrong_arguments(self):
+        for expression in ("bit_reverse(x)", "mul_high_u(x, 1)", "bit_reverse(1, 2)",
+                           "mul_high_u(1)", "mul_high_u(bits(1, Int8), bits(1, Int16))"):
+            with self.subTest(expression=expression), self.assertRaises(TypeCheckError):
+                check(f"bad: Add(x, 0)\n    C = {expression}\n    => x")
+
     def checked(self, source):
         return check(source, "example.rules")[0]
 

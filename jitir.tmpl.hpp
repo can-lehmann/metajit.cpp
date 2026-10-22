@@ -1303,38 +1303,6 @@ namespace metajit {
 
     // Folding
 
-    Value* fold_mul_high_u(Value* a, Value* b) {
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-      if (dynmatch(Const, const_b, b)) {
-        if (const_b->value() <= 1) {
-          return build_const(a->type(), 0);
-        } else if ((const_b->value() & (const_b->value() - 1)) == 0) {
-          return fold_shr_u(a, type_width(a->type()) - __builtin_ctzll(const_b->value()));
-        }
-        if (dynmatch(Const, const_a, a)) {
-          return build_const(a->type(), uint64_t((__uint128_t(const_a->value()) * const_b->value()) >> type_width(a->type())));
-        }
-      }
-      if (dynmatch(SelectInst, left, a)) {
-        if (dynamic_cast<Const*>(left->arg(1)) && dynamic_cast<Const*>(left->arg(2))) {
-          if (dynamic_cast<Const*>(b)) {
-            return fold_select(left->cond(), fold_mul_high_u(left->arg(1), b),
-                               fold_mul_high_u(left->arg(2), b));
-          }
-          if (dynmatch(SelectInst, right, b)) {
-            if (right->cond() == left->cond() && dynamic_cast<Const*>(right->arg(1)) &&
-                dynamic_cast<Const*>(right->arg(2))) {
-              return fold_select(left->cond(), fold_mul_high_u(left->arg(1), right->arg(1)),
-                                 fold_mul_high_u(left->arg(2), right->arg(2)));
-            }
-          }
-        }
-      }
-      return build_mul_high_u(a, b);
-    }
-
     Value* fold_div_s(Value* a, Value* b) {
       return build_div_s(a, b);
     }
@@ -1359,24 +1327,6 @@ namespace metajit {
       if (dynmatch(Const, const_a, a)) {
         if (dynmatch(Const, const_b, b)) {
           return build_const(Type::Bool, const_a->value() == const_b->value());
-        }
-      }
-
-      if (dynmatch(Const, const_b, b)) {
-        if (dynmatch(AndInst, and_inst, a)) {
-          if (dynmatch(Const, mask, and_inst->arg(1))) {
-            if (dynmatch(XorInst, xor_inst, and_inst->arg(0))) {
-              if (dynmatch(Const, constant, xor_inst->arg(1))) {
-                if (const_b->value() & ~mask->value()) {
-                  return build_const(Type::Bool, 0);
-                }
-                return fold_eq(
-                  fold_and(xor_inst->arg(0), mask),
-                  build_const(a->type(), const_b->value() ^ (constant->value() & mask->value()))
-                );
-              }
-            }
-          }
         }
       }
 
@@ -1565,22 +1515,6 @@ namespace metajit {
       }
 
       return build_promote(a);
-    }
-
-    Value* fold_bit_reverse(Value* a) {
-      if (dynmatch(Const, constant, a)) {
-        return build_const(a->type(), metajit::bit_reverse(a->type(), constant->value()));
-      }
-      if (dynmatch(SelectInst, select, a)) {
-        if (dynamic_cast<Const*>(select->arg(1)) && dynamic_cast<Const*>(select->arg(2))) {
-          return fold_select(select->cond(), fold_bit_reverse(select->arg(1)),
-                             fold_bit_reverse(select->arg(2)));
-        }
-      }
-      if (dynmatch(BitReverseInst, bit_reverse, a)) {
-        return bit_reverse->arg(0);
-      }
-      return build_bit_reverse(a);
     }
 
     Value* fold_popcount(Value* a) {

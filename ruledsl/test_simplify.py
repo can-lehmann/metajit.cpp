@@ -60,6 +60,80 @@ class SimplifyTests(unittest.TestCase):
             executed = subprocess.run([str(executable)], capture_output=True, text=True, timeout=60)
             self.assertEqual(executed.returncode, 0, executed.stdout + executed.stderr)
 
+    def test_migrated_bit_operations(self):
+        source = Path(__file__).with_name("fold.rules").read_text()
+        rules = [rule for rule in parse(source)
+                 if rule.name.startswith(("bit_reverse_", "mul_high_u_", "eq_masked_xor"))
+                 or rule.name == "select_same"]
+        code = generate("\n".join(source[rule.span.start:rule.span.end] for rule in rules),
+                        include_simplify=True, timeout_ms=10000)
+        main = """
+void expect_constant(Value* value, Type type, uint64_t expected) {
+  Const* constant = dynamic_cast<Const*>(value);
+  assert(constant && constant->type() == type && constant->value() == expected);
+}
+int main() {
+  Generated builder;
+  Value condition(Type::Bool);
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(type), shift(type);
+    uint64_t width = type_width(type), mask = type_mask(type);
+    Const zero(type, 0), one(type, 1), two(type, 2), ones(type, mask), five(type, 5);
+    for (Const* constant : {&zero, &one, &two, &ones, &five}) {
+      uint64_t expected = metajit::bit_reverse(type, constant->value());
+      expect_constant(builder.fold_bit_reverse(constant), type, expected);
+      expect_constant(builder.try_simplify(builder.build_bit_reverse(constant)), type, expected);
+      uint64_t product = uint64_t((__uint128_t(mask) * constant->value()) >> width);
+      expect_constant(builder.fold_mul_high_u(&ones, constant), type, product);
+      expect_constant(builder.try_simplify(builder.build_mul_high_u(&ones, constant)), type, product);
+    }
+    expect_constant(builder.fold_mul_high_u(&x, &zero), type, 0);
+    expect_constant(builder.fold_mul_high_u(&one, &x), type, 0);
+    for (uint64_t bit = 1; bit < width; ++bit) {
+      Const power(type, uint64_t(1) << bit);
+      ShrUInst* shifted = dynamic_cast<ShrUInst*>(builder.fold_mul_high_u(&power, &x));
+      assert(shifted && shifted->arg(0) == &x);
+      expect_constant(shifted->arg(1), type, width - bit);
+    }
+    Inst* reversed = builder.build_bit_reverse(&x);
+    assert(builder.fold_bit_reverse(reversed) == &x);
+    assert(builder.try_simplify(builder.build_bit_reverse(reversed)) == &x);
+    Value* left = builder.fold_bit_reverse(builder.build_shl(reversed, &shift));
+    Value* right = builder.try_simplify(builder.build_bit_reverse(builder.build_shr_u(reversed, &shift)));
+    ShrUInst* shr = dynamic_cast<ShrUInst*>(left);
+    ShlInst* shl = dynamic_cast<ShlInst*>(right);
+    assert(shr && shr->arg(0) == &x && shr->arg(1) == &shift);
+    assert(shl && shl->arg(0) == &x && shl->arg(1) == &shift);
+    unsigned before = builder.builds;
+    assert(builder.try_simplify(reversed) == nullptr);
+    assert(builder.builds == before);
+    Value* select = builder.build_select(&condition, &one, &five);
+    SelectInst* reverse_select = dynamic_cast<SelectInst*>(builder.fold_bit_reverse(select));
+    assert(reverse_select && reverse_select->arg(0) == &condition);
+    expect_constant(reverse_select->arg(1), type, uint64_t(1) << (width - 1));
+    expect_constant(reverse_select->arg(2), type, metajit::bit_reverse(type, 5));
+    SelectInst* high_select = dynamic_cast<SelectInst*>(builder.fold_mul_high_u(&ones, select));
+    assert(high_select && high_select->arg(0) == &condition);
+    expect_constant(high_select->arg(1), type, 0);
+    expect_constant(high_select->arg(2), type, 4);
+    Value* other_select = builder.build_select(&condition, &ones, &ones);
+    SelectInst* high_selects = dynamic_cast<SelectInst*>(builder.fold_mul_high_u(select, other_select));
+    assert(high_selects && high_selects->arg(0) == &condition);
+    expect_constant(high_selects->arg(1), type, 0);
+    expect_constant(high_selects->arg(2), type, 4);
+    Const low_mask(type, 3), expected(type, 2), impossible(type, 4);
+    Value* masked = builder.build_and(builder.build_xor(&five, &x), &low_mask);
+    expect_constant(builder.fold_eq(&impossible, masked), Type::Bool, 0);
+    EqInst* equal = dynamic_cast<EqInst*>(builder.try_simplify(builder.build_eq(masked, &expected)));
+    assert(equal && dynamic_cast<AndInst*>(equal->arg(0)));
+    expect_constant(equal->arg(1), type, 3);
+  }
+}
+"""
+        for statistics in (False, True):
+            with self.subTest(statistics=statistics):
+                self.run_cpp(code, main, statistics)
+
     def test_existing_instruction_matching(self):
         code = generate(RULES, include_simplify=True)
         main = """

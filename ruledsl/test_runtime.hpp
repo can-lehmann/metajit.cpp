@@ -25,6 +25,16 @@ inline uint64_t type_mask(Type type) {
 inline bool is_int(Type type) { return type != Type::Bool; }
 inline bool is_int_or_bool(Type) { return true; }
 
+namespace metajit {
+  inline uint64_t bit_reverse(Type type, uint64_t value) {
+    uint64_t result = 0;
+    for (uint64_t bit = 0; bit < type_width(type); ++bit) {
+      result = (result << 1) | ((value >> bit) & 1);
+    }
+    return result;
+  }
+}
+
 struct Value {
   Type _type;
   explicit Value(Type type): _type(type) {}
@@ -48,6 +58,7 @@ struct Inst: Value {
 RULEDSL_TEST_INST(Add)
 RULEDSL_TEST_INST(Sub)
 RULEDSL_TEST_INST(Mul)
+RULEDSL_TEST_INST(MulHighU)
 RULEDSL_TEST_INST(DivS)
 RULEDSL_TEST_INST(DivU)
 RULEDSL_TEST_INST(ModS)
@@ -66,6 +77,7 @@ RULEDSL_TEST_INST(ResizeU)
 RULEDSL_TEST_INST(ResizeS)
 RULEDSL_TEST_INST(ResizeX)
 RULEDSL_TEST_INST(Popcount)
+RULEDSL_TEST_INST(BitReverse)
 RULEDSL_TEST_INST(Freeze)
 #undef RULEDSL_TEST_INST
 
@@ -104,6 +116,7 @@ struct RawBuilder {
   RULEDSL_TEST_BINARY(Add, add)
   RULEDSL_TEST_BINARY(Sub, sub)
   RULEDSL_TEST_BINARY(Mul, mul)
+  RULEDSL_TEST_BINARY(MulHighU, mul_high_u)
   RULEDSL_TEST_BINARY(DivS, div_s)
   RULEDSL_TEST_BINARY(DivU, div_u)
   RULEDSL_TEST_BINARY(ModS, mod_s)
@@ -138,6 +151,7 @@ struct RawBuilder {
     return own(new SelectInst(a->type(), {condition, a, b}));
   }
   PopcountInst* build_popcount(Value* a) { return own(new PopcountInst(a->type(), {a})); }
+  BitReverseInst* build_bit_reverse(Value* a) { return own(new BitReverseInst(a->type(), {a})); }
   FreezeInst* build_freeze(Value* a) { return own(new FreezeInst(a->type(), {a})); }
   Value* _fold_add(Value* a, Value* b) {
     ++handwritten_calls;

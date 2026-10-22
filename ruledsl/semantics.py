@@ -35,6 +35,18 @@ def boolean_bits(condition):
     return z3.If(condition, z3.BitVecVal(1, 1), z3.BitVecVal(0, 1))
 
 
+def bit_reverse(bits):
+    if bits.size() == 1:
+        return bits
+    return z3.Concat(*(z3.Extract(index, index, bits) for index in range(bits.size())))
+
+
+def mul_high_u(left, right):
+    width = left.size()
+    product = z3.ZeroExt(width, left) * z3.ZeroExt(width, right)
+    return z3.Extract(2 * width - 1, width, product)
+
+
 def emit(kind, args, type_):
     poison = z3.Or(*(arg.poison for arg in args))
     a = args[0].bits
@@ -56,6 +68,8 @@ def emit(kind, args, type_):
         bits = z3.BitVecVal(0, type_.width)
         for index in range(a.size()):
             bits += z3.ZeroExt(type_.width - 1, z3.Extract(index, index, a))
+    elif kind == "BitReverse":
+        bits = bit_reverse(a)
     else:
         b = args[1].bits
         if kind == "Add":
@@ -64,6 +78,8 @@ def emit(kind, args, type_):
             bits = a - b
         elif kind == "Mul":
             bits = a * b
+        elif kind == "MulHighU":
+            bits = mul_high_u(a, b)
         elif kind == "And":
             bits = a & b
         elif kind == "Or":

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import operator
 import re
 
-from . import ast
+from . import ast, calculations
 from .parser import parse
 from .signatures import SIGNATURES
 from .source import TypeCheckError
@@ -185,6 +185,7 @@ class Checker:
 
     def call(self, node):
         arities = {"width": 1, "bits": 2, "min": 2, "max": 2, "ctz": 1,
+                   "bit_reverse": 1, "mul_high_u": 2,
                    "known_zeros": 1, "known_ones": 1}
         if node.name not in arities:
             self.error(node, f"unknown calculation function {node.name!r}")
@@ -204,6 +205,8 @@ class Checker:
         self.require(args[0], "constant", node.args[0])
         if node.name == "ctz":
             return ExprInfo("constant", self.constraints.fresh(), args[0].dependencies)
+        if node.name == "bit_reverse":
+            return ExprInfo("constant", args[0].type, args[0].dependencies)
         if node.name == "bits":
             self.require(args[1], "type", node.args[1])
             return ExprInfo("constant", args[1].type, args[0].dependencies)
@@ -310,6 +313,9 @@ class Checker:
                     result = assignment[self.expressions[node.args[0]].type].width
                 else:
                     result = (args[0] & -args[0]).bit_length() - 1
+            elif node.name in {"bit_reverse", "mul_high_u"}:
+                width = assignment[self.expressions[node.args[0]].type].width
+                result = getattr(calculations, node.name)(*args, width)
             elif node.name == "min":
                 result = min(args)
             else:

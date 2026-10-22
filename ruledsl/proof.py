@@ -4,7 +4,7 @@ import warnings
 import z3
 
 from . import ast
-from .semantics import Value, emit, resize_bits
+from .semantics import Value, bit_reverse, emit, mul_high_u, resize_bits
 from .source import SourceError
 from .typecheck import KNOWN_BITS_FUNCTIONS, check
 from .types import ConcreteType
@@ -221,6 +221,10 @@ class Prover:
                 value = z3.BitVecVal(args[0].value.width, self.type_of(node).width)
             elif node.name == "bits":
                 value = resize_bits(args[0].value, self.type_of(node).width)
+            elif node.name == "bit_reverse":
+                value = bit_reverse(args[0].value)
+            elif node.name == "mul_high_u":
+                value = mul_high_u(args[0].value, args[1].value)
             elif node.name == "ctz":
                 bits = args[0].value
                 width = self.type_of(node).width

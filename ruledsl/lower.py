@@ -226,6 +226,11 @@ class RuleLowerer:
                 expression = call("uint64_t", call("type_width", *args))
             elif node.name == "bits":
                 expression = args[0]
+            elif node.name == "bit_reverse":
+                expression = call("metajit::bit_reverse", self.type_of(node), *args)
+            elif node.name == "mul_high_u":
+                product = ir.Binary("*", call("__uint128_t", args[0]), args[1])
+                expression = call("uint64_t", ir.Binary(">>", product, call("type_width", self.type_of(node))))
             elif node.name == "ctz":
                 expression = ir.Conditional(
                     ir.Binary("==", args[0], ir.Literal(0)),

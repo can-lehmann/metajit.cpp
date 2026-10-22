@@ -79,6 +79,49 @@ mul_power_of_two: Mul(x, C)
 mul_shift_one: Mul(x, Shl(1, y))
     => Shl(x, y)
 
+mul_high_u_zero: MulHighU(x, 0)
+    => 0
+
+mul_high_u_one: MulHighU(x, 1)
+    => 0
+
+mul_high_u_constants: MulHighU(C1, C2)
+    C = mul_high_u(C1, C2)
+    => C
+
+mul_high_u_select_constant: MulHighU(Select(c, C1, C2), C3)
+    Ctrue = mul_high_u(C1, C3)
+    Cfalse = mul_high_u(C2, C3)
+    => Select(c, Ctrue, Cfalse)
+
+mul_high_u_selects: MulHighU(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = mul_high_u(C1, C3)
+    Cfalse = mul_high_u(C2, C4)
+    => Select(c, Ctrue, Cfalse)
+
+mul_high_u_power_of_two: MulHighU(x: T, C)
+    check C > 1 and C & (C - 1) == 0
+    Cshift = width(T) - ctz(C)
+    => ShrU(x, Cshift)
+
+bit_reverse_constant: BitReverse(C)
+    Creversed = bit_reverse(C)
+    => Creversed
+
+bit_reverse_twice: BitReverse(BitReverse(x))
+    => x
+
+bit_reverse_select: BitReverse(Select(c, C1, C2))
+    Ctrue = bit_reverse(C1)
+    Cfalse = bit_reverse(C2)
+    => Select(c, Ctrue, Cfalse)
+
+bit_reverse_shl_reverse: BitReverse(Shl(BitReverse(x), y))
+    => ShrU(x, y)
+
+bit_reverse_shr_u_reverse: BitReverse(ShrU(BitReverse(x), y))
+    => Shl(x, y)
+
 mod_u_power_of_two: ModU(x, C)
     SORRY_Z3_SMALL_WIDTHS
     check C != 0 and C & (C - 1) == 0
@@ -271,6 +314,15 @@ eq_xor_zero: Eq(Xor(x, y), 0)
 
 eq_sub_zero: Eq(Sub(x, y), 0)
     => Eq(x, y)
+
+eq_masked_xor_impossible: Eq(And(Xor(x, C1), Cmask), C2)
+    check C2 & ~Cmask != 0
+    => 0: Bool
+
+eq_masked_xor: Eq(And(Xor(x, C1), Cmask), C2)
+    check C2 & ~Cmask == 0
+    Cnew = C2 ^ (C1 & Cmask)
+    => Eq(And(x, Cmask), Cnew)
 
 lt_u_self: LtU(x, x)
     => 0
