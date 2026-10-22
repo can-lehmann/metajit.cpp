@@ -1860,15 +1860,20 @@ namespace metajit {
           }
         }
 
-        if (dynmatch(AndInst, masked, a)) {
-          if (dynmatch(Const, mask, masked->arg(1))) {
-            if (dynmatch(XorInst, xored, masked->arg(0))) {
-              if (dynmatch(Const, constant, xored->arg(1))) {
+        if (dynmatch(AndInst, and_inst, a)) {
+          if (dynmatch(Const, mask, and_inst->arg(1))) {
+            if (dynmatch(XorInst, xor_inst, and_inst->arg(0))) {
+              if (dynmatch(Const, constant, xor_inst->arg(1))) {
                 if (const_b->value() & ~mask->value()) {
                   return build_const(Type::Bool, 0);
                 }
-                return fold_eq(fold_and(xored->arg(0), mask),
-                  build_const(a->type(), const_b->value() ^ (constant->value() & mask->value())));
+                return fold_eq(
+                  fold_and(xor_inst->arg(0), mask),
+                  build_const(
+                    a->type(),
+                    const_b->value() ^ (constant->value() & mask->value())
+                  )
+                );
               }
             }
           }

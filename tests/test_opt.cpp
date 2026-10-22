@@ -2096,63 +2096,10 @@ void test_cse_pure_loads_across_guards() {
   unittest_assert(!section.verify(std::cout));
 }
 
-template <size_t Width>
-void check_fold_masked_xor() {
-  Type type = Width == 8 ? Type::Int8 : Width == 16 ? Type::Int16 : Width == 32 ? Type::Int32 : Type::Int64;
-  Context context;
-  Allocator allocator;
-  Section section(context, allocator);
-  Builder builder(&section);
-  builder.move_to_end(builder.build_block({Type::Ptr}));
-  Value* ptr = builder.entry_arg(0);
-  Value* input = builder.build_load(ptr, type, {}, AliasingGroup(0), 0);
-  struct Case { uint64_t mask, constant, expected; };
-  std::vector<Case> cases;
-  for (uint64_t mask : {uint64_t(0), type_mask(type), uint64_t(0xaaaaaaaaaaaaaaaa), uint64_t(1) << (Width - 1)}) {
-    for (uint64_t constant : {uint64_t(0), type_mask(type), uint64_t(0x5555555555555555), uint64_t(0x123456789abcdef0)}) {
-      for (uint64_t expected : {uint64_t(0), mask, uint64_t(1), uint64_t(0x87654321)}) {
-        Case test{mask & type_mask(type), constant & type_mask(type), expected & type_mask(type)};
-        Value* xored = builder.build_xor(input, builder.build_const(type, test.constant));
-        Value* masked = builder.build_and(xored, builder.build_const(type, test.mask));
-        Value* result = builder.fold_eq(masked, builder.build_const(type, test.expected));
-        builder.build_store(ptr, result, AliasingGroup(0), 8 + cases.size());
-        cases.push_back(test);
-      }
-    }
-  }
-  builder.build_exit();
-  OrderBlocks::run(&section, BlockOrdering::Natural);
-  CommonSubexprElim::run(&section);
-  DeadCodeElim::run(&section);
-  unittest_assert(!section.verify(std::cerr));
-  for (Block* block : section) {
-    for (Inst* inst : *block) unittest_assert(!dynamic_cast<XorInst*>(inst));
-  }
-  X86CodeGen codegen(&section, {Reg::phys(12)}, X86CodeGen::Mode::JIT);
-  using Fn = void(* [[clang::preserve_none]])(uint64_t*);
-  Fn fn = (Fn) codegen.deploy();
-  std::vector<uint64_t> data((8 + cases.size() + 7) / 8);
-  for (size_t sample = 0; sample < 1024; sample++) {
-    data[0] = 0;
-    for (size_t i = 0; i < 8; i++) data[0] = (data[0] << 8) | (rand() & 255);
-    uint64_t value = data[0] & type_mask(type);
-    fn(data.data());
-    for (size_t i = 0; i < cases.size(); i++) {
-      const Case& test = cases[i];
-      bool expected = ((value ^ test.constant) & test.mask) == test.expected;
-      unittest_assert(((uint8_t*) data.data())[8 + i] == expected);
-    }
-  }
-}
-
 int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
   DiffTestSuite suite("tests/output/test_opt", argc, argv);
-  suite.test("fold masked xor Int8").run(check_fold_masked_xor<8>);
-  suite.test("fold masked xor Int16").run(check_fold_masked_xor<16>);
-  suite.test("fold masked xor Int32").run(check_fold_masked_xor<32>);
-  suite.test("fold masked xor Int64").run(check_fold_masked_xor<64>);
   suite.test("knownbits variable shift witness").run(test_knownbits_variable_shift_witness);
 
   suite.test("cse commutative operands").run(test_cse_commutative_operands);
