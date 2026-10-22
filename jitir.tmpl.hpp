@@ -1867,6 +1867,7 @@ namespace metajit {
                 if (const_b->value() & ~mask->value()) {
                   return build_const(Type::Bool, 0);
                 }
+                // ((x ^ const) & mask) == K => (x & mask) == (K ^ (const & mask))
                 return fold_eq(
                   fold_and(xor_inst->arg(0), mask),
                   build_const(
