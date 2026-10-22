@@ -401,6 +401,11 @@ resize_u_resize_x_roundtrip: ResizeU(ResizeX(x: T): U): T
     Cmask = bits(bits(-1, U), T)
     => And(x, Cmask)
 
+resize_u_resize_u_roundtrip: ResizeU(ResizeU(x: T): U): T
+    where width(U) < width(T)
+    Cmask = bits(bits(-1, U), T)
+    => And(x, Cmask)
+
 resize_u_resize_u_widen: ResizeU(ResizeU(x: S): U): T
     where width(S) < width(U) < width(T)
     => ResizeU(x): T
@@ -417,11 +422,23 @@ resize_u_masked_resize_x_roundtrip: ResizeU(And(ResizeX(x: T): U, C)): T
     Cmask = bits(C, T)
     => And(x, Cmask)
 
+resize_u_masked_resize_u_roundtrip: ResizeU(And(ResizeU(x: T): U, C)): T
+    Cmask = bits(C, T)
+    => And(x, Cmask)
+
 resize_s_identity: ResizeS(x: T): T
     => x
 
+resize_s_narrow: ResizeS(x: S): T
+    where width(T) < width(S)
+    => ResizeU(x): T
+
 resize_x_identity: ResizeX(x: T): T
     => x
+
+resize_x_narrow: ResizeX(x: S): T
+    where width(T) < width(S)
+    => ResizeU(x): T
 
 resize_x_select: ResizeX(Select(c, C1: S, C2)): T
     where width(T) <= width(S)
@@ -429,7 +446,7 @@ resize_x_select: ResizeX(Select(c, C1: S, C2)): T
     Cfalse = bits(C2, T)
     => Select(c, Ctrue, Cfalse)
 
-resize_x_sign_bit: ResizeX(ShrU(x: T, C)): Bool
+resize_u_sign_bit: ResizeU(ShrU(x: T, C)): Bool
     check C == width(T) - 1
     => LtS(x, 0)
 

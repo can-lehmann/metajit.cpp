@@ -4132,8 +4132,9 @@ namespace metajit {
                 return or_inst->arg(0);
               }
             }
-          } else if (dynamic_cast<ResizeUInst*>(inst) ||
-                     dynamic_cast<ResizeSInst*>(inst)) {
+          } else if ((dynamic_cast<ResizeUInst*>(inst) ||
+                      dynamic_cast<ResizeSInst*>(inst)) &&
+                     type_width(inst->arg(0)->type()) < type_width(inst->type())) {
             UsedBits::Bits used = used_bits.at(inst);
             uint64_t mask = type_mask(inst->type()) & type_mask(inst->arg(0)->type());
             if ((used.used & ~mask) == 0) {

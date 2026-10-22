@@ -688,11 +688,11 @@ b2:
 )");
   });
 
-  suite.test("const_prop_resize_x_backwards").run([]() {
+  suite.test("const_prop_resize_u_backwards").run([]() {
     check_trace_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
-  %2 = ResizeX %1, type=Bool
+  %2 = ResizeU %1, type=Bool
   Branch %2, true_block=b1, false_block=b2
 b1:
   %4 = And %1, 1:Int8
@@ -704,7 +704,7 @@ b2:
 )", {0, 1}, R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
-  %2 = ResizeX %1, type=Bool
+  %2 = ResizeU %1, type=Bool
   Branch %2, true_block=b1, false_block=b2
 b1:
   %4 = And %1, 1:Int8
@@ -721,7 +721,7 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = Or %1, 6:Int8
-  %3 = ResizeX %2, type=Bool
+  %3 = ResizeU %2, type=Bool
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %2, 7:Int8
@@ -734,7 +734,7 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = Or %1, 6:Int8
-  %3 = ResizeX %2, type=Bool
+  %3 = ResizeU %2, type=Bool
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %2, 7:Int8
@@ -1332,7 +1332,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = And %2, 254:Int8
   %4 = Sub %1, %3
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %5, true_block=b1, false_block=b2
 b1:
   %7 = And %1, 1:Int8
@@ -1347,7 +1347,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = And %2, 254:Int8
   %4 = Sub %1, %3
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %5, true_block=b1, false_block=b2
 b1:
   %7 = And %1, 1:Int8
@@ -1366,7 +1366,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = And %2, 254:Int8
   %4 = Sub %3, %1
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %5, true_block=b1, false_block=b2
 b1:
   %7 = And %1, 1:Int8
@@ -1381,7 +1381,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = And %2, 254:Int8
   %4 = Sub %3, %1
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %5, true_block=b1, false_block=b2
 b1:
   %7 = And %1, 1:Int8
@@ -1552,7 +1552,7 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = ShrU %1, 3:Int8
-  %3 = ResizeX %2, type=Bool
+  %3 = ResizeU %2, type=Bool
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %1, 8:Int8
@@ -1565,7 +1565,7 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = ShrU %1, 3:Int8
-  %3 = ResizeX %2, type=Bool
+  %3 = ResizeU %2, type=Bool
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %1, 8:Int8
@@ -1762,7 +1762,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
   %4 = Select %1, %2, %3
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %1, true_block=b1, false_block=b2
 b1:
   Branch %5, true_block=b3, false_block=b2
@@ -1781,7 +1781,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
   %4 = Select %1, %2, %3
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %1, true_block=b1, false_block=b2
 b1:
   Branch %5, true_block=b3, false_block=b2
@@ -1846,7 +1846,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
   %4 = Select %1, %2, %3
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %1, true_block=b1, false_block=b2
 b1:
   Exit
@@ -1867,7 +1867,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
   %4 = Select %1, %2, %3
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %1, true_block=b1, false_block=b2
 b1:
   Exit
