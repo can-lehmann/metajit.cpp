@@ -512,8 +512,22 @@ tv::ValueState expected_poison_mul_high_u(z3::context& context, std::vector<tv::
   return result;
 }
 
+Value* build_assumed_bits(Builder& builder) {
+  return builder.build_assume_bits(builder.entry_arg(0), 0xf0, 0xa0);
+}
+
+tv::ValueState expected_assumed_bits(z3::context& context, std::vector<tv::ValueState> args) {
+  tv::ValueState result = args[0];
+  z3::expr nibble = result.value().extract(7, 4);
+  result.set_poison(result.is_poison() || nibble != context.bv_val(10, 4));
+  return result;
+}
+
 int main(int argc, char** argv) {
   TVTestSuite suite(argc, argv);
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    suite.tv_test(std::string("assumed_bits_") + to_string(type)).run_valuestate({type}, build_assumed_bits, expected_assumed_bits);
+  }
 
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     suite.tv_test(std::string("mul_high_u_") + to_string(type)).run({type, type}, build_mul_high_u, expected_mul_high_u);

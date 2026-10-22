@@ -3866,6 +3866,9 @@ namespace metajit {
       static Bits eval(Inst* inst, NameMap<Bits>& values) {
         if (dynamic_cast<FreezeInst*>(inst)) {
           return Bits(inst->type(), 0, 0);
+        } else if (dynmatch(AssumeBitsInst, assume, inst)) {
+          Bits input = at(values, assume->arg(0));
+          return Bits(inst->type(), input.mask | assume->mask(), input.value | assume->bits());
         } else if (dynamic_cast<PromoteInst*>(inst) ||
             dynamic_cast<AssumeConstInst*>(inst)) {
           return at(values, inst->arg(0));
@@ -3950,6 +3953,73 @@ namespace metajit {
         _values[inst].write(stream);
       });
       _section->write(stream, &info_writer);
+    }
+  };
+
+  class BridgeFacts {
+  public:
+    struct Field {
+      uint64_t offset;
+      KnownBits::Bits bits;
+      bool state_pointer = false;
+    };
+    std::vector<Field> fields;
+
+    BridgeFacts() {}
+
+    BridgeFacts(Block* block, Inst* end, Value* closure, const KnownBits& known_bits, Value* state = nullptr) {
+      for (Inst* inst : *block) {
+        if (inst == end) {
+          break;
+        }
+        if (dynmatch(StoreInst, store, inst)) {
+          if (store->ptr() != closure) {
+            fields.clear();
+            continue;
+          }
+          uint64_t offset = store->offset();
+          size_t size = type_size(store->value()->type());
+          for (size_t index = 0; index < fields.size(); ) {
+            const Field& field = fields[index];
+            if ((offset >= field.offset && offset - field.offset < type_size(field.bits.type)) ||
+                (field.offset >= offset && field.offset - offset < size)) {
+              fields.erase(fields.begin() + index);
+            } else {
+              index++;
+            }
+          }
+          Value* value = store->value();
+          while (dynmatch(AssumeConstInst, assume, value)) {
+            value = assume->arg(0);
+          }
+          if (state && value == state) {
+            fields.push_back({offset, KnownBits::Bits(Type::Ptr, 0, 0), true});
+          } else if (is_int_or_bool(store->value()->type())) {
+            KnownBits::Bits bits = known_bits.at(store->value());
+            if (bits.mask) {
+              fields.push_back({offset, bits});
+            }
+          }
+        } else if (dynamic_cast<CallInst*>(inst)) {
+          fields.clear();
+        }
+      }
+    }
+
+    void seed(TraceBuilder& builder, Value* closure, AliasingGroup aliasing, Value* state = nullptr) const {
+      for (const Field& field : fields) {
+        Value* value;
+        if (field.state_pointer) {
+          assert(state);
+          value = state;
+        } else if (field.bits.is_const()) {
+          value = builder.build_const(field.bits.type, field.bits.value);
+        } else {
+          value = builder.build_load(closure, field.bits.type, LoadFlags::None, aliasing, field.offset);
+          value = builder.build_assume_bits(value, field.bits.mask, field.bits.value);
+        }
+        builder.init_store(closure, value, aliasing, field.offset);
+      }
     }
   };
 
@@ -4397,6 +4467,10 @@ namespace metajit {
         return Event::EnterBlock;
       } else if (dynmatch(ExitInst, exit, _inst)) {
         return Event::Exit;
+      } else if (dynmatch(AssumeBitsInst, assume, _inst)) {
+        Bits value = at(assume->arg(0));
+        value.is_poison = value.is_poison || (value.value & assume->mask()) != assume->bits();
+        _values[_inst] = value;
       } else if (dynamic_cast<PromoteInst*>(_inst) ||
                  dynamic_cast<AssumeConstInst*>(_inst)) {
         _values[_inst] = at(_inst->arg(0));

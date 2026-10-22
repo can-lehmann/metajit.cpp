@@ -377,6 +377,12 @@ namespace metajit {
           std::string name = "freeze_" + std::to_string(_freeze_counter++);
           z3::expr arbitrary = _context.bv_const(name.c_str(), type_width(freeze->type()));
           return ValueState(freeze->type(), z3::ite(input.is_poison(), arbitrary, input.value()));
+        } else if (dynmatch(AssumeBitsInst, assume, inst)) {
+          ValueState result = emit(assume->arg(0));
+          z3::expr mask = _context.bv_val(assume->mask(), type_width(assume->type()));
+          z3::expr bits = _context.bv_val(assume->bits(), type_width(assume->type()));
+          result.set_poison(result.is_poison() || ((result.value() & mask) != bits));
+          return result;
         } else if (dynamic_cast<PromoteInst*>(inst) || dynamic_cast<AssumeConstInst*>(inst)) {
           return emit(inst->arg(0));
         } else if (dynmatch(SelectInst, select, inst)) {

@@ -874,6 +874,8 @@ namespace metajit {
         move(vreg(inst), vreg(freeze->arg(0)));
       } else if (dynmatch(PromoteInst, promote, inst)) {
         move(vreg(inst), vreg(promote->arg(0)));
+      } else if (dynmatch(AssumeBitsInst, assume, inst)) {
+        move(vreg(inst), vreg(assume->arg(0)));
       } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
         move(vreg(inst), vreg(assume_const->arg(0)));
       } else if (dynmatch(PtrToIntInst, ptr_to_int, inst)) {

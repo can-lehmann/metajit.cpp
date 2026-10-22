@@ -116,8 +116,119 @@ namespace metajit {
 using namespace metajit;
 using namespace metajit::test;
 
+void closure_facts_seed_bridge_entry() {
+  Context context;
+  Allocator allocator;
+  Section source(context, allocator);
+  Builder builder(&source);
+  Block* entry = builder.build_block({Type::Ptr, Type::Int32, Type::Ptr});
+  builder.move_to_end(entry);
+  builder.build_store(entry->arg(0), builder.build_const(Type::Int32, 42), 0, 8);
+  Value* narrowed = builder.build_and(entry->arg(1), builder.build_const(Type::Int32, 255));
+  builder.build_store(entry->arg(0), narrowed, 0, 12);
+  builder.build_store(entry->arg(0), builder.build_const(Type::Int32, 7), 0, 16);
+  builder.build_store(entry->arg(0), entry->arg(1), 0, 16);
+  builder.build_store(entry->arg(0), entry->arg(2), 0, 24);
+  Inst* end = builder.build_exit();
+  OrderBlocks::run(&source, BlockOrdering::Natural);
+  KnownBits bits(&source);
+  BridgeFacts facts(entry, end, entry->arg(0), bits, entry->arg(2));
+  unittest_assert(facts.fields.size() == 3);
+  Section bridge(context, allocator);
+  TraceBuilder trace(&bridge);
+  Chain chain;
+  trace.set_chain(&chain);
+  trace.move_to_end(trace.build_block(std::vector<Type>{Type::Ptr, Type::Ptr}));
+  facts.seed(trace, trace.entry_arg(0), 1, trace.entry_arg(1));
+  unittest_assert(trace.build_load(trace.entry_arg(0), Type::Ptr, LoadFlags::None, 1, 24) == trace.entry_arg(1));
+  Value* fixed = trace.build_load(trace.entry_arg(0), Type::Int32, LoadFlags::None, 1, 8);
+  unittest_assert(dynamic_cast<Const*>(fixed) && ((Const*) fixed)->value() == 42);
+  Value* value = trace.build_load(trace.entry_arg(0), Type::Int32, LoadFlags::None, 1, 12);
+  unittest_assert(dynamic_cast<AssumeBitsInst*>(value));
+  Value* high = trace.build_and(value, trace.build_const(Type::Int32, 0xffffff00));
+  trace.build_store(trace.entry_arg(0), high, 0, 32);
+  trace.build_exit();
+  OrderBlocks::run(&bridge, BlockOrdering::Natural);
+  Simplify::run(&bridge, 2);
+  DeadCodeElim::run(&bridge);
+  for (Block* block : bridge) {
+    for (Inst* inst : *block) {
+      if (dynmatch(StoreInst, store, inst)) {
+        unittest_assert(dynamic_cast<Const*>(store->value()));
+        unittest_assert(((Const*) store->value())->value() == 0);
+      }
+    }
+  }
+}
+
+void assumed_bits_preserve_runtime_values() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  builder.move_to_end(builder.build_block({Type::Ptr}));
+  Value* input = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, 0, 0);
+  Value* assumed = builder.build_assume_bits(input, 0xffffff00, 0x1200);
+  builder.build_store(builder.entry_arg(0), builder.build_add(assumed, builder.build_const(Type::Int32, 5)), 0, 4);
+  builder.build_exit();
+  OrderBlocks::run(&section, BlockOrdering::Natural);
+  KnownBits bits(&section);
+  unittest_assert(bits.at(assumed).mask == 0xffffff00);
+  unittest_assert(bits.at(assumed).value == 0x1200);
+  llvm::LLVMContext llvm_context;
+  llvm::Module module("assume_bits", llvm_context);
+  LLVMCodeGen llvm_codegen(&section, &module, "assume_bits");
+  unittest_assert(!llvm::verifyModule(module, &llvm::errs()));
+  X86CodeGen codegen(&section, {Reg::X86_R12()});
+  using Function = void(* [[clang::preserve_none]])(uint32_t*);
+  Function function = (Function) codegen.deploy();
+  for (uint32_t low = 0; low < 256; low++) {
+    uint32_t state[2] = {0x1200 + low, 0};
+    function(state);
+    unittest_assert(state[1] == state[0] + 5);
+    state[1] = 0;
+    Interpreter interpreter(&section, {Interpreter::Bits::constant(state)});
+    interpreter.run();
+    unittest_assert(state[1] == state[0] + 5);
+  }
+}
+
+void assumed_bits_reject_conflicting_values() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  builder.move_to_end(builder.build_block({Type::Int32}));
+  Value* value = builder.build_assume_bits(builder.entry_arg(0), 0xff00, 0x1200);
+  builder.build_exit();
+  OrderBlocks::run(&section, BlockOrdering::Natural);
+  Interpreter interpreter(&section, {Interpreter::Bits::constant(Type::Int32, 0x1300)});
+  interpreter.run();
+  unittest_assert(interpreter.at(value).is_poison);
+}
+
+void closure_facts_stop_at_unknown_writes() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Ptr, Type::Ptr});
+  builder.move_to_end(entry);
+  builder.build_store(entry->arg(0), builder.build_const(Type::Int32, 42), 0, 8);
+  builder.build_store(entry->arg(1), builder.build_const(Type::Int32, 43), 0, 8);
+  Inst* end = builder.build_exit();
+  OrderBlocks::run(&section, BlockOrdering::Natural);
+  KnownBits bits(&section);
+  BridgeFacts facts(entry, end, entry->arg(0), bits);
+  unittest_assert(facts.fields.empty());
+}
+
 int main(int argc, char** argv) {
   ReentryTestSuite suite(argc, argv);
+  suite.test("assumed bits reject conflicting values").run(assumed_bits_reject_conflicting_values);
+  suite.test("closure facts stop at unknown writes").run(closure_facts_stop_at_unknown_writes);
+  suite.test("assumed bits preserve runtime values").run(assumed_bits_preserve_runtime_values);
+  suite.test("closure facts seed bridge entry").run(closure_facts_seed_bridge_entry);
 
   suite.test("sliced continuation supports generating another guard").run([]() {
     Context context;

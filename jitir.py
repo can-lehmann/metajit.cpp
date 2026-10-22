@@ -384,6 +384,12 @@ jitir = IR(
             type_checks = [],
             doc = "Bind a value at tracing time. Insert a guard to check that the value is the same at runtime."
         ),
+        Inst("AssumeBits",
+            args = [Arg("a"), Arg("mask", Type("uint64_t")), Arg("bits", Type("uint64_t"))],
+            type = "a->type()",
+            type_checks = ["is_int_or_bool(a->type())", "(bits & ~mask) == 0", "(mask & ~type_mask(a->type())) == 0"],
+            doc = "Return a unchanged when (a & mask) == bits; otherwise produce poison. Carries proven entry facts without a runtime check."
+        ),
         Inst("AssumeConst",
             args = [Arg("a")],
             type = "a->type()",

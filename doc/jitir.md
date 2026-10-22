@@ -35,6 +35,24 @@ Arguments
 Return Type: `a->type()`
 
 
+### AssumeBits
+
+Return a unchanged when (a & mask) == bits; otherwise produce poison. Carries proven entry facts without a runtime check.
+
+Arguments
+
+- **a**: `Value*`
+- **mask**: `uint64_t`
+- **bits**: `uint64_t`
+
+Return Type: `a->type()`
+
+Type Checks:
+
+- `is_int_or_bool(a->type())`
+- `(bits & ~mask) == 0`
+- `(mask & ~type_mask(a->type())) == 0`
+
 ### AssumeConst
 
 Bind a value at tracing time without inserting a guard.
