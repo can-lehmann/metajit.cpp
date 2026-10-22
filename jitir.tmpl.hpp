@@ -1860,6 +1860,26 @@ namespace metajit {
           }
         }
 
+        if (dynmatch(AndInst, and_inst, a)) {
+          if (dynmatch(Const, mask, and_inst->arg(1))) {
+            if (dynmatch(XorInst, xor_inst, and_inst->arg(0))) {
+              if (dynmatch(Const, constant, xor_inst->arg(1))) {
+                if (const_b->value() & ~mask->value()) {
+                  return build_const(Type::Bool, 0);
+                }
+                // ((x ^ const1) & mask) == const2 => (x & mask) == (const2 ^ (const1 & mask))
+                return fold_eq(
+                  fold_and(xor_inst->arg(0), mask),
+                  build_const(
+                    a->type(),
+                    const_b->value() ^ (constant->value() & mask->value())
+                  )
+                );
+              }
+            }
+          }
+        }
+
         if (const_b->value() == 0) {
           if (dynmatch(XorInst, xor_a, a)) {
             // (a ^ b) == 0 => a == b
