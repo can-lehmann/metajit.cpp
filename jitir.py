@@ -469,6 +469,13 @@ jitir = IR(
                 "is_int(a->type())"
             ]
         ),
+        Inst("BitReverse",
+            args = [Arg("a")],
+            type = "a->type()",
+            type_checks = [
+                "is_int(a->type())"
+            ]
+        ),
         Inst("PtrToInt",
             args = [Arg("a"), Arg("type", Type("Type"))],
             type = "type",
@@ -524,6 +531,7 @@ jitir = IR(
         binop("Add"),
         binop("Sub"),
         binop("Mul"),
+        binop("MulHighU"),
         binop("DivS"),
         binop("DivU"),
         binop("ModS"),

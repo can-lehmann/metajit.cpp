@@ -2220,6 +2220,9 @@ void test_fold_constant_select_propagation() {
         check_fold_constant_select(builder.fold_sub(a, b), cond, type,
                                   reversed ? 7 - mask : mask - 7, reversed ? 2 : uint64_t(5) - 7);
         check_fold_constant_select(builder.fold_mul(a, b), cond, type, mask * 7, 35);
+        check_fold_constant_select(builder.fold_mul_high_u(a, b), cond, type,
+                                  uint64_t((__uint128_t(mask) * 7) >> type_width(type)),
+                                  uint64_t((__uint128_t(5) * 7) >> type_width(type)));
         check_fold_constant_select(builder.fold_lt_u(a, b), cond, Type::Bool,
                                   reversed ? 7 < mask : mask < 7, reversed ? 7 < 5 : 5 < 7);
       }
@@ -2239,6 +2242,11 @@ void test_fold_constant_select_propagation() {
       check_fold_constant_select(builder.fold_add(left, right), cond, type, mask + 3, 14);
       check_fold_constant_select(builder.fold_sub(left, right), cond, type, mask - 3, uint64_t(5) - 9);
       check_fold_constant_select(builder.fold_mul(left, right), cond, type, mask * 3, 45);
+      check_fold_constant_select(builder.fold_mul_high_u(left, right), cond, type,
+                                uint64_t((__uint128_t(mask) * 3) >> type_width(type)),
+                                uint64_t((__uint128_t(5) * 9) >> type_width(type)));
+      check_fold_constant_select(builder.fold_bit_reverse(left), cond, type,
+                                metajit::bit_reverse(type, mask), metajit::bit_reverse(type, 5));
       check_fold_constant_select(builder.fold_lt_u(left, right), cond, Type::Bool, mask < 3, 5 < 9);
       Value* one = builder.build_const(type, 1);
       uint64_t last = type_width(type) - 1;
@@ -2591,6 +2599,31 @@ b0(%0: Ptr, %1: Int8):
 )");
 }
 
+void test_cse_pure_loads_across_guards() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block(std::vector<Type>{Type::Ptr, Type::Ptr, Type::Bool});
+  Block* body = builder.build_block();
+  Block* exit = builder.build_block();
+  builder.move_to_end(entry);
+  Value* first = builder.build_load(entry->arg(0), Type::Int32, LoadFlags::Pure, 1, 0);
+  builder.build_branch(entry->arg(2), body, exit);
+  builder.move_to_end(body);
+  builder.build_store(entry->arg(1), builder.build_const(Type::Int32, 7), 1, 4);
+  builder.build_call(builder.build_symbol(Type::Ptr, "pure_load_call"), Type::Void, std::vector<Value*>{});
+  Value* second = builder.build_load(entry->arg(0), Type::Int32, LoadFlags::Pure, 1, 0);
+  StoreInst* output = builder.build_store(entry->arg(1), second, 2, 0);
+  builder.build_exit();
+  builder.move_to_end(exit);
+  builder.build_exit();
+  OrderBlocks::run(&section, BlockOrdering::Natural);
+  CommonSubexprElim::run(&section);
+  unittest_assert(output->value() == first);
+  unittest_assert(!section.verify(std::cout));
+}
+
 int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
@@ -2613,6 +2646,7 @@ int main(int argc, char** argv) {
   suite.test("cse commutative operands").run(test_cse_commutative_operands);
   suite.test("cse ordered operands").run(test_cse_ordered_operands);
   suite.test("cse commutative after substitution").run(test_cse_commutative_after_substitution);
+  suite.test("cse pure loads across guards and calls").run(test_cse_pure_loads_across_guards);
   suite.test("fold xor same operand").run(test_fold_xor_same_operand);
   suite.test("fold lt_u same operand").run(test_fold_lt_u_same_operand);
   suite.test("fold lt_s same operand").run(test_fold_lt_s_same_operand);

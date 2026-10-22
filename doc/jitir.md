@@ -165,6 +165,18 @@ Type Checks:
 
 - `is_int(a->type())`
 
+### BitReverse
+
+Arguments
+
+- **a**: `Value*`
+
+Return Type: `a->type()`
+
+Type Checks:
+
+- `is_int(a->type())`
+
 ### PtrToInt
 
 Arguments
@@ -269,6 +281,20 @@ Type Checks:
 - `is_int(a->type())`
 
 ### Mul
+
+Arguments
+
+- **a**: `Value*`
+- **b**: `Value*`
+
+Return Type: `a->type()`
+
+Type Checks:
+
+- `a->type() == b->type()`
+- `is_int(a->type())`
+
+### MulHighU
 
 Arguments
 

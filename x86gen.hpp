@@ -671,7 +671,7 @@ namespace metajit {
 
     bool is_sext_imm32(Type type, uint64_t value) {
       if (type_size(type) == 8) {
-        return (value >> 31) == 0 || (value >> 31) == 0x1fffffffULL;
+        return (value >> 31) == 0 || (value >> 31) == 0x1ffffffffULL;
       }
       return true;
     }
@@ -805,6 +805,41 @@ namespace metajit {
       _builder.lea64(dst, mem);
     }
 
+    void build_test(Value* cond) {
+      if (dynmatch(ResizeXInst, resize, cond)) {
+        if (dynmatch(ShrUInst, shift, resize->arg(0))) {
+          if (dynmatch(Const, amount, shift->arg(1))) {
+            if (amount->value() < 32 && amount->value() < type_width(shift->arg(0)->type())) {
+              _builder.test32_imm(vreg(shift->arg(0)), uint64_t(1) << amount->value());
+              return;
+            }
+          }
+        }
+        _builder.test32_imm(vreg(resize->arg(0)), uint64_t(1));
+        return;
+      }
+      _builder.test8_imm(vreg(cond), (uint64_t) 1);
+    }
+
+    void build_cmp_eq(Value* a, Value* b) {
+      if (dynmatch(Const, zero, b)) {
+        if (zero->value() == 0) {
+          if (dynmatch(AndInst, masked, a)) {
+            if (dynmatch(Const, mask, masked->arg(1))) {
+              if (type_size(a->type()) <= 4) {
+                _builder.test32_imm(vreg(masked->arg(0)), mask->value());
+                return;
+              } else if (is_sext_imm32(mask)) {
+                _builder.test64_imm(vreg(masked->arg(0)), mask->value());
+                return;
+              }
+            }
+          }
+        }
+      }
+      build_cmp(a, b);
+    }
+
     void build_cmp(Value* a, Value* b) {
       if (is_float(a->type())) {
         Reg bits_a = vreg();
@@ -847,7 +882,11 @@ namespace metajit {
         if (dynamic_cast<EqInst*>(pred_inst) ||
             dynamic_cast<LtSInst*>(pred_inst) ||
             dynamic_cast<LtUInst*>(pred_inst)) {
-          build_cmp(pred_inst->arg(0), pred_inst->arg(1));
+          if (dynamic_cast<EqInst*>(pred_inst)) {
+            build_cmp_eq(pred_inst->arg(0), pred_inst->arg(1));
+          } else {
+            build_cmp(pred_inst->arg(0), pred_inst->arg(1));
+          }
           if (dynamic_cast<EqInst*>(pred_inst)) {
             _builder.cmove64(res, then);
           } else if (dynamic_cast<LtSInst*>(pred_inst)) {
@@ -861,7 +900,7 @@ namespace metajit {
         }
       }
       
-      _builder.test8_imm(vreg(cond), (uint64_t) 1);
+      build_test(cond);
       _builder.cmovnz64(res, then);
     }
 
@@ -1060,6 +1099,39 @@ namespace metajit {
         }
 
         _builder.sub64(vreg(inst), vreg(sub->arg(1)));
+      } else if (dynmatch(MulHighUInst, mul, inst)) {
+        if (mul->type() != Type::Int64) {
+          Reg a = vreg();
+          Reg b = vreg();
+          switch (mul->type()) {
+            case Type::Int8:
+              _builder.movzx8to64(a, vreg(mul->arg(0)));
+              _builder.movzx8to64(b, vreg(mul->arg(1)));
+              break;
+            case Type::Int16:
+              _builder.movzx16to64(a, vreg(mul->arg(0)));
+              _builder.movzx16to64(b, vreg(mul->arg(1)));
+              break;
+            case Type::Int32:
+              _builder.mov32(a, vreg(mul->arg(0)));
+              _builder.mov32(b, vreg(mul->arg(1)));
+              break;
+            default:
+              assert(false && "Unsupported multiply type");
+          }
+          _builder.mov64(vreg(inst), a);
+          _builder.imul64(vreg(inst), b);
+          _builder.shr64_imm(vreg(inst), type_width(mul->type()));
+          return;
+        }
+
+        Reg rdx = fix_to_preg(vreg(), Reg::X86_RDX());
+        Reg rax = fix_to_preg(vreg(), Reg::X86_RAX());
+        _builder.mov64_imm(rdx, (uint64_t) 0);
+        _builder.mov64(rax, vreg(mul->arg(0)));
+        _builder.mul64(vreg(mul->arg(1)));
+        _builder.mov64(vreg(inst), rdx);
+        _builder.pseudo_use(rax);
       } else if (dynmatch(MulInst, mul, inst)) {
         _builder.mov64(vreg(inst), vreg(mul->arg(0)));
         _builder.imul64(vreg(inst), vreg(mul->arg(1)));
@@ -1215,7 +1287,11 @@ namespace metajit {
       } else if (dynamic_cast<EqInst*>(inst) ||
                  dynamic_cast<LtSInst*>(inst) ||
                  dynamic_cast<LtUInst*>(inst)) {
-        build_cmp(inst->arg(0), inst->arg(1));
+        if (dynamic_cast<EqInst*>(inst)) {
+          build_cmp_eq(inst->arg(0), inst->arg(1));
+        } else {
+          build_cmp(inst->arg(0), inst->arg(1));
+        }
         if (dynamic_cast<EqInst*>(inst)) {
           _builder.sete8(vreg(inst));
         } else if (dynamic_cast<LtSInst*>(inst)) {
@@ -1224,6 +1300,41 @@ namespace metajit {
           _builder.setb8(vreg(inst));
         } else {
           assert(false);
+        }
+      } else if (dynmatch(BitReverseInst, bit_reverse, inst)) {
+        Reg result = vreg(inst);
+        size_t width = type_width(inst->type());
+        _builder.mov64(result, vreg(bit_reverse->arg(0)));
+        if (width == 64) {
+          _builder.bswap64(result);
+        } else if (width > 8) {
+          _builder.bswap32(result);
+          if (width < 32) {
+            _builder.shr32_imm(result, 32 - width);
+          }
+        }
+        for (auto [shift, mask] : {std::pair<size_t, uint64_t>{4, 0x0f0f0f0f0f0f0f0full},
+                                  {2, 0x3333333333333333ull},
+                                  {1, 0x5555555555555555ull}}) {
+          mask &= type_mask(inst->type());
+          Reg other = vreg();
+          _builder.mov64(other, result);
+          _builder.shr64_imm(result, shift);
+          if (width == 64) {
+            Reg mask_reg = vreg();
+            _builder.mov64_imm64(mask_reg, mask);
+            _builder.and64(result, mask_reg);
+            _builder.and64(other, mask_reg);
+          } else {
+            _builder.and64_imm(result, mask);
+            _builder.and64_imm(other, mask);
+          }
+          if (shift <= 2) {
+            _builder.lea64(result, X86Inst::Mem(result, size_t(1) << shift, other, 0));
+          } else {
+            _builder.shl64_imm(other, shift);
+            _builder.or64(result, other);
+          }
         }
       } else if (dynmatch(PopcountInst, popcount, inst)) {
         switch (type_size(popcount->type())) {
@@ -1352,7 +1463,11 @@ namespace metajit {
           if (dynamic_cast<EqInst*>(pred_inst) ||
               dynamic_cast<LtSInst*>(pred_inst) ||
               dynamic_cast<LtUInst*>(pred_inst)) {
-            build_cmp(pred_inst->arg(0), pred_inst->arg(1));
+            if (dynamic_cast<EqInst*>(pred_inst)) {
+              build_cmp_eq(pred_inst->arg(0), pred_inst->arg(1));
+            } else {
+              build_cmp(pred_inst->arg(0), pred_inst->arg(1));
+            }
             if (dynamic_cast<EqInst*>(pred_inst)) {
               if (is_negated) {
                 _builder.jne(_blocks[true_block->name()]);
@@ -1379,7 +1494,7 @@ namespace metajit {
           }
         }
 
-        _builder.test8_imm(vreg(branch->cond()), (uint64_t) 1);
+        build_test(branch->cond());
         _builder.jne(_blocks[branch->true_block()->name()]);
         _builder.jmp(_blocks[branch->false_block()->name()]);
       } else if (dynmatch(JumpInst, jump, inst)) {
@@ -2276,10 +2391,35 @@ namespace metajit {
       }
     }
 
+    static std::optional<X86Inst::Kind> invert_branch(X86Inst::Kind kind) {
+      switch (kind) {
+        case X86Inst::Kind::JE: return X86Inst::Kind::JNE;
+        case X86Inst::Kind::JNE: return X86Inst::Kind::JE;
+        case X86Inst::Kind::JL: return X86Inst::Kind::JGE;
+        case X86Inst::Kind::JGE: return X86Inst::Kind::JL;
+        case X86Inst::Kind::JB: return X86Inst::Kind::JAE;
+        case X86Inst::Kind::JAE: return X86Inst::Kind::JB;
+        default: return std::nullopt;
+      }
+    }
+
     void peephole() {
       for (X86Block* block : _blocks) {
         for (auto it = block->begin(); it != block->end(); ) {
           X86Inst* inst = *it;
+
+          std::optional<X86Inst::Kind> inverted = invert_branch(inst->kind());
+          if (inverted &&
+              std::holds_alternative<X86Block*>(inst->imm()) &&
+              block->name() + 1 < _blocks.size() &&
+              std::get<X86Block*>(inst->imm()) == _blocks[block->name() + 1]) {
+            X86Inst* next = inst->next();
+            if (next && next->kind() == X86Inst::Kind::Jmp && !next->next()) {
+              inst->set_kind(*inverted);
+              inst->set_imm(next->imm());
+              block->insts().remove(next);
+            }
+          }
 
           if (((inst->kind() == X86Inst::Kind::Mov8Imm ||
                 inst->kind() == X86Inst::Kind::Mov32Imm ||

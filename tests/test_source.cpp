@@ -32,5 +32,12 @@ int main(int argc, char** argv) {
     .outputs({ Type::Int32 })
     .run();
 
+  for (const char* path : {"tests/source/bit_manipulation.o0.ll", "tests/source/bit_manipulation.o1.ll"}) {
+    suite.source_test(path)
+      .inputs({ RandomRange(Type::Int8), RandomRange(Type::Int16), RandomRange(Type::Int32), RandomRange(Type::Int64) })
+      .outputs({ Type::Int8, Type::Int16, Type::Int32, Type::Int64, Type::Int8, Type::Int16, Type::Int32, Type::Int64 })
+      .run();
+  }
+
   return suite.finish();
 }

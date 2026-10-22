@@ -19,6 +19,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Constants.h"
@@ -233,7 +234,11 @@ namespace metajit {
       } else if (llvm::ReturnInst* ret = llvm::dyn_cast<llvm::ReturnInst>(inst)) {
         return _builder.build_exit();
       } else if (llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(inst)) {
-        if (call->getCalledFunction() && call->getCalledFunction()->getName().starts_with("__metajit")) {
+        if (call->getIntrinsicID() == llvm::Intrinsic::bitreverse) {
+          return _builder.fold_bit_reverse(lower_operand(call->getArgOperand(0)));
+        } else if (call->getIntrinsicID() == llvm::Intrinsic::ctpop) {
+          return _builder.fold_popcount(lower_operand(call->getArgOperand(0)));
+        } else if (call->getCalledFunction() && call->getCalledFunction()->getName().starts_with("__metajit")) {
           llvm::StringRef name = call->getCalledFunction()->getName();
           std::vector<llvm::Value*> args;
           args.insert(args.end(), call->arg_begin(), call->arg_end());

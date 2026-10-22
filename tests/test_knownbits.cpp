@@ -1172,6 +1172,10 @@ int main(int argc, char** argv) {
     }
   });
 
+  suite.test("bit_reverse").run([]() {
+    unittest_assert(Bits(Type::Int8, 0xf0, 0xa0).bit_reverse() == Bits(Type::Int8, 0x0f, 0x05));
+  });
+
   test_add_example(suite);
   test_sub_example(suite);
   test_random(suite);

@@ -116,6 +116,14 @@ void static_select_omitted_arm(Builder& builder, TraceTestData& data) {
   }
 }
 
+void mul_high_u_promoted(Builder& builder, TraceTestData& data) {
+  Value* a = data.static_input(RandomRange(Type::Int64));
+  Value* b = data.input(RandomRange(Type::Int64));
+  data.output(builder.build_mul_high_u(a, a));
+  data.output(builder.build_mul_high_u(a, b));
+  data.output(builder.build_mul_high_u(b, b));
+}
+
 int main(int argc, char** argv) {
   LLVMCodeGen::initilize_llvm_jit();
 
@@ -125,6 +133,7 @@ int main(int argc, char** argv) {
     suite.set_record_replay(record_replay);
 
     suite.gen_ext_test("static_select_omitted_arm").samples(2, 4).run(static_select_omitted_arm);
+    suite.gen_ext_test("mul_high_u_promoted").samples(4, 16).run(mul_high_u_promoted);
 
     suite.gen_ext_test("captured_constant_block_argument").run(captured_constant_block_argument);
 
