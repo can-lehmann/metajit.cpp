@@ -800,16 +800,18 @@ namespace metajit {
       // Pure function of the arguments
       Pure = 1 << 0,
       Idempotent = 1 << 1,
+      Tail = 1 << 2,
     };
 
     using BaseFlags<CallFlags>::BaseFlags;
 
     constexpr static const char* NAMES[] = {
       "Pure",
-      "Idempotent"
+      "Idempotent",
+      "Tail"
     };
 
-    constexpr static size_t COUNT = 2;
+    constexpr static size_t COUNT = 3;
   };
 
   enum class CallConv {
@@ -6811,6 +6813,27 @@ private:
             arg->write_arg(errors);
             errors << "\n";
             return true;
+          }
+        }
+
+        if (dynmatch(CallInst, call, inst)) {
+          if (call->flags().has(CallFlags::Tail)) {
+            if (call->type() != Type::Void || call->call_conv() != CallConv::PreserveNone ||
+                call->flags().has(CallFlags::Pure) || call->flags().has(CallFlags::Idempotent) ||
+                !dynamic_cast<ExitInst*>(call->next())) {
+              errors << "Tail call requires an impure void PreserveNone call immediately followed by Exit\n";
+              return true;
+            }
+            if (call->arg_count() != entry()->args().size() + 1) {
+              errors << "Tail call argument count must match the entry signature\n";
+              return true;
+            }
+            for (size_t index = 0; index < entry()->args().size(); index++) {
+              if (call->arg(index + 1)->type() != entry()->arg(index)->type()) {
+                errors << "Tail call argument types must match the entry signature\n";
+                return true;
+              }
+            }
           }
         }
 
