@@ -565,6 +565,11 @@ shr_u_zero: ShrU(x, 0)
 shr_u_zero_value: ShrU(0, x)
     => 0
 
+shr_u_shl_equal: ShrU(Shl(x: T, C), C)
+    check C < width(T)
+    Cmask = -1 >> C
+    => And(x, Cmask)
+
 shr_u_constants: ShrU(C1: T, C2)
     check C2 < width(T)
     C = C1 >> C2

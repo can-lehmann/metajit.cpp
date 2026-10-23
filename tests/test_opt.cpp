@@ -881,6 +881,65 @@ b0(%0: Ptr, %1: Int64):
 )");
 }
 
+void test_fold_shr_u_shl_equal() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    for (uint64_t shift = 0; shift < type_width(type); shift++) {
+      Const* count = builder.build_const(type, shift);
+      Value* result = builder.fold_shr_u(builder.fold_shl(x, count), count);
+      if (shift == 0) {
+        unittest_assert(result == x);
+      } else {
+        AndInst* masked = dynamic_cast<AndInst*>(result);
+        unittest_assert(masked && masked->arg(0) == x);
+        check_const(masked->arg(1), type, type_mask(type) >> shift);
+      }
+    }
+    Const* invalid = builder.build_const(type, type_width(type));
+    unittest_assert(dynamic_cast<ShrUInst*>(builder.fold_shr_u(builder.build_shl(x, invalid), invalid)));
+    builder.build_exit();
+    unittest_assert(!section.verify(std::cout));
+  }
+}
+
+void test_simplify_shr_u_shl_equal() {
+  for (bool trace : {false, true}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({Type::Ptr, Type::Int8});
+    builder.move_to_end(block);
+    Value* x = block->arg(1);
+    Value* wide = builder.build_resize_x(x, Type::Int32);
+    Const* shift = builder.build_const(Type::Int32, 16);
+    Value* pair = builder.build_shr_u(builder.build_shl(wide, shift), shift);
+    StoreInst* truncated = builder.build_store(block->arg(0), builder.build_resize_x(pair, Type::Int8), 0, 0);
+    Value* zero_extended = builder.build_resize_u(x, Type::Int32);
+    Value* lossless = builder.build_shr_u(builder.build_shl(zero_extended, shift), shift);
+    StoreInst* unchanged = builder.build_store(block->arg(0), lossless, 0, 8);
+    builder.build_exit();
+    section.order_blocks(BlockOrdering::Dominator);
+    section.autoname();
+    if (trace) {
+      Chain chain;
+      chain.add(block);
+      SimplifyTrace::run(&section, &chain);
+    } else {
+      Simplify::run(&section, 3);
+    }
+    unittest_assert(truncated->value() == x);
+    unittest_assert(unchanged->value() == zero_extended);
+    unittest_assert(!section.verify(std::cout));
+  }
+}
+
 void test_builder_is_always_equal() {
   Context context;
   Allocator allocator;
@@ -2746,6 +2805,8 @@ int main(int argc, char** argv) {
   suite.test("fold or repeated operand").run(test_fold_or_repeated_operand);
   suite.test("fold unmasked shift pairs").run(test_fold_unmasked_shift_pairs);
   suite.test("fold shift pairs int64 boundaries").run(test_fold_shift_pairs_int64_boundaries);
+  suite.test("fold shr u shl equal").run(test_fold_shr_u_shl_equal);
+  suite.test("simplify shr u shl equal").run(test_simplify_shr_u_shl_equal);
   suite.test("builder is always equal").run(test_builder_is_always_equal);
   suite.test("fold equal constants factoring").run(test_fold_equal_constants_factoring);
   suite.test("fold equal constants absorption").run(test_fold_equal_constants_absorption);
