@@ -41,6 +41,13 @@ shr_u_shl_known_no_loss: ShrU(Shl(x: T, C), C)
     check known_zeros(x) | Cmask == -1
     => x
 
+shr_u_shl_known_no_loss_right: ShrU(Shl(x: T, C1), C2)
+    check C1 < C2 and C2 < width(T)
+    Cmask = -1 >> C1
+    check known_zeros(x) | Cmask == -1
+    Cshift = C2 - C1
+    => ShrU(x, Cshift)
+
 shr_s_shl_known_no_loss: ShrS(Shl(x: T, C), C)
     check C < width(T)
     Ctop = -1 << (width(T) - 1 - C)

@@ -993,6 +993,47 @@ void test_simplify_shr_u_shl_equal() {
   }
 }
 
+void test_simplify_shr_u_shl_known_no_loss_right() {
+  for (bool trace : {false, true}) {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      for (uint64_t left : {uint64_t(1), uint64_t(type_width(type) / 2), uint64_t(type_width(type) - 2)}) {
+        Context context;
+        Allocator allocator;
+        Section section(context, allocator);
+        Builder builder(&section);
+        Block* block = builder.build_block({Type::Ptr, type});
+        builder.move_to_end(block);
+        Value* x = builder.build_and(block->arg(1), builder.build_const(type, type_mask(type) >> left));
+        Value* shifted = builder.build_shl(x, builder.build_const(type, left));
+        StoreInst* shared = builder.build_store(block->arg(0), shifted, 0, 0);
+        Value* pair = builder.build_shr_u(shifted, builder.build_const(type, left + 1));
+        StoreInst* result = builder.build_store(block->arg(0), pair, 0, 8);
+        Inst* losing = builder.build_shr_u(builder.build_shl(block->arg(1), builder.build_const(type, left)),
+                                         builder.build_const(type, left + 1));
+        Inst* invalid = builder.build_shr_u(shifted, builder.build_const(type, type_width(type)));
+        builder.build_exit();
+        section.order_blocks(BlockOrdering::Dominator);
+        section.autoname();
+        KnownBits facts(&section);
+        unittest_assert(builder.try_simplify(losing, facts.view()) == nullptr);
+        unittest_assert(builder.try_simplify(invalid, facts.view()) == nullptr);
+        if (trace) {
+          Chain chain;
+          chain.add(block);
+          SimplifyTrace::run(&section, &chain);
+        } else {
+          Simplify::run(&section, 2);
+        }
+        ShrUInst* replacement = dynamic_cast<ShrUInst*>(result->value());
+        unittest_assert(replacement && replacement->arg(0) == x);
+        check_const(replacement->arg(1), type, 1);
+        unittest_assert(shared->value() == shifted);
+        unittest_assert(!section.verify(std::cout));
+      }
+    }
+  }
+}
+
 void test_builder_is_always_equal() {
   Context context;
   Allocator allocator;
@@ -2861,6 +2902,7 @@ int main(int argc, char** argv) {
   suite.test("fold shr u shl equal").run(test_fold_shr_u_shl_equal);
   suite.test("fold resize or shl").run(test_fold_resize_or_shl);
   suite.test("simplify shr u shl equal").run(test_simplify_shr_u_shl_equal);
+  suite.test("simplify shr u shl known no loss right").run(test_simplify_shr_u_shl_known_no_loss_right);
   suite.test("builder is always equal").run(test_builder_is_always_equal);
   suite.test("fold equal constants factoring").run(test_fold_equal_constants_factoring);
   suite.test("fold equal constants absorption").run(test_fold_equal_constants_absorption);
