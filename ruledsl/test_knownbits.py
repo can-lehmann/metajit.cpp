@@ -16,10 +16,10 @@ class KnownBitsTests(unittest.TestCase):
     def test_initial_rules_prove_at_all_widths(self):
         path = Path(__file__).with_name("simplify.rules")
         rules = prove(path.read_text(), str(path))
-        self.assertEqual(len(rules), 18)
+        self.assertEqual(len(rules), 19)
         self.assertTrue(all(rule.requires_facts for rule in rules))
         self.assertEqual([len(rule.instantiations) for rule in rules],
-                         [5, 5, 5, 4, 4, 5, 4, 5, 5, 4, 4, 4, 5, 5, 5, 10, 10, 10])
+                         [5, 5, 5, 4, 4, 5, 4, 5, 5, 4, 4, 4, 5, 5, 5, 10, 10, 10, 4])
 
     def test_masks_have_the_matched_type(self):
         rule, = check("mask: Or(x: T, 0)\n    C = known_zeros(x) | known_ones(x)\n    => C\n")

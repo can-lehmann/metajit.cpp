@@ -375,6 +375,54 @@ int main() {
             with self.subTest(statistics=statistics):
                 self.run_cpp(code, main, statistics)
 
+    def test_shr_u_or_known_zero(self):
+        source = Path(__file__).with_name("simplify.rules").read_text()
+        selected = [rule for rule in parse(source)
+                    if rule.name in {"shr_u_or_known_zero", "shr_u_shl_known_no_loss"}]
+        code = generate("", include_simplify=True,
+                        simplify_source="\n".join(source[rule.span.start:rule.span.end] for rule in selected))
+        self.run_cpp(code, """
+struct Facts {
+  Value* value;
+  uint64_t zeros;
+  uint64_t known_zeros(Value* operand) const { return operand == value ? zeros : 0; }
+};
+
+int main() {
+  Generated builder;
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(type), y(type);
+    for (uint64_t shift = 0; shift < type_width(type); ++shift) {
+      Const count(type, shift);
+      uint64_t zeros = (type_mask(type) << shift) & type_mask(type);
+      for (bool swapped : {false, true}) {
+        Inst* joined = swapped ? builder.build_or(&y, &x) : builder.build_or(&x, &y);
+        Inst* root = builder.build_shr_u(joined, &count);
+        ShrUInst* result = dynamic_cast<ShrUInst*>(builder.try_simplify(root, Facts{&x, zeros}));
+        assert(result && result->arg(0) == &y && result->arg(1) == &count);
+        unsigned before = builder.builds;
+        assert(builder.try_simplify(root, Facts{&x, zeros ^ (uint64_t(1) << shift)}) == nullptr);
+        assert(builder.try_simplify(root) == nullptr);
+        assert(builder.builds == before);
+      }
+    }
+    Const invalid(type, type_width(type));
+    Inst* root = builder.build_shr_u(builder.build_or(&x, &y), &invalid);
+    unsigned before = builder.builds;
+    assert(builder.try_simplify(root, Facts{&x, type_mask(type)}) == nullptr);
+    assert(builder.builds == before);
+  }
+  Value x(Type::Int32), condition(Type::Bool);
+  Value* low = builder.build_resize_u(&x, Type::Int64);
+  Value* high = builder.build_resize_u(&condition, Type::Int64);
+  Const count(Type::Int64, 32);
+  Inst* shifted = builder.build_shl(high, &count);
+  Inst* root = builder.build_shr_u(builder.build_or(low, shifted), &count);
+  Value* result = builder.try_simplify(root, Facts{low, UINT64_C(0xffffffff00000000)});
+  assert(result && builder.try_simplify((Inst*) result, Facts{high, UINT64_MAX ^ 1}) == high);
+}
+""")
+
     def test_migrated_select_and_resize_rules(self):
         facts_source = Path(__file__).with_name("simplify.rules").read_text()
         code = generate(RULES, include_simplify=True, simplify_source=facts_source)
