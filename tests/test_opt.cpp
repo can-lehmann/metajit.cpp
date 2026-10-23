@@ -881,6 +881,59 @@ b0(%0: Ptr, %1: Int64):
 )");
 }
 
+void check_resize_or_shl_result(Value* result, Value* input, Type type) {
+  ResizeUInst* resize = dynamic_cast<ResizeUInst*>(result);
+  unittest_assert(resize && resize->type() == type && resize->arg(0) == input);
+}
+
+void test_fold_resize_or_shl() {
+  for (Type source : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({source, source, Type::Bool});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    Value* y = block->arg(1);
+    for (bool reversed : {false, true}) {
+      Value* shifted = builder.build_shl(x, y);
+      Value* shared = builder.build_or(reversed ? shifted : x, reversed ? x : shifted);
+      check_resize_or_shl_result(builder.fold_resize_u(shared, Type::Bool), x, Type::Bool);
+      check_resize_or_shl_result(builder.fold_resize_x(shared, Type::Bool), x, Type::Bool);
+      Inst* root = builder.build_resize_u(shared, Type::Bool);
+      check_resize_or_shl_result(builder.try_simplify(root), x, Type::Bool);
+      Value* unrelated = builder.build_or(x, builder.build_shl(y, x));
+      ResizeUInst* retained = dynamic_cast<ResizeUInst*>(builder.fold_resize_u(unrelated, Type::Bool));
+      unittest_assert(retained && retained->arg(0) == unrelated);
+      for (Type target : {Type::Bool, Type::Int8, Type::Int16, Type::Int32}) {
+        if (type_width(target) >= type_width(source)) {
+          continue;
+        }
+        for (uint64_t count : {uint64_t(type_width(target) - 1), uint64_t(type_width(target)),
+                               uint64_t(type_width(source) - 1), uint64_t(type_width(source))}) {
+          Value* shifted_y = builder.build_shl(y, builder.build_const(source, count));
+          Value* combined = builder.build_or(reversed ? shifted_y : x, reversed ? x : shifted_y);
+          Value* result = builder.fold_resize_u(combined, target);
+          if (count >= type_width(target)) {
+            check_resize_or_shl_result(result, x, target);
+            Inst* truncation = builder.build_resize_u(combined, target);
+            check_resize_or_shl_result(builder.try_simplify(truncation), x, target);
+          } else {
+            ResizeUInst* resize = dynamic_cast<ResizeUInst*>(result);
+            unittest_assert(resize && resize->arg(0) == combined);
+          }
+        }
+      }
+    }
+    Value* extended = builder.build_resize_u(block->arg(2), source);
+    Value* original = builder.build_or(extended, builder.build_shl(extended, extended));
+    check_resize_or_shl_result(builder.fold_resize_u(original, Type::Bool), extended, Type::Bool);
+    builder.build_exit();
+    unittest_assert(!section.verify(std::cout));
+  }
+}
+
 void test_fold_shr_u_shl_equal() {
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -2806,6 +2859,7 @@ int main(int argc, char** argv) {
   suite.test("fold unmasked shift pairs").run(test_fold_unmasked_shift_pairs);
   suite.test("fold shift pairs int64 boundaries").run(test_fold_shift_pairs_int64_boundaries);
   suite.test("fold shr u shl equal").run(test_fold_shr_u_shl_equal);
+  suite.test("fold resize or shl").run(test_fold_resize_or_shl);
   suite.test("simplify shr u shl equal").run(test_simplify_shr_u_shl_equal);
   suite.test("builder is always equal").run(test_builder_is_always_equal);
   suite.test("fold equal constants factoring").run(test_fold_equal_constants_factoring);

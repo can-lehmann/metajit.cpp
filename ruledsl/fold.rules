@@ -446,6 +446,14 @@ resize_x_select: ResizeX(Select(c, C1: S, C2)): T
     Cfalse = bits(C2, T)
     => Select(c, Ctrue, Cfalse)
 
+resize_u_or_shl_bool: ResizeU(Or(x, Shl(x, y))): Bool
+    => ResizeU(x): Bool
+
+resize_u_or_shl_above_width: ResizeU(Or(x: S, Shl(y, C))): T
+    where width(T) < width(S)
+    check C >= width(T)
+    => ResizeU(x): T
+
 resize_u_sign_bit: ResizeU(ShrU(x: T, C)): Bool
     check C == width(T) - 1
     => LtS(x, 0)
