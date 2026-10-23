@@ -886,6 +886,43 @@ void check_resize_or_shl_result(Value* result, Value* input, Type type) {
   unittest_assert(resize && resize->type() == type && resize->arg(0) == input);
 }
 
+void test_fold_resize_add_even_bool() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    for (uint64_t constant : {uint64_t(0), uint64_t(2), uint64_t(42), type_mask(type) - 1,
+                              uint64_t(1), uint64_t(43), type_mask(type)}) {
+      for (bool reversed : {false, true}) {
+        Value* c = builder.build_const(type, constant);
+        Value* sum = builder.build_add(reversed ? c : x, reversed ? x : c);
+        Value* folded = builder.fold_resize_u(sum, Type::Bool);
+        ResizeUInst* normalized = dynamic_cast<ResizeUInst*>(builder.fold_resize_x(sum, Type::Bool));
+        unittest_assert(normalized);
+        Inst* root = builder.build_resize_u(sum, Type::Bool);
+        if ((constant & 1) == 0) {
+          ResizeUInst* resize = dynamic_cast<ResizeUInst*>(folded);
+          unittest_assert(resize && resize->arg(0) == x && resize->type() == Type::Bool);
+          unittest_assert(normalized->arg(0) == x);
+          ResizeUInst* replacement = dynamic_cast<ResizeUInst*>(builder.try_simplify(root));
+          unittest_assert(replacement && replacement->arg(0) == x && replacement->type() == Type::Bool);
+        } else {
+          ResizeUInst* resize = dynamic_cast<ResizeUInst*>(folded);
+          unittest_assert(resize && resize->arg(0) == sum);
+          unittest_assert(normalized->arg(0) == sum);
+          unittest_assert(builder.try_simplify(root) == nullptr);
+        }
+      }
+    }
+    builder.build_exit();
+    unittest_assert(!section.verify(std::cout));
+  }
+}
+
 void test_fold_resize_or_shl() {
   for (Type source : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     Context context;
@@ -2901,6 +2938,7 @@ int main(int argc, char** argv) {
   suite.test("fold shift pairs int64 boundaries").run(test_fold_shift_pairs_int64_boundaries);
   suite.test("fold shr u shl equal").run(test_fold_shr_u_shl_equal);
   suite.test("fold resize or shl").run(test_fold_resize_or_shl);
+  suite.test("fold resize add even bool").run(test_fold_resize_add_even_bool);
   suite.test("simplify shr u shl equal").run(test_simplify_shr_u_shl_equal);
   suite.test("simplify shr u shl known no loss right").run(test_simplify_shr_u_shl_known_no_loss_right);
   suite.test("builder is always equal").run(test_builder_is_always_equal);

@@ -388,6 +388,11 @@ select_nested_false: Select(c, x, Select(c, y, z))
 resize_u_identity: ResizeU(x: T): T
     => x
 
+resize_u_add_even_bool: ResizeU(Add(x, C)): Bool
+    # TODO: generalize via usedbits
+    check C & 1 == 0
+    => ResizeU(x): Bool
+
 resize_u_select: ResizeU(Select(c, C1: S, C2)): T
     Ctrue = bits(C1, T)
     Cfalse = bits(C2, T)
