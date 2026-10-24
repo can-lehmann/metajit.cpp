@@ -305,7 +305,7 @@ namespace metajit {
       }
       ptr = ptr.canonical();
       if (_group_ids.find(ptr) == _group_ids.end()) {
-        if (dynamic_cast<RecordLayout*>(ptr.layout) && ptr.layout->singleton()) {
+        if (dynamic_cast<RecordLayout*>(ptr.layout) && ptr.layout->singleton() && ptr.offset.has_value()) {
           _group_ids[ptr] = _next_exact_group--;
         } else {
           _group_ids[ptr] = _next_group++;
