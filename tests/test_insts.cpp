@@ -372,6 +372,15 @@ void test_alloca(DiffTestSuite& suite) {
 }
 
 void test_call(DiffTestSuite& suite) {
+  suite.diff_test("call_memory_update").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
+    Value* old = data.input(RandomRange(Type::Int32, 0, 0));
+    Value* ptr = builder.entry_arg(0);
+    Value* callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_default_void_store);
+    builder.build_call(callee, Type::Void, {ptr, old, old}, CallConv::Default);
+    builder.build_store(ptr, builder.build_add(old, builder.build_const(Type::Int32, 1)), AliasingGroup(0), 0);
+    data.output(builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(0), 0));
+  });
+
   suite.diff_test("call_preserve_none").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* a = data.input(Type::Int64);
     Value* b = data.input(Type::Int64);
