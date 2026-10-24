@@ -1143,61 +1143,56 @@ namespace metajit {
         Reg rdx = fix_to_preg(vreg(), Reg::X86_RDX());
         Reg rax = fix_to_preg(vreg(), Reg::X86_RAX());
 
-        if (dynamic_cast<DivSInst*>(inst) || dynamic_cast<ModSInst*>(inst)) {
-          if (inst->type() == Type::Int8) {
+        bool is_signed = dynamic_cast<DivSInst*>(inst) || dynamic_cast<ModSInst*>(inst);
+        Reg divisor;
+        if (inst->type() == Type::Int8) {
+          if (is_signed) {
             _builder.movsx8to64(rax, vreg(inst->arg(0)));
           } else {
-            _builder.mov64(rax, vreg(inst->arg(0)));
+            _builder.movzx8to64(rax, vreg(inst->arg(0)));
           }
 
-          switch (inst->type()) {
-            case Type::Int8: {
-              Reg divisor = vreg();
-              if (dynmatch(Const, constant_b, inst->arg(1))) {
-                _builder.mov16_imm(divisor, sign_extend_imm(constant_b));
-              } else {
-                _builder.movsx8to64(divisor, vreg(inst->arg(1)));
-              }
-              _builder.cwd(rdx);
-              _builder.idiv16(divisor);
-              break;
+          divisor = vreg();
+          if (dynmatch(Const, constant_b, inst->arg(1))) {
+            uint64_t value = constant_b->value();
+            if (is_signed) {
+              value = sign_extend_imm(constant_b);
             }
+            _builder.mov16_imm(divisor, value);
+          } else if (is_signed) {
+            _builder.movsx8to64(divisor, vreg(inst->arg(1)));
+          } else {
+            _builder.movzx8to64(divisor, vreg(inst->arg(1)));
+          }
+        } else {
+          _builder.mov64(rax, vreg(inst->arg(0)));
+          divisor = vreg(inst->arg(1));
+        }
+
+        if (is_signed) {
+          switch (inst->type()) {
+            case Type::Int8:
             case Type::Int16:
               _builder.cwd(rdx);
-              _builder.idiv16(vreg(inst->arg(1)));
+              _builder.idiv16(divisor);
             break;
             case Type::Int32:
               _builder.cdq(rdx);
-              _builder.idiv32(vreg(inst->arg(1)));
+              _builder.idiv32(divisor);
             break;
             case Type::Int64:
               _builder.cqo(rdx);
-              _builder.idiv64(vreg(inst->arg(1)));
+              _builder.idiv64(divisor);
             break;
             default: assert(false && "Unsupported type");
           }
         } else {
           _builder.mov64_imm(rdx, (uint64_t) 0);
-          if (inst->type() == Type::Int8) {
-            _builder.movzx8to64(rax, vreg(inst->arg(0)));
-          } else {
-            _builder.mov64(rax, vreg(inst->arg(0)));
-          }
-
           switch (inst->type()) {
-            case Type::Int8: {
-              Reg divisor = vreg();
-              if (dynmatch(Const, constant_b, inst->arg(1))) {
-                _builder.mov16_imm(divisor, constant_b->value());
-              } else {
-                _builder.movzx8to64(divisor, vreg(inst->arg(1)));
-              }
-              _builder.div16(divisor);
-              break;
-            }
-            case Type::Int16: _builder.div16(vreg(inst->arg(1))); break;
-            case Type::Int32: _builder.div32(vreg(inst->arg(1))); break;
-            case Type::Int64: _builder.div64(vreg(inst->arg(1))); break;
+            case Type::Int8:
+            case Type::Int16: _builder.div16(divisor); break;
+            case Type::Int32: _builder.div32(divisor); break;
+            case Type::Int64: _builder.div64(divisor); break;
             default: assert(false && "Unsupported type");
           }
         }
