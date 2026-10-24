@@ -906,6 +906,17 @@ namespace metajit {
       _builder.cmovnz64(res, then);
     }
 
+    std::pair<Value*, Value*> commutative_args(Inst* inst) {
+      Value* a = inst->arg(0);
+      Value* b = inst->arg(1);
+      if (inst->is_commutative() && a->is_named() && b->is_named() &&
+          !_vregs.at((NamedValue*) a).is_invalid() &&
+          _vregs.at((NamedValue*) b).is_invalid()) {
+        std::swap(a, b);
+      }
+      return {a, b};
+    }
+
     void isel(Inst* inst, Block* block) {
       if (dynmatch(FreezeInst, freeze, inst)) {
         move(vreg(inst), vreg(freeze->arg(0)));
@@ -1135,8 +1146,9 @@ namespace metajit {
         _builder.mov64(vreg(inst), rdx);
         _builder.pseudo_use(rax);
       } else if (dynmatch(MulInst, mul, inst)) {
-        _builder.mov64(vreg(inst), vreg(mul->arg(0)));
-        _builder.imul64(vreg(inst), vreg(mul->arg(1)));
+        auto [a, b] = commutative_args(inst);
+        _builder.mov64(vreg(inst), vreg(a));
+        _builder.imul64(vreg(inst), vreg(b));
       } else if (dynamic_cast<DivUInst*>(inst) ||
                  dynamic_cast<ModUInst*>(inst) ||
                  dynamic_cast<DivSInst*>(inst) ||
@@ -1207,38 +1219,41 @@ namespace metajit {
           _builder.pseudo_use(rdx);
         }
       } else if (dynmatch(AndInst, and_inst, inst)) {
-        _builder.mov64(vreg(inst), vreg(and_inst->arg(0)));
+        auto [a, b] = commutative_args(inst);
+        _builder.mov64(vreg(inst), vreg(a));
 
-        if (dynmatch(Const, constant_b, and_inst->arg(1))) {
+        if (dynmatch(Const, constant_b, b)) {
           if (is_sext_imm32(constant_b)) {
             _builder.and64_imm(vreg(inst), sign_extend_imm(constant_b));
             return;
           }
         }
 
-        _builder.and64(vreg(inst), vreg(and_inst->arg(1)));
+        _builder.and64(vreg(inst), vreg(b));
       } else if (dynmatch(OrInst, or_inst, inst)) {
-        _builder.mov64(vreg(inst), vreg(or_inst->arg(0)));
+        auto [a, b] = commutative_args(inst);
+        _builder.mov64(vreg(inst), vreg(a));
 
-        if (dynmatch(Const, constant_b, or_inst->arg(1))) {
+        if (dynmatch(Const, constant_b, b)) {
           if (is_sext_imm32(constant_b)) {
             _builder.or64_imm(vreg(inst), sign_extend_imm(constant_b));
             return;
           }
         }
 
-        _builder.or64(vreg(inst), vreg(or_inst->arg(1)));
+        _builder.or64(vreg(inst), vreg(b));
       } else if (dynmatch(XorInst, xor_inst, inst)) {
-        _builder.mov64(vreg(inst), vreg(xor_inst->arg(0)));
+        auto [a, b] = commutative_args(inst);
+        _builder.mov64(vreg(inst), vreg(a));
 
-        if (dynmatch(Const, constant_b, xor_inst->arg(1))) {
+        if (dynmatch(Const, constant_b, b)) {
           if (is_sext_imm32(constant_b)) {
             _builder.xor64_imm(vreg(inst), sign_extend_imm(constant_b));
             return;
           }
         }
 
-        _builder.xor64(vreg(inst), vreg(xor_inst->arg(1)));
+        _builder.xor64(vreg(inst), vreg(b));
       } else if (dynmatch(ShlInst, shl, inst)) {
         _builder.mov64(vreg(inst), vreg(shl->arg(0)));
 
@@ -1550,18 +1565,6 @@ namespace metajit {
               !_vregs.at(inst).is_invalid()) {
             
             _builder.move_before(_builder.block(), _builder.block()->first());
-
-            if (dynamic_cast<AndInst*>(inst) || dynamic_cast<OrInst*>(inst) ||
-                dynamic_cast<XorInst*>(inst) || dynamic_cast<MulInst*>(inst)) {
-              Value* a = inst->arg(0);
-              Value* b = inst->arg(1);
-              if (a->is_named() && b->is_named() &&
-                  !_vregs.at((NamedValue*) a).is_invalid() &&
-                  _vregs.at((NamedValue*) b).is_invalid()) {
-                inst->set_arg(0, b);
-                inst->set_arg(1, a);
-              }
-            }
             
             #ifdef METAJIT_DEBUG
             {

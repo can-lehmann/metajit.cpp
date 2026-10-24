@@ -756,7 +756,7 @@ int main(int argc, char** argv) {
     builder.section()->autoname();
     builder.section()->set_ordering(BlockOrdering::Natural);
     X86CodeGen codegen(builder.section(), {Reg::X86_RDI()});
-    unittest_assert(result->arg(0) == b && result->arg(1) == a);
+    unittest_assert(result->arg(0) == a && result->arg(1) == b);
   });
   suite.test("mul_high_u_semantics").run(mul_high_u_semantics);
   suite.diff_test("mul_high_u_boundaries").run(mul_high_u_boundaries);
