@@ -152,6 +152,9 @@ void test_div_mod(DiffTestSuite& suite) {
     suite.diff_test(#name "_" #type).run([](Builder& builder, TestData& data) { \
       Value* divisor = data.input(RandomRange(Type::type, 1, type_mask(Type::type))); \
       data.output(builder.build_##name(data.input(Type::type), divisor)); \
+    }); \
+    suite.diff_test(#name "_" #type "_imm").run([](Builder& builder, TestData& data) { \
+      data.output(builder.build_##name(data.input(Type::type), RandomRange(Type::type, 1, type_mask(Type::type)).gen_const(builder))); \
     });
 
   #define div_mod(name) \
