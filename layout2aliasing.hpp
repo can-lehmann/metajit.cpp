@@ -155,7 +155,7 @@ namespace metajit {
         layout(layout), offset(offset) {
         
         if (dynamic_cast<HeapLayout*>(layout) || dynamic_cast<ArrayLayout*>(layout)) {
-          offset = std::nullopt;
+          this->offset = std::nullopt;
         }
       }
      
