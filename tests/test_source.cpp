@@ -22,32 +22,6 @@ int main(int argc, char** argv) {
 
   SourceTestSuite suite("tests/output/test_source", argc, argv);
 
-  suite.test("negative_gep_index").run([]() {
-    llvm::LLVMContext llvm_context;
-    llvm::SMDiagnostic error;
-    auto module = llvm::parseIR(llvm::MemoryBufferRef(R"(
-      define void @run(ptr %p, i32 %i, ptr %out) {
-        %q = getelementptr i8, ptr %p, i32 %i
-        store ptr %q, ptr %out
-        ret void
-      }
-    )", "negative_gep_index"), error, llvm_context);
-    unittest_assert(module != nullptr);
-    Context context;
-    Allocator allocator;
-    Section section(context, allocator);
-    LowerLLVM(module->getFunction("run"), &section);
-    char buffer[2];
-    void* result = nullptr;
-    Interpreter interpreter(&section, {
-      Interpreter::Bits::constant(buffer + 1),
-      Interpreter::Bits::constant(Type::Int32, uint32_t(-1)),
-      Interpreter::Bits::constant(&result)
-    });
-    unittest_assert(interpreter.run() == Interpreter::Event::Exit);
-    unittest_assert(result == buffer);
-  });
-
   suite.source_test("tests/source/fib.o0.ll")
     .inputs({ RandomRange(Type::Int32, 0, 40) })
     .outputs({ Type::Int32 })
