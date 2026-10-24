@@ -108,6 +108,21 @@ int main(int argc, char** argv) {
     });
   }
 
+  suite.diff_test("jump_threading").run([](Builder& builder, TestData& data) {
+    Block* jump = builder.build_block();
+    Block* exit = builder.build_block();
+    builder.build_branch(data.input(Type::Bool), jump, exit);
+    builder.move_to_end(jump);
+    builder.build_jump(exit);
+    builder.move_to_end(exit);
+    builder.build_exit();
+    builder.section()->autoname();
+    X86CodeGen codegen(builder.section(), {Reg::X86_R12()});
+    std::ostringstream assembly;
+    codegen.write(assembly);
+    unittest_assert(assembly.str().find("jne imm=b2\n") != std::string::npos);
+  });
+
   suite.diff_test("branch").run([](Builder& builder, TestData& data) {
     Block* a = builder.build_block();
     Block* b = builder.build_block();

@@ -2422,6 +2422,20 @@ namespace metajit {
         for (auto it = block->begin(); it != block->end(); ) {
           X86Inst* inst = *it;
 
+          if (std::holds_alternative<X86Block*>(inst->imm())) {
+            for (size_t steps = 0; steps < _blocks.size(); steps++) {
+              X86Inst* jump = std::get<X86Block*>(inst->imm())->first();
+              while (jump && jump->kind() == X86Inst::Kind::Comment) {
+                jump = jump->next();
+              }
+              if (!jump || jump->next() || jump->kind() != X86Inst::Kind::Jmp ||
+                  jump->imm() == inst->imm()) {
+                break;
+              }
+              inst->set_imm(jump->imm());
+            }
+          }
+
           std::optional<X86Inst::Kind> inverted = invert_branch(inst->kind());
           if (inverted &&
               std::holds_alternative<X86Block*>(inst->imm()) &&
@@ -2432,6 +2446,7 @@ namespace metajit {
               inst->set_kind(*inverted);
               inst->set_imm(next->imm());
               block->insts().remove(next);
+              continue;
             }
           }
 
