@@ -333,6 +333,14 @@ void test_assume_const(DiffTestSuite& suite) {
 }
 
 void test_alloca(DiffTestSuite& suite) {
+  suite.diff_test("alloca_mixed_alignment").run([](Builder& builder, TestData& data) {
+    Value* byte_ptr = builder.build_alloca(Type::Int8);
+    Value* ptr = builder.build_alloca(Type::Int64);
+    builder.build_store(byte_ptr, data.input(Type::Int8), AliasingGroup(0), 0);
+    data.output(builder.build_load(byte_ptr, Type::Int8, LoadFlags::None, AliasingGroup(0), 0));
+    data.output(builder.build_and(builder.build_ptr_to_int(ptr, Type::Int64), builder.build_const(Type::Int64, 7)));
+  });
+
   for (Type type : {Type::Int32, Type::Int64, Type::Float32, Type::Float64}) {
     suite.diff_test(std::string("alloca_store_load_") + to_string(type)).run([=](Builder& builder, TestData& data) {
       Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, type_size(type)), type_size(type));
