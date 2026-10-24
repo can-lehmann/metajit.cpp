@@ -1211,34 +1211,58 @@ namespace metajit {
 
         if (dynmatch(Const, constant_b, and_inst->arg(1))) {
           if (is_sext_imm32(constant_b)) {
-            _builder.and64_imm(vreg(inst), sign_extend_imm(constant_b));
+            if (type_size(inst->type()) == 8) {
+              _builder.and64_imm(vreg(inst), sign_extend_imm(constant_b));
+            } else {
+              _builder.and32_imm(vreg(inst), sign_extend_imm(constant_b));
+            }
             return;
           }
         }
 
-        _builder.and64(vreg(inst), vreg(and_inst->arg(1)));
+        if (type_size(inst->type()) == 8) {
+          _builder.and64(vreg(inst), vreg(and_inst->arg(1)));
+        } else {
+          _builder.and32(vreg(inst), vreg(and_inst->arg(1)));
+        }
       } else if (dynmatch(OrInst, or_inst, inst)) {
         _builder.mov64(vreg(inst), vreg(or_inst->arg(0)));
 
         if (dynmatch(Const, constant_b, or_inst->arg(1))) {
           if (is_sext_imm32(constant_b)) {
-            _builder.or64_imm(vreg(inst), sign_extend_imm(constant_b));
+            if (type_size(inst->type()) == 8) {
+              _builder.or64_imm(vreg(inst), sign_extend_imm(constant_b));
+            } else {
+              _builder.or32_imm(vreg(inst), sign_extend_imm(constant_b));
+            }
             return;
           }
         }
 
-        _builder.or64(vreg(inst), vreg(or_inst->arg(1)));
+        if (type_size(inst->type()) == 8) {
+          _builder.or64(vreg(inst), vreg(or_inst->arg(1)));
+        } else {
+          _builder.or32(vreg(inst), vreg(or_inst->arg(1)));
+        }
       } else if (dynmatch(XorInst, xor_inst, inst)) {
         _builder.mov64(vreg(inst), vreg(xor_inst->arg(0)));
 
         if (dynmatch(Const, constant_b, xor_inst->arg(1))) {
           if (is_sext_imm32(constant_b)) {
-            _builder.xor64_imm(vreg(inst), sign_extend_imm(constant_b));
+            if (type_size(inst->type()) == 8) {
+              _builder.xor64_imm(vreg(inst), sign_extend_imm(constant_b));
+            } else {
+              _builder.xor32_imm(vreg(inst), sign_extend_imm(constant_b));
+            }
             return;
           }
         }
 
-        _builder.xor64(vreg(inst), vreg(xor_inst->arg(1)));
+        if (type_size(inst->type()) == 8) {
+          _builder.xor64(vreg(inst), vreg(xor_inst->arg(1)));
+        } else {
+          _builder.xor32(vreg(inst), vreg(xor_inst->arg(1)));
+        }
       } else if (dynmatch(ShlInst, shl, inst)) {
         _builder.mov64(vreg(inst), vreg(shl->arg(0)));
 
