@@ -12,7 +12,7 @@ COVERAGE_TESTS := test_knownbits test_insts test_interpreter test_clone test_cfg
 run: main
 	./main
 
-test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_code_sinking tests/test_simplify_trace tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
+test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_code_sinking tests/test_simplify_trace tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext tests/test_x86
 	./tests/test_knownbits
 	./tests/test_insts
 	./tests/test_interpreter
@@ -26,6 +26,7 @@ test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_cl
 	./tests/test_mem2reg
 	./tests/test_source
 	./tests/test_genext
+	./tests/test_x86
 
 fuzz: tests/fuzzer
 	./tests/fuzzer
@@ -62,6 +63,9 @@ tests/test_fuzzer: tests/test_fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 
 tests/test_cfg: tests/test_cfg.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
+
+tests/test_x86: tests/test_x86.cpp ${HEADER_FILES}
+	clang++ ${TEST_CFLAGS} -UMETAJIT_DEBUG -o $@ $<
 
 tests/test_opt: tests/test_opt.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
@@ -173,6 +177,7 @@ clean:
 	-rm tests/test_clone
 	-rm tests/test_fuzzer
 	-rm tests/test_cfg
+	-rm tests/test_x86
 	-rm tests/test_opt
 	-rm tests/test_code_sinking
 	-rm tests/test_simplify_trace
