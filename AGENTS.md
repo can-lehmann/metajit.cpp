@@ -71,11 +71,13 @@ metajit.cpp uses a generating extension for tracing.
 - Never edit any files in tests/output. They are just output files from the unit tests used to debug failing test cases. They are also not golden tests; in fact, they are ignored by Git.
 - metajit.cpp is a JIT compiler. This makes compile time a crucial metric to optimize for. Write performant compiler code and avoid allocations where possible.
 - Always try to keep changes scoped and reviewable. Attempt to build the minimal change needed to implement a feature or fix a bug, and avoid making unrelated formatting or refactoring changes in the same commit.
+- Use `git diff` to review changes and reduce the diff size by removing unnecessary changes.
 
 ## Testing
 
 Make automatically regenerates the JITIR headers.
 
+- When finding a minimal test case for a bug, reduce it as much as possible while preserving the bug reproduction.
 - You can run the entire test suite using `make test`.
 - You can run individual tests using `make tests/test_* && ./tests/test_*`.
 - You can run the fuzzer using `make fuzz`.
