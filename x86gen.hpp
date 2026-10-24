@@ -933,10 +933,14 @@ namespace metajit {
           _builder.mov64(vreg(inst), vreg(select->arg(2)));
           build_cmov(vreg(inst), select->cond(), vreg(select->arg(1)));
         }
-      } else if (dynmatch(ResizeUInst, resize_u, inst)) {
-        if (resize_u->arg(0)->type() == Type::Bool || resize_u->type() == Type::Bool) {
+      } else if (Inst* resize_u = inst; dynamic_cast<ResizeUInst*>(inst) ||
+                 (inst->type() == Type::Bool &&
+                  (dynamic_cast<ResizeSInst*>(inst) || dynamic_cast<ResizeXInst*>(inst)))) {
+        if (resize_u->type() == Type::Bool) {
           _builder.mov64(vreg(inst), vreg(resize_u->arg(0)));
-          _builder.and64_imm(vreg(inst), (uint64_t) 1);
+          if (resize_u->arg(0)->type() != Type::Bool) {
+            _builder.and32_imm8(vreg(inst), (uint64_t) 1);
+          }
         } else {
           switch (type_size(resize_u->arg(0)->type())) {
             case 1: _builder.movzx8to64(vreg(inst), vreg(resize_u->arg(0))); break;
@@ -949,10 +953,8 @@ namespace metajit {
         }
       } else if (dynmatch(ResizeSInst, resize_s, inst)) {
         if (resize_s->arg(0)->type() == Type::Bool) {
-          _builder.mov64_imm(vreg(inst), (uint64_t) 0);
-          Reg ones = vreg();
-          _builder.mov64_imm(ones, ~(uint64_t) 0);
-          build_cmov(vreg(inst), resize_s->arg(0), ones);
+          _builder.movzx8to64(vreg(inst), vreg(resize_s->arg(0)));
+          _builder.neg64(vreg(inst));
         } else {
           switch (type_size(resize_s->arg(0)->type())) {
             case 1: _builder.movsx8to64(vreg(inst), vreg(resize_s->arg(0))); break;
@@ -1062,10 +1064,6 @@ namespace metajit {
                 assert(false && "Unsupported store type");
             }
           }
-        }
-
-        if (store->arg(1)->type() == Type::Bool) {
-          _builder.and64_imm(vreg(store->arg(1)), (uint64_t) 1);
         }
 
         switch (type_size(store->arg(1)->type())) {
