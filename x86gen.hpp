@@ -1550,6 +1550,18 @@ namespace metajit {
               !_vregs.at(inst).is_invalid()) {
             
             _builder.move_before(_builder.block(), _builder.block()->first());
+
+            if (dynamic_cast<AndInst*>(inst) || dynamic_cast<OrInst*>(inst) ||
+                dynamic_cast<XorInst*>(inst) || dynamic_cast<MulInst*>(inst)) {
+              Value* a = inst->arg(0);
+              Value* b = inst->arg(1);
+              if (a->is_named() && b->is_named() &&
+                  !_vregs.at((NamedValue*) a).is_invalid() &&
+                  _vregs.at((NamedValue*) b).is_invalid()) {
+                inst->set_arg(0, b);
+                inst->set_arg(1, a);
+              }
+            }
             
             #ifdef METAJIT_DEBUG
             {

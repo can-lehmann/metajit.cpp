@@ -746,6 +746,18 @@ int main(int argc, char** argv) {
 
   DiffTestSuite suite("tests/output/test_insts", argc, argv);
 
+  suite.diff_test("commutative_operand_coalescing").run([](Builder& builder, TestData& data) {
+    Value* a = data.input(Type::Int64);
+    Value* b = data.input(Type::Int64);
+    Inst* result = builder.build_and(a, b);
+    data.output(result);
+    data.output(a);
+    builder.build_exit();
+    builder.section()->autoname();
+    builder.section()->set_ordering(BlockOrdering::Natural);
+    X86CodeGen codegen(builder.section(), {Reg::X86_RDI()});
+    unittest_assert(result->arg(0) == b && result->arg(1) == a);
+  });
   suite.test("mul_high_u_semantics").run(mul_high_u_semantics);
   suite.diff_test("mul_high_u_boundaries").run(mul_high_u_boundaries);
 
