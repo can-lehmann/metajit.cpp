@@ -206,7 +206,7 @@ namespace metajit {
             uint64_t offset = _data_layout.getStructLayout(it.getStructType())->getElementOffset(index);
             ptr = _builder.fold_add_ptr(ptr, _builder.build_const(Type::Int64, offset));
           } else {
-            Value* index = _builder.fold_resize_u(lower_operand(it.getOperand()), Type::Int64);
+            Value* index = _builder.fold_resize_s(lower_operand(it.getOperand()), Type::Int64);
             uint64_t stride = it.getSequentialElementStride(_data_layout).getFixedValue();
             if (stride != 1) {
               index = _builder.fold_mul(index, _builder.build_const(Type::Int64, stride));
