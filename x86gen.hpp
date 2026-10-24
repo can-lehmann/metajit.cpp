@@ -934,7 +934,7 @@ namespace metajit {
           build_cmov(vreg(inst), select->cond(), vreg(select->arg(1)));
         }
       } else if (dynmatch(ResizeUInst, resize_u, inst)) {
-        if (resize_u->arg(0)->type() == Type::Bool) {
+        if (resize_u->arg(0)->type() == Type::Bool || resize_u->type() == Type::Bool) {
           _builder.mov64(vreg(inst), vreg(resize_u->arg(0)));
           _builder.and64_imm(vreg(inst), (uint64_t) 1);
         } else {

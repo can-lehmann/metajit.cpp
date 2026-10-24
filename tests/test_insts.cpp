@@ -222,6 +222,15 @@ void test_resize(DiffTestSuite& suite) {
   
   resize(resize_u)
   resize(resize_s)
+
+  suite.diff_test("resize_u_to_bool_eq").run([](Builder& builder, TestData& data) {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      Value* result = builder.build_resize_u(data.input(RandomRange(type, 0, 7)), Type::Bool);
+      data.output(builder.build_eq(result, builder.build_const(Type::Bool, 0)));
+      data.output(builder.build_eq(result, builder.build_const(Type::Bool, 1)));
+      data.output(builder.build_eq(result, data.input(Type::Bool)));
+    }
+  });
 }
 
 static uint32_t test_call_default_void_slot = 0;
