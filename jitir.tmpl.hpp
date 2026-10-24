@@ -7577,9 +7577,17 @@ private:
     Section* _section = nullptr;
     NameMap<size_t> _alloca_index; // alloca name -> dense index, SIZE_MAX if not lowerable
     std::vector<AllocaInst*> _lowerable_allocas; // dense index -> alloca
+    std::vector<Type> _types;
     BlockMap<BlockData> _blocks;
     std::map<LoadInst*, Value*> _loads;
     Builder _builder;
+
+    bool matches_type(AllocaInst* alloca, Type type) {
+      size_t index = _alloca_index[alloca];
+      if (index == SIZE_MAX) return false;
+      if (_types[index] == Type::Void) _types[index] = type;
+      return _types[index] == type;
+    }
 
     void find_lowerable_allocas() {
       _alloca_index.init(_section);
@@ -7592,13 +7600,7 @@ private:
         }
       }
 
-      std::vector<Type> types(_lowerable_allocas.size(), Type::Void);
-      auto matches_type = [&](AllocaInst* alloca, Type type) {
-        size_t index = _alloca_index[alloca];
-        if (index == SIZE_MAX) return false;
-        if (types[index] == Type::Void) types[index] = type;
-        return types[index] == type;
-      };
+      _types.assign(_lowerable_allocas.size(), Type::Void);
 
       for (Block* block : *_section) {
         for (Inst* inst : *block) {
