@@ -82,6 +82,7 @@ x86_inst(Lea64, lea64, { use(rm); def(reg); }, true, { rex_w(); byte(0x8d); modr
 
 binop_x86_inst(Add64, add64, binop_usedef, true, { rex_w(); byte(0x03); modrm(); })
 binop_x86_inst(Sub64, sub64, binop_usedef, true, { rex_w(); byte(0x2b); modrm(); })
+unop_x86_inst(Neg64, neg64, imm_usedef, true, { reg = Reg::phys(3); rex_w(); byte(0xf7); modrm(); })
 binop_x86_inst(IMul64, imul64, binop_usedef, true, { rex_w(); byte(0x0f); byte(0xaf); modrm(); })
 unop_x86_inst(Mul64, mul64, { use(rm); }, true, { reg = Reg::phys(4); rex_w(); byte(0xf7); modrm(); })
 
