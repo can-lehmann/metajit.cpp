@@ -7592,19 +7592,27 @@ private:
         }
       }
 
+      std::vector<Type> types(_lowerable_allocas.size(), Type::Void);
+      auto matches_type = [&](AllocaInst* alloca, Type type) {
+        size_t index = _alloca_index[alloca];
+        if (index == SIZE_MAX) return false;
+        if (types[index] == Type::Void) types[index] = type;
+        return types[index] == type;
+      };
+
       for (Block* block : *_section) {
         for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst)) {
             if (dynmatch(AllocaInst, alloca, store->value())) {
               _alloca_index[alloca] = SIZE_MAX;
             } else if (dynmatch(AllocaInst, alloca, store->ptr())) {
-              if (store->offset() != 0) {
+              if (store->offset() != 0 || !matches_type(alloca, store->value()->type())) {
                 _alloca_index[alloca] = SIZE_MAX;
               }
             }
           } else if (dynmatch(LoadInst, load, inst)) {
             if (dynmatch(AllocaInst, alloca, load->ptr())) {
-              if (load->offset() != 0) {
+              if (load->offset() != 0 || !matches_type(alloca, load->type())) {
                 _alloca_index[alloca] = SIZE_MAX;
               }
             }
