@@ -1620,7 +1620,7 @@ namespace metajit {
       }
 
       size_t frame_size() const {
-        size_t size = _max_offset;
+        size_t size = _max_offset + align_pad(_max_offset, 8);
         if (_needs_call_alignment && (size % 16) != 8) {
           size += 8;
         }
