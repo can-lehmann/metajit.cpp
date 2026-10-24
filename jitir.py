@@ -228,8 +228,9 @@ class InstReadPlugin:
                     code += f"    LoadFlags {arg.name} = read_load_flags();\n"
                 elif arg.type == Type("CallFlags"):
                     code += f"    CallFlags {arg.name} = read_call_flags();\n"
-                elif arg.type == Type("AliasingGroup") or \
-                     arg.type == Type("uint64_t") or \
+                elif arg.type == Type("AliasingGroup"):
+                    code += f"    AliasingGroup {arg.name} = read_int32();\n"
+                elif arg.type == Type("uint64_t") or \
                      arg.type == Type("uint32_t") or \
                      arg.type == Type("size_t"):
                     code += f"    uint64_t {arg.name} = read_uint64();\n"
