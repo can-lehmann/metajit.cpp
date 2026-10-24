@@ -2958,6 +2958,24 @@ namespace metajit {
       }
     }
 
+    int32_t read_int32() {
+      skip_whitespace();
+      std::string int_str;
+      if (_stream.peek() == '-') {
+        int_str += get_char();
+      }
+      int_str += get_word();
+      try {
+        size_t end;
+        int64_t value = std::stoll(int_str, &end);
+        if (end == int_str.size() && value >= INT32_MIN && value <= INT32_MAX) {
+          return static_cast<int32_t>(value);
+        }
+      } catch (const std::exception& e) {
+      }
+      error("Invalid integer literal '" + int_str + "'");
+    }
+
     uint64_t read_uint64() {
       std::string int_str = get_word();
       try {
