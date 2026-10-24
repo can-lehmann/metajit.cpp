@@ -7584,8 +7584,12 @@ private:
 
     bool matches_type(AllocaInst* alloca, Type type) {
       size_t index = _alloca_index[alloca];
-      if (index == SIZE_MAX) return false;
-      if (_types[index] == Type::Void) _types[index] = type;
+      if (index == SIZE_MAX) {
+        return false;
+      }
+      if (_types[index] == Type::Void) {
+        _types[index] = type;
+      }
       return _types[index] == type;
     }
 
