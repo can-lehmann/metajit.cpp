@@ -701,8 +701,8 @@ namespace metajit {
         Reg reg = vreg(value->type());
         switch (constant->type()) {
           case Type::Bool:
-          case Type::Int8: _builder.mov8_imm(reg, constant->value()); break;
-          case Type::Int16: _builder.mov16_imm(reg, constant->value()); break;
+          case Type::Int8:
+          case Type::Int16:
           case Type::Int32: _builder.mov32_imm(reg, constant->value()); break;
           case Type::Int64:
           case Type::Ptr:
@@ -999,8 +999,8 @@ namespace metajit {
         X86Inst::Mem mem(vreg(load->arg(0)), load->offset());
         switch (load->type()) {
           case Type::Bool:
-          case Type::Int8: _builder.mov8(vreg(inst), mem); break;
-          case Type::Int16: _builder.mov16(vreg(inst), mem); break;
+          case Type::Int8: _builder.movzx8to64(vreg(inst), mem); break;
+          case Type::Int16: _builder.movzx16to64(vreg(inst), mem); break;
           case Type::Int32: _builder.mov32(vreg(inst), mem); break;
           case Type::Ptr:
           case Type::Int64: _builder.mov64(vreg(inst), mem); break;

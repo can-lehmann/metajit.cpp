@@ -342,6 +342,13 @@ void test_assume_const(DiffTestSuite& suite) {
 }
 
 void test_alloca(DiffTestSuite& suite) {
+  suite.diff_test("load_bool_noncanonical").run([](Builder& builder, TestData& data) {
+    Value* ptr = builder.build_alloca(Type::Int8);
+    builder.build_store(ptr, data.input(Type::Int8), AliasingGroup(0), 0);
+    Value* loaded = builder.build_load(ptr, Type::Bool, LoadFlags::None, AliasingGroup(0), 0);
+    data.output(builder.build_resize_u(loaded, Type::Int64));
+  });
+
   suite.diff_test("alloca_mixed_alignment").run([](Builder& builder, TestData& data) {
     Value* byte_ptr = builder.build_alloca(Type::Int8);
     Value* ptr = builder.build_alloca(Type::Int64);
