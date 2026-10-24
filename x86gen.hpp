@@ -2425,6 +2425,9 @@ namespace metajit {
           if (std::holds_alternative<X86Block*>(inst->imm())) {
             for (size_t steps = 0; steps < _blocks.size(); steps++) {
               X86Inst* jump = std::get<X86Block*>(inst->imm())->first();
+              while (jump && jump->kind() == X86Inst::Kind::Comment) {
+                jump = jump->next();
+              }
               if (!jump || jump->next() || jump->kind() != X86Inst::Kind::Jmp ||
                   jump->imm() == inst->imm()) {
                 break;

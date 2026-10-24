@@ -61,7 +61,7 @@ tests/test_fuzzer: tests/test_fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_cfg: tests/test_cfg.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
-	clang++ ${TEST_CFLAGS} -UMETAJIT_DEBUG -o $@ $<
+	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_opt: tests/test_opt.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
