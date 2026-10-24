@@ -625,9 +625,10 @@ namespace metajit {
     void memory_deps() {
       for (Block* block : *_section) {
         std::unordered_map<AliasingGroup, void*> last_store;
+        void* last_call = block;
         for (Inst* inst : *block) {
           #define find_dep(inst) \
-            void* dep = (void*) block; \
+            void* dep = last_call; \
             if (last_store.find(inst->aliasing()) != last_store.end()) { \
               dep = (void*) last_store.at(inst->aliasing()); \
             } \
@@ -640,6 +641,7 @@ namespace metajit {
             last_store[store->aliasing()] = store;
           } else if (dynamic_cast<CallInst*>(inst)) {
             _memory_deps[inst] = (void*) block;
+            last_call = inst;
             for (auto& [aliasing, dep] : last_store) {
               dep = (void*) inst;
             }
