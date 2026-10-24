@@ -740,6 +740,7 @@ namespace metajit {
       // For each output slot, check refinement:
       // before is NOT UB AND before result is NOT poison AND
       // (after result IS poison OR values differ)
+      z3::expr counterexample = z3_context.bool_val(false);
       for (const TVTestData::Output& output : data.outputs()) {
         ValueState ptr(Type::Ptr,
           data_ptr.value() + z3_context.bv_val(output.offset, type_width(Type::Ptr)),
@@ -749,13 +750,12 @@ namespace metajit {
         ValueState before_val = before_cg.exit_memory_state().load(ptr, output.type);
         ValueState after_val  = after_cg.exit_memory_state().load(ptr, output.type);
 
-        z3::expr counterexample =
+        counterexample = counterexample || (
           !before_cg.has_ub() &&
           !before_val.is_poison() &&
-          (after_val.is_poison() || before_val.value() != after_val.value());
-
-        solver.add(counterexample.simplify());
+          (after_val.is_poison() || before_val.value() != after_val.value()));
       }
+      solver.add(counterexample.simplify());
 
       z3::check_result result = solver.check();
       if (result == z3::sat) {
