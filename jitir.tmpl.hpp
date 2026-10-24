@@ -6599,6 +6599,7 @@ private:
 
         marks.push_back(_undo.size());
         ValidLoads valid_loads;
+        std::unordered_map<AliasingGroup, StoreInst*> last_stores;
 
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
@@ -6619,6 +6620,7 @@ private:
           }
 
           if (dynmatch(StoreInst, store, inst)) {
+            last_stores[store->aliasing()] = store;
             std::vector<LoadInst*> remaining_loads;
             for (LoadInst* load : valid_loads[store->aliasing()]) {
               if (could_alias(load, store)) {
@@ -6637,6 +6639,18 @@ private:
               }
             }
             valid_loads.clear();
+            last_stores.clear();
+          } else if (dynmatch(LoadInst, load, inst)) {
+            if (last_stores.find(load->aliasing()) != last_stores.end()) {
+              StoreInst* store = last_stores.at(load->aliasing());
+              if (load->type() == store->value()->type() &&
+                  (load->aliasing() < 0 ||
+                   (load->ptr() == store->ptr() && load->offset() == store->offset()))) {
+                substs[load] = store->value();
+                inst_it = inst_it.erase();
+                continue;
+              }
+            }
           }
 
           if (inst->has_side_effect() ||
@@ -7587,6 +7601,7 @@ private:
     };
 
     struct BlockData {
+      size_t original_arg_count = 0;
       BitVector live; // Live allocas at entry, one bit per alloca index
       std::vector<Value*> values_at_entry; // Values at entry, indexed by alloca index (nullptr = unknown)
       std::vector<Value*> values_at_exit;  // Values at exit, indexed by alloca index (nullptr = unknown)
@@ -7655,6 +7670,7 @@ private:
 
       // Initialize live/value vectors for all blocks
       for (Block* block : *_section) {
+        _blocks[block].original_arg_count = block->args().size();
         _blocks[block].live.assign(n, false);
         _blocks[block].values_at_entry.assign(n, nullptr);
         _blocks[block].values_at_exit.assign(n, nullptr);
@@ -7809,9 +7825,9 @@ private:
 
         _builder.add_args_to_terminator(block, [&](Block* target) {
           BlockData& target_data = _blocks[target];
-          std::vector<Value*> args;
+          std::vector<Value*> args(target_data.args.size());
           for (auto& [alloca, arg] : target_data.args) {
-            args.push_back(data.values_at_exit[_alloca_index[alloca]]);
+            args[arg->index() - target_data.original_arg_count] = data.values_at_exit[_alloca_index[alloca]];
           }
           return args;
         });

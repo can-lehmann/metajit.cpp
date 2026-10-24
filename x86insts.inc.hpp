@@ -108,11 +108,18 @@ rev_binop_x86_inst(Add64Mem, add64_mem, binop_usedef, true, { rex_w(); byte(0x01
 imm_binop_x86_inst(Add64Imm, add64_imm, imm_usedef, true, { reg = Reg::phys(0); rex_w(); byte(is_sext_imm8<int64_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int64_t>(imm.value()) ? 1 : 4); })
 imm_binop_x86_inst(Sub64Imm, sub64_imm, imm_usedef, true, { reg = Reg::phys(5); rex_w(); byte(is_sext_imm8<int64_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int64_t>(imm.value()) ? 1 : 4); })
 
+binop_x86_inst(And32, and32, binop_usedef, false, { rex_opt(); byte(0x23); modrm(); })
+binop_x86_inst(Or32, or32, binop_usedef, false, { rex_opt(); byte(0x0b); modrm(); })
+binop_x86_inst(Xor32, xor32, binop_usedef, false, { rex_opt(); byte(0x33); modrm(); })
+
 binop_x86_inst(And64, and64, binop_usedef, true, { rex_w(); byte(0x23); modrm(); })
 binop_x86_inst(Or64, or64, binop_usedef, true, { rex_w(); byte(0x0b); modrm(); })
 binop_x86_inst(Xor64, xor64, binop_usedef, true, { rex_w(); byte(0x33); modrm(); })
 
-imm_binop_x86_inst(And32Imm8, and32_imm8, imm_usedef, false, { reg = Reg::phys(4); rex_opt(); byte(0x83); modrm(); imm_n(1); })
+imm_binop_x86_inst(And32Imm, and32_imm, imm_usedef, false, { reg = Reg::phys(4); rex_opt(); byte(is_sext_imm8<int32_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int32_t>(imm.value()) ? 1 : 4); })
+imm_binop_x86_inst(Or32Imm, or32_imm, imm_usedef, false, { reg = Reg::phys(1); rex_opt(); byte(is_sext_imm8<int32_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int32_t>(imm.value()) ? 1 : 4); })
+imm_binop_x86_inst(Xor32Imm, xor32_imm, imm_usedef, false, { reg = Reg::phys(6); rex_opt(); byte(is_sext_imm8<int32_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int32_t>(imm.value()) ? 1 : 4); })
+
 imm_binop_x86_inst(And64Imm, and64_imm, imm_usedef, true, { reg = Reg::phys(4); rex_w(); byte(is_sext_imm8<int64_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int64_t>(imm.value()) ? 1 : 4); })
 imm_binop_x86_inst(Or64Imm, or64_imm, imm_usedef, true, { reg = Reg::phys(1); rex_w(); byte(is_sext_imm8<int64_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int64_t>(imm.value()) ? 1 : 4); })
 imm_binop_x86_inst(Xor64Imm, xor64_imm, imm_usedef, true, { reg = Reg::phys(6); rex_w(); byte(is_sext_imm8<int64_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int64_t>(imm.value()) ? 1 : 4); })
