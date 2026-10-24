@@ -7577,9 +7577,21 @@ private:
     Section* _section = nullptr;
     NameMap<size_t> _alloca_index; // alloca name -> dense index, SIZE_MAX if not lowerable
     std::vector<AllocaInst*> _lowerable_allocas; // dense index -> alloca
+    std::vector<Type> _types;
     BlockMap<BlockData> _blocks;
     std::map<LoadInst*, Value*> _loads;
     Builder _builder;
+
+    bool matches_type(AllocaInst* alloca, Type type) {
+      size_t index = _alloca_index[alloca];
+      if (index == SIZE_MAX) {
+        return false;
+      }
+      if (_types[index] == Type::Void) {
+        _types[index] = type;
+      }
+      return _types[index] == type;
+    }
 
     void find_lowerable_allocas() {
       _alloca_index.init(_section);
@@ -7592,19 +7604,21 @@ private:
         }
       }
 
+      _types.assign(_lowerable_allocas.size(), Type::Void);
+
       for (Block* block : *_section) {
         for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst)) {
             if (dynmatch(AllocaInst, alloca, store->value())) {
               _alloca_index[alloca] = SIZE_MAX;
             } else if (dynmatch(AllocaInst, alloca, store->ptr())) {
-              if (store->offset() != 0) {
+              if (store->offset() != 0 || !matches_type(alloca, store->value()->type())) {
                 _alloca_index[alloca] = SIZE_MAX;
               }
             }
           } else if (dynmatch(LoadInst, load, inst)) {
             if (dynmatch(AllocaInst, alloca, load->ptr())) {
-              if (load->offset() != 0) {
+              if (load->offset() != 0 || !matches_type(alloca, load->type())) {
                 _alloca_index[alloca] = SIZE_MAX;
               }
             }
