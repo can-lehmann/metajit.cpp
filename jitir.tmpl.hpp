@@ -3293,7 +3293,8 @@ namespace metajit {
         if (group.base == nullptr) {
           group.base = ptr;
           group.type = type;
-        } else if (group.base != ptr || group.type != type || offset % type_size(type) != 0) {
+        }
+        if (group.base != ptr || group.type != type || offset % type_size(type) != 0) {
           group.is_invalid = true;
         }
       }
