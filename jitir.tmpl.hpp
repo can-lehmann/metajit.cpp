@@ -6599,6 +6599,7 @@ private:
 
         marks.push_back(_undo.size());
         ValidLoads valid_loads;
+        std::unordered_map<AliasingGroup, StoreInst*> last_stores;
 
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
@@ -6619,6 +6620,7 @@ private:
           }
 
           if (dynmatch(StoreInst, store, inst)) {
+            last_stores[store->aliasing()] = store;
             std::vector<LoadInst*> remaining_loads;
             for (LoadInst* load : valid_loads[store->aliasing()]) {
               if (could_alias(load, store)) {
@@ -6637,6 +6639,18 @@ private:
               }
             }
             valid_loads.clear();
+            last_stores.clear();
+          } else if (dynmatch(LoadInst, load, inst)) {
+            if (last_stores.find(load->aliasing()) != last_stores.end()) {
+              StoreInst* store = last_stores.at(load->aliasing());
+              if (load->type() == store->value()->type() &&
+                  (load->aliasing() < 0 ||
+                   (load->ptr() == store->ptr() && load->offset() == store->offset()))) {
+                substs[load] = store->value();
+                inst_it = inst_it.erase();
+                continue;
+              }
+            }
           }
 
           if (inst->has_side_effect() ||
