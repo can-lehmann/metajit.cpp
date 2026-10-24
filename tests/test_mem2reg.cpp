@@ -140,6 +140,27 @@ int main(int argc, char** argv) {
     check_no_allocas(section);
   });
 
+  suite.opt_test("promoted_arg_order").run([](Builder& builder, TestData& data) {
+    AllocaInst* wide = builder.build_alloca(Type::Int64);
+    AllocaInst* narrow = builder.build_alloca(Type::Int8);
+    AllocaInst* first = std::min(wide, narrow, std::less<AllocaInst*>());
+    builder.block()->remove(first);
+    builder.block()->add(first);
+    Block* left = builder.build_block();
+    Block* right = builder.build_block();
+    Block* merge = builder.build_block({Type::Int64});
+    builder.build_branch(data.input(Type::Bool), left, right);
+    for (Block* block : {left, right}) {
+      builder.move_to_end(block);
+      builder.build_store(wide, data.input(Type::Int64), AliasingGroup(0), 0);
+      builder.build_store(narrow, data.input(Type::Int8), AliasingGroup(0), 0);
+      builder.build_jump(merge, {data.input(Type::Int64)});
+    }
+    builder.move_to_end(merge);
+    data.output(builder.build_load(wide, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+    data.output(builder.build_load(narrow, Type::Int8, LoadFlags::None, AliasingGroup(0), 0));
+  }, Mem2Reg::run<Section*>);
+
   suite.opt_test("nested_branch").run([](Builder& builder, TestData& data) {
     Block* true_block = builder.build_block();
     Block* false_block = builder.build_block();

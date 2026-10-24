@@ -7587,6 +7587,7 @@ private:
     };
 
     struct BlockData {
+      size_t original_arg_count = 0;
       BitVector live; // Live allocas at entry, one bit per alloca index
       std::vector<Value*> values_at_entry; // Values at entry, indexed by alloca index (nullptr = unknown)
       std::vector<Value*> values_at_exit;  // Values at exit, indexed by alloca index (nullptr = unknown)
@@ -7655,6 +7656,7 @@ private:
 
       // Initialize live/value vectors for all blocks
       for (Block* block : *_section) {
+        _blocks[block].original_arg_count = block->args().size();
         _blocks[block].live.assign(n, false);
         _blocks[block].values_at_entry.assign(n, nullptr);
         _blocks[block].values_at_exit.assign(n, nullptr);
@@ -7809,9 +7811,9 @@ private:
 
         _builder.add_args_to_terminator(block, [&](Block* target) {
           BlockData& target_data = _blocks[target];
-          std::vector<Value*> args;
+          std::vector<Value*> args(target_data.args.size());
           for (auto& [alloca, arg] : target_data.args) {
-            args.push_back(data.values_at_exit[_alloca_index[alloca]]);
+            args[arg->index() - target_data.original_arg_count] = data.values_at_exit[_alloca_index[alloca]];
           }
           return args;
         });
