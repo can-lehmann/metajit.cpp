@@ -1719,6 +1719,7 @@ namespace metajit {
         }
         if (dynmatch(OrInst, inner, a)) {
           if (dynmatch(Const, inner_constant, inner->arg(1))) {
+            // (x | c1) | c2 => x | (c1 | c2)
             uint64_t combined = inner_constant->value() | constant->value();
             if (combined == inner_constant->value()) {
               return inner;
@@ -4971,6 +4972,7 @@ namespace metajit {
               }
               if (dynmatch(OrInst, inner, or_inst->arg(0))) {
                 if (dynamic_cast<Const*>(inner->arg(1))) {
+                  // (x | c1) | c2 => x | (c1 | c2)
                   return _builder.fold_or(inner, b);
                 }
               }
@@ -4983,6 +4985,7 @@ namespace metajit {
                       uses.at(inner).front().inst == shl) {
                     for (size_t index = 0; index < 2; index++) {
                       if (dynmatch(Const, constant, inner->arg(index))) {
+                        // (x | c) << k => (x << k) | ((c << k) & type_mask), for single-use OR and k < width
                         uint64_t shifted = (constant->value() << shift->value()) & type_mask(shl->type());
                         return _builder.fold_or(_builder.fold_shl(inner->arg(1 - index), shift),
                                                 _builder.build_const(shl->type(), shifted));
