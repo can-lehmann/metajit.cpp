@@ -241,6 +241,9 @@ namespace metajit {
                 if (dynmatch(Const, constant, add_ptr->offset())) {
                   *ptr.offset += constant->value();
                 } else {
+                  if (dynamic_cast<RecordLayout*>(ptr.layout)) {
+                    throw std::runtime_error("Layout2Aliasing: Record layout requires a constant offset");
+                  }
                   ptr.offset = std::nullopt;
                 }
               }
@@ -262,6 +265,8 @@ namespace metajit {
               if (inst->type() == Type::Ptr) {
                 changed |= _pointers[inst].meet(at(inst->arg(0)));
               }
+            } else if (dynamic_cast<SelectInst*>(inst) && inst->type() == Type::Ptr) {
+              throw std::runtime_error("Layout2Aliasing: pointer Select is unsupported");
             }
           }
         }
