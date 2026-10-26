@@ -28,7 +28,6 @@ public:
   };
 
 private:
-  enum class BinaryKind { And, Or, Xor };
   enum class ResizeKind { Unsigned, Signed, Unknown };
   enum class ShiftKind { Left, RightUnsigned, RightSigned };
 
@@ -146,37 +145,96 @@ private:
       normalize(width);
     }
 
-    Mapping transfer_binary(const Mapping& right, Inst* inst, BinaryKind kind) const {
+    Mapping transfer_and(const Mapping& right, AndInst* inst) const {
       Mapping result;
       bool mixed = false;
       for (size_t i = 0; i < type_width(inst->type()); i++) {
         Bit a = bits[i], b = right.bits[i], bit = Unknown;
-        Value* source = nullptr;
+        Value* bit_source = nullptr;
         bool eq = same(a, this->source, b, right.source);
         bool opposite = same(a, this->source, invert(b), right.source);
-        if (kind == BinaryKind::And && (a == Zero || b == Zero || opposite)) {
+        if (a == Zero || b == Zero || opposite) {
           bit = Zero;
-        } else if (kind == BinaryKind::Or && (a == One || b == One || opposite)) {
-          bit = One;
-        } else if (kind == BinaryKind::Xor && eq) {
-          bit = Zero;
-        } else if (kind == BinaryKind::Xor && opposite) {
-          bit = One;
-        } else if (a == Zero || a == One) {
-          bit = kind == BinaryKind::Xor && a == One ? invert(b) : b;
-          source = right.source;
-        } else if (b == Zero || b == One) {
-          bit = kind == BinaryKind::Xor && b == One ? invert(a) : a;
-          source = this->source;
+        } else if (a == One) {
+          bit = b;
+          bit_source = right.source;
+        } else if (b == One) {
+          bit = a;
+          bit_source = this->source;
         } else if (eq) {
           bit = a;
-          source = this->source;
+          bit_source = this->source;
         } else if (a != Unknown && b != Unknown) {
           bit = i;
-          source = inst;
+          bit_source = inst;
         }
         result.bits[i] = bit;
-        collect_source(result.source, mixed, source, bit);
+        collect_source(result.source, mixed, bit_source, bit);
+      }
+      result.finish(inst, mixed);
+      return result;
+    }
+
+    Mapping transfer_or(const Mapping& right, OrInst* inst) const {
+      Mapping result;
+      bool mixed = false;
+      for (size_t i = 0; i < type_width(inst->type()); i++) {
+        Bit a = bits[i], b = right.bits[i], bit = Unknown;
+        Value* bit_source = nullptr;
+        bool eq = same(a, this->source, b, right.source);
+        bool opposite = same(a, this->source, invert(b), right.source);
+        if (a == One || b == One || opposite) {
+          bit = One;
+        } else if (a == Zero) {
+          bit = b;
+          bit_source = right.source;
+        } else if (b == Zero) {
+          bit = a;
+          bit_source = this->source;
+        } else if (eq) {
+          bit = a;
+          bit_source = this->source;
+        } else if (a != Unknown && b != Unknown) {
+          bit = i;
+          bit_source = inst;
+        }
+        result.bits[i] = bit;
+        collect_source(result.source, mixed, bit_source, bit);
+      }
+      result.finish(inst, mixed);
+      return result;
+    }
+
+    Mapping transfer_xor(const Mapping& right, XorInst* inst) const {
+      Mapping result;
+      bool mixed = false;
+      for (size_t i = 0; i < type_width(inst->type()); i++) {
+        Bit a = bits[i], b = right.bits[i], bit = Unknown;
+        Value* bit_source = nullptr;
+        bool eq = same(a, this->source, b, right.source);
+        bool opposite = same(a, this->source, invert(b), right.source);
+        if (eq) {
+          bit = Zero;
+        } else if (opposite) {
+          bit = One;
+        } else if (a == Zero) {
+          bit = b;
+          bit_source = right.source;
+        } else if (a == One) {
+          bit = invert(b);
+          bit_source = right.source;
+        } else if (b == Zero) {
+          bit = a;
+          bit_source = this->source;
+        } else if (b == One) {
+          bit = invert(a);
+          bit_source = this->source;
+        } else if (a != Unknown && b != Unknown) {
+          bit = i;
+          bit_source = inst;
+        }
+        result.bits[i] = bit;
+        collect_source(result.source, mixed, bit_source, bit);
       }
       result.finish(inst, mixed);
       return result;
@@ -334,14 +392,14 @@ private:
       return opaque(inst);
     }
     Mapping b = get(inst->arg(1));
-    if (dynamic_cast<AndInst*>(inst)) {
-      return a.transfer_binary(b, inst, BinaryKind::And);
+    if (AndInst* and_inst = dynamic_cast<AndInst*>(inst)) {
+      return a.transfer_and(b, and_inst);
     }
-    if (dynamic_cast<OrInst*>(inst)) {
-      return a.transfer_binary(b, inst, BinaryKind::Or);
+    if (OrInst* or_inst = dynamic_cast<OrInst*>(inst)) {
+      return a.transfer_or(b, or_inst);
     }
-    if (dynamic_cast<XorInst*>(inst)) {
-      return a.transfer_binary(b, inst, BinaryKind::Xor);
+    if (XorInst* xor_inst = dynamic_cast<XorInst*>(inst)) {
+      return a.transfer_xor(b, xor_inst);
     }
     uint64_t number = 0;
     if (dynamic_cast<ShlInst*>(inst) || dynamic_cast<ShrUInst*>(inst) ||
