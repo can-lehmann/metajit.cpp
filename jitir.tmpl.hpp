@@ -4828,6 +4828,15 @@ namespace metajit {
           Inst* inst = *inst_it;
           inst->substitute_args(substs);
 
+          if (inst->is_commutative() && inst->arg_count() == 2 &&
+              dynamic_cast<Const*>(inst->arg(0)) &&
+              !dynamic_cast<Const*>(inst->arg(1))) {
+            Value* constant = inst->arg(0);
+            inst->set_arg(0, inst->arg(1));
+            inst->set_arg(1, constant);
+            changed = true;
+          }
+
           _builder.move_before(block, inst);
           Value* subst = fn(inst);
           if (subst) {
