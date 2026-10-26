@@ -237,6 +237,11 @@ static uint32_t test_call_default_void_slot = 0;
 static uint64_t test_call_ptr_anchor = 0;
 
 extern "C" __attribute__((preserve_none, noinline))
+void test_call_must_tail_target(uint64_t* out) {
+  *out = 42;
+}
+
+extern "C" __attribute__((preserve_none, noinline))
 uint64_t test_call_preserve_none_target(uint64_t a, uint64_t b, uint64_t c) {
   return (a + b) ^ c;
 }
@@ -381,23 +386,10 @@ void test_alloca(DiffTestSuite& suite) {
 }
 
 void test_call(DiffTestSuite& suite) {
-  suite.test("call_must_tail").run([]() {
-    Context context;
-    Allocator allocator;
-    Section section(context, allocator);
-    Builder builder(&section);
-    builder.move_to_end(builder.build_block({Type::Ptr, Type::Ptr}));
-    auto target = +[](uint64_t* out) __attribute__((preserve_none)) {
-      *out = 42;
-    };
-    builder.build_call(builder.entry_arg(0), Type::Void, {builder.entry_arg(1)}, CallConv::PreserveNone, CallFlags::MustTail);
-    builder.build_exit();
-    OrderBlocks::run(&section, BlockOrdering::Natural);
-    X86CodeGen codegen(&section, {Reg::X86_R12(), Reg::X86_R13()});
-    using Function = void(* [[clang::preserve_none]])(void*, uint64_t*);
-    uint64_t result = 0;
-    reinterpret_cast<Function>(codegen.deploy())((void*) target, &result);
-    unittest_assert(result == 42);
+  suite.diff_test("call_must_tail").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
+    data.alloc_output(Type::Int64);
+    Value* callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_must_tail_target);
+    builder.build_call(callee, Type::Void, {builder.entry_arg(0)}, CallConv::PreserveNone, CallFlags::MustTail);
   });
 
   suite.diff_test("call_memory_update").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
