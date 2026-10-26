@@ -917,16 +917,17 @@ namespace metajit {
       if (dynmatch(EqInst, eq, value)) {
         build_cmp_eq(eq->arg(0), eq->arg(1));
         _builder.sete8(dst);
+        return true;
       } else if (dynmatch(LtSInst, lt_s, value)) {
         build_cmp(lt_s->arg(0), lt_s->arg(1));
         _builder.setl8(dst);
+        return true;
       } else if (dynmatch(LtUInst, lt_u, value)) {
         build_cmp(lt_u->arg(0), lt_u->arg(1));
         _builder.setb8(dst);
-      } else {
-        return false;
+        return true;
       }
-      return true;
+      return false;
     }
 
     void build_cmov(Reg res, Type type, Value* cond, Reg then) {
@@ -1096,8 +1097,10 @@ namespace metajit {
       } else if (dynmatch(StoreInst, store, inst)) {
         X86Inst::Mem mem(vreg(store->arg(0)), store->offset());
         if (store->arg(1)->type() == Type::Bool && store->arg(1)->is_named() &&
-            _use_counts.at((NamedValue*) store->arg(1)) == 1 && build_cmp_setcc(mem, store->arg(1))) {
-          return;
+            _use_counts.at((NamedValue*) store->arg(1)) == 1) {
+          if (build_cmp_setcc(mem, store->arg(1))) {
+            return;
+          }
         }
         
         switch (store->arg(1)->type()) {
