@@ -6837,15 +6837,6 @@ private:
   bool Section::verify(std::ostream& errors) {
     autoname();
 
-    bool has_alloca = false;
-    for (Block* block : *this) {
-      for (Inst* inst : *block) {
-        if (dynamic_cast<AllocaInst*>(inst)) {
-          has_alloca = true;
-        }
-      }
-    }
-
     std::optional<DominatorTree> dt;
     if (_ordering >= BlockOrdering::Dominator) {
       dt.emplace(this);
@@ -6922,10 +6913,6 @@ private:
 
         if (dynmatch(CallInst, call, inst)) {
           if (call->flags().has(CallFlags::MustTail)) {
-            if (has_alloca) {
-              errors << "Tail calls are not supported in sections containing Alloca\n";
-              return true;
-            }
             if (call->type() != Type::Void || call->call_conv() != CallConv::PreserveNone ||
                 call->flags().has(CallFlags::Pure) || call->flags().has(CallFlags::Idempotent) ||
                 !dynamic_cast<ExitInst*>(call->next())) {
