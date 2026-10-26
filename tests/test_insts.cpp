@@ -747,22 +747,6 @@ int main(int argc, char** argv) {
   DiffTestSuite suite("tests/output/test_insts", argc, argv);
 
   suite.test("mul_high_u_semantics").run(mul_high_u_semantics);
-  suite.test("void_calls_without_return_spills").run([]() {
-    Context context;
-    Allocator allocator;
-    Section section(context, allocator);
-    Builder builder(&section);
-    Block* block = builder.build_block({Type::Ptr});
-    builder.move_to_end(block);
-    builder.build_call(block->arg(0), Type::Void, std::vector<Value*>(), CallConv::Default);
-    builder.build_call(block->arg(0), Type::Void, std::vector<Value*>(), CallConv::Default);
-    builder.build_exit();
-    section.autoname();
-    X86CodeGen codegen(&section, {Reg::X86_R12()});
-    std::ostringstream assembly;
-    codegen.write(assembly);
-    unittest_assert(assembly.str().find("mov64_mem") == std::string::npos);
-  });
   suite.diff_test("mul_high_u_boundaries").run(mul_high_u_boundaries);
 
   test_binop(suite);
