@@ -393,6 +393,12 @@ on successful DSL rewrites, and commutative variants share one source-rule ID.
 With statistics disabled, the arrays and increments are omitted by the C++
 preprocessor. No runtime hook is required for counting.
 
+Define `METAJIT_DISABLE_RULEDSL` to disable generated rewrites for comparison
+tests. Folding entry points retain handwritten `_fold_*` fallbacks where
+registered and otherwise use raw `build_*` methods. The generated simplifier
+returns `nullptr` without constructing instructions. Rule proofs still run
+during header generation.
+
 ## Production integration
 
 `Builder::try_simplify(Inst*, const Facts&)` is shared by Simplify and SimplifyTrace.

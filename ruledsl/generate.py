@@ -1,7 +1,7 @@
 from .cpp import emit
 from . import ast
 from .lower import expression_nodes, lower
-from .matcher import build_matchers
+from .matcher import MatcherProgram, build_matchers
 from .optimize import optimize
 
 
@@ -20,8 +20,13 @@ def generate(source, filename="<string>", handwritten=(), timeout_ms=120000, inc
     operations = dict.fromkeys(node.name for checked in rules
                                for node in expression_nodes(checked.rule.replacement)
                                if isinstance(node, ast.Call))
-    code = emit(optimize(lower(build_matchers(rules, include_facts=False), handwritten, operations)))
+    matcher = build_matchers(rules, include_facts=False)
+    code = emit(optimize(lower(matcher, handwritten, operations)))
     if include_simplify:
         from .lower_simplify import lower as lower_simplify
         code += emit(optimize(lower_simplify(build_matchers(rules))), include_statistics=False)
-    return code
+    fallback = emit(optimize(lower(MatcherProgram((), {}), handwritten,
+                                   dict.fromkeys((*matcher.matchers, *operations)))))
+    if include_simplify:
+        fallback += emit(optimize(lower_simplify(MatcherProgram((), {}))), include_statistics=False)
+    return "#ifndef METAJIT_DISABLE_RULEDSL\n" + code + "#else\n" + fallback + "#endif\n"

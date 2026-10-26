@@ -483,6 +483,51 @@ class NativeCppTests(unittest.TestCase):
             raise unittest.SkipTest("a C++17 compiler is required for native emission tests")
         cls.code = generate(RULES, handwritten=("Add", "Sub"))
 
+    def test_disabled_rules_preserve_fallbacks(self):
+        rules = ("zero: Add(x, 0)\n    => x\n"
+                 "cancel: Xor(x, x)\n    => 0\n"
+                 "twice: Mul(x, 2)\n    => Shl(x, 1)\n")
+        fixture = Path(__file__).with_name("test_runtime.hpp")
+        for simplify in (False, True):
+            code = generate(rules, handwritten=("Add", "Sub"), include_simplify=simplify)
+            main = """
+int main() {
+  Generated builder;
+  Value x(Type::Int32);
+  Const zero(Type::Int32, 0), two(Type::Int32, 2);
+  AddInst* add = dynamic_cast<AddInst*>(builder.fold_add(&zero, &x));
+  assert(add && add->arg(0) == &x && add->arg(1) == &zero);
+  assert(dynamic_cast<SubInst*>(builder.fold_sub(&x, &x)));
+  assert(builder.handwritten_calls == 2);
+  assert(dynamic_cast<XorInst*>(builder.fold_xor(&x, &x)));
+  assert(dynamic_cast<MulInst*>(builder.fold_mul(&x, &two)));
+  assert(dynamic_cast<ShlInst*>(builder.fold_shl(&x, &two)));
+"""
+            if simplify:
+                main += """
+  unsigned builds = builder.builds;
+  assert(builder.try_simplify(add) == nullptr);
+  struct Facts {};
+  assert(builder.try_simplify(add, Facts{}) == nullptr);
+  assert(builder.builds == builds);
+"""
+            main += "}\n"
+            for statistics in (False, True):
+                with self.subTest(simplify=simplify, statistics=statistics), tempfile.TemporaryDirectory() as directory:
+                    source = Path(directory) / "disabled.cpp"
+                    executable = Path(directory) / "disabled"
+                    source.write_text(f'#include "{fixture}"\nstruct Generated: RawBuilder {{\n'
+                                      + code + "};\n" + main)
+                    command = [self.compiler, "-std=c++17", "-O1", "-Wall", "-Wextra", "-Werror",
+                               "-DMETAJIT_DISABLE_RULEDSL", "-fsanitize=undefined",
+                               "-fno-sanitize-recover=undefined", str(source), "-o", str(executable)]
+                    if statistics:
+                        command.append("-DMETAJIT_RULE_STATS")
+                    compiled = subprocess.run(command, capture_output=True, text=True, timeout=60)
+                    self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+                    executed = subprocess.run([str(executable)], capture_output=True, text=True, timeout=60)
+                    self.assertEqual(executed.returncode, 0, executed.stdout + executed.stderr)
+
     def test_constant_select_propagation_from_fold_rules(self):
         source = Path(__file__).with_name("fold.rules").read_text()
         names = {f"{name}_{form}" for name in ("add", "sub", "mul", "and", "or", "xor",
