@@ -617,6 +617,7 @@ namespace metajit {
     X86InstBuilder _builder;
 
     NameMap<void*> _memory_deps;
+    NameMap<size_t> _use_counts;
 
     NameMap<Reg> _vregs;
     lwir::Span<Reg> _input_vregs;
@@ -631,6 +632,11 @@ namespace metajit {
         std::unordered_map<AliasingGroup, void*> last_store;
         void* last_call = block;
         for (Inst* inst : *block) {
+          for (Value* arg : inst->args()) {
+            if (arg->is_named()) {
+              _use_counts[(NamedValue*) arg]++;
+            }
+          }
           #define find_dep(inst) \
             void* dep = last_call; \
             if (last_store.find(inst->aliasing()) != last_store.end()) { \
@@ -826,7 +832,18 @@ namespace metajit {
     }
 
     void build_test(Value* cond) {
-      if (dynmatch(ResizeXInst, resize, cond)) {
+      assert(cond->type() == Type::Bool);
+      if (dynmatch(AndInst, and_inst, cond)) {
+        if (_use_counts.at(and_inst) == 1) {
+          _builder.test8(vreg(and_inst->arg(0)), vreg(and_inst->arg(1)));
+          return;
+        }
+      } else if (dynmatch(XorInst, xor_inst, cond)) {
+        if (_use_counts.at(xor_inst) == 1) {
+          _builder.cmp8(vreg(xor_inst->arg(0)), vreg(xor_inst->arg(1)));
+          return;
+        }
+      } else if (dynmatch(ResizeXInst, resize, cond)) {
         if (dynmatch(ShrUInst, shift, resize->arg(0))) {
           if (dynmatch(Const, amount, shift->arg(1))) {
             if (amount->value() < 32 && amount->value() < type_width(shift->arg(0)->type())) {
@@ -2582,6 +2599,7 @@ namespace metajit {
       #endif
 
       _memory_deps.init(_section);
+      _use_counts.init(_section);
       _vregs.init(_section);
       _input_vregs = _builder.alloc_regs(_section->entry()->args().size());
 

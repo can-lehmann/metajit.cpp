@@ -159,6 +159,7 @@ imm_binop_x86_inst(Cmp16Imm, cmp16_imm, cmp_imm_usedef, false, { reg = Reg::phys
 imm_binop_x86_inst(Cmp32Imm, cmp32_imm, cmp_imm_usedef, false, { reg = Reg::phys(7); rex_opt(); byte(is_sext_imm8<int32_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int32_t>(imm.value()) ? 1 : 4); })
 imm_binop_x86_inst(Cmp64Imm, cmp64_imm, cmp_imm_usedef, true, { reg = Reg::phys(7); rex_w(); byte(is_sext_imm8<int64_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int64_t>(imm.value()) ? 1 : 4); })
 
+binop_x86_inst(Test8, test8, cmp_usedef, false, { rex(); byte(0x84); modrm(); })
 binop_x86_inst(Test64, test64, cmp_usedef, true, { rex_w(); byte(0x85); modrm(); })
 imm_binop_x86_inst(Test8Imm, test8_imm, cmp_imm_usedef, false, { reg = Reg::phys(0); rex(); byte(0xf6); modrm(); imm_n(1); })
 
