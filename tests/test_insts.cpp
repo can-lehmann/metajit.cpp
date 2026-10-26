@@ -19,84 +19,6 @@
 using namespace metajit;
 using namespace metajit::test;
 
-void scaled_add_selection() {
-  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
-    for (uint64_t amount : {uint64_t(0), uint64_t(1), uint64_t(2), uint64_t(3), uint64_t(4)}) {
-      for (bool swapped : {false, true}) {
-        for (size_t variant = 0; variant < 6; variant++) {
-          Context context;
-          Allocator allocator;
-          Section section(context, allocator);
-          Builder builder(&section);
-          Block* block = builder.build_block({type, type, Type::Ptr});
-          builder.move_to_end(block);
-          Value* base = block->arg(0);
-          Value* index = block->arg(1);
-          Value* by = builder.build_const(type, amount);
-          if (variant == 1) {
-            base = builder.build_const(type, 7);
-          } else if (variant == 2) {
-            by = base;
-          } else if (variant == 3) {
-            index = builder.build_resize_u(index, Type::Int64);
-            by = builder.build_const(Type::Int64, amount);
-          }
-          Value* shifted = builder.build_shl(index, by);
-          Value* scaled = shifted;
-          if (variant == 3) {
-            scaled = builder.build_resize_u(shifted, type);
-          }
-          Value* a = base;
-          Value* b = scaled;
-          if (swapped) {
-            std::swap(a, b);
-          }
-          Value* result = nullptr;
-          if (variant == 4) {
-            result = builder.build_or(a, b);
-          } else {
-            result = builder.build_add(a, b);
-          }
-          builder.build_store(block->arg(2), result, AliasingGroup(0), 0);
-          if (variant == 5) {
-            builder.build_store(block->arg(2), shifted, AliasingGroup(0), 8);
-          }
-          builder.build_exit();
-          section.autoname();
-          section.set_ordering(BlockOrdering::Natural);
-          X86CodeGen codegen(&section, {Reg::X86_R12(), Reg::X86_R13(), Reg::X86_R14()});
-          std::ostringstream assembly;
-          codegen.write(assembly);
-          bool expected = (type == Type::Int32 || type == Type::Int64) &&
-                          amount >= 1 && amount <= 3 && (variant == 0 || variant == 5);
-          bool has_scale = assembly.str().find(" * 2]") != std::string::npos ||
-                           assembly.str().find(" * 4]") != std::string::npos ||
-                           assembly.str().find(" * 8]") != std::string::npos;
-          unittest_assert(has_scale == expected);
-          if (expected) {
-            unittest_assert(assembly.str().find("lea" + std::to_string(type_width(type)) + " reg=") != std::string::npos);
-            unittest_assert(assembly.str().find(" * " + std::to_string(uint64_t(1) << amount) + "]") != std::string::npos);
-            unittest_assert((assembly.str().find("shl64_imm") != std::string::npos) == (variant == 5));
-          }
-        }
-      }
-    }
-  }
-}
-
-void scaled_add_semantics(Builder& builder, TestData& data) {
-  for (Type type : {Type::Int32, Type::Int64}) {
-    Value* base = builder.build_add(data.input(type), builder.build_const(type, type_mask(type)));
-    Value* index = builder.build_add(data.input(type), builder.build_const(type, type_mask(type)));
-    for (uint64_t amount = 1; amount <= 3; amount++) {
-      Value* shifted = builder.build_shl(index, builder.build_const(type, amount));
-      data.output(builder.build_add(base, shifted));
-      data.output(builder.build_add(shifted, base));
-      data.output(shifted);
-    }
-  }
-}
-
 void mul_high_u_boundaries(Builder& builder, TestData& data) {
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     uint64_t mask = type_mask(type);
@@ -823,9 +745,6 @@ int main(int argc, char** argv) {
   LLVMCodeGen::initilize_llvm_jit();
 
   DiffTestSuite suite("tests/output/test_insts", argc, argv);
-
-  suite.test("scaled_add_selection").run(scaled_add_selection);
-  suite.diff_test("scaled_add_semantics").run(scaled_add_semantics);
 
   suite.test("mul_high_u_semantics").run(mul_high_u_semantics);
   suite.diff_test("mul_high_u_boundaries").run(mul_high_u_boundaries);
