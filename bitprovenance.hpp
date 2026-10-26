@@ -22,12 +22,31 @@ namespace metajit {
 
 class BitProvenance: public Pass<BitProvenance> {
 private:
+  // provenance of a single bit. 0-63 encode a position in source.
+  // 64-127 encode the inverse of a bit in source.
+  // Zero (=128) and One (=129) encode a constant bit
+  // Unknown (=130) carries no provenance, all Unknown bits are potentially
+  // different from other Unknown bits.
+  // Invalid (=131) in bits[0] marks an invalid mapping.
   typedef uint8_t Bit;
 
   static constexpr Bit Zero = 128;
   static constexpr Bit One = 129;
   static constexpr Bit Unknown = 130;
   static constexpr Bit Invalid = 131;
+
+  static bool reference(Bit bit) { return bit < Zero; }
+
+  static Bit invert(Bit bit) {
+    if (reference(bit)) {
+      return bit ^ 64;
+    }
+    return bit == Zero ? One : bit == One ? Zero : Unknown;
+  }
+
+  static bool same(Bit a, Value* as, Bit b, Value* bs) {
+    return a != Unknown && b != Unknown && a == b && (!reference(a) || as == bs);
+  }
 
   struct Mapping {
     Value* source = nullptr;
@@ -354,18 +373,6 @@ private:
   std::unordered_map<Key, Value*, Hash> _available;
   std::unordered_map<Value*, std::vector<Value*>> _candidates;
   static constexpr size_t MaxCandidatesPerSourceType = 4;
-  static bool reference(Bit bit) { return bit < Zero; }
-
-  static Bit invert(Bit bit) {
-    if (reference(bit)) {
-      return bit ^ 64;
-    }
-    return bit == Zero ? One : bit == One ? Zero : Unknown;
-  }
-
-  static bool same(Bit a, Value* as, Bit b, Value* bs) {
-    return a != Unknown && b != Unknown && a == b && (!reference(a) || as == bs);
-  }
 
   static Mapping opaque(Value* value) {
     Mapping result;
