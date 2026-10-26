@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "../bitprovenance.hpp"
 #include "../../unittest.cpp/unittest.hpp"
 
@@ -251,13 +252,8 @@ void test_first_four_keeps_equivalence() {
   unittest_assert(!section.verify(std::cerr));
 }
 
-uint64_t provenance_random(uint64_t& state) {
-  state = state * 6364136223846793005ull + 1442695040888963407ull;
-  return state;
-}
-
 void test_random_execution() {
-  uint64_t state = 1234567;
+  srand(1234567);
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     for (size_t sample = 0; sample < 20; sample++) {
       Context context;
@@ -268,10 +264,10 @@ void test_random_execution() {
       builder.move_to_end(block);
       std::vector<Value*> values = {block->arg(1), block->arg(2)};
       for (size_t i = 0; i < 64; i++) {
-        Value* a = values[provenance_random(state) % values.size()];
-        Value* b = values[provenance_random(state) % values.size()];
-        Const* shift = builder.build_const(type, provenance_random(state) % type_width(type));
-        switch (provenance_random(state) % 10) {
+        Value* a = values[rand() % values.size()];
+        Value* b = values[rand() % values.size()];
+        Const* shift = builder.build_const(type, rand() % type_width(type));
+        switch (rand() % 10) {
           case 0: values.push_back(builder.build_and(a, b)); break;
           case 1: values.push_back(builder.build_or(a, b)); break;
           case 2: values.push_back(builder.build_xor(a, b)); break;
@@ -288,8 +284,11 @@ void test_random_execution() {
       builder.build_exit();
       section.order_blocks(BlockOrdering::Natural);
       uint64_t before[16] = {}, after[16] = {};
-      uint64_t a = provenance_random(state) & type_mask(type);
-      uint64_t b = provenance_random(state) & type_mask(type);
+      uint64_t a = 0, b = 0;
+      for (size_t i = 0; i < type_size(type); i++) {
+        a |= uint64_t(rand() & 0xff) << (i * 8);
+        b |= uint64_t(rand() & 0xff) << (i * 8);
+      }
       Interpreter original(&section, {Interpreter::Bits::constant(before), Interpreter::Bits::constant(type, a), Interpreter::Bits::constant(type, b)});
       unittest_assert(original.run() == Interpreter::Event::Exit);
       BitProvenance::run(&section, Chain({block}));
