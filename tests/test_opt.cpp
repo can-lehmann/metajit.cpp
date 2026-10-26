@@ -2105,6 +2105,20 @@ int main(int argc, char** argv) {
   suite.test("cse commutative operands").run(test_cse_commutative_operands);
   suite.test("cse ordered operands").run(test_cse_ordered_operands);
   suite.test("cse commutative after substitution").run(test_cse_commutative_after_substitution);
+  suite.test("cse store load forwarding").run([]() {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    builder.move_to_end(builder.build_block({Type::Ptr, Type::Int32}));
+    builder.build_store(builder.entry_arg(0), builder.entry_arg(1), 1, 8);
+    Value* load = builder.build_load(builder.entry_arg(0), Type::Int32, {}, 1, 8);
+    StoreInst* output = builder.build_store(builder.entry_arg(0), load, 1, 0);
+    builder.build_exit();
+    section.order_blocks(BlockOrdering::Dominator);
+    CommonSubexprElim::run(&section);
+    unittest_assert(output->value() == builder.entry_arg(1));
+  });
   suite.test("cse pure loads across guards and calls").run(test_cse_pure_loads_across_guards);
   suite.test("fold xor same operand").run(test_fold_xor_same_operand);
   suite.test("fold lt_u same operand").run(test_fold_lt_u_same_operand);
@@ -3116,9 +3130,8 @@ b0(%0: Ptr):
   Store %1, 1:Int64, aliasing=0, offset=0
   Store %2, 2:Int64, aliasing=0, offset=0
   %5 = Load %1, type=Int64, flags={}, aliasing=0, offset=0
-  %6 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
-  %7 = Add %5, %6
-  Store %0, %7, aliasing=0, offset=0
+  %6 = Add %5, 2:Int64
+  Store %0, %6, aliasing=0, offset=0
   Exit
 }
 )", section);
@@ -3245,16 +3258,14 @@ b3:
 b0(%0: Bool, %1: Ptr):
   %2 = Alloca 8:Int64, align=8
   Store %2, 1:Int64, aliasing=0, offset=0
-  %4 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
   Branch %0, true_block=b1, false_block=b2
 b1:
   Store %2, 2:Int64, aliasing=0, offset=0
-  %7 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
-  Store %1, %7, aliasing=0, offset=0
+  Store %1, 2:Int64, aliasing=0, offset=0
   Jump block=b3
 b2:
-  %10 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
-  Store %1, %10, aliasing=0, offset=0
+  %8 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
+  Store %1, %8, aliasing=0, offset=0
   Jump block=b3
 b3:
   Exit
@@ -3302,16 +3313,15 @@ b3:
 b0(%0: Bool, %1: Ptr):
   %2 = Alloca 8:Int64, align=8
   Store %2, 1:Int64, aliasing=0, offset=0
-  %4 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
   Branch %0, true_block=b1, false_block=b2
 b1:
   Call @cse_call_invalidation_target:Ptr, type=Void, call_conv=Default, flags={}
-  %7 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
-  Store %1, %7, aliasing=0, offset=0
+  %6 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
+  Store %1, %6, aliasing=0, offset=0
   Jump block=b3
 b2:
-  %10 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
-  Store %1, %10, aliasing=0, offset=0
+  %9 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
+  Store %1, %9, aliasing=0, offset=0
   Jump block=b3
 b3:
   Exit
