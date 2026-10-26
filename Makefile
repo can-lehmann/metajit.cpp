@@ -45,6 +45,9 @@ tests/ubsan/%: tests/%.cpp ${HEADER_FILES} ${TEST_HEADER_FILES} Makefile
 main: main.cpp ${HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
 
+tests/test_bitprovenance: tests/test_bitprovenance.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${TEST_CFLAGS} -o $@ $<
+
 tests/test_knownbits: tests/test_knownbits.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
