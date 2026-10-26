@@ -2045,23 +2045,6 @@ namespace metajit {
 
             it = it.erase();
             continue;
-          } else if (is_reg_mov(inst) &&
-                     _vreg_info[inst->reg().id()].fixed.is_physical() &&
-                     _vreg_info[inst->reg().id()].fixed == _vreg_info[std::get<Reg>(inst->rm()).id()].fixed) {
-            Reg src = std::get<Reg>(inst->rm());
-            Reg dst = inst->reg();
-            VRegInfo& src_info = _vreg_info[src.id()];
-            VRegInfo& dst_info = _vreg_info[dst.id()];
-            Reg preg = dst_info.fixed;
-            if (src_info.current_reg != preg) {
-              spill_and_unspill(reg_file, preg, src, false, false);
-            }
-            spill(reg_file, preg, false);
-            dst_info.current_reg = preg;
-            reg_file.set(preg, dst);
-            reg_file.touch(preg);
-            it = it.erase();
-            continue;
           } else if (inst->kind() == X86Inst::Kind::Call || inst->kind() == X86Inst::Kind::TailJump) {
             X86CallData* data = (X86CallData*) inst->data();
             CallConvInfo info(data->call_conv);

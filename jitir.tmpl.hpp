@@ -801,7 +801,7 @@ namespace metajit {
       // Pure function of the arguments
       Pure = 1 << 0,
       Idempotent = 1 << 1,
-      // Require a tail transfer with no additional stack frame.
+      // Require a tail call with no additional stack frame.
       MustTail = 1 << 2,
     };
 
