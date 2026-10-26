@@ -1202,6 +1202,8 @@ namespace metajit {
 
     /* ${builder} */
 
+    #include "ruledsl/generated.inc.hpp"
+
     ShlInst* build_shl(Value* a, size_t shift) {
       assert(shift <= type_size(a->type()) * 8);
       return build_shl(a, build_const(a->type(), shift));

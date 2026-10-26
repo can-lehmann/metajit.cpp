@@ -431,11 +431,11 @@ Those facts are used only as the trace walk proceeds beyond the guard.
 `Builder::fold_*`, so preserving the latter interfaces also preserves trace
 recording and the generated builder API.
 
-Generated fold definitions are appended to the allocator builder plugin's
-existing output in `jitir.py`, using its existing insertion point in
-`jitir.tmpl.hpp`. This avoids another generated include and avoids changing
-`lwir.cpp`. Existing handwritten methods are named `_fold_*` and explicitly
-registered through `handwritten_folds` in `jitir.py`. Constant-select propagation
+Generated fold definitions live in `ruledsl/generated.inc.hpp`, included inside
+`Builder` by `jitir.tmpl.hpp`. Rule generation runs independently of `jitir.py`
+and does not change `lwir.cpp`. Existing handwritten methods are named `_fold_*`
+and explicitly registered with `--handwritten` in the rule-generation Make
+target. Constant-select propagation
 for arithmetic, bitwise operations, integer/Boolean equality, unsigned comparison,
 unsigned resizing, truncating `ResizeX`, and left/unsigned-right shifts is
 expressed in `fold.rules`. Shift rules require every calculated count to be
@@ -450,18 +450,19 @@ before invoking either a handwritten fallback or a raw builder. Matching runs
 before this normalization and supports both operand orders, including nested
 operations created through raw builders.
 
-Every regeneration must verify the rules under their proof annotations before
-writing generated output.
-Both generation entry points enforce that requirement. `jitir.py` proves and
-generates the folds before invoking any output-writing plugins, so proof errors
-leave all existing outputs untouched. Both Makefiles track the rule file,
-generator modules, and templates, with grouped targets for the generated headers.
+Regenerating `ruledsl/generated.inc.hpp` verifies the rules under their proof
+annotations before writing the output. Proof errors leave the existing include
+untouched. Both Makefiles track the rule files and generator modules separately
+from instruction generation. Changes to rules regenerate only the rule include;
+changes to instruction definitions or templates regenerate the three JITIR
+headers without running Z3. C++ build targets depend on both sets of outputs.
+Running `jitir.py` alone does not generate the rule include or require Z3.
 
 Install Python's `z3-solver` package or the distribution's `python3-z3` package.
 Set `PYTHON` to select a Python environment when invoking Make, for example:
 
 ```sh
-make PYTHON=/path/to/venv/bin/python3 jitir.hpp
+make PYTHON=/path/to/venv/bin/python3 jitir.hpp ruledsl/generated.inc.hpp
 make PYTHON=/path/to/venv/bin/python3 test-ruledsl
 ```
 
