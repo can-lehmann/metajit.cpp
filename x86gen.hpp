@@ -613,6 +613,7 @@ namespace metajit {
     X86InstBuilder _builder;
 
     NameMap<void*> _memory_deps;
+    NameMap<size_t> _use_counts;
 
     NameMap<Reg> _vregs;
     lwir::Span<Reg> _input_vregs;
@@ -627,6 +628,11 @@ namespace metajit {
         std::unordered_map<AliasingGroup, void*> last_store;
         void* last_call = block;
         for (Inst* inst : *block) {
+          for (Value* arg : inst->args()) {
+            if (arg->is_inst()) {
+              _use_counts[(Inst*) arg]++;
+            }
+          }
           #define find_dep(inst) \
             void* dep = last_call; \
             if (last_store.find(inst->aliasing()) != last_store.end()) { \
@@ -808,6 +814,18 @@ namespace metajit {
     }
 
     void build_test(Value* cond) {
+      if (cond->type() == Type::Bool && cond->is_inst()) {
+        Inst* inst = (Inst*) cond;
+        if (_use_counts.at(inst) == 1) {
+          if (dynamic_cast<AndInst*>(inst)) {
+            _builder.test8(vreg(inst->arg(0)), vreg(inst->arg(1)));
+            return;
+          } else if (dynamic_cast<XorInst*>(inst)) {
+            _builder.cmp8(vreg(inst->arg(0)), vreg(inst->arg(1)));
+            return;
+          }
+        }
+      }
       if (dynmatch(ResizeXInst, resize, cond)) {
         if (dynmatch(ShrUInst, shift, resize->arg(0))) {
           if (dynmatch(Const, amount, shift->arg(1))) {
@@ -2558,6 +2576,7 @@ namespace metajit {
       #endif
 
       _memory_deps.init(_section);
+      _use_counts.init(_section);
       _vregs.init(_section);
       _input_vregs = _builder.alloc_regs(_section->entry()->args().size());
 
