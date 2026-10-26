@@ -29,6 +29,8 @@ public:
 
 private:
   enum class BinaryKind { And, Or, Xor };
+  enum class ResizeKind { Unsigned, Signed, Unknown };
+  enum class ShiftKind { Left, RightUnsigned, RightSigned };
 
   class PhaseTimer {
   private:
@@ -146,21 +148,21 @@ private:
     mapping.source = nullptr;
   }
 
-  static Mapping resize(const Mapping& input, size_t from, size_t to, unsigned kind) {
+  static Mapping resize(const Mapping& input, size_t from, size_t to, ResizeKind kind) {
     Mapping result = input;
-    Bit fill = kind == 0 ? Zero : kind == 1 ? input.bits[from - 1] : Unknown;
+    Bit fill = kind == ResizeKind::Unsigned ? Zero : kind == ResizeKind::Signed ? input.bits[from - 1] : Unknown;
     for (size_t i = from; i < to; i++) { result.bits[i] = fill; }
     normalize(result, to);
     return result;
   }
 
-  static Mapping shift(const Mapping& input, size_t width, uint64_t amount, unsigned kind) {
+  static Mapping shift(const Mapping& input, size_t width, uint64_t amount, ShiftKind kind) {
     Mapping result;
     result.source = input.source;
     for (size_t i = 0; i < width; i++) {
       if (amount >= width) { result.bits[i] = Unknown; }
-      else if (kind == 0) { result.bits[i] = i < amount ? Zero : input.bits[i - amount]; }
-      else { result.bits[i] = i + amount < width ? input.bits[i + amount] : kind == 1 ? Zero : input.bits[width - 1]; }
+      else if (kind == ShiftKind::Left) { result.bits[i] = i < amount ? Zero : input.bits[i - amount]; }
+      else { result.bits[i] = i + amount < width ? input.bits[i + amount] : kind == ShiftKind::RightUnsigned ? Zero : input.bits[width - 1]; }
     }
     normalize(result, width);
     return result;
@@ -217,9 +219,9 @@ private:
     if (inst->has_side_effect() || dynamic_cast<LoadInst*>(inst) || inst->arg_count() == 0 ||
         !is_int_or_bool(inst->arg(0)->type())) { return opaque(inst); }
     Mapping a = get(inst->arg(0));
-    if (dynamic_cast<ResizeUInst*>(inst)) { return resize(a, type_width(inst->arg(0)->type()), width, 0); }
-    if (dynamic_cast<ResizeSInst*>(inst)) { return resize(a, type_width(inst->arg(0)->type()), width, 1); }
-    if (dynamic_cast<ResizeXInst*>(inst)) { return resize(a, type_width(inst->arg(0)->type()), width, 2); }
+    if (dynamic_cast<ResizeUInst*>(inst)) { return resize(a, type_width(inst->arg(0)->type()), width, ResizeKind::Unsigned); }
+    if (dynamic_cast<ResizeSInst*>(inst)) { return resize(a, type_width(inst->arg(0)->type()), width, ResizeKind::Signed); }
+    if (dynamic_cast<ResizeXInst*>(inst)) { return resize(a, type_width(inst->arg(0)->type()), width, ResizeKind::Unknown); }
     if (dynamic_cast<BitReverseInst*>(inst)) {
       Mapping result = a;
       for (size_t i = 0; i < width; i++) { result.bits[i] = a.bits[width - 1 - i]; }
@@ -233,7 +235,8 @@ private:
     uint64_t number = 0;
     if (dynamic_cast<ShlInst*>(inst) || dynamic_cast<ShrUInst*>(inst) || dynamic_cast<ShrSInst*>(inst)) {
       if (!constant(b, width, number)) { return opaque(inst); }
-      unsigned kind = dynamic_cast<ShlInst*>(inst) ? 0 : dynamic_cast<ShrUInst*>(inst) ? 1 : 2;
+      ShiftKind kind = dynamic_cast<ShlInst*>(inst) ? ShiftKind::Left :
+        dynamic_cast<ShrUInst*>(inst) ? ShiftKind::RightUnsigned : ShiftKind::RightSigned;
       return shift(a, width, number, kind);
     }
     if (dynamic_cast<LtSInst*>(inst) && constant(b, type_width(inst->arg(1)->type()), number) && number == 0) {
@@ -278,11 +281,11 @@ private:
     size_t from = type_width(source->type());
     Mapping input = get(source);
     if (source->type() != inst->type()) {
-      for (unsigned kind = 0; kind < 3; kind++) {
+      for (ResizeKind kind : {ResizeKind::Unsigned, ResizeKind::Signed, ResizeKind::Unknown}) {
         if (!equal(resize(input, from, width, kind), mapping, width)) { continue; }
         if ((dynamic_cast<ResizeUInst*>(inst) || dynamic_cast<ResizeSInst*>(inst) || dynamic_cast<ResizeXInst*>(inst)) && inst->arg(0) == source) { return nullptr; }
-        if (kind == 0) { return _builder.build_resize_u(source, inst->type()); }
-        if (kind == 1) { return _builder.build_resize_s(source, inst->type()); }
+        if (kind == ResizeKind::Unsigned) { return _builder.build_resize_u(source, inst->type()); }
+        if (kind == ResizeKind::Signed) { return _builder.build_resize_s(source, inst->type()); }
         return _builder.build_resize_x(source, inst->type());
       }
       return nullptr;
@@ -293,15 +296,15 @@ private:
     if (first == width) { return nullptr; }
     size_t position = mapping.bits[first] & 63;
     if (position >= width || position == first || input.bits[position] != mapping.bits[first]) { return nullptr; }
-    unsigned kind = first > position ? 0 : 1;
+    ShiftKind kind = first > position ? ShiftKind::Left : ShiftKind::RightUnsigned;
     size_t amount = first > position ? first - position : position - first;
     if (!equal(shift(input, width, amount, kind), mapping, width)) { return nullptr; }
-    if (((kind == 0 && dynamic_cast<ShlInst*>(inst)) || (kind == 1 && dynamic_cast<ShrUInst*>(inst))) && inst->arg(0) == source) {
+    if (((kind == ShiftKind::Left && dynamic_cast<ShlInst*>(inst)) || (kind == ShiftKind::RightUnsigned && dynamic_cast<ShrUInst*>(inst))) && inst->arg(0) == source) {
       Const* count = dynamic_cast<Const*>(inst->arg(1));
       if (count && count->value() == amount) { return nullptr; }
     }
     Const* count = _builder.build_const(inst->type(), amount);
-    return kind == 0 ? (Value*) _builder.build_shl(source, count) : (Value*) _builder.build_shr_u(source, count);
+    return kind == ShiftKind::Left ? (Value*) _builder.build_shl(source, count) : (Value*) _builder.build_shr_u(source, count);
   }
 
   Value* extraction(Inst* inst, const Mapping& mapping) {
@@ -313,11 +316,11 @@ private:
       Mapping input = get(candidate);
       size_t from = type_width(candidate->type());
       if (candidate->type() != inst->type()) {
-        for (unsigned kind = 0; kind < 3; kind++) {
+        for (ResizeKind kind : {ResizeKind::Unsigned, ResizeKind::Signed, ResizeKind::Unknown}) {
           if (!equal(resize(input, from, width, kind), mapping, width)) { continue; }
           if ((dynamic_cast<ResizeUInst*>(inst) || dynamic_cast<ResizeSInst*>(inst) || dynamic_cast<ResizeXInst*>(inst)) && inst->arg(0) == candidate) { return nullptr; }
-          if (kind == 0) { return _builder.build_resize_u(candidate, inst->type()); }
-          if (kind == 1) { return _builder.build_resize_s(candidate, inst->type()); }
+          if (kind == ResizeKind::Unsigned) { return _builder.build_resize_u(candidate, inst->type()); }
+          if (kind == ResizeKind::Signed) { return _builder.build_resize_s(candidate, inst->type()); }
           return _builder.build_resize_x(candidate, inst->type());
         }
         continue;
@@ -327,15 +330,15 @@ private:
       if (first == width) { continue; }
       for (size_t position = 0; position < width; position++) {
         if (input.bits[position] != mapping.bits[first] || position == first) { continue; }
-        unsigned kind = first > position ? 0 : 1;
+        ShiftKind kind = first > position ? ShiftKind::Left : ShiftKind::RightUnsigned;
         size_t amount = first > position ? first - position : position - first;
         if (!equal(shift(input, width, amount, kind), mapping, width)) { continue; }
-        if (((kind == 0 && dynamic_cast<ShlInst*>(inst)) || (kind == 1 && dynamic_cast<ShrUInst*>(inst))) && inst->arg(0) == candidate) {
+        if (((kind == ShiftKind::Left && dynamic_cast<ShlInst*>(inst)) || (kind == ShiftKind::RightUnsigned && dynamic_cast<ShrUInst*>(inst))) && inst->arg(0) == candidate) {
           Const* count = dynamic_cast<Const*>(inst->arg(1));
           if (count && count->value() == amount) { return nullptr; }
         }
         Const* count = _builder.build_const(inst->type(), amount);
-        return kind == 0 ? (Value*) _builder.build_shl(candidate, count) : (Value*) _builder.build_shr_u(candidate, count);
+        return kind == ShiftKind::Left ? (Value*) _builder.build_shl(candidate, count) : (Value*) _builder.build_shr_u(candidate, count);
       }
     }
     return nullptr;
