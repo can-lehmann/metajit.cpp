@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <optional>
 #include "jitir.hpp"
 
 namespace metajit {
@@ -427,32 +428,73 @@ private:
     return opaque(inst);
   }
 
-  Value* source_extraction(Inst* inst, const Mapping& mapping) {
+  static std::optional<ResizeKind> match_resize(const Mapping& input, const Mapping& mapping,
+                                                size_t from, size_t width) {
+    for (ResizeKind kind : {ResizeKind::Unsigned, ResizeKind::Signed, ResizeKind::Unknown}) {
+      if (input.transfer_resize(from, width, kind).equal(mapping, width)) {
+        return kind;
+      }
+    }
+    return std::nullopt;
+  }
+
+  Value* build_resize_replacement(Inst* inst, Value* input, ResizeKind kind) {
+    if ((dynamic_cast<ResizeUInst*>(inst) || dynamic_cast<ResizeSInst*>(inst) ||
+         dynamic_cast<ResizeXInst*>(inst)) && inst->arg(0) == input) {
+      return nullptr;
+    }
+    if (kind == ResizeKind::Unsigned) {
+      return _builder.build_resize_u(input, inst->type());
+    }
+    if (kind == ResizeKind::Signed) {
+      return _builder.build_resize_s(input, inst->type());
+    }
+    return _builder.build_resize_x(input, inst->type());
+  }
+
+  struct Shift {
+    ShiftKind kind;
+    size_t amount;
+  };
+
+  static std::optional<Shift> match_shift(const Mapping& input, const Mapping& mapping,
+                                          size_t width, size_t first, size_t position) {
+    if (position >= width || position == first || input.bits[position] != mapping.bits[first]) {
+      return std::nullopt;
+    }
+    Shift shift{first > position ? ShiftKind::Left : ShiftKind::RightUnsigned,
+                first > position ? first - position : position - first};
+    if (!input.transfer_shift(width, shift.amount, shift.kind).equal(mapping, width)) {
+      return std::nullopt;
+    }
+    return shift;
+  }
+
+  Value* build_shift_replacement(Inst* inst, Value* input, Shift shift) {
+    if (((shift.kind == ShiftKind::Left && dynamic_cast<ShlInst*>(inst)) ||
+         (shift.kind == ShiftKind::RightUnsigned && dynamic_cast<ShrUInst*>(inst))) &&
+        inst->arg(0) == input) {
+      Const* count = dynamic_cast<Const*>(inst->arg(1));
+      if (count && count->value() == shift.amount) {
+        return nullptr;
+      }
+    }
+    Const* count = _builder.build_const(inst->type(), shift.amount);
+    return shift.kind == ShiftKind::Left ? (Value*) _builder.build_shl(input, count)
+                                        : (Value*) _builder.build_shr_u(input, count);
+  }
+
+  Value* extract_from_source(Inst* inst, const Mapping& mapping) {
     PhaseTimer timer(_stats.source_extraction_ns);
     Value* source = mapping.source;
     if (!source || source == inst || !source->is_named()) {
       return nullptr;
     }
     size_t width = type_width(inst->type());
-    size_t from = type_width(source->type());
     Mapping input = get(source);
     if (source->type() != inst->type()) {
-      for (ResizeKind kind : {ResizeKind::Unsigned, ResizeKind::Signed, ResizeKind::Unknown}) {
-        if (!input.transfer_resize(from, width, kind).equal(mapping, width)) {
-          continue;
-        }
-        if ((dynamic_cast<ResizeUInst*>(inst) || dynamic_cast<ResizeSInst*>(inst) ||
-             dynamic_cast<ResizeXInst*>(inst)) &&
-            inst->arg(0) == source) {
-          return nullptr;
-        }
-        if (kind == ResizeKind::Unsigned) {
-          return _builder.build_resize_u(source, inst->type());
-        }
-        if (kind == ResizeKind::Signed) {
-          return _builder.build_resize_s(source, inst->type());
-        }
-        return _builder.build_resize_x(source, inst->type());
+      if (auto kind = match_resize(input, mapping, type_width(source->type()), width)) {
+        return build_resize_replacement(inst, source, *kind);
       }
       return nullptr;
     }
@@ -466,29 +508,13 @@ private:
     if (first == width) {
       return nullptr;
     }
-    size_t position = mapping.bits[first] & 63;
-    if (position >= width || position == first || input.bits[position] != mapping.bits[first]) {
-      return nullptr;
+    if (auto shift = match_shift(input, mapping, width, first, mapping.bits[first] & 63)) {
+      return build_shift_replacement(inst, source, *shift);
     }
-    ShiftKind kind = first > position ? ShiftKind::Left : ShiftKind::RightUnsigned;
-    size_t amount = first > position ? first - position : position - first;
-    if (!input.transfer_shift(width, amount, kind).equal(mapping, width)) {
-      return nullptr;
-    }
-    if (((kind == ShiftKind::Left && dynamic_cast<ShlInst*>(inst)) ||
-         (kind == ShiftKind::RightUnsigned && dynamic_cast<ShrUInst*>(inst))) &&
-        inst->arg(0) == source) {
-      Const* count = dynamic_cast<Const*>(inst->arg(1));
-      if (count && count->value() == amount) {
-        return nullptr;
-      }
-    }
-    Const* count = _builder.build_const(inst->type(), amount);
-    return kind == ShiftKind::Left ? (Value*) _builder.build_shl(source, count)
-                                   : (Value*) _builder.build_shr_u(source, count);
+    return nullptr;
   }
 
-  Value* extraction(Inst* inst, const Mapping& mapping) {
+  Value* extract_from_candidates(Inst* inst, const Mapping& mapping) {
     PhaseTimer timer(_stats.extraction_ns);
     if (!mapping.source || _candidates.find(mapping.source) == _candidates.end()) {
       return nullptr;
@@ -497,24 +523,9 @@ private:
     for (Value* candidate : _candidates.at(mapping.source)) {
       _stats.candidates++;
       Mapping input = get(candidate);
-      size_t from = type_width(candidate->type());
       if (candidate->type() != inst->type()) {
-        for (ResizeKind kind : {ResizeKind::Unsigned, ResizeKind::Signed, ResizeKind::Unknown}) {
-          if (!input.transfer_resize(from, width, kind).equal(mapping, width)) {
-            continue;
-          }
-          if ((dynamic_cast<ResizeUInst*>(inst) || dynamic_cast<ResizeSInst*>(inst) ||
-               dynamic_cast<ResizeXInst*>(inst)) &&
-              inst->arg(0) == candidate) {
-            return nullptr;
-          }
-          if (kind == ResizeKind::Unsigned) {
-            return _builder.build_resize_u(candidate, inst->type());
-          }
-          if (kind == ResizeKind::Signed) {
-            return _builder.build_resize_s(candidate, inst->type());
-          }
-          return _builder.build_resize_x(candidate, inst->type());
+        if (auto kind = match_resize(input, mapping, type_width(candidate->type()), width)) {
+          return build_resize_replacement(inst, candidate, *kind);
         }
         continue;
       }
@@ -526,28 +537,51 @@ private:
         continue;
       }
       for (size_t position = 0; position < width; position++) {
-        if (input.bits[position] != mapping.bits[first] || position == first) {
-          continue;
+        if (auto shift = match_shift(input, mapping, width, first, position)) {
+          return build_shift_replacement(inst, candidate, *shift);
         }
-        ShiftKind kind = first > position ? ShiftKind::Left : ShiftKind::RightUnsigned;
-        size_t amount = first > position ? first - position : position - first;
-        if (!input.transfer_shift(width, amount, kind).equal(mapping, width)) {
-          continue;
-        }
-        if (((kind == ShiftKind::Left && dynamic_cast<ShlInst*>(inst)) ||
-             (kind == ShiftKind::RightUnsigned && dynamic_cast<ShrUInst*>(inst))) &&
-            inst->arg(0) == candidate) {
-          Const* count = dynamic_cast<Const*>(inst->arg(1));
-          if (count && count->value() == amount) {
-            return nullptr;
-          }
-        }
-        Const* count = _builder.build_const(inst->type(), amount);
-        return kind == ShiftKind::Left ? (Value*) _builder.build_shl(candidate, count)
-                                       : (Value*) _builder.build_shr_u(candidate, count);
       }
     }
     return nullptr;
+  }
+
+  Value* find_replacement(Block* block, Inst* inst, const Mapping& mapping) {
+    if (inst->has_side_effect() || inst->is_terminator() || dynamic_cast<LoadInst*>(inst)) {
+      return nullptr;
+    }
+    _builder.move_before(block, inst);
+    uint64_t number;
+    if (mapping.constant(type_width(inst->type()), number)) {
+      _stats.constants++;
+      return _builder.build_const(inst->type(), number);
+    }
+    if (!mapping.exact(type_width(inst->type()))) {
+      return nullptr;
+    }
+    {
+      PhaseTimer timer(_stats.lookup_ns);
+      Key key{mapping, inst->type()};
+      if (_available.find(key) != _available.end()) {
+        _stats.reused++;
+        _stats.equivalence_hits++;
+        return _available.at(key);
+      }
+    }
+    if (Value* replacement = extract_from_candidates(inst, mapping)) {
+      _stats.extracted++;
+      _stats.candidate_hits++;
+      return replacement;
+    }
+    Value* replacement = extract_from_source(inst, mapping);
+    if (replacement) {
+      _stats.source_hits++;
+      if (replacement == mapping.source) {
+        _stats.reused++;
+      } else {
+        _stats.extracted++;
+      }
+    }
+    return replacement;
   }
 
   void remember(NamedValue* value, const Mapping& mapping) {
@@ -596,43 +630,7 @@ public:
         }
         _stats.visited++;
         Mapping mapping = transfer(inst);
-        Value* replacement = nullptr;
-        if (!inst->has_side_effect() && !inst->is_terminator() && !dynamic_cast<LoadInst*>(inst)) {
-          uint64_t number;
-          _builder.move_before(block, inst);
-          if (mapping.constant(type_width(inst->type()), number)) {
-            replacement = _builder.build_const(inst->type(), number);
-            _stats.constants++;
-          } else if (mapping.exact(type_width(inst->type()))) {
-            {
-              PhaseTimer timer(_stats.lookup_ns);
-              Key key{mapping, inst->type()};
-              if (_available.find(key) != _available.end()) {
-                replacement = _available.at(key);
-                _stats.reused++;
-                _stats.equivalence_hits++;
-              }
-            }
-            if (!replacement) {
-              replacement = extraction(inst, mapping);
-              if (replacement) {
-                _stats.extracted++;
-                _stats.candidate_hits++;
-              }
-            }
-            if (!replacement) {
-              replacement = source_extraction(inst, mapping);
-              if (replacement) {
-                _stats.source_hits++;
-                if (replacement == mapping.source) {
-                  _stats.reused++;
-                } else {
-                  _stats.extracted++;
-                }
-              }
-            }
-          }
-        }
+        Value* replacement = find_replacement(block, inst, mapping);
         if (replacement) {
           _substs.ensure_size(_builder.next_name());
           _seen.ensure_size(_builder.next_name());
