@@ -611,7 +611,7 @@ public:
         }
       }
       for (Inst* inst : *block) {
-        inst->substitute_args_resolved(_substs);
+        inst->substitute_args_iterated(_substs);
         if (!is_int_or_bool(inst->type())) {
           continue;
         }
@@ -632,7 +632,7 @@ public:
     }
     for (Block* block : *section) {
       for (Inst* inst : *block) {
-        inst->substitute_args_resolved(_substs);
+        inst->substitute_args_iterated(_substs);
       }
       for (auto cursor = block->begin(); cursor != block->end();) {
         if (_substs[*cursor]) {

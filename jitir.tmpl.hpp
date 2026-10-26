@@ -498,7 +498,7 @@ namespace metajit {
     }
 
     void substitute_args(NameMap<Value*>& substs);
-    void substitute_args_resolved(NameMap<Value*>& substs);
+    void substitute_args_iterated(NameMap<Value*>& substs);
 
     void substitute_blocks(BlockMap<Block*>& substs);
     void substitute_blocks(const std::map<Block*, Block*>& substs);
@@ -2842,7 +2842,7 @@ namespace metajit {
     return replacement;
   }
 
-  void Inst::substitute_args_resolved(NameMap<Value*>& substs) {
+  void Inst::substitute_args_iterated(NameMap<Value*>& substs) {
     for (size_t index = 0; index < arg_count(); index++) {
       set_arg(index, resolve_substitution(arg(index), substs));
     }
