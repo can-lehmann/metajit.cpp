@@ -252,6 +252,71 @@ void test_first_four_keeps_equivalence() {
   unittest_assert(!section.verify(std::cerr));
 }
 
+void test_shift_boundaries() {
+  for (size_t width : {8, 16, 32, 64}) {
+    std::string type = "Int" + std::to_string(width);
+    for (const std::string op : {"Shl", "ShrU", "ShrS"}) {
+      for (size_t amount : {size_t(0), width - 1, width, width + 1}) {
+        std::string prefix = "section {\nb0(%0: Ptr, %1: " + type + "):\n";
+        std::string shift = "  %2 = " + op + " %1, " + std::to_string(amount) + ":" + type + "\n";
+        std::string suffix = ", aliasing=0, offset=0\n  Exit\n}\n";
+        check_provenance(prefix + shift + "  Store %0, %2" + suffix,
+                         prefix + (amount == 0 ? "  Store %0, %1" : shift + "  Store %0, %2") + suffix);
+      }
+    }
+  }
+}
+
+void test_resize_roundtrips() {
+  for (const std::string type : {"Bool", "Int8", "Int16", "Int32", "Int64"}) {
+    for (const std::string op : {"ResizeU", "ResizeS", "ResizeX"}) {
+      std::string prefix = "section {\nb0(%0: Ptr, %1: " + type + "):\n";
+      std::string suffix = ", aliasing=0, offset=0\n  Exit\n}\n";
+      check_provenance(prefix + "  %2 = " + op + " %1, type=Int64\n  %3 = ResizeU %2, type=" + type +
+                       "\n  Store %0, %3" + suffix, prefix + "  Store %0, %1" + suffix);
+    }
+  }
+}
+
+void test_resize_extraction() {
+  for (size_t width : {8, 16, 32}) {
+    std::string type = "Int" + std::to_string(width);
+    std::string prefix = "section {\nb0(%0: Ptr, %1: " + type + "):\n";
+    std::string suffix = ", aliasing=0, offset=0\n  Exit\n}\n";
+    std::string amount = std::to_string(64 - width) + ":Int64\n";
+    check_provenance(prefix + "  %2 = ResizeU %1, type=Int64\n  %3 = Shl %2, " + amount +
+                     "  %4 = ShrS %3, " + amount + "  Store %0, %4" + suffix,
+                     prefix + "  %2 = ResizeS %1, type=Int64\n  Store %0, %2" + suffix);
+    check_provenance(prefix + "  %2 = ResizeX %1, type=Int64\n  %3 = And %2, " +
+                     std::to_string((UINT64_C(1) << width) - 1) + ":Int64\n  Store %0, %3" + suffix,
+                     prefix + "  %2 = ResizeU %1, type=Int64\n  Store %0, %2" + suffix);
+  }
+}
+
+void test_mixed_sources() {
+  for (const std::string op : {"And", "Or", "Xor"}) {
+    std::string prefix = "section {\nb0(%0: Ptr, %1: Int32, %2: Int32):\n  %3 = " + op + " %1, %2\n";
+    std::string suffix = ", aliasing=0, offset=0\n  Exit\n}\n";
+    check_provenance(prefix + "  %4 = BitReverse %3\n  %5 = BitReverse %4\n  Store %0, %5" + suffix,
+                     prefix + "  Store %0, %3" + suffix);
+  }
+  check_provenance(R"(section {
+b0(%0: Ptr, %1: Int32, %2: Int32):
+  %3 = And %1, 255:Int32
+  %4 = And %2, 65280:Int32
+  %5 = Or %3, %4
+  %6 = And %5, 65536:Int32
+  Store %0, %6, aliasing=0, offset=0
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr, %1: Int32, %2: Int32):
+  Store %0, 0:Int32, aliasing=0, offset=0
+  Exit
+}
+)");
+}
+
 void test_random_execution() {
   srand(1234567);
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
@@ -267,7 +332,7 @@ void test_random_execution() {
         Value* a = values[rand() % values.size()];
         Value* b = values[rand() % values.size()];
         Const* shift = builder.build_const(type, rand() % type_width(type));
-        switch (rand() % 10) {
+        switch (rand() % 15) {
           case 0: values.push_back(builder.build_and(a, b)); break;
           case 1: values.push_back(builder.build_or(a, b)); break;
           case 2: values.push_back(builder.build_xor(a, b)); break;
@@ -278,25 +343,54 @@ void test_random_execution() {
           case 7: values.push_back(builder.build_add(a, b)); break;
           case 8: values.push_back(builder.build_resize_u(builder.build_resize_x(a, Type::Int64), type)); break;
           case 9: values.push_back(builder.build_select(builder.build_lt_s(a, builder.build_const(type, 0)), a, b)); break;
+          case 10: values.push_back(builder.build_resize_u(builder.build_eq(a, b), type)); break;
+          case 11: values.push_back(builder.build_select(builder.build_eq(a, b), a, b)); break;
+          case 12: values.push_back(builder.build_resize_s(builder.build_resize_u(a, Type::Int8), type)); break;
+          case 13: values.push_back(builder.build_and(a, builder.build_const(type, UINT64_C(0x5555555555555555)))); break;
+          case 14: values.push_back(builder.build_xor(a, builder.build_const(type, UINT64_MAX))); break;
         }
       }
       for (size_t i = 0; i < 16; i++) { builder.build_store(block->arg(0), values[values.size() - 1 - i], 0, i * 8); }
       builder.build_exit();
       section.order_blocks(BlockOrdering::Natural);
-      uint64_t before[16] = {}, after[16] = {};
-      uint64_t a = 0, b = 0;
-      for (size_t i = 0; i < type_size(type); i++) {
-        a |= uint64_t(rand() & 0xff) << (i * 8);
-        b |= uint64_t(rand() & 0xff) << (i * 8);
+      uint64_t mask = UINT64_MAX >> (64 - type_width(type));
+      std::vector<uint64_t> inputs = {0, mask, UINT64_C(1) << (type_width(type) - 1),
+                                      UINT64_C(0x5555555555555555) & mask,
+                                      UINT64_C(0xaaaaaaaaaaaaaaaa) & mask};
+      for (size_t sample_input = 0; sample_input < 4; sample_input++) {
+        uint64_t value = 0;
+        for (size_t i = 0; i < type_size(type); i++) {
+          value |= uint64_t(rand() & 0xff) << (i * 8);
+        }
+        inputs.push_back(value);
       }
-      Interpreter original(&section, {Interpreter::Bits::constant(before), Interpreter::Bits::constant(type, a), Interpreter::Bits::constant(type, b)});
-      unittest_assert(original.run() == Interpreter::Event::Exit);
+      std::vector<std::array<uint64_t, 16>> expected;
+      for (uint64_t a : inputs) {
+        for (uint64_t b : inputs) {
+          std::array<uint64_t, 16> output{};
+          Interpreter original(&section, {Interpreter::Bits::constant(output.data()), Interpreter::Bits::constant(type, a), Interpreter::Bits::constant(type, b)});
+          unittest_assert(original.run() == Interpreter::Event::Exit);
+          expected.push_back(output);
+        }
+      }
       BitProvenance::run(&section, Chain({block}));
       unittest_assert(!section.verify(std::cerr));
       DeadCodeElim::run(&section);
-      Interpreter optimized(&section, {Interpreter::Bits::constant(after), Interpreter::Bits::constant(type, a), Interpreter::Bits::constant(type, b)});
-      unittest_assert(optimized.run() == Interpreter::Event::Exit);
-      for (size_t i = 0; i < 16; i++) { unittest_assert(before[i] == after[i]); }
+      size_t input_index = 0;
+      for (uint64_t a : inputs) {
+        for (uint64_t b : inputs) {
+          std::array<uint64_t, 16> output{};
+          Interpreter optimized(&section, {Interpreter::Bits::constant(output.data()), Interpreter::Bits::constant(type, a), Interpreter::Bits::constant(type, b)});
+          unittest_assert(optimized.run() == Interpreter::Event::Exit);
+          if (expected[input_index] != output) {
+            std::cerr << "seed=1234567 width=" << type_width(type) << " program=" << sample
+                      << " a=" << a << " b=" << b << "\n";
+            section.write(std::cerr);
+          }
+          unittest_assert(expected[input_index] == output);
+          input_index++;
+        }
+      }
     }
   }
 }
@@ -309,6 +403,10 @@ int main(int argc, char** argv) {
   suite.test("sibling reuse").run(test_sibling_reuse);
   suite.test("unrecorded source").run(test_unrecorded_source);
   suite.test("trace chain").run(test_trace_chain);
+  suite.test("shift boundaries").run(test_shift_boundaries);
+  suite.test("resize roundtrips").run(test_resize_roundtrips);
+  suite.test("resize extraction").run(test_resize_extraction);
+  suite.test("mixed sources").run(test_mixed_sources);
   suite.test("random execution").run(test_random_execution);
   suite.test("combined shift").run(test_combined_shift);
   suite.test("equivalence map").run(test_equivalence_map);
