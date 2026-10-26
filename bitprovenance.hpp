@@ -46,7 +46,9 @@ private:
     }
     ~PhaseTimer() {
       #ifdef METAJIT_BIT_PROVENANCE_PROFILE
-      _total += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - _start).count();
+      _total += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                  std::chrono::steady_clock::now() - _start)
+                  .count();
       #endif
     }
   };
@@ -92,7 +94,9 @@ private:
   static bool reference(Bit bit) { return bit < Zero; }
 
   static Bit invert(Bit bit) {
-    if (reference(bit)) { return bit ^ 64; }
+    if (reference(bit)) {
+      return bit ^ 64;
+    }
     return bit == Zero ? One : bit == One ? Zero : Unknown;
   }
 
@@ -103,7 +107,9 @@ private:
   static Mapping opaque(Value* value) {
     Mapping result;
     result.source = value;
-    for (size_t i = 0; i < type_width(value->type()); i++) { result.bits[i] = i; }
+    for (size_t i = 0; i < type_width(value->type()); i++) {
+      result.bits[i] = i;
+    }
     return result;
   }
 
@@ -115,7 +121,8 @@ private:
       }
       return result;
     }
-    if (value->is_named() && ((NamedValue*) value)->name() < _seen.size() && _seen[(NamedValue*) value]) {
+    if (value->is_named() && ((NamedValue*) value)->name() < _seen.size() &&
+        _seen[(NamedValue*) value]) {
       return _facts[(NamedValue*) value];
     }
     return opaque(value);
@@ -124,15 +131,20 @@ private:
   static bool constant(const Mapping& mapping, size_t width, uint64_t& value) {
     value = 0;
     for (size_t i = 0; i < width; i++) {
-      if (mapping.bits[i] == One) { value |= uint64_t(1) << i; }
-      else if (mapping.bits[i] != Zero) { return false; }
+      if (mapping.bits[i] == One) {
+        value |= uint64_t(1) << i;
+      } else if (mapping.bits[i] != Zero) {
+        return false;
+      }
     }
     return true;
   }
 
   static bool exact(const Mapping& mapping, size_t width) {
     for (size_t i = 0; i < width; i++) {
-      if (mapping.bits[i] == Unknown) { return false; }
+      if (mapping.bits[i] == Unknown) {
+        return false;
+      }
     }
     return true;
   }
@@ -143,35 +155,50 @@ private:
 
   static void normalize(Mapping& mapping, size_t width) {
     for (size_t i = 0; i < width; i++) {
-      if (reference(mapping.bits[i])) { return; }
+      if (reference(mapping.bits[i])) {
+        return;
+      }
     }
     mapping.source = nullptr;
   }
 
   static Mapping transfer_resize(const Mapping& input, size_t from, size_t to, ResizeKind kind) {
     Mapping result = input;
-    Bit fill = kind == ResizeKind::Unsigned ? Zero : kind == ResizeKind::Signed ? input.bits[from - 1] : Unknown;
-    for (size_t i = from; i < to; i++) { result.bits[i] = fill; }
+    Bit fill = kind == ResizeKind::Unsigned ? Zero :
+               kind == ResizeKind::Signed ? input.bits[from - 1] : Unknown;
+    for (size_t i = from; i < to; i++) {
+      result.bits[i] = fill;
+    }
     normalize(result, to);
     return result;
   }
 
-  static Mapping transfer_shift(const Mapping& input, size_t width, uint64_t amount, ShiftKind kind) {
+  static Mapping transfer_shift(const Mapping& input, size_t width, uint64_t amount,
+                                ShiftKind kind) {
     Mapping result;
     result.source = input.source;
     for (size_t i = 0; i < width; i++) {
-      if (amount >= width) { result.bits[i] = Unknown; }
-      else if (kind == ShiftKind::Left) { result.bits[i] = i < amount ? Zero : input.bits[i - amount]; }
-      else { result.bits[i] = i + amount < width ? input.bits[i + amount] : kind == ShiftKind::RightUnsigned ? Zero : input.bits[width - 1]; }
+      if (amount >= width) {
+        result.bits[i] = Unknown;
+      } else if (kind == ShiftKind::Left) {
+        result.bits[i] = i < amount ? Zero : input.bits[i - amount];
+      } else {
+        result.bits[i] = i + amount < width ? input.bits[i + amount] :
+                         kind == ShiftKind::RightUnsigned ? Zero : input.bits[width - 1];
+      }
     }
     normalize(result, width);
     return result;
   }
 
   static void collect_source(Value*& source, bool& mixed, Value* incoming, Bit bit) {
-    if (!reference(bit)) { return; }
+    if (!reference(bit)) {
+      return;
+    }
     assert(incoming);
-    if (source && source != incoming) { mixed = true; }
+    if (source && source != incoming) {
+      mixed = true;
+    }
     source = incoming;
   }
 
@@ -180,14 +207,17 @@ private:
     if (mixed) {
       result.source = inst;
       for (size_t i = 0; i < width; i++) {
-        if (result.bits[i] != Zero && result.bits[i] != One) { result.bits[i] = i; }
+        if (result.bits[i] != Zero && result.bits[i] != One) {
+          result.bits[i] = i;
+        }
       }
     }
     normalize(result, width);
     return result;
   }
 
-  static Mapping transfer_binary(const Mapping& left, const Mapping& right, Inst* inst, BinaryKind kind) {
+  static Mapping transfer_binary(const Mapping& left, const Mapping& right, Inst* inst,
+                                 BinaryKind kind) {
     Mapping result;
     bool mixed = false;
     for (size_t i = 0; i < type_width(inst->type()); i++) {
@@ -195,18 +225,27 @@ private:
       Value* source = nullptr;
       bool eq = same(a, left.source, b, right.source);
       bool opposite = same(a, left.source, invert(b), right.source);
-      if (kind == BinaryKind::And && (a == Zero || b == Zero || opposite)) { bit = Zero; }
-      else if (kind == BinaryKind::Or && (a == One || b == One || opposite)) { bit = One; }
-      else if (kind == BinaryKind::Xor && eq) { bit = Zero; }
-      else if (kind == BinaryKind::Xor && opposite) { bit = One; }
-      else if (a == Zero || a == One) {
+      if (kind == BinaryKind::And && (a == Zero || b == Zero || opposite)) {
+        bit = Zero;
+      } else if (kind == BinaryKind::Or && (a == One || b == One || opposite)) {
+        bit = One;
+      } else if (kind == BinaryKind::Xor && eq) {
+        bit = Zero;
+      } else if (kind == BinaryKind::Xor && opposite) {
+        bit = One;
+      } else if (a == Zero || a == One) {
         bit = kind == BinaryKind::Xor && a == One ? invert(b) : b;
         source = right.source;
       } else if (b == Zero || b == One) {
         bit = kind == BinaryKind::Xor && b == One ? invert(a) : a;
         source = left.source;
-      } else if (eq) { bit = a; source = left.source; }
-      else if (a != Unknown && b != Unknown) { bit = i; source = inst; }
+      } else if (eq) {
+        bit = a;
+        source = left.source;
+      } else if (a != Unknown && b != Unknown) {
+        bit = i;
+        source = inst;
+      }
       result.bits[i] = bit;
       collect_source(result.source, mixed, source, bit);
     }
@@ -215,7 +254,9 @@ private:
 
   static Mapping transfer_lt_s(LtSInst* inst, const Mapping& a, const Mapping& b) {
     uint64_t number;
-    if (!constant(b, type_width(inst->arg(1)->type()), number) || number != 0) { return opaque(inst); }
+    if (!constant(b, type_width(inst->arg(1)->type()), number) || number != 0) {
+      return opaque(inst);
+    }
     Mapping result;
     result.source = a.source;
     result.bits[0] = a.bits[type_width(inst->arg(0)->type()) - 1];
@@ -226,25 +267,39 @@ private:
   static Mapping transfer_eq(EqInst* inst, const Mapping& a, const Mapping& b) {
     size_t width = type_width(inst->arg(0)->type());
     Mapping result;
-    if (exact(a, width) && exact(b, width) && equal(a, b, width)) { result.bits[0] = One; return result; }
+    if (exact(a, width) && exact(b, width) && equal(a, b, width)) {
+      result.bits[0] = One;
+      return result;
+    }
     for (size_t i = 0; i < width; i++) {
-      if (same(a.bits[i], a.source, invert(b.bits[i]), b.source)) { result.bits[0] = Zero; return result; }
+      if (same(a.bits[i], a.source, invert(b.bits[i]), b.source)) {
+        result.bits[0] = Zero;
+        return result;
+      }
     }
     return opaque(inst);
   }
 
   Mapping transfer_select(SelectInst* inst, const Mapping& a, const Mapping& b) const {
     uint64_t number;
-    if (constant(a, 1, number)) { return get(inst->arg(number ? 1 : 2)); }
+    if (constant(a, 1, number)) {
+      return get(inst->arg(number ? 1 : 2));
+    }
     Mapping c = get(inst->arg(2)), result;
     bool mixed = false;
     for (size_t i = 0; i < type_width(inst->type()); i++) {
       Bit bit;
       Value* source;
-      if (same(b.bits[i], b.source, c.bits[i], c.source)) { bit = b.bits[i]; source = b.source; }
-      else if (b.bits[i] >= Zero && b.bits[i] <= One && c.bits[i] >= Zero && c.bits[i] <= One) {
-        bit = b.bits[i] == One ? a.bits[0] : invert(a.bits[0]); source = a.source;
-      } else { bit = i; source = inst; }
+      if (same(b.bits[i], b.source, c.bits[i], c.source)) {
+        bit = b.bits[i];
+        source = b.source;
+      } else if (b.bits[i] >= Zero && b.bits[i] <= One && c.bits[i] >= Zero && c.bits[i] <= One) {
+        bit = b.bits[i] == One ? a.bits[0] : invert(a.bits[0]);
+        source = a.source;
+      } else {
+        bit = i;
+        source = inst;
+      }
       result.bits[i] = bit;
       collect_source(result.source, mixed, source, bit);
     }
@@ -255,71 +310,128 @@ private:
     PhaseTimer timer(_stats.transfer_ns);
     size_t width = type_width(inst->type());
     if (inst->has_side_effect() || dynamic_cast<LoadInst*>(inst) || inst->arg_count() == 0 ||
-        !is_int_or_bool(inst->arg(0)->type())) { return opaque(inst); }
+        !is_int_or_bool(inst->arg(0)->type())) {
+      return opaque(inst);
+    }
     Mapping a = get(inst->arg(0));
-    if (dynamic_cast<ResizeUInst*>(inst)) { return transfer_resize(a, type_width(inst->arg(0)->type()), width, ResizeKind::Unsigned); }
-    if (dynamic_cast<ResizeSInst*>(inst)) { return transfer_resize(a, type_width(inst->arg(0)->type()), width, ResizeKind::Signed); }
-    if (dynamic_cast<ResizeXInst*>(inst)) { return transfer_resize(a, type_width(inst->arg(0)->type()), width, ResizeKind::Unknown); }
+    if (dynamic_cast<ResizeUInst*>(inst)) {
+      return transfer_resize(a, type_width(inst->arg(0)->type()), width, ResizeKind::Unsigned);
+    }
+    if (dynamic_cast<ResizeSInst*>(inst)) {
+      return transfer_resize(a, type_width(inst->arg(0)->type()), width, ResizeKind::Signed);
+    }
+    if (dynamic_cast<ResizeXInst*>(inst)) {
+      return transfer_resize(a, type_width(inst->arg(0)->type()), width, ResizeKind::Unknown);
+    }
     if (dynamic_cast<BitReverseInst*>(inst)) {
       Mapping result = a;
-      for (size_t i = 0; i < width; i++) { result.bits[i] = a.bits[width - 1 - i]; }
+      for (size_t i = 0; i < width; i++) {
+        result.bits[i] = a.bits[width - 1 - i];
+      }
       return result;
     }
-    if (inst->arg_count() < 2 || !is_int_or_bool(inst->arg(1)->type())) { return opaque(inst); }
+    if (inst->arg_count() < 2 || !is_int_or_bool(inst->arg(1)->type())) {
+      return opaque(inst);
+    }
     Mapping b = get(inst->arg(1));
-    if (dynamic_cast<AndInst*>(inst)) { return transfer_binary(a, b, inst, BinaryKind::And); }
-    if (dynamic_cast<OrInst*>(inst)) { return transfer_binary(a, b, inst, BinaryKind::Or); }
-    if (dynamic_cast<XorInst*>(inst)) { return transfer_binary(a, b, inst, BinaryKind::Xor); }
+    if (dynamic_cast<AndInst*>(inst)) {
+      return transfer_binary(a, b, inst, BinaryKind::And);
+    }
+    if (dynamic_cast<OrInst*>(inst)) {
+      return transfer_binary(a, b, inst, BinaryKind::Or);
+    }
+    if (dynamic_cast<XorInst*>(inst)) {
+      return transfer_binary(a, b, inst, BinaryKind::Xor);
+    }
     uint64_t number = 0;
-    if (dynamic_cast<ShlInst*>(inst) || dynamic_cast<ShrUInst*>(inst) || dynamic_cast<ShrSInst*>(inst)) {
-      if (!constant(b, width, number)) { return opaque(inst); }
+    if (dynamic_cast<ShlInst*>(inst) || dynamic_cast<ShrUInst*>(inst) ||
+        dynamic_cast<ShrSInst*>(inst)) {
+      if (!constant(b, width, number)) {
+        return opaque(inst);
+      }
       ShiftKind kind = dynamic_cast<ShlInst*>(inst) ? ShiftKind::Left :
-        dynamic_cast<ShrUInst*>(inst) ? ShiftKind::RightUnsigned : ShiftKind::RightSigned;
+                       dynamic_cast<ShrUInst*>(inst) ? ShiftKind::RightUnsigned :
+                       ShiftKind::RightSigned;
       return transfer_shift(a, width, number, kind);
     }
-    if (LtSInst* lt_s = dynamic_cast<LtSInst*>(inst)) { return transfer_lt_s(lt_s, a, b); }
-    if (EqInst* eq = dynamic_cast<EqInst*>(inst)) { return transfer_eq(eq, a, b); }
-    if (SelectInst* select = dynamic_cast<SelectInst*>(inst)) { return transfer_select(select, a, b); }
+    if (LtSInst* lt_s = dynamic_cast<LtSInst*>(inst)) {
+      return transfer_lt_s(lt_s, a, b);
+    }
+    if (EqInst* eq = dynamic_cast<EqInst*>(inst)) {
+      return transfer_eq(eq, a, b);
+    }
+    if (SelectInst* select = dynamic_cast<SelectInst*>(inst)) {
+      return transfer_select(select, a, b);
+    }
     return opaque(inst);
   }
 
   Value* source_extraction(Inst* inst, const Mapping& mapping) {
     PhaseTimer timer(_stats.source_extraction_ns);
     Value* source = mapping.source;
-    if (!source || source == inst || !source->is_named()) { return nullptr; }
+    if (!source || source == inst || !source->is_named()) {
+      return nullptr;
+    }
     size_t width = type_width(inst->type());
     size_t from = type_width(source->type());
     Mapping input = get(source);
     if (source->type() != inst->type()) {
       for (ResizeKind kind : {ResizeKind::Unsigned, ResizeKind::Signed, ResizeKind::Unknown}) {
-        if (!equal(transfer_resize(input, from, width, kind), mapping, width)) { continue; }
-        if ((dynamic_cast<ResizeUInst*>(inst) || dynamic_cast<ResizeSInst*>(inst) || dynamic_cast<ResizeXInst*>(inst)) && inst->arg(0) == source) { return nullptr; }
-        if (kind == ResizeKind::Unsigned) { return _builder.build_resize_u(source, inst->type()); }
-        if (kind == ResizeKind::Signed) { return _builder.build_resize_s(source, inst->type()); }
+        if (!equal(transfer_resize(input, from, width, kind), mapping, width)) {
+          continue;
+        }
+        if ((dynamic_cast<ResizeUInst*>(inst) || dynamic_cast<ResizeSInst*>(inst) ||
+             dynamic_cast<ResizeXInst*>(inst)) &&
+            inst->arg(0) == source) {
+          return nullptr;
+        }
+        if (kind == ResizeKind::Unsigned) {
+          return _builder.build_resize_u(source, inst->type());
+        }
+        if (kind == ResizeKind::Signed) {
+          return _builder.build_resize_s(source, inst->type());
+        }
         return _builder.build_resize_x(source, inst->type());
       }
       return nullptr;
     }
-    if (equal(input, mapping, width)) { return source; }
+    if (equal(input, mapping, width)) {
+      return source;
+    }
     size_t first = 0;
-    while (first < width && !reference(mapping.bits[first])) { first++; }
-    if (first == width) { return nullptr; }
+    while (first < width && !reference(mapping.bits[first])) {
+      first++;
+    }
+    if (first == width) {
+      return nullptr;
+    }
     size_t position = mapping.bits[first] & 63;
-    if (position >= width || position == first || input.bits[position] != mapping.bits[first]) { return nullptr; }
+    if (position >= width || position == first || input.bits[position] != mapping.bits[first]) {
+      return nullptr;
+    }
     ShiftKind kind = first > position ? ShiftKind::Left : ShiftKind::RightUnsigned;
     size_t amount = first > position ? first - position : position - first;
-    if (!equal(transfer_shift(input, width, amount, kind), mapping, width)) { return nullptr; }
-    if (((kind == ShiftKind::Left && dynamic_cast<ShlInst*>(inst)) || (kind == ShiftKind::RightUnsigned && dynamic_cast<ShrUInst*>(inst))) && inst->arg(0) == source) {
+    if (!equal(transfer_shift(input, width, amount, kind), mapping, width)) {
+      return nullptr;
+    }
+    if (((kind == ShiftKind::Left && dynamic_cast<ShlInst*>(inst)) ||
+         (kind == ShiftKind::RightUnsigned && dynamic_cast<ShrUInst*>(inst))) &&
+        inst->arg(0) == source) {
       Const* count = dynamic_cast<Const*>(inst->arg(1));
-      if (count && count->value() == amount) { return nullptr; }
+      if (count && count->value() == amount) {
+        return nullptr;
+      }
     }
     Const* count = _builder.build_const(inst->type(), amount);
-    return kind == ShiftKind::Left ? (Value*) _builder.build_shl(source, count) : (Value*) _builder.build_shr_u(source, count);
+    return kind == ShiftKind::Left ? (Value*) _builder.build_shl(source, count)
+                                   : (Value*) _builder.build_shr_u(source, count);
   }
 
   Value* extraction(Inst* inst, const Mapping& mapping) {
     PhaseTimer timer(_stats.extraction_ns);
-    if (!mapping.source || _candidates.find(mapping.source) == _candidates.end()) { return nullptr; }
+    if (!mapping.source || _candidates.find(mapping.source) == _candidates.end()) {
+      return nullptr;
+    }
     size_t width = type_width(inst->type());
     for (Value* candidate : _candidates.at(mapping.source)) {
       _stats.candidates++;
@@ -327,28 +439,51 @@ private:
       size_t from = type_width(candidate->type());
       if (candidate->type() != inst->type()) {
         for (ResizeKind kind : {ResizeKind::Unsigned, ResizeKind::Signed, ResizeKind::Unknown}) {
-          if (!equal(transfer_resize(input, from, width, kind), mapping, width)) { continue; }
-          if ((dynamic_cast<ResizeUInst*>(inst) || dynamic_cast<ResizeSInst*>(inst) || dynamic_cast<ResizeXInst*>(inst)) && inst->arg(0) == candidate) { return nullptr; }
-          if (kind == ResizeKind::Unsigned) { return _builder.build_resize_u(candidate, inst->type()); }
-          if (kind == ResizeKind::Signed) { return _builder.build_resize_s(candidate, inst->type()); }
+          if (!equal(transfer_resize(input, from, width, kind), mapping, width)) {
+            continue;
+          }
+          if ((dynamic_cast<ResizeUInst*>(inst) || dynamic_cast<ResizeSInst*>(inst) ||
+               dynamic_cast<ResizeXInst*>(inst)) &&
+              inst->arg(0) == candidate) {
+            return nullptr;
+          }
+          if (kind == ResizeKind::Unsigned) {
+            return _builder.build_resize_u(candidate, inst->type());
+          }
+          if (kind == ResizeKind::Signed) {
+            return _builder.build_resize_s(candidate, inst->type());
+          }
           return _builder.build_resize_x(candidate, inst->type());
         }
         continue;
       }
       size_t first = 0;
-      while (first < width && !reference(mapping.bits[first])) { first++; }
-      if (first == width) { continue; }
+      while (first < width && !reference(mapping.bits[first])) {
+        first++;
+      }
+      if (first == width) {
+        continue;
+      }
       for (size_t position = 0; position < width; position++) {
-        if (input.bits[position] != mapping.bits[first] || position == first) { continue; }
+        if (input.bits[position] != mapping.bits[first] || position == first) {
+          continue;
+        }
         ShiftKind kind = first > position ? ShiftKind::Left : ShiftKind::RightUnsigned;
         size_t amount = first > position ? first - position : position - first;
-        if (!equal(transfer_shift(input, width, amount, kind), mapping, width)) { continue; }
-        if (((kind == ShiftKind::Left && dynamic_cast<ShlInst*>(inst)) || (kind == ShiftKind::RightUnsigned && dynamic_cast<ShrUInst*>(inst))) && inst->arg(0) == candidate) {
+        if (!equal(transfer_shift(input, width, amount, kind), mapping, width)) {
+          continue;
+        }
+        if (((kind == ShiftKind::Left && dynamic_cast<ShlInst*>(inst)) ||
+             (kind == ShiftKind::RightUnsigned && dynamic_cast<ShrUInst*>(inst))) &&
+            inst->arg(0) == candidate) {
           Const* count = dynamic_cast<Const*>(inst->arg(1));
-          if (count && count->value() == amount) { return nullptr; }
+          if (count && count->value() == amount) {
+            return nullptr;
+          }
         }
         Const* count = _builder.build_const(inst->type(), amount);
-        return kind == ShiftKind::Left ? (Value*) _builder.build_shl(candidate, count) : (Value*) _builder.build_shr_u(candidate, count);
+        return kind == ShiftKind::Left ? (Value*) _builder.build_shl(candidate, count)
+                                       : (Value*) _builder.build_shr_u(candidate, count);
       }
     }
     return nullptr;
@@ -372,24 +507,32 @@ private:
       std::vector<Value*>& values = _candidates[mapping.source];
       size_t count = 0;
       for (Value* previous : values) {
-        if (previous->type() == value->type()) { count++; }
+        if (previous->type() == value->type()) {
+          count++;
+        }
       }
-      if (count >= 4) { return; }
+      if (count >= 4) {
+        return;
+      }
       values.push_back(value);
     }
   }
 
 public:
-  BitProvenance(Section* section, const Chain& chain, Stats* stats = nullptr):
-      Pass(section), _builder(section), _facts(section), _seen(section), _substs(section) {
+  BitProvenance(Section* section, const Chain& chain, Stats* stats = nullptr)
+      : Pass(section), _builder(section), _facts(section), _seen(section), _substs(section) {
     _builder.set_next_name();
     for (Block* block : chain) {
       for (Arg* arg : block->args()) {
-        if (is_int_or_bool(arg->type())) { remember(arg, opaque(arg)); }
+        if (is_int_or_bool(arg->type())) {
+          remember(arg, opaque(arg));
+        }
       }
       for (Inst* inst : *block) {
         inst->substitute_args_resolved(_substs);
-        if (!is_int_or_bool(inst->type())) { continue; }
+        if (!is_int_or_bool(inst->type())) {
+          continue;
+        }
         _stats.visited++;
         Mapping mapping = transfer(inst);
         Value* replacement = nullptr;
@@ -411,14 +554,20 @@ public:
             }
             if (!replacement) {
               replacement = extraction(inst, mapping);
-              if (replacement) { _stats.extracted++; _stats.candidate_hits++; }
+              if (replacement) {
+                _stats.extracted++;
+                _stats.candidate_hits++;
+              }
             }
             if (!replacement) {
               replacement = source_extraction(inst, mapping);
               if (replacement) {
                 _stats.source_hits++;
-                if (replacement == mapping.source) { _stats.reused++; }
-                else { _stats.extracted++; }
+                if (replacement == mapping.source) {
+                  _stats.reused++;
+                } else {
+                  _stats.extracted++;
+                }
               }
             }
           }
@@ -427,17 +576,26 @@ public:
           _substs.ensure_size(_builder.next_name());
           _seen.ensure_size(_builder.next_name());
           _substs[inst] = replacement;
-          if (replacement->is_inst() && !_seen[(NamedValue*) replacement]) { remember((NamedValue*) replacement, mapping); }
-        } else { remember(inst, mapping); }
+          if (replacement->is_inst() && !_seen[(NamedValue*) replacement]) {
+            remember((NamedValue*) replacement, mapping);
+          }
+        } else {
+          remember(inst, mapping);
+        }
       }
     }
     {
       PhaseTimer timer(_stats.cleanup_ns);
       for (Block* block : *section) {
-        for (Inst* inst : *block) { inst->substitute_args_resolved(_substs); }
-        for (auto cursor = block->begin(); cursor != block->end(); ) {
-          if (_substs[*cursor]) { cursor = cursor.erase(); }
-          else { cursor++; }
+        for (Inst* inst : *block) {
+          inst->substitute_args_resolved(_substs);
+        }
+        for (auto cursor = block->begin(); cursor != block->end();) {
+          if (_substs[*cursor]) {
+            cursor = cursor.erase();
+          } else {
+            cursor++;
+          }
         }
       }
     }
