@@ -58,12 +58,16 @@ private:
   static constexpr Bit Zero = 128;
   static constexpr Bit One = 129;
   static constexpr Bit Unknown = 130;
+  static constexpr Bit Invalid = 131;
 
   struct Mapping {
     Value* source = nullptr;
-    std::array<Bit, 64> bits{};
+    std::array<Bit, 64> bits{Invalid};
+
+    bool valid() const { return bits[0] != Invalid; }
 
     bool constant(size_t width, uint64_t& value) const {
+      assert(valid());
       value = 0;
       for (size_t i = 0; i < width; i++) {
         if (bits[i] == One) {
@@ -76,6 +80,7 @@ private:
     }
 
     bool exact(size_t width) const {
+      assert(valid());
       for (size_t i = 0; i < width; i++) {
         if (bits[i] == Unknown) {
           return false;
@@ -85,10 +90,12 @@ private:
     }
 
     bool equal(const Mapping& other, size_t width) const {
+      assert(valid() && other.valid());
       return source == other.source && std::memcmp(bits.data(), other.bits.data(), width) == 0;
     }
 
     void normalize(size_t width) {
+      assert(valid());
       for (size_t i = 0; i < width; i++) {
         if (reference(bits[i])) {
           return;
@@ -98,6 +105,7 @@ private:
     }
 
     Mapping transfer_resize(size_t from, size_t to, ResizeKind kind) const {
+      assert(valid());
       Mapping result = *this;
       Bit fill = kind == ResizeKind::Unsigned ? Zero :
                  kind == ResizeKind::Signed ? bits[from - 1] : Unknown;
@@ -109,6 +117,7 @@ private:
     }
 
     Mapping transfer_shift(size_t width, uint64_t amount, ShiftKind kind) const {
+      assert(valid());
       Mapping result;
       result.source = source;
       for (size_t i = 0; i < width; i++) {
@@ -126,6 +135,7 @@ private:
     }
 
     Mapping transfer_bit_reverse(size_t width) const {
+      assert(valid());
       Mapping result = *this;
       for (size_t i = 0; i < width; i++) {
         result.bits[i] = bits[width - 1 - i];
@@ -134,6 +144,7 @@ private:
     }
 
     void finish(Inst* inst, bool mixed) {
+      assert(valid());
       size_t width = type_width(inst->type());
       if (mixed) {
         source = inst;
@@ -147,6 +158,7 @@ private:
     }
 
     Mapping transfer_and(const Mapping& right, AndInst* inst) const {
+      assert(valid() && right.valid());
       Mapping result;
       bool mixed = false;
       for (size_t i = 0; i < type_width(inst->type()); i++) {
@@ -177,6 +189,7 @@ private:
     }
 
     Mapping transfer_or(const Mapping& right, OrInst* inst) const {
+      assert(valid() && right.valid());
       Mapping result;
       bool mixed = false;
       for (size_t i = 0; i < type_width(inst->type()); i++) {
@@ -207,6 +220,7 @@ private:
     }
 
     Mapping transfer_xor(const Mapping& right, XorInst* inst) const {
+      assert(valid() && right.valid());
       Mapping result;
       bool mixed = false;
       for (size_t i = 0; i < type_width(inst->type()); i++) {
@@ -242,6 +256,7 @@ private:
     }
 
     Mapping transfer_lt_s(const Mapping& right, LtSInst* inst) const {
+      assert(valid() && right.valid());
       uint64_t number;
       if (!right.constant(type_width(inst->arg(1)->type()), number) || number != 0) {
         return opaque(inst);
@@ -254,6 +269,7 @@ private:
     }
 
     Mapping transfer_eq(const Mapping& right, EqInst* inst) const {
+      assert(valid() && right.valid());
       size_t width = type_width(inst->arg(0)->type());
       Mapping result;
       if (exact(width) && right.exact(width) && equal(right, width)) {
@@ -271,6 +287,7 @@ private:
 
     Mapping transfer_select(const Mapping& true_value, const Mapping& false_value,
                             SelectInst* inst) const {
+      assert(valid() && true_value.valid() && false_value.valid());
       Mapping result;
       bool mixed = false;
       for (size_t i = 0; i < type_width(inst->type()); i++) {
@@ -316,7 +333,6 @@ private:
 
   Builder _builder;
   NameMap<Mapping> _facts;
-  NameMap<bool> _seen;
   NameMap<Value*> _substs;
   std::unordered_map<Key, Value*, Hash> _available;
   std::unordered_map<Value*, std::vector<Value*>> _candidates;
@@ -351,8 +367,8 @@ private:
       }
       return result;
     }
-    if (value->is_named() && ((NamedValue*) value)->name() < _seen.size() &&
-        _seen[(NamedValue*) value]) {
+    if (value->is_named() && ((NamedValue*) value)->name() < _facts.size() &&
+        _facts[(NamedValue*) value].valid()) {
       return _facts[(NamedValue*) value];
     }
     return opaque(value);
@@ -585,13 +601,12 @@ private:
   }
 
   void remember(NamedValue* value, const Mapping& mapping) {
+    assert(mapping.valid());
     PhaseTimer timer(_stats.remember_ns);
     size_t size = _builder.next_name();
     _facts.ensure_size(size);
-    _seen.ensure_size(size);
     _substs.ensure_size(size);
     _facts[value] = mapping;
-    _seen[value] = true;
     _stats.peak_fact_bytes = std::max(_stats.peak_fact_bytes, _facts.size() * sizeof(Mapping));
     if (mapping.exact(type_width(value->type()))) {
       PhaseTimer record_timer(_stats.equivalence_record_ns);
@@ -615,7 +630,7 @@ private:
 
 public:
   BitProvenance(Section* section, const Chain& chain, Stats* stats = nullptr)
-      : Pass(section), _builder(section), _facts(section), _seen(section), _substs(section) {
+      : Pass(section), _builder(section), _facts(section), _substs(section) {
     _builder.set_next_name();
     for (Block* block : chain) {
       for (Arg* arg : block->args()) {
@@ -633,9 +648,9 @@ public:
         Value* replacement = find_replacement(block, inst, mapping);
         if (replacement) {
           _substs.ensure_size(_builder.next_name());
-          _seen.ensure_size(_builder.next_name());
+          _facts.ensure_size(_builder.next_name());
           _substs[inst] = replacement;
-          if (replacement->is_inst() && !_seen[(NamedValue*) replacement]) {
+          if (replacement->is_inst() && !_facts[(NamedValue*) replacement].valid()) {
             remember((NamedValue*) replacement, mapping);
           }
         } else {

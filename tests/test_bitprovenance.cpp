@@ -111,6 +111,28 @@ b2:
   check_provenance(input, input, {0, 1});
 }
 
+void test_unrecorded_source() {
+  check_provenance(R"(section {
+b0(%0: Ptr, %1: Int32):
+  %2 = And %1, 255:Int32
+  Jump block=b1
+b1:
+  %3 = BitReverse %2
+  %4 = BitReverse %3
+  Store %0, %4, aliasing=0, offset=0
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr, %1: Int32):
+  %2 = And %1, 255:Int32
+  Jump block=b1
+b1:
+  Store %0, %2, aliasing=0, offset=0
+  Exit
+}
+)", {1});
+}
+
 void test_combined_shift() {
   check_provenance(R"(section {
 b0(%0: Ptr, %1: Int32):
@@ -288,6 +310,7 @@ int main(int argc, char** argv) {
   suite.test("reconstruction").run(test_reconstruction);
   suite.test("sign extension").run(test_sign_extension);
   suite.test("sibling reuse").run(test_sibling_reuse);
+  suite.test("unrecorded source").run(test_unrecorded_source);
   suite.test("trace chain").run(test_trace_chain);
   suite.test("random execution").run(test_random_execution);
   suite.test("combined shift").run(test_combined_shift);
