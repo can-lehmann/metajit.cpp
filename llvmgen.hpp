@@ -107,8 +107,8 @@ namespace metajit {
           );
         } else if (constant->type() == Type::Float32) {
           return llvm::ConstantFP::get(
-            llvm::Type::getFloatTy(_context),
-            bit_cast<float>((uint32_t) constant->value())
+            _context,
+            llvm::APFloat(llvm::APFloat::IEEEsingle(), llvm::APInt(32, constant->value()))
           );
         } else if (constant->type() == Type::Float64) {
           return llvm::ConstantFP::get(
