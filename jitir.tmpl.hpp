@@ -6913,10 +6913,16 @@ private:
 
         if (dynmatch(CallInst, call, inst)) {
           if (call->flags().has(CallFlags::MustTail)) {
-            if (call->type() != Type::Void || call->call_conv() != CallConv::PreserveNone ||
-                call->flags().has(CallFlags::Pure) || call->flags().has(CallFlags::Idempotent) ||
-                !dynamic_cast<ExitInst*>(call->next())) {
-              errors << "Tail call requires an impure void PreserveNone call immediately followed by Exit\n";
+            if (call->call_conv() != CallConv::PreserveNone) {
+              errors << "MustTail call requires PreserveNone calling convention\n";
+              return true;
+            }
+            if (call->type() != Type::Void) {
+              errors << "MustTail call requires a void return type\n";
+              return true;
+            }
+            if (!dynamic_cast<ExitInst*>(call->next())) {
+              errors << "MustTail call must be immediately followed by Exit\n";
               return true;
             }
           }
