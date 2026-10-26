@@ -1063,6 +1063,22 @@ namespace metajit {
         }
       } else if (dynmatch(StoreInst, store, inst)) {
         X86Inst::Mem mem(vreg(store->arg(0)), store->offset());
+        if (store->arg(1)->type() == Type::Bool && store->arg(1)->is_named() &&
+            _use_counts.at((NamedValue*) store->arg(1)) == 1) {
+          if (dynmatch(EqInst, eq, store->arg(1))) {
+            build_cmp_eq(eq->arg(0), eq->arg(1));
+            _builder.sete8(mem);
+            return;
+          } else if (dynmatch(LtSInst, lt_s, store->arg(1))) {
+            build_cmp(lt_s->arg(0), lt_s->arg(1));
+            _builder.setl8(mem);
+            return;
+          } else if (dynmatch(LtUInst, lt_u, store->arg(1))) {
+            build_cmp(lt_u->arg(0), lt_u->arg(1));
+            _builder.setb8(mem);
+            return;
+          }
+        }
         
         switch (store->arg(1)->type()) {
           case Type::Float32: _builder.movss_mem(mem, vreg(store->arg(1))); return;
