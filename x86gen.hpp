@@ -343,7 +343,6 @@ namespace metajit {
   }
 
   struct X86CallData {
-    bool tail = false;
     CallConv call_conv;
     lwir::Span<Reg> args;
     Reg ret;
@@ -1498,7 +1497,9 @@ namespace metajit {
         Reg callee_reg = fix_to_preg(vreg(), Reg::X86_R10());
         _builder.mov64(callee_reg, vreg(call->callee()));
         X86Inst* call_inst = _builder.call(callee_reg, ret_reg, call->call_conv(), args);
-        ((X86CallData*) call_inst->data())->tail = call->flags().has(CallFlags::MustTail);
+        if (call->flags().has(CallFlags::MustTail)) {
+          call_inst->set_kind(X86Inst::Kind::TailJump);
+        }
 
         if (call->type() != Type::Void) {
           move(vreg(call), ret_reg);
@@ -1565,7 +1566,10 @@ namespace metajit {
         }
         _builder.jmp(_blocks[jump->block()->name()]);
       } else if (dynmatch(ExitInst, exit, inst)) {
-        _builder.ret();
+        CallInst* call = dynamic_cast<CallInst*>(exit->prev());
+        if (!call || !call->flags().has(CallFlags::MustTail)) {
+          _builder.ret();
+        }
       } else {
         inst->write(std::cerr);
         std::cerr << std::endl;
@@ -1982,7 +1986,7 @@ namespace metajit {
             _vreg_info[reg.id()].interval.incl(inst->name());
           });
 
-          if (inst->kind() == X86Inst::Kind::Call) {
+          if (inst->kind() == X86Inst::Kind::Call || inst->kind() == X86Inst::Kind::TailJump) {
             X86CallData* data = (X86CallData*) inst->data();
             for (Reg arg : data->args) {
               assert(arg.is_virtual());
@@ -2058,7 +2062,7 @@ namespace metajit {
             reg_file.touch(preg);
             it = it.erase();
             continue;
-          } else if (inst->kind() == X86Inst::Kind::Call) {
+          } else if (inst->kind() == X86Inst::Kind::Call || inst->kind() == X86Inst::Kind::TailJump) {
             X86CallData* data = (X86CallData*) inst->data();
             CallConvInfo info(data->call_conv);
 
@@ -2546,22 +2550,6 @@ namespace metajit {
       }
     }
 
-    void lower_tail_calls() {
-      for (X86Block* block : _blocks) {
-        for (X86Inst* inst : *block) {
-          if (inst->kind() == X86Inst::Kind::Call && ((X86CallData*) inst->data())->tail) {
-            X86Inst* next = inst->next();
-            while (next && next->kind() == X86Inst::Kind::Comment) {
-              next = next->next();
-            }
-            assert(next && next->kind() == X86Inst::Kind::Ret);
-            block->insts().remove(next);
-            inst->set_kind(X86Inst::Kind::TailJump);
-          }
-        }
-      }
-    }
-
     void insert_stack_frame() {
       size_t stack_frame_size = _stack_offset_alloc.frame_size();
       if (stack_frame_size == 0) {
@@ -2635,7 +2623,6 @@ namespace metajit {
         with_timer(regalloc, graph_coloring_regalloc());
       }
 
-      lower_tail_calls();
       insert_stack_frame();
       with_timer(peephole, peephole());
 
