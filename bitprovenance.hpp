@@ -488,9 +488,7 @@ private:
     while (first < width && !reference(mapping.bits[first])) {
       first++;
     }
-    if (first == width) {
-      return nullptr;
-    }
+    assert(first < width);
     if (value == mapping.source) {
       if (auto shift = input.match_shift(mapping, width, first, mapping.bits[first] & 63)) {
         return build_shift_replacement(inst, value, *shift);

@@ -317,6 +317,58 @@ b0(%0: Ptr, %1: Int32, %2: Int32):
 )");
 }
 
+void test_signed_comparison_fallback() {
+  for (const std::string right : {"1:Int32", "%2"}) {
+    std::string input = "section {\nb0(%0: Ptr, %1: Int32, %2: Int32):\n  %3 = LtS %1, " + right +
+                        "\n  Store %0, %3, aliasing=0, offset=0\n  Exit\n}\n";
+    check_provenance(input, input);
+  }
+}
+
+void test_variable_shifts() {
+  for (const std::string op : {"Shl", "ShrU", "ShrS"}) {
+    std::string prefix = "section {\nb0(%0: Ptr, %1: Int32, %2: Int32):\n  %3 = " + op + " %1, %2\n";
+    std::string suffix = ", aliasing=0, offset=0\n  Exit\n}\n";
+    check_provenance(prefix + "  %4 = BitReverse %3\n  %5 = BitReverse %4\n  Store %0, %5" + suffix,
+                     prefix + "  Store %0, %3" + suffix);
+  }
+}
+
+void test_opaque_transfers() {
+  for (const std::string operation : {"Popcount %1", "Freeze %1", "PtrToInt %0, type=Int32"}) {
+    std::string prefix = "section {\nb0(%0: Ptr, %1: Int32):\n  %2 = " + operation + "\n";
+    std::string suffix = ", aliasing=0, offset=0\n  Exit\n}\n";
+    check_provenance(prefix + "  %3 = BitReverse %2\n  %4 = BitReverse %3\n  Store %0, %4" + suffix,
+                     prefix + "  Store %0, %2" + suffix);
+  }
+}
+
+void test_loads_across_store() {
+  check_provenance(R"(section {
+b0(%0: Ptr, %1: Ptr, %2: Int32):
+  %3 = Load %0, type=Int32, flags={}, aliasing=0, offset=0
+  %4 = BitReverse %3
+  %5 = BitReverse %4
+  Store %0, %2, aliasing=0, offset=0
+  %6 = Load %0, type=Int32, flags={}, aliasing=0, offset=0
+  %7 = BitReverse %6
+  %8 = BitReverse %7
+  Store %1, %5, aliasing=0, offset=0
+  Store %1, %8, aliasing=0, offset=4
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr, %1: Ptr, %2: Int32):
+  %3 = Load %0, type=Int32, flags={}, aliasing=0, offset=0
+  Store %0, %2, aliasing=0, offset=0
+  %4 = Load %0, type=Int32, flags={}, aliasing=0, offset=0
+  Store %1, %3, aliasing=0, offset=0
+  Store %1, %4, aliasing=0, offset=4
+  Exit
+}
+)");
+}
+
 void test_random_execution() {
   srand(1234567);
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
@@ -407,6 +459,10 @@ int main(int argc, char** argv) {
   suite.test("resize roundtrips").run(test_resize_roundtrips);
   suite.test("resize extraction").run(test_resize_extraction);
   suite.test("mixed sources").run(test_mixed_sources);
+  suite.test("signed comparison fallback").run(test_signed_comparison_fallback);
+  suite.test("variable shifts").run(test_variable_shifts);
+  suite.test("opaque transfers").run(test_opaque_transfers);
+  suite.test("loads across store").run(test_loads_across_store);
   suite.test("random execution").run(test_random_execution);
   suite.test("combined shift").run(test_combined_shift);
   suite.test("equivalence map").run(test_equivalence_map);
