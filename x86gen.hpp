@@ -913,6 +913,22 @@ namespace metajit {
       }
     }
 
+    bool build_cmp_setcc(X86Inst::RM dst, Value* value) {
+      if (dynmatch(EqInst, eq, value)) {
+        build_cmp_eq(eq->arg(0), eq->arg(1));
+        _builder.sete8(dst);
+      } else if (dynmatch(LtSInst, lt_s, value)) {
+        build_cmp(lt_s->arg(0), lt_s->arg(1));
+        _builder.setl8(dst);
+      } else if (dynmatch(LtUInst, lt_u, value)) {
+        build_cmp(lt_u->arg(0), lt_u->arg(1));
+        _builder.setb8(dst);
+      } else {
+        return false;
+      }
+      return true;
+    }
+
     void build_cmov(Reg res, Value* cond, Reg then) {
       if (cond->is_inst()) {
         Inst* pred_inst = (Inst*) cond;
@@ -1064,20 +1080,8 @@ namespace metajit {
       } else if (dynmatch(StoreInst, store, inst)) {
         X86Inst::Mem mem(vreg(store->arg(0)), store->offset());
         if (store->arg(1)->type() == Type::Bool && store->arg(1)->is_named() &&
-            _use_counts.at((NamedValue*) store->arg(1)) == 1) {
-          if (dynmatch(EqInst, eq, store->arg(1))) {
-            build_cmp_eq(eq->arg(0), eq->arg(1));
-            _builder.sete8(mem);
-            return;
-          } else if (dynmatch(LtSInst, lt_s, store->arg(1))) {
-            build_cmp(lt_s->arg(0), lt_s->arg(1));
-            _builder.setl8(mem);
-            return;
-          } else if (dynmatch(LtUInst, lt_u, store->arg(1))) {
-            build_cmp(lt_u->arg(0), lt_u->arg(1));
-            _builder.setb8(mem);
-            return;
-          }
+            _use_counts.at((NamedValue*) store->arg(1)) == 1 && build_cmp_setcc(mem, store->arg(1))) {
+          return;
         }
         
         switch (store->arg(1)->type()) {
@@ -1393,20 +1397,7 @@ namespace metajit {
       } else if (dynamic_cast<EqInst*>(inst) ||
                  dynamic_cast<LtSInst*>(inst) ||
                  dynamic_cast<LtUInst*>(inst)) {
-        if (dynamic_cast<EqInst*>(inst)) {
-          build_cmp_eq(inst->arg(0), inst->arg(1));
-        } else {
-          build_cmp(inst->arg(0), inst->arg(1));
-        }
-        if (dynamic_cast<EqInst*>(inst)) {
-          _builder.sete8(vreg(inst));
-        } else if (dynamic_cast<LtSInst*>(inst)) {
-          _builder.setl8(vreg(inst));
-        } else if (dynamic_cast<LtUInst*>(inst)) {
-          _builder.setb8(vreg(inst));
-        } else {
-          assert(false);
-        }
+        build_cmp_setcc(vreg(inst), inst);
       } else if (dynmatch(BitReverseInst, bit_reverse, inst)) {
         Reg result = vreg(inst);
         size_t width = type_width(inst->type());
