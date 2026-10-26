@@ -776,10 +776,10 @@ namespace metajit {
     }
 
     void build_add(Reg dst, Value* a, Value* b) {
+      Type type = a->type();
       if (dynamic_cast<ShlInst*>(a) || dynamic_cast<MulInst*>(a)) {
         std::swap(a, b);
       }
-      bool use_lea32 = false;
       X86Inst::Mem mem;
       if (dynmatch(Const, constant_b, b)) {
         if (is_sext_imm32(constant_b)) {
@@ -802,13 +802,11 @@ namespace metajit {
           }
         }
       } else if (dynmatch(ShlInst, shift, b)) {
-        Type type = a->type();
         if ((type == Type::Int32 || type == Type::Int64) &&
             a->is_named() && shift->type() == type && shift->arg(0)->type() == type) {
           if (dynmatch(Const, amount, shift->arg(1))) {
             if (amount->value() >= 1 && amount->value() <= 3) {
               mem = X86Inst::Mem(vreg(a), size_t(1) << amount->value(), vreg(shift->arg(0)), 0);
-              use_lea32 = type == Type::Int32;
             }
           }
         }
@@ -823,7 +821,7 @@ namespace metajit {
         );
       }
 
-      if (use_lea32) {
+      if (type == Type::Int32) {
         _builder.lea32(dst, mem);
       } else {
         _builder.lea64(dst, mem);
