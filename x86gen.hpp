@@ -421,6 +421,10 @@ namespace metajit {
       return &build(X86Inst::Kind::Mov64Imm64).set_rm(dst).set_imm(imm);
     }
     
+    X86Inst* lea32(Reg dst, X86Inst::Mem src) {
+      return &build(X86Inst::Kind::Lea32).set_reg(dst).set_rm(src);
+    }
+
     X86Inst* lea64(Reg dst, X86Inst::Mem src) {
       return &build(X86Inst::Kind::Lea64).set_reg(dst).set_rm(src);
     }
@@ -771,7 +775,10 @@ namespace metajit {
       }
     }
 
-    void build_add(Reg dst, Value* a, Value* b) {
+    void build_add(Reg dst, Type type, Value* a, Value* b) {
+      if (dynamic_cast<ShlInst*>(a) || dynamic_cast<MulInst*>(a)) {
+        std::swap(a, b);
+      }
       X86Inst::Mem mem;
       if (dynmatch(Const, constant_b, b)) {
         if (is_sext_imm32(constant_b)) {
@@ -793,6 +800,13 @@ namespace metajit {
             );
           }
         }
+      } else if (dynmatch(ShlInst, shift, b)) {
+        if (dynmatch(Const, amount, shift->arg(1))) {
+          if (a->is_named() && type_size(type) >= 4 && shift->type() == type &&
+              amount->value() >= 1 && amount->value() <= 3) {
+            mem = X86Inst::Mem(vreg(a), size_t(1) << amount->value(), vreg(shift->arg(0)), 0);
+          }
+        }
       }
 
       if (mem.is_invalid()) {
@@ -804,7 +818,11 @@ namespace metajit {
         );
       }
 
-      _builder.lea64(dst, mem);
+      if (type_size(type) <= 4) {
+        _builder.lea32(dst, mem);
+      } else {
+        _builder.lea64(dst, mem);
+      }
     }
 
     void build_test(Value* cond) {
@@ -1100,9 +1118,9 @@ namespace metajit {
         Reg rsp = fix_to_preg(vreg(), Reg::X86_RSP());
         _builder.lea64(vreg(inst), X86Inst::Mem(rsp, (int32_t) offset));
       } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
-        build_add(vreg(inst), add_ptr->ptr(), add_ptr->offset());
+        build_add(vreg(inst), inst->type(), add_ptr->ptr(), add_ptr->offset());
       } else if (dynmatch(AddInst, add, inst)) {
-        build_add(vreg(inst), add->arg(0), add->arg(1));
+        build_add(vreg(inst), inst->type(), add->arg(0), add->arg(1));
       } else if (dynmatch(SubInst, sub, inst)) {
         _builder.mov64(vreg(inst), vreg(sub->arg(0)));
 

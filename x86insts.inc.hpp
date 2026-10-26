@@ -78,6 +78,7 @@ binop_x86_inst(MovSX32To64, movsx32to64, mov_usedef, false, { rex_w(); byte(0x63
 binop_x86_inst(MovZX8To64, movzx8to64, mov_usedef, false, { rex_w(); byte(0x0f); byte(0xb6); modrm(); })
 binop_x86_inst(MovZX16To64, movzx16to64, mov_usedef, false, { rex_w(); byte(0x0f); byte(0xb7); modrm(); })
 
+x86_inst(Lea32, lea32, { use(rm); def(reg); }, false, { rex_opt(); byte(0x8d); modrm(); })
 x86_inst(Lea64, lea64, { use(rm); def(reg); }, true, { rex_w(); byte(0x8d); modrm(); })
 
 binop_x86_inst(Add64, add64, binop_usedef, true, { rex_w(); byte(0x03); modrm(); })
