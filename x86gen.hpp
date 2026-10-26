@@ -421,6 +421,10 @@ namespace metajit {
       return &build(X86Inst::Kind::Mov64Imm64).set_rm(dst).set_imm(imm);
     }
     
+    X86Inst* lea32(Reg dst, X86Inst::Mem src) {
+      return &build(X86Inst::Kind::Lea32).set_reg(dst).set_rm(src);
+    }
+
     X86Inst* lea64(Reg dst, X86Inst::Mem src) {
       return &build(X86Inst::Kind::Lea64).set_reg(dst).set_rm(src);
     }
@@ -771,6 +775,29 @@ namespace metajit {
       }
     }
 
+    bool build_scaled_add(Reg dst, Type type, Value* base, Value* index) {
+      if ((type != Type::Int32 && type != Type::Int64) ||
+          !base->is_named() || base->type() != type || index->type() != type) {
+        return false;
+      }
+      if (dynmatch(ShlInst, shift, index)) {
+        if (shift->arg(0)->type() == type) {
+          if (dynmatch(Const, amount, shift->arg(1))) {
+            if (amount->value() >= 1 && amount->value() <= 3) {
+              X86Inst::Mem mem(vreg(base), size_t(1) << amount->value(), vreg(shift->arg(0)), 0);
+              if (type == Type::Int32) {
+                _builder.lea32(dst, mem);
+              } else {
+                _builder.lea64(dst, mem);
+              }
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    }
+
     void build_add(Reg dst, Value* a, Value* b) {
       X86Inst::Mem mem;
       if (dynmatch(Const, constant_b, b)) {
@@ -1102,6 +1129,10 @@ namespace metajit {
       } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
         build_add(vreg(inst), add_ptr->ptr(), add_ptr->offset());
       } else if (dynmatch(AddInst, add, inst)) {
+        if (build_scaled_add(vreg(inst), add->type(), add->arg(0), add->arg(1)) ||
+            build_scaled_add(vreg(inst), add->type(), add->arg(1), add->arg(0))) {
+          return;
+        }
         build_add(vreg(inst), add->arg(0), add->arg(1));
       } else if (dynmatch(SubInst, sub, inst)) {
         _builder.mov64(vreg(inst), vreg(sub->arg(0)));
