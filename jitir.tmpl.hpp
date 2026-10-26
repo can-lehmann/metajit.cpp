@@ -498,6 +498,7 @@ namespace metajit {
     }
 
     void substitute_args(NameMap<Value*>& substs);
+    void substitute_args_iterated(NameMap<Value*>& substs);
 
     void substitute_blocks(BlockMap<Block*>& substs);
     void substitute_blocks(const std::map<Block*, Block*>& substs);
@@ -2758,6 +2759,20 @@ namespace metajit {
 
     size_t size() const { return _size; }
 
+    void ensure_size(size_t size) {
+      if (size <= _size) {
+        return;
+      }
+      size = std::max(size, _size * 2);
+      T* data = new T[size]();
+      for (size_t index = 0; index < _size; index++) {
+        data[index] = _data[index];
+      }
+      delete[] _data;
+      _data = data;
+      _size = size;
+    }
+
     T& at(K* key) {
       assert(key->name() < _size);
       return _data[key->name()];
@@ -2808,6 +2823,30 @@ namespace metajit {
       BaseNameMap<Block, T, BlockMap<T>>::init_size(section->block_count());
     }
   };
+
+  Value* resolve_substitution(Value* value, NameMap<Value*>& substs) {
+    Value* replacement = value;
+    while (replacement->is_named() && ((NamedValue*) replacement)->name() < substs.size()) {
+      Value* next = substs[(NamedValue*) replacement];
+      if (!next) {
+        break;
+      }
+      replacement = next;
+    }
+    while (value != replacement) {
+      Value*& next = substs[(NamedValue*) value];
+      Value* old_next = next;
+      next = replacement;
+      value = old_next;
+    }
+    return replacement;
+  }
+
+  void Inst::substitute_args_iterated(NameMap<Value*>& substs) {
+    for (size_t index = 0; index < arg_count(); index++) {
+      set_arg(index, resolve_substitution(arg(index), substs));
+    }
+  }
 
   void Inst::substitute_args(NameMap<Value*>& substs) {
     for (size_t it = 0; it < arg_count(); it++) {
