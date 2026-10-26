@@ -45,6 +45,17 @@ int main(int argc, char** argv) {
 
   DiffTestSuite suite("tests/output/test_reader", argc, argv);
 
+  suite.diff_test("refined_aliasing_roundtrip").run([](Builder& builder, TestData& data) {
+    Value* value = data.input(RandomRange(Type::Int64));
+    data.output(value);
+    builder.build_exit();
+
+    RefineAliasing::run(builder.section());
+    check_roundtrip(builder.section());
+    Section* folded = copy_and_fold(builder.section());
+    delete folded;
+  });
+
   suite.diff_test("bug_fold_lt_u").run([](Builder& builder, TestData& data) {
     Value* lt = builder.fold_lt_u(
       builder.build_const(Type::Int64, 1271752347623423UL),

@@ -625,9 +625,10 @@ namespace metajit {
     void memory_deps() {
       for (Block* block : *_section) {
         std::unordered_map<AliasingGroup, void*> last_store;
+        void* last_call = block;
         for (Inst* inst : *block) {
           #define find_dep(inst) \
-            void* dep = (void*) block; \
+            void* dep = last_call; \
             if (last_store.find(inst->aliasing()) != last_store.end()) { \
               dep = (void*) last_store.at(inst->aliasing()); \
             } \
@@ -640,6 +641,7 @@ namespace metajit {
             last_store[store->aliasing()] = store;
           } else if (dynamic_cast<CallInst*>(inst)) {
             _memory_deps[inst] = (void*) block;
+            last_call = inst;
             for (auto& [aliasing, dep] : last_store) {
               dep = (void*) inst;
             }
@@ -699,8 +701,8 @@ namespace metajit {
         Reg reg = vreg(value->type());
         switch (constant->type()) {
           case Type::Bool:
-          case Type::Int8: _builder.mov8_imm(reg, constant->value()); break;
-          case Type::Int16: _builder.mov16_imm(reg, constant->value()); break;
+          case Type::Int8:
+          case Type::Int16:
           case Type::Int32: _builder.mov32_imm(reg, constant->value()); break;
           case Type::Int64:
           case Type::Ptr:
@@ -904,6 +906,17 @@ namespace metajit {
       _builder.cmovnz64(res, then);
     }
 
+    std::pair<Value*, Value*> commutative_args(Inst* inst) {
+      Value* a = inst->arg(0);
+      Value* b = inst->arg(1);
+      if (inst->is_commutative() && a->is_named() && b->is_named() &&
+          !_vregs.at((NamedValue*) a).is_invalid() &&
+          _vregs.at((NamedValue*) b).is_invalid()) {
+        std::swap(a, b);
+      }
+      return {a, b};
+    }
+
     void isel(Inst* inst, Block* block) {
       if (dynmatch(FreezeInst, freeze, inst)) {
         move(vreg(inst), vreg(freeze->arg(0)));
@@ -931,26 +944,28 @@ namespace metajit {
           _builder.mov64(vreg(inst), vreg(select->arg(2)));
           build_cmov(vreg(inst), select->cond(), vreg(select->arg(1)));
         }
-      } else if (dynmatch(ResizeUInst, resize_u, inst)) {
-        if (resize_u->arg(0)->type() == Type::Bool) {
-          _builder.mov64(vreg(inst), vreg(resize_u->arg(0)));
-          _builder.and64_imm(vreg(inst), (uint64_t) 1);
+      } else if (dynamic_cast<ResizeUInst*>(inst) ||
+                 (inst->type() == Type::Bool &&
+                  (dynamic_cast<ResizeSInst*>(inst) || dynamic_cast<ResizeXInst*>(inst)))) {
+        if (inst->type() == Type::Bool) {
+          _builder.mov64(vreg(inst), vreg(inst->arg(0)));
+          if (inst->arg(0)->type() != Type::Bool) {
+            _builder.and32_imm(vreg(inst), (uint64_t) 1);
+          }
         } else {
-          switch (type_size(resize_u->arg(0)->type())) {
-            case 1: _builder.movzx8to64(vreg(inst), vreg(resize_u->arg(0))); break;
-            case 2: _builder.movzx16to64(vreg(inst), vreg(resize_u->arg(0))); break;
-            case 4: _builder.mov32(vreg(inst), vreg(resize_u->arg(0))); break;
-            case 8: _builder.mov64(vreg(inst), vreg(resize_u->arg(0))); break;
+          switch (type_size(inst->arg(0)->type())) {
+            case 1: _builder.movzx8to64(vreg(inst), vreg(inst->arg(0))); break;
+            case 2: _builder.movzx16to64(vreg(inst), vreg(inst->arg(0))); break;
+            case 4: _builder.mov32(vreg(inst), vreg(inst->arg(0))); break;
+            case 8: _builder.mov64(vreg(inst), vreg(inst->arg(0))); break;
             default:
               assert(false && "Unsupported resize type");
           }
         }
       } else if (dynmatch(ResizeSInst, resize_s, inst)) {
         if (resize_s->arg(0)->type() == Type::Bool) {
-          _builder.mov64_imm(vreg(inst), (uint64_t) 0);
-          Reg ones = vreg();
-          _builder.mov64_imm(ones, ~(uint64_t) 0);
-          build_cmov(vreg(inst), resize_s->arg(0), ones);
+          _builder.movzx8to64(vreg(inst), vreg(resize_s->arg(0)));
+          _builder.neg64(vreg(inst));
         } else {
           switch (type_size(resize_s->arg(0)->type())) {
             case 1: _builder.movsx8to64(vreg(inst), vreg(resize_s->arg(0))); break;
@@ -964,11 +979,15 @@ namespace metajit {
       } else if (dynmatch(ResizeXInst, resize_x, inst)) {
         _builder.mov64(vreg(inst), vreg(resize_x->arg(0)));
       } else if (dynmatch(ResizeFInst, resize_f, inst)) {
-        switch (resize_f->type()) {
-          case Type::Float32: _builder.cvtsd2ss(vreg(inst), vreg(resize_f->arg(0))); break;
-          case Type::Float64: _builder.cvtss2sd(vreg(inst), vreg(resize_f->arg(0))); break;
-          default:
-            assert(false && "Unsupported resize_f type");
+        if (resize_f->type() == resize_f->arg(0)->type()) {
+          move(vreg(inst), vreg(resize_f->arg(0)));
+        } else {
+          switch (resize_f->type()) {
+            case Type::Float32: _builder.cvtsd2ss(vreg(inst), vreg(resize_f->arg(0))); break;
+            case Type::Float64: _builder.cvtss2sd(vreg(inst), vreg(resize_f->arg(0))); break;
+            default:
+              assert(false && "Unsupported resize_f type");
+          }
         }
       } else if (dynmatch(IntToFloatSInst, int_to_float_s, inst)) {
         Reg src = vreg();
@@ -997,8 +1016,8 @@ namespace metajit {
         X86Inst::Mem mem(vreg(load->arg(0)), load->offset());
         switch (load->type()) {
           case Type::Bool:
-          case Type::Int8: _builder.mov8(vreg(inst), mem); break;
-          case Type::Int16: _builder.mov16(vreg(inst), mem); break;
+          case Type::Int8: _builder.movzx8to64(vreg(inst), mem); break;
+          case Type::Int16: _builder.movzx16to64(vreg(inst), mem); break;
           case Type::Int32: _builder.mov32(vreg(inst), mem); break;
           case Type::Ptr:
           case Type::Int64: _builder.mov64(vreg(inst), mem); break;
@@ -1060,10 +1079,6 @@ namespace metajit {
                 assert(false && "Unsupported store type");
             }
           }
-        }
-
-        if (store->arg(1)->type() == Type::Bool) {
-          _builder.and64_imm(vreg(store->arg(1)), (uint64_t) 1);
         }
 
         switch (type_size(store->arg(1)->type())) {
@@ -1133,8 +1148,9 @@ namespace metajit {
         _builder.mov64(vreg(inst), rdx);
         _builder.pseudo_use(rax);
       } else if (dynmatch(MulInst, mul, inst)) {
-        _builder.mov64(vreg(inst), vreg(mul->arg(0)));
-        _builder.imul64(vreg(inst), vreg(mul->arg(1)));
+        auto [a, b] = commutative_args(inst);
+        _builder.mov64(vreg(inst), vreg(a));
+        _builder.imul64(vreg(inst), vreg(b));
       } else if (dynamic_cast<DivUInst*>(inst) ||
                  dynamic_cast<ModUInst*>(inst) ||
                  dynamic_cast<DivSInst*>(inst) ||
@@ -1143,44 +1159,56 @@ namespace metajit {
         Reg rdx = fix_to_preg(vreg(), Reg::X86_RDX());
         Reg rax = fix_to_preg(vreg(), Reg::X86_RAX());
 
-        if (dynamic_cast<DivSInst*>(inst) || dynamic_cast<ModSInst*>(inst)) {
-          if (inst->type() == Type::Int8) {
+        bool is_signed = dynamic_cast<DivSInst*>(inst) || dynamic_cast<ModSInst*>(inst);
+        Reg divisor;
+        if (inst->type() == Type::Int8) {
+          if (is_signed) {
             _builder.movsx8to64(rax, vreg(inst->arg(0)));
-            _builder.movsx8to64(vreg(inst->arg(1)), vreg(inst->arg(1)));
           } else {
-            _builder.mov64(rax, vreg(inst->arg(0)));
+            _builder.movzx8to64(rax, vreg(inst->arg(0)));
           }
 
+          divisor = vreg();
+          if (dynmatch(Const, constant_b, inst->arg(1))) {
+            uint64_t value = constant_b->value();
+            if (is_signed) {
+              value = sign_extend_imm(constant_b);
+            }
+            _builder.mov16_imm(divisor, value);
+          } else if (is_signed) {
+            _builder.movsx8to64(divisor, vreg(inst->arg(1)));
+          } else {
+            _builder.movzx8to64(divisor, vreg(inst->arg(1)));
+          }
+        } else {
+          _builder.mov64(rax, vreg(inst->arg(0)));
+          divisor = vreg(inst->arg(1));
+        }
+
+        if (is_signed) {
           switch (inst->type()) {
             case Type::Int8:
             case Type::Int16:
               _builder.cwd(rdx);
-              _builder.idiv16(vreg(inst->arg(1)));
+              _builder.idiv16(divisor);
             break;
             case Type::Int32:
               _builder.cdq(rdx);
-              _builder.idiv32(vreg(inst->arg(1)));
+              _builder.idiv32(divisor);
             break;
             case Type::Int64:
               _builder.cqo(rdx);
-              _builder.idiv64(vreg(inst->arg(1)));
+              _builder.idiv64(divisor);
             break;
             default: assert(false && "Unsupported type");
           }
         } else {
           _builder.mov64_imm(rdx, (uint64_t) 0);
-          if (inst->type() == Type::Int8) {
-            _builder.movzx8to64(rax, vreg(inst->arg(0)));
-            _builder.movzx8to64(vreg(inst->arg(1)), vreg(inst->arg(1)));
-          } else {
-            _builder.mov64(rax, vreg(inst->arg(0)));
-          }
-
           switch (inst->type()) {
             case Type::Int8:
-            case Type::Int16: _builder.div16(vreg(inst->arg(1))); break;
-            case Type::Int32: _builder.div32(vreg(inst->arg(1))); break;
-            case Type::Int64: _builder.div64(vreg(inst->arg(1))); break;
+            case Type::Int16: _builder.div16(divisor); break;
+            case Type::Int32: _builder.div32(divisor); break;
+            case Type::Int64: _builder.div64(divisor); break;
             default: assert(false && "Unsupported type");
           }
         }
@@ -1193,38 +1221,65 @@ namespace metajit {
           _builder.pseudo_use(rdx);
         }
       } else if (dynmatch(AndInst, and_inst, inst)) {
-        _builder.mov64(vreg(inst), vreg(and_inst->arg(0)));
+        auto [a, b] = commutative_args(inst);
+        _builder.mov64(vreg(inst), vreg(a));
 
-        if (dynmatch(Const, constant_b, and_inst->arg(1))) {
+        if (dynmatch(Const, constant_b, b)) {
           if (is_sext_imm32(constant_b)) {
-            _builder.and64_imm(vreg(inst), sign_extend_imm(constant_b));
+            if (type_size(inst->type()) == 8) {
+              _builder.and64_imm(vreg(inst), sign_extend_imm(constant_b));
+            } else {
+              _builder.and32_imm(vreg(inst), sign_extend_imm(constant_b));
+            }
             return;
           }
         }
 
-        _builder.and64(vreg(inst), vreg(and_inst->arg(1)));
+        if (type_size(inst->type()) == 8) {
+          _builder.and64(vreg(inst), vreg(b));
+        } else {
+          _builder.and32(vreg(inst), vreg(b));
+        }
       } else if (dynmatch(OrInst, or_inst, inst)) {
-        _builder.mov64(vreg(inst), vreg(or_inst->arg(0)));
+        auto [a, b] = commutative_args(inst);
+        _builder.mov64(vreg(inst), vreg(a));
 
-        if (dynmatch(Const, constant_b, or_inst->arg(1))) {
+        if (dynmatch(Const, constant_b, b)) {
           if (is_sext_imm32(constant_b)) {
-            _builder.or64_imm(vreg(inst), sign_extend_imm(constant_b));
+            if (type_size(inst->type()) == 8) {
+              _builder.or64_imm(vreg(inst), sign_extend_imm(constant_b));
+            } else {
+              _builder.or32_imm(vreg(inst), sign_extend_imm(constant_b));
+            }
             return;
           }
         }
 
-        _builder.or64(vreg(inst), vreg(or_inst->arg(1)));
+        if (type_size(inst->type()) == 8) {
+          _builder.or64(vreg(inst), vreg(b));
+        } else {
+          _builder.or32(vreg(inst), vreg(b));
+        }
       } else if (dynmatch(XorInst, xor_inst, inst)) {
-        _builder.mov64(vreg(inst), vreg(xor_inst->arg(0)));
+        auto [a, b] = commutative_args(inst);
+        _builder.mov64(vreg(inst), vreg(a));
 
-        if (dynmatch(Const, constant_b, xor_inst->arg(1))) {
+        if (dynmatch(Const, constant_b, b)) {
           if (is_sext_imm32(constant_b)) {
-            _builder.xor64_imm(vreg(inst), sign_extend_imm(constant_b));
+            if (type_size(inst->type()) == 8) {
+              _builder.xor64_imm(vreg(inst), sign_extend_imm(constant_b));
+            } else {
+              _builder.xor32_imm(vreg(inst), sign_extend_imm(constant_b));
+            }
             return;
           }
         }
 
-        _builder.xor64(vreg(inst), vreg(xor_inst->arg(1)));
+        if (type_size(inst->type()) == 8) {
+          _builder.xor64(vreg(inst), vreg(b));
+        } else {
+          _builder.xor32(vreg(inst), vreg(b));
+        }
       } else if (dynmatch(ShlInst, shl, inst)) {
         _builder.mov64(vreg(inst), vreg(shl->arg(0)));
 
@@ -1608,7 +1663,7 @@ namespace metajit {
       }
 
       size_t frame_size() const {
-        size_t size = _max_offset;
+        size_t size = _max_offset + align_pad(_max_offset, 8);
         if (_needs_call_alignment && (size % 16) != 8) {
           size += 8;
         }
@@ -2015,9 +2070,11 @@ namespace metajit {
             }
 
             VRegInfo& ret_info = _vreg_info[data->ret.id()];
-            ret_info.current_reg = ret_info.fixed;
-            reg_file.set(ret_info.fixed, data->ret);
-            reg_file.touch(ret_info.fixed);
+            if (ret_info.interval.max > inst->name()) {
+              ret_info.current_reg = ret_info.fixed;
+              reg_file.set(ret_info.fixed, data->ret);
+              reg_file.touch(ret_info.fixed);
+            }
 
             it++;
             continue;
@@ -2408,6 +2465,20 @@ namespace metajit {
         for (auto it = block->begin(); it != block->end(); ) {
           X86Inst* inst = *it;
 
+          if (std::holds_alternative<X86Block*>(inst->imm())) {
+            for (size_t steps = 0; steps < _blocks.size(); steps++) {
+              X86Inst* jump = std::get<X86Block*>(inst->imm())->first();
+              while (jump && jump->kind() == X86Inst::Kind::Comment) {
+                jump = jump->next();
+              }
+              if (!jump || jump->next() || jump->kind() != X86Inst::Kind::Jmp ||
+                  jump->imm() == inst->imm()) {
+                break;
+              }
+              inst->set_imm(jump->imm());
+            }
+          }
+
           std::optional<X86Inst::Kind> inverted = invert_branch(inst->kind());
           if (inverted &&
               std::holds_alternative<X86Block*>(inst->imm()) &&
@@ -2418,6 +2489,7 @@ namespace metajit {
               inst->set_kind(*inverted);
               inst->set_imm(next->imm());
               block->insts().remove(next);
+              continue;
             }
           }
 

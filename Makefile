@@ -9,7 +9,7 @@ TEST_CFLAGS := ${CFLAGS} -DMETAJIT_DEBUG -DMETAJIT_SLOW_ASSERTS
 COVERAGE_CFLAGS := ${TEST_CFLAGS} -fprofile-instr-generate -fcoverage-mapping
 UBSAN_CFLAGS := ${TEST_CFLAGS} -fsanitize=undefined -fno-sanitize=function -fno-sanitize-recover=undefined
 
-COVERAGE_TESTS := test_knownbits test_insts test_interpreter test_clone test_cfg test_fuzzer test_opt test_code_sinking test_simplify_trace test_reentry test_mem2reg test_source test_genext test_reader
+COVERAGE_TESTS := test_bitprovenance test_knownbits test_insts test_interpreter test_clone test_cfg test_fuzzer test_opt test_code_sinking test_simplify_trace test_reentry test_mem2reg test_source test_genext test_reader
 
 run: main
 	./main
@@ -19,7 +19,8 @@ run: main
 test-ruledsl:
 	$(PYTHON) -m unittest discover -s ruledsl -t .
 
-test: test-ruledsl tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_code_sinking tests/test_simplify_trace tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
+test: test-ruledsl tests/test_bitprovenance tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_code_sinking tests/test_simplify_trace tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
+	./tests/test_bitprovenance
 	./tests/test_knownbits
 	./tests/test_insts
 	./tests/test_interpreter
@@ -38,7 +39,8 @@ fuzz: tests/fuzzer
 	./tests/fuzzer
 
 .PHONY: test-ubsan
-test-ubsan: tests/ubsan/test_knownbits tests/ubsan/test_opt tests/ubsan/test_code_sinking tests/ubsan/test_simplify_trace tests/ubsan/test_interpreter
+test-ubsan: tests/ubsan/test_bitprovenance tests/ubsan/test_knownbits tests/ubsan/test_opt tests/ubsan/test_code_sinking tests/ubsan/test_simplify_trace tests/ubsan/test_interpreter
+	./tests/ubsan/test_bitprovenance
 	./tests/ubsan/test_knownbits
 	./tests/ubsan/test_opt
 	./tests/ubsan/test_code_sinking
@@ -51,6 +53,9 @@ tests/ubsan/%: tests/%.cpp ${HEADER_FILES} ${TEST_HEADER_FILES} Makefile
 
 main: main.cpp ${HEADER_FILES}
 	clang++ ${CFLAGS} -o $@ $<
+
+tests/test_bitprovenance: tests/test_bitprovenance.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
+	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_knownbits: tests/test_knownbits.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<

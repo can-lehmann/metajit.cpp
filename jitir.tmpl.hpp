@@ -498,7 +498,7 @@ namespace metajit {
     }
 
     void substitute_args(NameMap<Value*>& substs);
-    void substitute_args_resolved(NameMap<Value*>& substs);
+    void substitute_args_iterated(NameMap<Value*>& substs);
 
     void substitute_blocks(BlockMap<Block*>& substs);
     void substitute_blocks(const std::map<Block*, Block*>& substs);
@@ -2071,7 +2071,7 @@ namespace metajit {
     return replacement;
   }
 
-  void Inst::substitute_args_resolved(NameMap<Value*>& substs) {
+  void Inst::substitute_args_iterated(NameMap<Value*>& substs) {
     for (size_t index = 0; index < arg_count(); index++) {
       set_arg(index, resolve_substitution(arg(index), substs));
     }
@@ -2224,6 +2224,24 @@ namespace metajit {
       } else {
         error("Unknown calling convention '" + call_conv_name + "'");
       }
+    }
+
+    int32_t read_int32() {
+      skip_whitespace();
+      std::string int_str;
+      if (_stream.peek() == '-') {
+        int_str += get_char();
+      }
+      int_str += get_word();
+      try {
+        size_t end;
+        int64_t value = std::stoll(int_str, &end);
+        if (end == int_str.size() && value >= INT32_MIN && value <= INT32_MAX) {
+          return static_cast<int32_t>(value);
+        }
+      } catch (const std::exception& e) {
+      }
+      error("Invalid integer literal '" + int_str + "'");
     }
 
     uint64_t read_uint64() {
@@ -2561,7 +2579,8 @@ namespace metajit {
         if (group.base == nullptr) {
           group.base = ptr;
           group.type = type;
-        } else if (group.base != ptr || group.type != type || offset % type_size(type) != 0) {
+        }
+        if (group.base != ptr || group.type != type || offset % type_size(type) != 0) {
           group.is_invalid = true;
         }
       }
@@ -4051,7 +4070,7 @@ namespace metajit {
       for (Block* block : *_section) {
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
-          inst->substitute_args_resolved(substs);
+          inst->substitute_args_iterated(substs);
 
           _builder.move_before(block, inst);
           Value* subst = fn(inst);
@@ -4172,7 +4191,7 @@ private:
   }
 
   void _substitute_args(Inst* inst) {
-    inst->substitute_args_resolved(_substs);
+    inst->substitute_args_iterated(_substs);
   }
 
 public:
@@ -5743,6 +5762,7 @@ private:
 
         marks.push_back(_undo.size());
         ValidLoads valid_loads;
+        std::unordered_map<AliasingGroup, StoreInst*> last_stores;
 
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
@@ -5763,6 +5783,7 @@ private:
           }
 
           if (dynmatch(StoreInst, store, inst)) {
+            last_stores[store->aliasing()] = store;
             std::vector<LoadInst*> remaining_loads;
             for (LoadInst* load : valid_loads[store->aliasing()]) {
               if (could_alias(load, store)) {
@@ -5781,6 +5802,18 @@ private:
               }
             }
             valid_loads.clear();
+            last_stores.clear();
+          } else if (dynmatch(LoadInst, load, inst)) {
+            if (last_stores.find(load->aliasing()) != last_stores.end()) {
+              StoreInst* store = last_stores.at(load->aliasing());
+              if (load->type() == store->value()->type() &&
+                  (load->aliasing() < 0 ||
+                   (load->ptr() == store->ptr() && load->offset() == store->offset()))) {
+                substs[load] = store->value();
+                inst_it = inst_it.erase();
+                continue;
+              }
+            }
           }
 
           if (inst->has_side_effect() ||
@@ -6731,6 +6764,7 @@ private:
     };
 
     struct BlockData {
+      size_t original_arg_count = 0;
       BitVector live; // Live allocas at entry, one bit per alloca index
       std::vector<Value*> values_at_entry; // Values at entry, indexed by alloca index (nullptr = unknown)
       std::vector<Value*> values_at_exit;  // Values at exit, indexed by alloca index (nullptr = unknown)
@@ -6799,6 +6833,7 @@ private:
 
       // Initialize live/value vectors for all blocks
       for (Block* block : *_section) {
+        _blocks[block].original_arg_count = block->args().size();
         _blocks[block].live.assign(n, false);
         _blocks[block].values_at_entry.assign(n, nullptr);
         _blocks[block].values_at_exit.assign(n, nullptr);
@@ -6953,9 +6988,9 @@ private:
 
         _builder.add_args_to_terminator(block, [&](Block* target) {
           BlockData& target_data = _blocks[target];
-          std::vector<Value*> args;
+          std::vector<Value*> args(target_data.args.size());
           for (auto& [alloca, arg] : target_data.args) {
-            args.push_back(data.values_at_exit[_alloca_index[alloca]]);
+            args[arg->index() - target_data.original_arg_count] = data.values_at_exit[_alloca_index[alloca]];
           }
           return args;
         });

@@ -152,6 +152,9 @@ void test_div_mod(DiffTestSuite& suite) {
     suite.diff_test(#name "_" #type).run([](Builder& builder, TestData& data) { \
       Value* divisor = data.input(RandomRange(Type::type, 1, type_mask(Type::type))); \
       data.output(builder.build_##name(data.input(Type::type), divisor)); \
+    }); \
+    suite.diff_test(#name "_" #type "_imm").run([](Builder& builder, TestData& data) { \
+      data.output(builder.build_##name(data.input(Type::type), RandomRange(Type::type, 1, type_mask(Type::type)).gen_const(builder))); \
     });
 
   #define div_mod(name) \
@@ -219,6 +222,15 @@ void test_resize(DiffTestSuite& suite) {
   
   resize(resize_u)
   resize(resize_s)
+
+  suite.diff_test("resize_u_to_bool_eq").run([](Builder& builder, TestData& data) {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      Value* result = builder.build_resize_u(data.input(RandomRange(type, 0, 7)), Type::Bool);
+      data.output(builder.build_eq(result, builder.build_const(Type::Bool, 0)));
+      data.output(builder.build_eq(result, builder.build_const(Type::Bool, 1)));
+      data.output(builder.build_eq(result, data.input(Type::Bool)));
+    }
+  });
 }
 
 static uint32_t test_call_default_void_slot = 0;
@@ -330,6 +342,14 @@ void test_assume_const(DiffTestSuite& suite) {
 }
 
 void test_alloca(DiffTestSuite& suite) {
+  suite.diff_test("alloca_mixed_alignment").run([](Builder& builder, TestData& data) {
+    Value* byte_ptr = builder.build_alloca(Type::Int8);
+    Value* ptr = builder.build_alloca(Type::Int64);
+    builder.build_store(byte_ptr, data.input(Type::Int8), AliasingGroup(0), 0);
+    data.output(builder.build_load(byte_ptr, Type::Int8, LoadFlags::None, AliasingGroup(0), 0));
+    data.output(builder.build_and(builder.build_ptr_to_int(ptr, Type::Int64), builder.build_const(Type::Int64, 7)));
+  });
+
   for (Type type : {Type::Int32, Type::Int64, Type::Float32, Type::Float64}) {
     suite.diff_test(std::string("alloca_store_load_") + to_string(type)).run([=](Builder& builder, TestData& data) {
       Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, type_size(type)), type_size(type));
@@ -361,6 +381,15 @@ void test_alloca(DiffTestSuite& suite) {
 }
 
 void test_call(DiffTestSuite& suite) {
+  suite.diff_test("call_memory_update").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
+    Value* old = data.input(RandomRange(Type::Int32, 0, 0));
+    Value* ptr = builder.entry_arg(0);
+    Value* callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_default_void_store);
+    builder.build_call(callee, Type::Void, {ptr, old, old}, CallConv::Default);
+    builder.build_store(ptr, builder.build_add(old, builder.build_const(Type::Int32, 1)), AliasingGroup(0), 0);
+    data.output(builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(0), 0));
+  });
+
   suite.diff_test("call_preserve_none").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* a = data.input(Type::Int64);
     Value* b = data.input(Type::Int64);

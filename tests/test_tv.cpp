@@ -515,6 +515,25 @@ tv::ValueState expected_poison_mul_high_u(z3::context& context, std::vector<tv::
 int main(int argc, char** argv) {
   TVTestSuite suite(argc, argv);
 
+  suite.test("refinement detects one incorrect output").run([]() {
+    Context context;
+    Allocator allocator;
+    Section before(context, allocator);
+    Section after(context, allocator);
+    Builder builder(&before);
+    tv::TVTestData data(builder, {});
+    data.output(builder.build_const(Type::Int8, 0));
+    data.output(builder.build_const(Type::Int8, 0));
+    builder.build_exit();
+    Clone::run(&before, &after);
+    after.entry()->terminator()->prev()->set_arg(1, builder.build_const(Type::Int8, 1));
+    try {
+      tv::check_tv_refinement(&before, &after, data);
+      unittest_assert(false);
+    } catch (const std::runtime_error&) {
+    }
+  });
+
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     suite.tv_test(std::string("mul_high_u_") + to_string(type)).run({type, type}, build_mul_high_u, expected_mul_high_u);
     suite.tv_test(std::string("mul_high_u_poison_") + to_string(type)).run_valuestate({type, type}, build_poison_mul_high_u, expected_poison_mul_high_u);
