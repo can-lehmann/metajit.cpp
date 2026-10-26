@@ -457,7 +457,7 @@ private:
   Value* build_resize_replacement(Inst* inst, Value* input, ResizeKind kind) {
     if ((dynamic_cast<ResizeUInst*>(inst) || dynamic_cast<ResizeSInst*>(inst) ||
          dynamic_cast<ResizeXInst*>(inst)) && inst->arg(0) == input) {
-      return nullptr;
+      return inst;
     }
     if (kind == ResizeKind::Unsigned) {
       return _builder.build_resize_u(input, inst->type());
@@ -492,7 +492,7 @@ private:
         inst->arg(0) == input) {
       Const* count = dynamic_cast<Const*>(inst->arg(1));
       if (count && count->value() == shift.amount) {
-        return nullptr;
+        return inst;
       }
     }
     Const* count = _builder.build_const(inst->type(), shift.amount);
@@ -500,22 +500,17 @@ private:
                                         : (Value*) _builder.build_shr_u(input, count);
   }
 
-  Value* extract_from_source(Inst* inst, const Mapping& mapping) {
-    PhaseTimer timer(_stats.source_extraction_ns);
-    Value* source = mapping.source;
-    if (!source || source == inst || !source->is_named()) {
-      return nullptr;
-    }
+  Value* extract_from_value(Inst* inst, const Mapping& mapping, Value* value) {
     size_t width = type_width(inst->type());
-    Mapping input = get(source);
-    if (source->type() != inst->type()) {
-      if (auto kind = match_resize(input, mapping, type_width(source->type()), width)) {
-        return build_resize_replacement(inst, source, *kind);
+    Mapping input = get(value);
+    if (value->type() != inst->type()) {
+      if (auto kind = match_resize(input, mapping, type_width(value->type()), width)) {
+        return build_resize_replacement(inst, value, *kind);
       }
       return nullptr;
     }
     if (input.equal(mapping, width)) {
-      return source;
+      return value;
     }
     size_t first = 0;
     while (first < width && !reference(mapping.bits[first])) {
@@ -524,10 +519,27 @@ private:
     if (first == width) {
       return nullptr;
     }
-    if (auto shift = match_shift(input, mapping, width, first, mapping.bits[first] & 63)) {
-      return build_shift_replacement(inst, source, *shift);
+    if (value == mapping.source) {
+      if (auto shift = match_shift(input, mapping, width, first, mapping.bits[first] & 63)) {
+        return build_shift_replacement(inst, value, *shift);
+      }
+    } else {
+      for (size_t position = 0; position < width; position++) {
+        if (auto shift = match_shift(input, mapping, width, first, position)) {
+          return build_shift_replacement(inst, value, *shift);
+        }
+      }
     }
     return nullptr;
+  }
+
+  Value* extract_from_source(Inst* inst, const Mapping& mapping) {
+    PhaseTimer timer(_stats.source_extraction_ns);
+    Value* source = mapping.source;
+    if (!source || source == inst || !source->is_named()) {
+      return nullptr;
+    }
+    return extract_from_value(inst, mapping, source);
   }
 
   Value* extract_from_candidates(Inst* inst, const Mapping& mapping) {
@@ -535,27 +547,10 @@ private:
     if (!mapping.source || _candidates.find(mapping.source) == _candidates.end()) {
       return nullptr;
     }
-    size_t width = type_width(inst->type());
     for (Value* candidate : _candidates.at(mapping.source)) {
       _stats.candidates++;
-      Mapping input = get(candidate);
-      if (candidate->type() != inst->type()) {
-        if (auto kind = match_resize(input, mapping, type_width(candidate->type()), width)) {
-          return build_resize_replacement(inst, candidate, *kind);
-        }
-        continue;
-      }
-      size_t first = 0;
-      while (first < width && !reference(mapping.bits[first])) {
-        first++;
-      }
-      if (first == width) {
-        continue;
-      }
-      for (size_t position = 0; position < width; position++) {
-        if (auto shift = match_shift(input, mapping, width, first, position)) {
-          return build_shift_replacement(inst, candidate, *shift);
-        }
+      if (Value* replacement = extract_from_value(inst, mapping, candidate)) {
+        return replacement;
       }
     }
     return nullptr;
@@ -583,19 +578,23 @@ private:
         return _available.at(key);
       }
     }
-    if (Value* replacement = extract_from_candidates(inst, mapping)) {
-      _stats.extracted++;
-      _stats.candidate_hits++;
-      return replacement;
-    }
     Value* replacement = extract_from_source(inst, mapping);
-    if (replacement) {
+    if (replacement && replacement != inst) {
       _stats.source_hits++;
       if (replacement == mapping.source) {
         _stats.reused++;
       } else {
         _stats.extracted++;
       }
+      return replacement;
+    }
+    replacement = extract_from_candidates(inst, mapping);
+    if (replacement == inst) {
+      return nullptr;
+    }
+    if (replacement) {
+      _stats.extracted++;
+      _stats.candidate_hits++;
     }
     return replacement;
   }
