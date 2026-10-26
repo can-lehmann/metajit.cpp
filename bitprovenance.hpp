@@ -378,15 +378,14 @@ private:
   }
 
   Mapping get(Value* value) const {
-    if (Const* constant = dynamic_cast<Const*>(value)) {
+    if (dynmatch(Const, constant, value)) {
       Mapping result;
       for (size_t i = 0; i < type_width(value->type()); i++) {
         result.bits[i] = ((constant->value() >> i) & 1) ? One : Zero;
       }
       result.validate(type_width(value->type()));
       return result;
-    }
-    if (value->is_named() && ((NamedValue*) value)->name() < _facts.size() &&
+    } else if (value->is_named() && ((NamedValue*) value)->name() < _facts.size() &&
         _facts[(NamedValue*) value].valid()) {
       return _facts[(NamedValue*) value];
     }
@@ -402,30 +401,23 @@ private:
     Mapping a = get(inst->arg(0));
     if (dynamic_cast<ResizeUInst*>(inst)) {
       return a.resize_u(type_width(inst->arg(0)->type()), width);
-    }
-    if (dynamic_cast<ResizeSInst*>(inst)) {
+    } else if (dynamic_cast<ResizeSInst*>(inst)) {
       return a.resize_s(type_width(inst->arg(0)->type()), width);
-    }
-    if (dynamic_cast<ResizeXInst*>(inst)) {
+    } else if (dynamic_cast<ResizeXInst*>(inst)) {
       return a.resize_x(type_width(inst->arg(0)->type()), width);
-    }
-    if (dynamic_cast<BitReverseInst*>(inst)) {
+    } else if (dynamic_cast<BitReverseInst*>(inst)) {
       return a.bit_reverse(width);
-    }
-    if (inst->arg_count() < 2 || !is_int_or_bool(inst->arg(1)->type())) {
+    } else if (inst->arg_count() < 2 || !is_int_or_bool(inst->arg(1)->type())) {
       return opaque(inst);
     }
     Mapping b = get(inst->arg(1));
-    if (AndInst* and_inst = dynamic_cast<AndInst*>(inst)) {
+    if (dynmatch(AndInst, and_inst, inst)) {
       return a.bit_and(b, and_inst);
-    }
-    if (OrInst* or_inst = dynamic_cast<OrInst*>(inst)) {
+    } else if (dynmatch(OrInst, or_inst, inst)) {
       return a.bit_or(b, or_inst);
-    }
-    if (XorInst* xor_inst = dynamic_cast<XorInst*>(inst)) {
+    } else if (dynmatch(XorInst, xor_inst, inst)) {
       return a.bit_xor(b, xor_inst);
-    }
-    if (dynamic_cast<ShlInst*>(inst) || dynamic_cast<ShrUInst*>(inst) ||
+    } else if (dynamic_cast<ShlInst*>(inst) || dynamic_cast<ShrUInst*>(inst) ||
         dynamic_cast<ShrSInst*>(inst)) {
       auto number = b.constant(width);
       if (!number) {
@@ -433,19 +425,15 @@ private:
       }
       if (dynamic_cast<ShlInst*>(inst)) {
         return a.shl(width, *number);
-      }
-      if (dynamic_cast<ShrUInst*>(inst)) {
+      } else if (dynamic_cast<ShrUInst*>(inst)) {
         return a.shr_u(width, *number);
       }
       return a.shr_s(width, *number);
-    }
-    if (LtSInst* lt_s = dynamic_cast<LtSInst*>(inst)) {
+    } else if (dynmatch(LtSInst, lt_s, inst)) {
       return a.lt_s(b, lt_s);
-    }
-    if (EqInst* eq = dynamic_cast<EqInst*>(inst)) {
+    } else if (dynmatch(EqInst, eq, inst)) {
       return a.eq(b, eq);
-    }
-    if (SelectInst* select = dynamic_cast<SelectInst*>(inst)) {
+    } else if (dynmatch(SelectInst, select, inst)) {
       if (auto number = a.constant(1)) {
         return get(select->arg(*number ? 1 : 2));
       }
@@ -484,9 +472,10 @@ private:
         return nullptr;
       }
       if (dynamic_cast<ShlInst*>(inst) && inst->arg(0) == value) {
-        Const* count = dynamic_cast<Const*>(inst->arg(1));
-        if (count && count->value() == amount) {
-          return inst;
+        if (dynmatch(Const, count, inst->arg(1))) {
+          if (count->value() == amount) {
+            return inst;
+          }
         }
       }
       return _builder.build_shl(value, _builder.build_const(inst->type(), amount));
@@ -496,9 +485,10 @@ private:
       return nullptr;
     }
     if (dynamic_cast<ShrUInst*>(inst) && inst->arg(0) == value) {
-      Const* count = dynamic_cast<Const*>(inst->arg(1));
-      if (count && count->value() == amount) {
-        return inst;
+      if (dynmatch(Const, count, inst->arg(1))) {
+        if (count->value() == amount) {
+          return inst;
+        }
       }
     }
     return _builder.build_shr_u(value, _builder.build_const(inst->type(), amount));
