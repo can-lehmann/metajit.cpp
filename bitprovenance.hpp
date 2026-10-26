@@ -336,6 +336,7 @@ private:
   NameMap<Value*> _substs;
   std::unordered_map<Key, Value*, Hash> _available;
   std::unordered_map<Value*, std::vector<Value*>> _candidates;
+  static constexpr size_t MaxCandidatesPerSourceType = 4;
   Stats _stats;
   static bool reference(Bit bit) { return bit < Zero; }
 
@@ -620,7 +621,7 @@ private:
           count++;
         }
       }
-      if (count >= 4) {
+      if (count >= MaxCandidatesPerSourceType) {
         return;
       }
       values.push_back(value);
