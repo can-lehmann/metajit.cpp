@@ -979,11 +979,15 @@ namespace metajit {
       } else if (dynmatch(ResizeXInst, resize_x, inst)) {
         _builder.mov64(vreg(inst), vreg(resize_x->arg(0)));
       } else if (dynmatch(ResizeFInst, resize_f, inst)) {
-        switch (resize_f->type()) {
-          case Type::Float32: _builder.cvtsd2ss(vreg(inst), vreg(resize_f->arg(0))); break;
-          case Type::Float64: _builder.cvtss2sd(vreg(inst), vreg(resize_f->arg(0))); break;
-          default:
-            assert(false && "Unsupported resize_f type");
+        if (resize_f->type() == resize_f->arg(0)->type()) {
+          move(vreg(inst), vreg(resize_f->arg(0)));
+        } else {
+          switch (resize_f->type()) {
+            case Type::Float32: _builder.cvtsd2ss(vreg(inst), vreg(resize_f->arg(0))); break;
+            case Type::Float64: _builder.cvtss2sd(vreg(inst), vreg(resize_f->arg(0))); break;
+            default:
+              assert(false && "Unsupported resize_f type");
+          }
         }
       } else if (dynmatch(IntToFloatSInst, int_to_float_s, inst)) {
         Reg src = vreg();
