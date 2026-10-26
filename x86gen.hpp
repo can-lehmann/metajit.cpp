@@ -814,6 +814,7 @@ namespace metajit {
     }
 
     void build_test(Value* cond) {
+      assert(cond->type() == Type::Bool);
       if (dynmatch(AndInst, and_inst, cond)) {
         if (_use_counts.at(and_inst) == 1) {
           _builder.test8(vreg(and_inst->arg(0)), vreg(and_inst->arg(1)));
