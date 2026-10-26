@@ -2068,9 +2068,11 @@ namespace metajit {
             }
 
             VRegInfo& ret_info = _vreg_info[data->ret.id()];
-            ret_info.current_reg = ret_info.fixed;
-            reg_file.set(ret_info.fixed, data->ret);
-            reg_file.touch(ret_info.fixed);
+            if (ret_info.interval.max > inst->name()) {
+              ret_info.current_reg = ret_info.fixed;
+              reg_file.set(ret_info.fixed, data->ret);
+              reg_file.touch(ret_info.fixed);
+            }
 
             it++;
             continue;
