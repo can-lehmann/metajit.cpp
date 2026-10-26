@@ -186,6 +186,7 @@ jmp_x86_inst(JAE, jae, {}, true, { byte(0x0f); byte(0x83); imm_n(4); })
 op0_x86_inst(Ret, ret, {}, true, { byte(0xc3); })
 
 x86_inst(Call, call, { use(rm); }, true, { reg = Reg::phys(2); rex_w(); byte(0xff); modrm(); })
+x86_inst(TailJump, tail_jump, { use(rm); }, true, { reg = Reg::phys(4); rex_w(); byte(0xff); modrm(); })
 
 x86_inst(Comment, comment, {}, false, { })
 

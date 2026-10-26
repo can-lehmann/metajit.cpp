@@ -237,6 +237,11 @@ static uint32_t test_call_default_void_slot = 0;
 static uint64_t test_call_ptr_anchor = 0;
 
 extern "C" __attribute__((preserve_none, noinline))
+void test_call_must_tail_target(uint64_t* out) {
+  *out = 42;
+}
+
+extern "C" __attribute__((preserve_none, noinline))
 uint64_t test_call_preserve_none_target(uint64_t a, uint64_t b, uint64_t c) {
   return (a + b) ^ c;
 }
@@ -381,6 +386,12 @@ void test_alloca(DiffTestSuite& suite) {
 }
 
 void test_call(DiffTestSuite& suite) {
+  suite.diff_test("call_must_tail").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
+    data.alloc_output(Type::Int64);
+    Value* callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_must_tail_target);
+    builder.build_call(callee, Type::Void, {builder.entry_arg(0)}, CallConv::PreserveNone, CallFlags::MustTail);
+  });
+
   suite.diff_test("call_memory_update").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* old = data.input(RandomRange(Type::Int32, 0, 0));
     Value* ptr = builder.entry_arg(0);
