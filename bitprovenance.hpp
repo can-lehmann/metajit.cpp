@@ -11,6 +11,11 @@ private:
   enum class ResizeKind { Unsigned, Signed, Unknown };
   enum class ShiftKind { Left, RightUnsigned, RightSigned };
 
+  struct Shift {
+    ShiftKind kind;
+    size_t amount;
+  };
+
   typedef uint8_t Bit;
 
   static constexpr Bit Zero = 128;
@@ -23,6 +28,23 @@ private:
     std::array<Bit, 64> bits{Invalid};
 
     bool valid() const { return bits[0] != Invalid; }
+
+    void validate(size_t width) const {
+      #ifdef METAJIT_SLOW_ASSERTS
+      assert(valid());
+      assert(width > 0 && width <= bits.size());
+      bool has_reference = false;
+      for (size_t i = 0; i < width; i++) {
+        assert(bits[i] <= Unknown);
+        if (reference(bits[i])) {
+          assert(source && is_int_or_bool(source->type()));
+          assert((bits[i] & 63) < type_width(source->type()));
+          has_reference = true;
+        }
+      }
+      assert(has_reference == (source != nullptr));
+      #endif
+    }
 
     bool constant(size_t width, uint64_t& value) const {
       assert(valid());
@@ -101,6 +123,18 @@ private:
       return result;
     }
 
+    void set_bit(size_t index, Bit bit, Value* bit_source, bool& mixed) {
+      bits[index] = bit;
+      if (!reference(bit)) {
+        return;
+      }
+      assert(bit_source);
+      if (source && source != bit_source) {
+        mixed = true;
+      }
+      source = bit_source;
+    }
+
     void finish(Inst* inst, bool mixed) {
       assert(valid());
       size_t width = type_width(inst->type());
@@ -139,8 +173,7 @@ private:
           bit = i;
           bit_source = inst;
         }
-        result.bits[i] = bit;
-        collect_source(result.source, mixed, bit_source, bit);
+        result.set_bit(i, bit, bit_source, mixed);
       }
       result.finish(inst, mixed);
       return result;
@@ -170,8 +203,7 @@ private:
           bit = i;
           bit_source = inst;
         }
-        result.bits[i] = bit;
-        collect_source(result.source, mixed, bit_source, bit);
+        result.set_bit(i, bit, bit_source, mixed);
       }
       result.finish(inst, mixed);
       return result;
@@ -206,8 +238,7 @@ private:
           bit = i;
           bit_source = inst;
         }
-        result.bits[i] = bit;
-        collect_source(result.source, mixed, bit_source, bit);
+        result.set_bit(i, bit, bit_source, mixed);
       }
       result.finish(inst, mixed);
       return result;
@@ -262,11 +293,34 @@ private:
           bit = i;
           bit_source = inst;
         }
-        result.bits[i] = bit;
-        collect_source(result.source, mixed, bit_source, bit);
+        result.set_bit(i, bit, bit_source, mixed);
       }
       result.finish(inst, mixed);
       return result;
+    }
+
+    std::optional<ResizeKind> match_resize(const Mapping& target, size_t from, size_t width) const {
+      assert(target.exact(width));
+      for (ResizeKind kind : {ResizeKind::Unsigned, ResizeKind::Signed}) {
+        if (transfer_resize(from, width, kind).equal(target, width)) {
+          return kind;
+        }
+      }
+      return std::nullopt;
+    }
+
+    std::optional<Shift> match_shift(const Mapping& target, size_t width,
+                                    size_t first, size_t position) const {
+      assert(valid() && target.valid());
+      if (position >= width || position == first || bits[position] != target.bits[first]) {
+        return std::nullopt;
+      }
+      Shift shift{first > position ? ShiftKind::Left : ShiftKind::RightUnsigned,
+                  first > position ? first - position : position - first};
+      if (!transfer_shift(width, shift.amount, shift.kind).equal(target, width)) {
+        return std::nullopt;
+      }
+      return shift;
     }
   };
 
@@ -314,6 +368,7 @@ private:
     for (size_t i = 0; i < type_width(value->type()); i++) {
       result.bits[i] = i;
     }
+    result.validate(type_width(value->type()));
     return result;
   }
 
@@ -323,6 +378,7 @@ private:
       for (size_t i = 0; i < type_width(value->type()); i++) {
         result.bits[i] = ((constant->value() >> i) & 1) ? One : Zero;
       }
+      result.validate(type_width(value->type()));
       return result;
     }
     if (value->is_named() && ((NamedValue*) value)->name() < _facts.size() &&
@@ -330,17 +386,6 @@ private:
       return _facts[(NamedValue*) value];
     }
     return opaque(value);
-  }
-
-  static void collect_source(Value*& source, bool& mixed, Value* incoming, Bit bit) {
-    if (!reference(bit)) {
-      return;
-    }
-    assert(incoming);
-    if (source && source != incoming) {
-      mixed = true;
-    }
-    source = incoming;
   }
 
   Mapping transfer(Inst* inst) {
@@ -401,16 +446,6 @@ private:
     return opaque(inst);
   }
 
-  static std::optional<ResizeKind> match_resize(const Mapping& input, const Mapping& mapping,
-                                                size_t from, size_t width) {
-    for (ResizeKind kind : {ResizeKind::Unsigned, ResizeKind::Signed, ResizeKind::Unknown}) {
-      if (input.transfer_resize(from, width, kind).equal(mapping, width)) {
-        return kind;
-      }
-    }
-    return std::nullopt;
-  }
-
   Value* build_resize_replacement(Inst* inst, Value* input, ResizeKind kind) {
     if ((dynamic_cast<ResizeUInst*>(inst) || dynamic_cast<ResizeSInst*>(inst) ||
          dynamic_cast<ResizeXInst*>(inst)) && inst->arg(0) == input) {
@@ -419,28 +454,8 @@ private:
     if (kind == ResizeKind::Unsigned) {
       return _builder.build_resize_u(input, inst->type());
     }
-    if (kind == ResizeKind::Signed) {
-      return _builder.build_resize_s(input, inst->type());
-    }
-    return _builder.build_resize_x(input, inst->type());
-  }
-
-  struct Shift {
-    ShiftKind kind;
-    size_t amount;
-  };
-
-  static std::optional<Shift> match_shift(const Mapping& input, const Mapping& mapping,
-                                          size_t width, size_t first, size_t position) {
-    if (position >= width || position == first || input.bits[position] != mapping.bits[first]) {
-      return std::nullopt;
-    }
-    Shift shift{first > position ? ShiftKind::Left : ShiftKind::RightUnsigned,
-                first > position ? first - position : position - first};
-    if (!input.transfer_shift(width, shift.amount, shift.kind).equal(mapping, width)) {
-      return std::nullopt;
-    }
-    return shift;
+    assert(kind == ResizeKind::Signed);
+    return _builder.build_resize_s(input, inst->type());
   }
 
   Value* build_shift_replacement(Inst* inst, Value* input, Shift shift) {
@@ -461,7 +476,7 @@ private:
     size_t width = type_width(inst->type());
     Mapping input = get(value);
     if (value->type() != inst->type()) {
-      if (auto kind = match_resize(input, mapping, type_width(value->type()), width)) {
+      if (auto kind = input.match_resize(mapping, type_width(value->type()), width)) {
         return build_resize_replacement(inst, value, *kind);
       }
       return nullptr;
@@ -477,12 +492,12 @@ private:
       return nullptr;
     }
     if (value == mapping.source) {
-      if (auto shift = match_shift(input, mapping, width, first, mapping.bits[first] & 63)) {
+      if (auto shift = input.match_shift(mapping, width, first, mapping.bits[first] & 63)) {
         return build_shift_replacement(inst, value, *shift);
       }
     } else {
       for (size_t position = 0; position < width; position++) {
-        if (auto shift = match_shift(input, mapping, width, first, position)) {
+        if (auto shift = input.match_shift(mapping, width, first, position)) {
           return build_shift_replacement(inst, value, *shift);
         }
       }
@@ -537,8 +552,9 @@ private:
     return replacement;
   }
 
-  void remember(NamedValue* value, const Mapping& mapping) {
+  void record_value(NamedValue* value, const Mapping& mapping) {
     assert(mapping.valid());
+    mapping.validate(type_width(value->type()));
     size_t size = _builder.next_name();
     _facts.ensure_size(size);
     _substs.ensure_size(size);
@@ -568,7 +584,7 @@ public:
     for (Block* block : chain) {
       for (Arg* arg : block->args()) {
         if (is_int_or_bool(arg->type())) {
-          remember(arg, opaque(arg));
+          record_value(arg, opaque(arg));
         }
       }
       for (Inst* inst : *block) {
@@ -577,16 +593,17 @@ public:
           continue;
         }
         Mapping mapping = transfer(inst);
+        mapping.validate(type_width(inst->type()));
         Value* replacement = find_replacement(block, inst, mapping);
         if (replacement) {
           _substs.ensure_size(_builder.next_name());
           _facts.ensure_size(_builder.next_name());
           _substs[inst] = replacement;
           if (replacement->is_inst() && !_facts[(NamedValue*) replacement].valid()) {
-            remember((NamedValue*) replacement, mapping);
+            record_value((NamedValue*) replacement, mapping);
           }
         } else {
-          remember(inst, mapping);
+          record_value(inst, mapping);
         }
       }
     }
