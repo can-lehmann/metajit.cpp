@@ -170,6 +170,7 @@ namespace metajit {
   private:
     Kind _kind;
     Reg _reg;
+    Reg _vvvv;
     RM _rm;
     Imm _imm;
     void* _data = nullptr;
@@ -179,11 +180,13 @@ namespace metajit {
     
     Kind kind() const { return _kind; }
     Reg reg() const { return _reg; }
+    Reg vvvv() const { return _vvvv; }
     RM rm() const { return _rm; }
     Imm imm() const { return _imm; }
     void* data() const { return _data; }
 
     X86Inst& set_kind(Kind kind) { _kind = kind; return *this; }
+    X86Inst& set_vvvv(Reg reg) { _vvvv = reg; return *this; }
     X86Inst& set_reg(Reg reg) { _reg = reg; return *this; }
     X86Inst& set_rm(const RM& rm) { _rm = rm; return *this; }
     X86Inst& set_imm(const Imm& imm) { _imm = imm; return *this; }
@@ -196,6 +199,10 @@ namespace metajit {
     void visit_regs(const Fn& fn) {
       if (!_reg.is_invalid()) {
         fn(_reg);
+      }
+
+      if (!_vvvv.is_invalid()) {
+        fn(_vvvv);
       }
 
       if (std::holds_alternative<Reg>(_rm)) {
@@ -216,6 +223,7 @@ namespace metajit {
         reg = _reg;
       }
       RM rm = _rm;
+      RM vvvv = _vvvv;
 
       auto use = [&](RM rm) {
         if (std::holds_alternative<Reg>(rm)) {
@@ -327,6 +335,10 @@ namespace metajit {
       stream << " reg=" << _reg;
     }
 
+    if (!_vvvv.is_invalid()) {
+      stream << " vvvv=" << _vvvv;
+    }
+
     if (std::holds_alternative<Reg>(_rm)) {
       stream << " rm=" << std::get<Reg>(_rm);
     } else if (std::holds_alternative<Mem>(_rm)) {
@@ -384,6 +396,11 @@ namespace metajit {
       new (block) X86Block();
       return block;
     }
+
+    #define ternop_x86_inst(kind, name, ...) \
+      X86Inst* name(Reg dst, Reg src, X86Inst::RM rm) { \
+        return &build(X86Inst::Kind::kind).set_reg(dst).set_vvvv(src).set_rm(rm); \
+      }
 
     #define binop_x86_inst(kind, name, ...) \
       X86Inst* name(Reg dst, X86Inst::RM src) { \
@@ -615,6 +632,7 @@ namespace metajit {
     NameMap<void*> _memory_deps;
 
     NameMap<Reg> _vregs;
+    NameMap<size_t> _use_counts;
     lwir::Span<Reg> _input_vregs;
     std::vector<VRegInfo> _vreg_info;
 
@@ -915,6 +933,68 @@ namespace metajit {
         std::swap(a, b);
       }
       return {a, b};
+    }
+
+    bool build_bmi_and(AndInst* inst) {
+      if (!__builtin_cpu_supports("bmi")) {
+        return false;
+      }
+      for (size_t it = 0; it < 2; it++) {
+        Value* a = inst->arg(it);
+        Value* b = inst->arg(1 - it);
+        if (dynmatch(XorInst, inversion, a)) {
+          for (size_t index = 0; index < 2; index++) {
+            if (dynmatch(Const, ones, inversion->arg(index))) {
+              if (ones->value() == type_mask(inst->type())) {
+                if (inst->type() == Type::Int64) {
+                  _builder.andn64(vreg(inst), vreg(inversion->arg(1 - index)), vreg(b));
+                } else {
+                  _builder.andn32(vreg(inst), vreg(inversion->arg(1 - index)), vreg(b));
+                }
+                return true;
+              }
+            }
+          }
+        }
+        if (dynmatch(Const, mask, b)) {
+          uint64_t bits = mask->value();
+          if (bits == 0 || (bits & (bits + 1)) != 0) {
+            continue;
+          }
+          Inst* shift = dynamic_cast<ShrUInst*>(a);
+          bool arithmetic = false;
+          if (!shift) {
+            shift = dynamic_cast<ShrSInst*>(a);
+            arithmetic = true;
+          }
+          if (!shift || _use_counts.at(shift) != 1 || !_vregs.at(shift).is_invalid()) {
+            continue;
+          }
+          if (dynmatch(Const, amount, shift->arg(1))) {
+            size_t width = type_width(inst->type());
+            uint64_t start = amount->value();
+            if (start == 0 || start >= width) {
+              continue;
+            }
+            size_t length = __builtin_popcountll(bits);
+            if (length > width - start) {
+              if (arithmetic) {
+                continue;
+              }
+              length = width - start;
+            }
+            Reg control = vreg();
+            _builder.mov32_imm(control, start | (length << 8));
+            if (inst->type() == Type::Int64) {
+              _builder.bextr64(vreg(inst), control, vreg(shift->arg(0)));
+            } else {
+              _builder.bextr32(vreg(inst), control, vreg(shift->arg(0)));
+            }
+            return true;
+          }
+        }
+      }
+      return false;
     }
 
     void isel(Inst* inst, Block* block) {
@@ -1221,6 +1301,9 @@ namespace metajit {
           _builder.pseudo_use(rdx);
         }
       } else if (dynmatch(AndInst, and_inst, inst)) {
+        if (build_bmi_and(and_inst)) {
+          return;
+        }
         auto [a, b] = commutative_args(inst);
         _builder.mov64(vreg(inst), vreg(a));
 
@@ -1316,6 +1399,15 @@ namespace metajit {
         }
         _builder.pseudo_use(rcx);
       } else if (dynmatch(ShrSInst, shr_s, inst)) {
+        if (__builtin_cpu_supports("bmi2") && !dynamic_cast<Const*>(shr_s->arg(1))) {
+          if (inst->type() == Type::Int32) {
+            _builder.sarx32(vreg(inst), vreg(shr_s->arg(1)), vreg(shr_s->arg(0)));
+            return;
+          } else if (inst->type() == Type::Int64) {
+            _builder.sarx64(vreg(inst), vreg(shr_s->arg(1)), vreg(shr_s->arg(0)));
+            return;
+          }
+        }
         _builder.mov64(vreg(inst), vreg(shr_s->arg(0)));
 
         if (dynmatch(Const, constant_b, shr_s->arg(1))) {
@@ -2559,6 +2651,16 @@ namespace metajit {
 
       _memory_deps.init(_section);
       _vregs.init(_section);
+      _use_counts.init(_section);
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          for (Value* arg : inst->args()) {
+            if (arg->is_named()) {
+              _use_counts[(NamedValue*) arg]++;
+            }
+          }
+        }
+      }
       _input_vregs = _builder.alloc_regs(_section->entry()->args().size());
 
       for (Arg* arg : _section->entry()->args()) {
@@ -2679,6 +2781,14 @@ namespace metajit {
 
       auto byte = [&](uint8_t value) {
         buffer.push_back(value);
+      };
+
+      auto vex = [&](bool w, uint8_t prefix) {
+        assert(std::holds_alternative<Reg>(rm));
+        byte(0xc4);
+        byte((((~reg.id() >> 3) & 1) << 7) | 0x40 |
+             (((~std::get<Reg>(rm).id() >> 3) & 1) << 5) | 2);
+        byte((uint8_t(w) << 7) | ((~inst->vvvv().id() & 15) << 3) | prefix);
       };
 
       auto rex = [&](bool w = false) {
