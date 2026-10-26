@@ -381,6 +381,25 @@ void test_alloca(DiffTestSuite& suite) {
 }
 
 void test_call(DiffTestSuite& suite) {
+  suite.test("call_must_tail").run([]() {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    builder.move_to_end(builder.build_block({Type::Ptr, Type::Ptr}));
+    auto target = +[](uint64_t* out) __attribute__((preserve_none)) {
+      *out = 42;
+    };
+    builder.build_call(builder.entry_arg(0), Type::Void, {builder.entry_arg(1)}, CallConv::PreserveNone, CallFlags::MustTail);
+    builder.build_exit();
+    OrderBlocks::run(&section, BlockOrdering::Natural);
+    X86CodeGen codegen(&section, {Reg::X86_R12(), Reg::X86_R13()});
+    using Function = void(* [[clang::preserve_none]])(void*, uint64_t*);
+    uint64_t result = 0;
+    reinterpret_cast<Function>(codegen.deploy())((void*) target, &result);
+    unittest_assert(result == 42);
+  });
+
   suite.diff_test("call_memory_update").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     Value* old = data.input(RandomRange(Type::Int32, 0, 0));
     Value* ptr = builder.entry_arg(0);

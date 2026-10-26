@@ -265,7 +265,6 @@ namespace metajit {
         }
 
         if (call->flags().has(CallFlags::MustTail)) {
-          _function->setCallingConv(llvm::CallingConv::PreserveNone);
           call_inst->setTailCallKind(llvm::CallInst::TCK_MustTail);
         }
 
