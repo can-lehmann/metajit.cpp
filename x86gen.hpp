@@ -929,7 +929,7 @@ namespace metajit {
       return true;
     }
 
-    void build_cmov(Reg res, Value* cond, Reg then) {
+    void build_cmov(Reg res, Type type, Value* cond, Reg then) {
       if (cond->is_inst()) {
         Inst* pred_inst = (Inst*) cond;
         if (dynamic_cast<EqInst*>(pred_inst) ||
@@ -941,11 +941,23 @@ namespace metajit {
             build_cmp(pred_inst->arg(0), pred_inst->arg(1));
           }
           if (dynamic_cast<EqInst*>(pred_inst)) {
-            _builder.cmove64(res, then);
+            if (type_size(type) <= 4) {
+              _builder.cmove32(res, then);
+            } else {
+              _builder.cmove64(res, then);
+            }
           } else if (dynamic_cast<LtSInst*>(pred_inst)) {
-            _builder.cmovl64(res, then);
+            if (type_size(type) <= 4) {
+              _builder.cmovl32(res, then);
+            } else {
+              _builder.cmovl64(res, then);
+            }
           } else if (dynamic_cast<LtUInst*>(pred_inst)) {
-            _builder.cmovb64(res, then);
+            if (type_size(type) <= 4) {
+              _builder.cmovb32(res, then);
+            } else {
+              _builder.cmovb64(res, then);
+            }
           } else {
             assert(false);
           }
@@ -954,7 +966,11 @@ namespace metajit {
       }
       
       build_test(cond);
-      _builder.cmovnz64(res, then);
+      if (type_size(type) <= 4) {
+        _builder.cmovnz32(res, then);
+      } else {
+        _builder.cmovnz64(res, then);
+      }
     }
 
     std::pair<Value*, Value*> commutative_args(Inst* inst) {
@@ -989,11 +1005,11 @@ namespace metajit {
           Reg then = vreg();
           _builder.movq_to_gp(res, vreg(select->arg(2)));
           _builder.movq_to_gp(then, vreg(select->arg(1)));
-          build_cmov(res, select->cond(), then);
+          build_cmov(res, select->type(), select->cond(), then);
           _builder.movq(vreg(inst), res);
         } else {
           _builder.mov64(vreg(inst), vreg(select->arg(2)));
-          build_cmov(vreg(inst), select->cond(), vreg(select->arg(1)));
+          build_cmov(vreg(inst), select->type(), select->cond(), vreg(select->arg(1)));
         }
       } else if (dynamic_cast<ResizeUInst*>(inst) ||
                  (inst->type() == Type::Bool &&
@@ -1339,13 +1355,21 @@ namespace metajit {
         _builder.mov64(vreg(inst), vreg(shl->arg(0)));
 
         if (dynmatch(Const, constant_b, shl->arg(1))) {
-          _builder.shl64_imm(vreg(inst), constant_b->value());
+          if (type_size(inst->type()) <= 4) {
+            _builder.shl32_imm(vreg(inst), constant_b->value());
+          } else {
+            _builder.shl64_imm(vreg(inst), constant_b->value());
+          }
           return;
         }
 
         Reg rcx = fix_to_preg(vreg(), Reg::X86_RCX());
         _builder.mov64(rcx, vreg(shl->arg(1)));
-        _builder.shl64(vreg(inst));
+        if (type_size(inst->type()) <= 4) {
+          _builder.shl32(vreg(inst));
+        } else {
+          _builder.shl64(vreg(inst));
+        }
         _builder.pseudo_use(rcx);
       } else if (dynmatch(ShrUInst, shr_u, inst)) {
         _builder.mov64(vreg(inst), vreg(shr_u->arg(0)));
@@ -1427,9 +1451,17 @@ namespace metajit {
             _builder.and64_imm(other, mask);
           }
           if (shift <= 2) {
-            _builder.lea64(result, X86Inst::Mem(result, size_t(1) << shift, other, 0));
+            if (width <= 32) {
+              _builder.lea32(result, X86Inst::Mem(result, size_t(1) << shift, other, 0));
+            } else {
+              _builder.lea64(result, X86Inst::Mem(result, size_t(1) << shift, other, 0));
+            }
           } else {
-            _builder.shl64_imm(other, shift);
+            if (width <= 32) {
+              _builder.shl32_imm(other, shift);
+            } else {
+              _builder.shl64_imm(other, shift);
+            }
             _builder.or64(result, other);
           }
         }

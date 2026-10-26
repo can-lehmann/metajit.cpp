@@ -4963,6 +4963,10 @@ namespace metajit {
               if ((used.used & ~b->value()) == 0) {
                 return and_inst->arg(0);
               }
+              uint64_t mask = b->value() & used.used;
+              if (mask != b->value()) {
+                return _builder.fold_and(and_inst->arg(0), _builder.build_const(inst->type(), mask));
+              }
             }
           } else if (dynmatch(OrInst, or_inst, inst)) {
             UsedBits::Bits used = used_bits.at(inst);
