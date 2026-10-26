@@ -6919,16 +6919,6 @@ private:
               errors << "Tail call requires an impure void PreserveNone call immediately followed by Exit\n";
               return true;
             }
-            if (call->arg_count() != entry()->args().size() + 1) {
-              errors << "Tail call argument count must match the entry signature\n";
-              return true;
-            }
-            for (size_t index = 0; index < entry()->args().size(); index++) {
-              if (call->arg(index + 1)->type() != entry()->arg(index)->type()) {
-                errors << "Tail call argument types must match the entry signature\n";
-                return true;
-              }
-            }
           }
         }
 
