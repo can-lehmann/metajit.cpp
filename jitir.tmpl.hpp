@@ -800,7 +800,8 @@ namespace metajit {
       // Pure function of the arguments
       Pure = 1 << 0,
       Idempotent = 1 << 1,
-      Tail = 1 << 2,
+      // Require a tail transfer with no additional stack frame.
+      MustTail = 1 << 2,
     };
 
     using BaseFlags<CallFlags>::BaseFlags;
@@ -808,7 +809,7 @@ namespace metajit {
     constexpr static const char* NAMES[] = {
       "Pure",
       "Idempotent",
-      "Tail"
+      "MustTail"
     };
 
     constexpr static size_t COUNT = 3;
@@ -6848,7 +6849,7 @@ private:
         }
 
         if (dynmatch(CallInst, call, inst)) {
-          if (call->flags().has(CallFlags::Tail)) {
+          if (call->flags().has(CallFlags::MustTail)) {
             if (has_alloca) {
               errors << "Tail calls are not supported in sections containing Alloca\n";
               return true;

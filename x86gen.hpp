@@ -1443,7 +1443,7 @@ namespace metajit {
         Reg callee_reg = fix_to_preg(vreg(), Reg::X86_R10());
         _builder.mov64(callee_reg, vreg(call->callee()));
         X86Inst* call_inst = _builder.call(callee_reg, ret_reg, call->call_conv(), args);
-        ((X86CallData*) call_inst->data())->tail = call->flags().has(CallFlags::Tail);
+        ((X86CallData*) call_inst->data())->tail = call->flags().has(CallFlags::MustTail);
 
         if (call->type() != Type::Void) {
           move(vreg(call), ret_reg);

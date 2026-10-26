@@ -575,7 +575,7 @@ Type Checks:
 
 ### Call
 
-Call a function pointer. The Tail flag requires a tail transfer, not an optimization hint. Tail calls must be impure void PreserveNone calls immediately followed by Exit, with argument types matching the section entry. Sections containing a tail call must not contain Alloca, even in another block. The x86 backend restores its frame before jumping; the LLVM backend emits musttail and uses PreserveNone for the containing function.
+Call a function pointer.
 
 Arguments
 

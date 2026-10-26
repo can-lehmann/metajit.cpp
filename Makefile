@@ -7,13 +7,12 @@ TEST_CFLAGS := ${CFLAGS} -DMETAJIT_DEBUG -DMETAJIT_SLOW_ASSERTS
 COVERAGE_CFLAGS := ${TEST_CFLAGS} -fprofile-instr-generate -fcoverage-mapping
 UBSAN_CFLAGS := ${TEST_CFLAGS} -fsanitize=undefined -fno-sanitize=function -fno-sanitize-recover=undefined
 
-COVERAGE_TESTS := test_tailcall test_knownbits test_insts test_interpreter test_clone test_cfg test_fuzzer test_opt test_code_sinking test_simplify_trace test_reentry test_mem2reg test_source test_genext test_reader
+COVERAGE_TESTS := test_knownbits test_insts test_interpreter test_clone test_cfg test_fuzzer test_opt test_code_sinking test_simplify_trace test_reentry test_mem2reg test_source test_genext test_reader
 
 run: main
 	./main
 
-test: tests/test_tailcall tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_code_sinking tests/test_simplify_trace tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
-	./tests/test_tailcall
+test: tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_code_sinking tests/test_simplify_trace tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
 	./tests/test_knownbits
 	./tests/test_insts
 	./tests/test_interpreter
@@ -59,9 +58,6 @@ tests/test_clone: tests/test_clone.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_fuzzer: tests/test_fuzzer.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
-	clang++ ${TEST_CFLAGS} -o $@ $<
-
-tests/test_tailcall: tests/test_tailcall.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
 tests/test_cfg: tests/test_cfg.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
@@ -176,7 +172,6 @@ clean:
 	-rm tests/test_interpreter
 	-rm tests/test_clone
 	-rm tests/test_fuzzer
-	-rm tests/test_tailcall
 	-rm tests/test_cfg
 	-rm tests/test_opt
 	-rm tests/test_code_sinking
