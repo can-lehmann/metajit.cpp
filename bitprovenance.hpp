@@ -49,13 +49,15 @@ private:
     }
   };
 
-  static constexpr uint8_t Zero = 128;
-  static constexpr uint8_t One = 129;
-  static constexpr uint8_t Unknown = 130;
+  typedef uint8_t Bit;
+
+  static constexpr Bit Zero = 128;
+  static constexpr Bit One = 129;
+  static constexpr Bit Unknown = 130;
 
   struct Mapping {
     Value* source = nullptr;
-    std::array<uint8_t, 64> bits{};
+    std::array<Bit, 64> bits{};
   };
 
   struct Key {
@@ -85,14 +87,14 @@ private:
   std::unordered_map<Key, Value*, Hash> _available;
   std::unordered_map<Value*, std::vector<Value*>> _candidates;
   Stats _stats;
-  static bool reference(uint8_t bit) { return bit < Zero; }
+  static bool reference(Bit bit) { return bit < Zero; }
 
-  static uint8_t invert(uint8_t bit) {
+  static Bit invert(Bit bit) {
     if (reference(bit)) { return bit ^ 64; }
     return bit == Zero ? One : bit == One ? Zero : Unknown;
   }
 
-  static bool same(uint8_t a, Value* as, uint8_t b, Value* bs) {
+  static bool same(Bit a, Value* as, Bit b, Value* bs) {
     return a != Unknown && b != Unknown && a == b && (!reference(a) || as == bs);
   }
 
@@ -146,7 +148,7 @@ private:
 
   static Mapping resize(const Mapping& input, size_t from, size_t to, unsigned kind) {
     Mapping result = input;
-    uint8_t fill = kind == 0 ? Zero : kind == 1 ? input.bits[from - 1] : Unknown;
+    Bit fill = kind == 0 ? Zero : kind == 1 ? input.bits[from - 1] : Unknown;
     for (size_t i = from; i < to; i++) { result.bits[i] = fill; }
     normalize(result, to);
     return result;
@@ -164,7 +166,7 @@ private:
     return result;
   }
 
-  static void collect_source(Value*& source, bool& mixed, Value* incoming, uint8_t bit) {
+  static void collect_source(Value*& source, bool& mixed, Value* incoming, Bit bit) {
     if (!reference(bit)) { return; }
     assert(incoming);
     if (source && source != incoming) { mixed = true; }
@@ -187,7 +189,7 @@ private:
     Mapping result;
     bool mixed = false;
     for (size_t i = 0; i < type_width(inst->type()); i++) {
-      uint8_t a = left.bits[i], b = right.bits[i], bit = Unknown;
+      Bit a = left.bits[i], b = right.bits[i], bit = Unknown;
       Value* source = nullptr;
       bool eq = same(a, left.source, b, right.source);
       bool opposite = same(a, left.source, invert(b), right.source);
@@ -254,7 +256,7 @@ private:
       Mapping c = get(inst->arg(2)), result;
       bool mixed = false;
       for (size_t i = 0; i < width; i++) {
-        uint8_t bit;
+        Bit bit;
         Value* source;
         if (same(b.bits[i], b.source, c.bits[i], c.source)) { bit = b.bits[i]; source = b.source; }
         else if (b.bits[i] >= Zero && b.bits[i] <= One && c.bits[i] >= Zero && c.bits[i] <= One) {
