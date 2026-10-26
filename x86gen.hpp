@@ -629,8 +629,8 @@ namespace metajit {
         void* last_call = block;
         for (Inst* inst : *block) {
           for (Value* arg : inst->args()) {
-            if (arg->is_inst()) {
-              _use_counts[(Inst*) arg]++;
+            if (arg->is_named()) {
+              _use_counts[(NamedValue*) arg]++;
             }
           }
           #define find_dep(inst) \
@@ -814,19 +814,17 @@ namespace metajit {
     }
 
     void build_test(Value* cond) {
-      if (cond->type() == Type::Bool && cond->is_inst()) {
-        Inst* inst = (Inst*) cond;
-        if (_use_counts.at(inst) == 1) {
-          if (dynamic_cast<AndInst*>(inst)) {
-            _builder.test8(vreg(inst->arg(0)), vreg(inst->arg(1)));
-            return;
-          } else if (dynamic_cast<XorInst*>(inst)) {
-            _builder.cmp8(vreg(inst->arg(0)), vreg(inst->arg(1)));
-            return;
-          }
+      if (dynmatch(AndInst, and_inst, cond)) {
+        if (_use_counts.at(and_inst) == 1) {
+          _builder.test8(vreg(and_inst->arg(0)), vreg(and_inst->arg(1)));
+          return;
         }
-      }
-      if (dynmatch(ResizeXInst, resize, cond)) {
+      } else if (dynmatch(XorInst, xor_inst, cond)) {
+        if (_use_counts.at(xor_inst) == 1) {
+          _builder.cmp8(vreg(xor_inst->arg(0)), vreg(xor_inst->arg(1)));
+          return;
+        }
+      } else if (dynmatch(ResizeXInst, resize, cond)) {
         if (dynmatch(ShrUInst, shift, resize->arg(0))) {
           if (dynmatch(Const, amount, shift->arg(1))) {
             if (amount->value() < 32 && amount->value() < type_width(shift->arg(0)->type())) {
