@@ -7,8 +7,6 @@ namespace metajit {
 
 class BitProvenance: public Pass<BitProvenance> {
 public:
-  enum class ExtractionMode { AvailableValues, SourceOnly, EquivalenceOnly, CandidatesOnly, FirstFour };
-
   struct Stats {
     size_t visited = 0;
     size_t constants = 0;
@@ -87,16 +85,6 @@ private:
   std::unordered_map<Key, Value*, Hash> _available;
   std::unordered_map<Value*, std::vector<Value*>> _candidates;
   Stats _stats;
-  ExtractionMode _mode;
-
-  bool use_equivalence() const {
-    return _mode == ExtractionMode::AvailableValues || _mode == ExtractionMode::EquivalenceOnly || _mode == ExtractionMode::FirstFour;
-  }
-
-  bool use_candidates() const {
-    return _mode == ExtractionMode::AvailableValues || _mode == ExtractionMode::CandidatesOnly || _mode == ExtractionMode::FirstFour;
-  }
-
   static bool reference(uint8_t bit) { return bit < Zero; }
 
   static uint8_t invert(uint8_t bit) {
@@ -360,27 +348,25 @@ private:
     _facts[value] = mapping;
     _seen[value] = true;
     _stats.peak_fact_bytes = std::max(_stats.peak_fact_bytes, _facts.size() * sizeof(Mapping));
-    if (use_equivalence() && exact(mapping, type_width(value->type()))) {
+    if (exact(mapping, type_width(value->type()))) {
       PhaseTimer record_timer(_stats.equivalence_record_ns);
       _available.try_emplace(Key{mapping, value->type()}, value);
     }
-    if (use_candidates() && mapping.source) {
+    if (mapping.source) {
       PhaseTimer record_timer(_stats.candidates_record_ns);
       std::vector<Value*>& values = _candidates[mapping.source];
-      if (_mode == ExtractionMode::FirstFour) {
-        size_t count = 0;
-        for (Value* previous : values) {
-          if (previous->type() == value->type()) { count++; }
-        }
-        if (count >= 4) { return; }
+      size_t count = 0;
+      for (Value* previous : values) {
+        if (previous->type() == value->type()) { count++; }
       }
+      if (count >= 4) { return; }
       values.push_back(value);
     }
   }
 
 public:
-  BitProvenance(Section* section, const Chain& chain, Stats* stats = nullptr, ExtractionMode mode = ExtractionMode::AvailableValues):
-      Pass(section), _builder(section), _facts(section), _seen(section), _substs(section), _mode(mode) {
+  BitProvenance(Section* section, const Chain& chain, Stats* stats = nullptr):
+      Pass(section), _builder(section), _facts(section), _seen(section), _substs(section) {
     _builder.set_next_name();
     for (Block* block : chain) {
       for (Arg* arg : block->args()) {
@@ -399,7 +385,7 @@ public:
             replacement = _builder.build_const(inst->type(), number);
             _stats.constants++;
           } else if (exact(mapping, type_width(inst->type()))) {
-            if (use_equivalence()) {
+            {
               PhaseTimer timer(_stats.lookup_ns);
               Key key{mapping, inst->type()};
               if (_available.find(key) != _available.end()) {
@@ -408,7 +394,7 @@ public:
                 _stats.equivalence_hits++;
               }
             }
-            if (!replacement && use_candidates()) {
+            if (!replacement) {
               replacement = extraction(inst, mapping);
               if (replacement) { _stats.extracted++; _stats.candidate_hits++; }
             }

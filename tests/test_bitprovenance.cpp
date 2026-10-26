@@ -4,7 +4,6 @@
 using namespace metajit;
 
 void check_provenance(const std::string& input, const std::string& expected,
-                      BitProvenance::ExtractionMode mode = BitProvenance::ExtractionMode::AvailableValues,
                       const std::vector<size_t>& chain_indices = {0}) {
   Context context;
   Allocator allocator;
@@ -16,9 +15,7 @@ void check_provenance(const std::string& input, const std::string& expected,
   for (Block* block : *section) { blocks.push_back(block); }
   Chain chain;
   for (size_t index : chain_indices) { chain.add(blocks.at(index)); }
-  BitProvenance::Stats stats;
-  BitProvenance::run(section, chain, &stats, mode);
-  if (mode == BitProvenance::ExtractionMode::SourceOnly) { unittest_assert(stats.candidates == 0); }
+  BitProvenance::run(section, chain);
   unittest_assert(!section->verify(std::cerr));
   DeadCodeElim::run(section);
   section->autoname();
@@ -111,10 +108,10 @@ b2:
   Exit
 }
 )";
-  check_provenance(input, input, BitProvenance::ExtractionMode::FirstFour, {0, 1});
+  check_provenance(input, input, {0, 1});
 }
 
-void test_source_only_shift() {
+void test_combined_shift() {
   check_provenance(R"(section {
 b0(%0: Ptr, %1: Int32):
   %2 = Shl %1, 8:Int32
@@ -128,7 +125,7 @@ b0(%0: Ptr, %1: Int32):
   Store %0, %2, aliasing=0, offset=0
   Exit
 }
-)", BitProvenance::ExtractionMode::SourceOnly);
+)");
 }
 
 void test_trace_chain() {
@@ -160,7 +157,7 @@ b2:
   Store %0, %1, aliasing=0, offset=4
   Exit
 }
-)", BitProvenance::ExtractionMode::FirstFour, {0, 1});
+)", {0, 1});
 }
 
 
@@ -182,8 +179,7 @@ b0(%0: Ptr, %1: Int32):
   Store %0, %2, aliasing=0, offset=8
   Exit
 }
-)", BitProvenance::ExtractionMode::EquivalenceOnly);
-  check_provenance(input, input, BitProvenance::ExtractionMode::CandidatesOnly);
+)");
 }
 
 void test_candidate_map() {
@@ -208,7 +204,7 @@ b0(%0: Ptr, %1: Int64):
   Store %0, %4, aliasing=0, offset=0
   Exit
 }
-)", BitProvenance::ExtractionMode::CandidatesOnly);
+)");
 }
 
 void test_first_four_keeps_equivalence() {
@@ -229,7 +225,7 @@ void test_first_four_keeps_equivalence() {
   builder.build_exit();
   section.order_blocks(BlockOrdering::Natural);
   BitProvenance::Stats stats;
-  BitProvenance::run(&section, Chain({block}), &stats, BitProvenance::ExtractionMode::FirstFour);
+  BitProvenance::run(&section, Chain({block}), &stats);
   unittest_assert(store->value() == masked);
   unittest_assert(stats.equivalence_hits != 0);
   unittest_assert(!section.verify(std::cerr));
@@ -276,7 +272,7 @@ void test_random_execution() {
       uint64_t b = provenance_random(state) & type_mask(type);
       Interpreter original(&section, {Interpreter::Bits::constant(before), Interpreter::Bits::constant(type, a), Interpreter::Bits::constant(type, b)});
       unittest_assert(original.run() == Interpreter::Event::Exit);
-      BitProvenance::run(&section, Chain({block}), nullptr, static_cast<BitProvenance::ExtractionMode>(sample % 5));
+      BitProvenance::run(&section, Chain({block}));
       unittest_assert(!section.verify(std::cerr));
       DeadCodeElim::run(&section);
       Interpreter optimized(&section, {Interpreter::Bits::constant(after), Interpreter::Bits::constant(type, a), Interpreter::Bits::constant(type, b)});
@@ -294,7 +290,7 @@ int main(int argc, char** argv) {
   suite.test("sibling reuse").run(test_sibling_reuse);
   suite.test("trace chain").run(test_trace_chain);
   suite.test("random execution").run(test_random_execution);
-  suite.test("source only shift").run(test_source_only_shift);
+  suite.test("combined shift").run(test_combined_shift);
   suite.test("equivalence map").run(test_equivalence_map);
   suite.test("candidate map").run(test_candidate_map);
   suite.test("first four keeps equivalence").run(test_first_four_keeps_equivalence);
