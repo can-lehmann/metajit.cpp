@@ -775,8 +775,7 @@ namespace metajit {
       }
     }
 
-    void build_add(Reg dst, Value* a, Value* b) {
-      Type type = a->type();
+    void build_add(Reg dst, Type type, Value* a, Value* b) {
       if (dynamic_cast<ShlInst*>(a) || dynamic_cast<MulInst*>(a)) {
         std::swap(a, b);
       }
@@ -802,12 +801,10 @@ namespace metajit {
           }
         }
       } else if (dynmatch(ShlInst, shift, b)) {
-        if ((type == Type::Int32 || type == Type::Int64) &&
-            a->is_named() && shift->type() == type && shift->arg(0)->type() == type) {
-          if (dynmatch(Const, amount, shift->arg(1))) {
-            if (amount->value() >= 1 && amount->value() <= 3) {
-              mem = X86Inst::Mem(vreg(a), size_t(1) << amount->value(), vreg(shift->arg(0)), 0);
-            }
+        if (dynmatch(Const, amount, shift->arg(1))) {
+          if (a->is_named() && type_size(type) >= 4 && shift->type() == type &&
+              amount->value() >= 1 && amount->value() <= 3) {
+            mem = X86Inst::Mem(vreg(a), size_t(1) << amount->value(), vreg(shift->arg(0)), 0);
           }
         }
       }
@@ -821,7 +818,7 @@ namespace metajit {
         );
       }
 
-      if (type == Type::Int32) {
+      if (type_size(type) <= 4) {
         _builder.lea32(dst, mem);
       } else {
         _builder.lea64(dst, mem);
@@ -1121,9 +1118,9 @@ namespace metajit {
         Reg rsp = fix_to_preg(vreg(), Reg::X86_RSP());
         _builder.lea64(vreg(inst), X86Inst::Mem(rsp, (int32_t) offset));
       } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
-        build_add(vreg(inst), add_ptr->ptr(), add_ptr->offset());
+        build_add(vreg(inst), inst->type(), add_ptr->ptr(), add_ptr->offset());
       } else if (dynmatch(AddInst, add, inst)) {
-        build_add(vreg(inst), add->arg(0), add->arg(1));
+        build_add(vreg(inst), inst->type(), add->arg(0), add->arg(1));
       } else if (dynmatch(SubInst, sub, inst)) {
         _builder.mov64(vreg(inst), vreg(sub->arg(0)));
 
