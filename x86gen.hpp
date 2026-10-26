@@ -166,11 +166,10 @@ namespace metajit {
     };
 
     using RM = std::variant<std::monostate, Reg, Mem>;
-    using Imm = std::variant<std::monostate, uint64_t, X86Block*>;
+    using Imm = std::variant<std::monostate, uint64_t, X86Block*, Reg>;
   private:
     Kind _kind;
     Reg _reg;
-    Reg _vvvv;
     RM _rm;
     Imm _imm;
     void* _data = nullptr;
@@ -180,13 +179,18 @@ namespace metajit {
     
     Kind kind() const { return _kind; }
     Reg reg() const { return _reg; }
-    Reg vvvv() const { return _vvvv; }
+    Reg vvvv() const {
+      if (std::holds_alternative<Reg>(_imm)) {
+        return std::get<Reg>(_imm);
+      }
+      return Reg();
+    }
     RM rm() const { return _rm; }
     Imm imm() const { return _imm; }
     void* data() const { return _data; }
 
     X86Inst& set_kind(Kind kind) { _kind = kind; return *this; }
-    X86Inst& set_vvvv(Reg reg) { _vvvv = reg; return *this; }
+    X86Inst& set_vvvv(Reg reg) { _imm = reg; return *this; }
     X86Inst& set_reg(Reg reg) { _reg = reg; return *this; }
     X86Inst& set_rm(const RM& rm) { _rm = rm; return *this; }
     X86Inst& set_imm(const Imm& imm) { _imm = imm; return *this; }
@@ -201,8 +205,8 @@ namespace metajit {
         fn(_reg);
       }
 
-      if (!_vvvv.is_invalid()) {
-        fn(_vvvv);
+      if (std::holds_alternative<Reg>(_imm)) {
+        fn(std::get<Reg>(_imm));
       }
 
       if (std::holds_alternative<Reg>(_rm)) {
@@ -223,7 +227,7 @@ namespace metajit {
         reg = _reg;
       }
       RM rm = _rm;
-      RM vvvv = _vvvv;
+      RM vvvv = this->vvvv();
 
       auto use = [&](RM rm) {
         if (std::holds_alternative<Reg>(rm)) {
@@ -335,10 +339,6 @@ namespace metajit {
       stream << " reg=" << _reg;
     }
 
-    if (!_vvvv.is_invalid()) {
-      stream << " vvvv=" << _vvvv;
-    }
-
     if (std::holds_alternative<Reg>(_rm)) {
       stream << " rm=" << std::get<Reg>(_rm);
     } else if (std::holds_alternative<Mem>(_rm)) {
@@ -351,6 +351,8 @@ namespace metajit {
       stream << " imm=" << std::get<uint64_t>(_imm);
     } else if (std::holds_alternative<X86Block*>(_imm)) {
       stream << " imm=b" << std::get<X86Block*>(_imm)->name();
+    } else if (std::holds_alternative<Reg>(_imm)) {
+      stream << " vvvv=" << std::get<Reg>(_imm);
     }
   }
 
@@ -2783,28 +2785,30 @@ namespace metajit {
         buffer.push_back(value);
       };
 
+      auto reg_extensions = [&]() {
+        uint8_t bits = ((reg.id() >> 3) & 1) << 2;
+        if (std::holds_alternative<Reg>(rm)) {
+          bits |= (std::get<Reg>(rm).id() >> 3) & 1;
+        } else if (std::holds_alternative<X86Inst::Mem>(rm)) {
+          X86Inst::Mem mem = std::get<X86Inst::Mem>(rm);
+          bits |= (mem.base.id() >> 3) & 1;
+          if (!mem.index.is_invalid()) {
+            bits |= ((mem.index.id() >> 3) & 1) << 1;
+          }
+        }
+        return bits;
+      };
+
       auto vex = [&](bool w, uint8_t prefix) {
-        assert(std::holds_alternative<Reg>(rm));
         byte(0xc4);
-        byte((((~reg.id() >> 3) & 1) << 7) | 0x40 |
-             (((~std::get<Reg>(rm).id() >> 3) & 1) << 5) | 2);
+        byte(((~reg_extensions() & 7) << 5) | 2);
         byte((uint8_t(w) << 7) | ((~inst->vvvv().id() & 15) << 3) | prefix);
       };
 
       auto rex = [&](bool w = false) {
-        uint8_t rex = 0x40;
+        uint8_t rex = 0x40 | reg_extensions();
         if (w) {
           rex |= 0x08;
-        }
-        rex |= ((reg.id() >> 3) & 1) << 2; // R
-        if (std::holds_alternative<Reg>(rm)) {
-          rex |= ((std::get<Reg>(rm).id() >> 3) & 1); // B
-        } else if (std::holds_alternative<X86Inst::Mem>(rm)) {
-          X86Inst::Mem mem = std::get<X86Inst::Mem>(rm);
-          rex |= ((mem.base.id() >> 3) & 1); // B
-          if (!mem.index.is_invalid()) {
-            rex |= ((mem.index.id() >> 3) & 1) << 1; // X
-          }
         }
         byte(rex);
       };
