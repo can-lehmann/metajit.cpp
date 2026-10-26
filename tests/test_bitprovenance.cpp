@@ -246,10 +246,8 @@ void test_first_four_keeps_equivalence() {
   StoreInst* store = builder.build_store(block->arg(0), repeated, 0, 0);
   builder.build_exit();
   section.order_blocks(BlockOrdering::Natural);
-  BitProvenance::Stats stats;
-  BitProvenance::run(&section, Chain({block}), &stats);
+  BitProvenance::run(&section, Chain({block}));
   unittest_assert(store->value() == masked);
-  unittest_assert(stats.equivalence_hits != 0);
   unittest_assert(!section.verify(std::cerr));
 }
 

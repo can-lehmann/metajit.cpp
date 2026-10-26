@@ -7,51 +7,9 @@
 namespace metajit {
 
 class BitProvenance: public Pass<BitProvenance> {
-public:
-  struct Stats {
-    size_t visited = 0;
-    size_t constants = 0;
-    size_t reused = 0;
-    size_t extracted = 0;
-    size_t candidates = 0;
-    size_t peak_fact_bytes = 0;
-    uint64_t transfer_ns = 0;
-    uint64_t lookup_ns = 0;
-    uint64_t extraction_ns = 0;
-    uint64_t remember_ns = 0;
-    uint64_t cleanup_ns = 0;
-    uint64_t source_extraction_ns = 0;
-    uint64_t equivalence_record_ns = 0;
-    uint64_t candidates_record_ns = 0;
-    size_t equivalence_hits = 0;
-    size_t candidate_hits = 0;
-    size_t source_hits = 0;
-  };
-
 private:
   enum class ResizeKind { Unsigned, Signed, Unknown };
   enum class ShiftKind { Left, RightUnsigned, RightSigned };
-
-  class PhaseTimer {
-  private:
-    uint64_t& _total;
-    #ifdef METAJIT_BIT_PROVENANCE_PROFILE
-    std::chrono::steady_clock::time_point _start;
-    #endif
-  public:
-    PhaseTimer(uint64_t& total): _total(total) {
-      #ifdef METAJIT_BIT_PROVENANCE_PROFILE
-      _start = std::chrono::steady_clock::now();
-      #endif
-    }
-    ~PhaseTimer() {
-      #ifdef METAJIT_BIT_PROVENANCE_PROFILE
-      _total += std::chrono::duration_cast<std::chrono::nanoseconds>(
-                  std::chrono::steady_clock::now() - _start)
-                  .count();
-      #endif
-    }
-  };
 
   typedef uint8_t Bit;
 
@@ -337,7 +295,6 @@ private:
   std::unordered_map<Key, Value*, Hash> _available;
   std::unordered_map<Value*, std::vector<Value*>> _candidates;
   static constexpr size_t MaxCandidatesPerSourceType = 4;
-  Stats _stats;
   static bool reference(Bit bit) { return bit < Zero; }
 
   static Bit invert(Bit bit) {
@@ -387,7 +344,6 @@ private:
   }
 
   Mapping transfer(Inst* inst) {
-    PhaseTimer timer(_stats.transfer_ns);
     size_t width = type_width(inst->type());
     if (inst->has_side_effect() || dynamic_cast<LoadInst*>(inst) || inst->arg_count() == 0 ||
         !is_int_or_bool(inst->arg(0)->type())) {
@@ -535,7 +491,6 @@ private:
   }
 
   Value* extract_from_source(Inst* inst, const Mapping& mapping) {
-    PhaseTimer timer(_stats.source_extraction_ns);
     Value* source = mapping.source;
     if (!source || source == inst || !source->is_named()) {
       return nullptr;
@@ -544,12 +499,10 @@ private:
   }
 
   Value* extract_from_candidates(Inst* inst, const Mapping& mapping) {
-    PhaseTimer timer(_stats.extraction_ns);
     if (!mapping.source || _candidates.find(mapping.source) == _candidates.end()) {
       return nullptr;
     }
     for (Value* candidate : _candidates.at(mapping.source)) {
-      _stats.candidates++;
       if (Value* replacement = extract_from_value(inst, mapping, candidate)) {
         return replacement;
       }
@@ -564,56 +517,36 @@ private:
     _builder.move_before(block, inst);
     uint64_t number;
     if (mapping.constant(type_width(inst->type()), number)) {
-      _stats.constants++;
       return _builder.build_const(inst->type(), number);
     }
     if (!mapping.exact(type_width(inst->type()))) {
       return nullptr;
     }
-    {
-      PhaseTimer timer(_stats.lookup_ns);
-      Key key{mapping, inst->type()};
-      if (_available.find(key) != _available.end()) {
-        _stats.reused++;
-        _stats.equivalence_hits++;
-        return _available.at(key);
-      }
+    Key key{mapping, inst->type()};
+    if (_available.find(key) != _available.end()) {
+      return _available.at(key);
     }
     Value* replacement = extract_from_source(inst, mapping);
     if (replacement && replacement != inst) {
-      _stats.source_hits++;
-      if (replacement == mapping.source) {
-        _stats.reused++;
-      } else {
-        _stats.extracted++;
-      }
       return replacement;
     }
     replacement = extract_from_candidates(inst, mapping);
     if (replacement == inst) {
       return nullptr;
     }
-    if (replacement) {
-      _stats.extracted++;
-      _stats.candidate_hits++;
-    }
     return replacement;
   }
 
   void remember(NamedValue* value, const Mapping& mapping) {
     assert(mapping.valid());
-    PhaseTimer timer(_stats.remember_ns);
     size_t size = _builder.next_name();
     _facts.ensure_size(size);
     _substs.ensure_size(size);
     _facts[value] = mapping;
-    _stats.peak_fact_bytes = std::max(_stats.peak_fact_bytes, _facts.size() * sizeof(Mapping));
     if (mapping.exact(type_width(value->type()))) {
-      PhaseTimer record_timer(_stats.equivalence_record_ns);
       _available.try_emplace(Key{mapping, value->type()}, value);
     }
     if (mapping.source) {
-      PhaseTimer record_timer(_stats.candidates_record_ns);
       std::vector<Value*>& values = _candidates[mapping.source];
       size_t count = 0;
       for (Value* previous : values) {
@@ -629,7 +562,7 @@ private:
   }
 
 public:
-  BitProvenance(Section* section, const Chain& chain, Stats* stats = nullptr)
+  BitProvenance(Section* section, const Chain& chain)
       : Pass(section), _builder(section), _facts(section), _substs(section) {
     _builder.set_next_name();
     for (Block* block : chain) {
@@ -643,7 +576,6 @@ public:
         if (!is_int_or_bool(inst->type())) {
           continue;
         }
-        _stats.visited++;
         Mapping mapping = transfer(inst);
         Value* replacement = find_replacement(block, inst, mapping);
         if (replacement) {
@@ -658,39 +590,17 @@ public:
         }
       }
     }
-    {
-      PhaseTimer timer(_stats.cleanup_ns);
-      for (Block* block : *section) {
-        for (Inst* inst : *block) {
-          inst->substitute_args_resolved(_substs);
-        }
-        for (auto cursor = block->begin(); cursor != block->end();) {
-          if (_substs[*cursor]) {
-            cursor = cursor.erase();
-          } else {
-            cursor++;
-          }
+    for (Block* block : *section) {
+      for (Inst* inst : *block) {
+        inst->substitute_args_resolved(_substs);
+      }
+      for (auto cursor = block->begin(); cursor != block->end();) {
+        if (_substs[*cursor]) {
+          cursor = cursor.erase();
+        } else {
+          cursor++;
         }
       }
-    }
-    if (stats) {
-      stats->visited += _stats.visited;
-      stats->constants += _stats.constants;
-      stats->reused += _stats.reused;
-      stats->extracted += _stats.extracted;
-      stats->candidates += _stats.candidates;
-      stats->peak_fact_bytes = std::max(stats->peak_fact_bytes, _stats.peak_fact_bytes);
-      stats->transfer_ns += _stats.transfer_ns;
-      stats->lookup_ns += _stats.lookup_ns;
-      stats->extraction_ns += _stats.extraction_ns;
-      stats->remember_ns += _stats.remember_ns;
-      stats->cleanup_ns += _stats.cleanup_ns;
-      stats->source_extraction_ns += _stats.source_extraction_ns;
-      stats->equivalence_record_ns += _stats.equivalence_record_ns;
-      stats->candidates_record_ns += _stats.candidates_record_ns;
-      stats->equivalence_hits += _stats.equivalence_hits;
-      stats->candidate_hits += _stats.candidate_hits;
-      stats->source_hits += _stats.source_hits;
     }
   }
 };
