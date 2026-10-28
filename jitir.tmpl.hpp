@@ -1983,11 +1983,11 @@ namespace metajit {
             return fold_xor(cond, build_const(Type::Bool, 1));
           }
         }
-        if (cond == true_value) {
+        if (cond == true_value && false_const) {
           // (cond ? cond : x) => cond | x
           return fold_or(cond, false_value);
         }
-        if (cond == false_value) {
+        if (cond == false_value && true_const) {
           // (cond ? x : cond) => cond & x
           return fold_and(cond, true_value);
         }
