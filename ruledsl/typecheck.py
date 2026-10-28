@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import operator
 import re
 
-from . import ast, calculations
+from . import ast
 from .parser import parse
 from .signatures import SIGNATURES
 from .source import TypeCheckError
@@ -51,6 +51,20 @@ COMPARISON_OPERATORS = {
 }
 UNARY_OPERATORS = {"+": operator.pos, "-": operator.neg, "~": operator.invert,
                    "not": operator.not_}
+
+
+def bit_reverse(value, width):
+    result = 0
+    for index in range(width):
+        result = (result << 1) | ((value >> index) & 1)
+    return result
+
+
+def mul_high_u(left, right, width):
+    return (left * right) >> width
+
+
+CALCULATION_FUNCTIONS = {"bit_reverse": bit_reverse, "mul_high_u": mul_high_u}
 
 
 class Checker:
@@ -313,9 +327,9 @@ class Checker:
                     result = assignment[self.expressions[node.args[0]].type].width
                 else:
                     result = (args[0] & -args[0]).bit_length() - 1
-            elif node.name in {"bit_reverse", "mul_high_u"}:
+            elif node.name in CALCULATION_FUNCTIONS:
                 width = assignment[self.expressions[node.args[0]].type].width
-                result = getattr(calculations, node.name)(*args, width)
+                result = CALCULATION_FUNCTIONS[node.name](*args, width)
             elif node.name == "min":
                 result = min(args)
             else:
