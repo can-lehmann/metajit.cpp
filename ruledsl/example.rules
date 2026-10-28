@@ -1,0 +1,20 @@
+add_zero: Add(x, 0)
+    => x
+
+add_constants: Add(C1, C2)
+    C = C1 + C2
+    => C
+
+add_reassoc: Add(Add(x, C1), C2)
+    C = C1 + C2
+    => Add(x, C)
+
+sub_self: Sub(x, x)
+    => 0
+
+and_self: And(x, x)
+    => x
+
+resize_roundtrip: ResizeU(ResizeU(x: T): U): T
+    where width(U) >= width(T)
+    => x

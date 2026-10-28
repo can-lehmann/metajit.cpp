@@ -1,0 +1,37 @@
+and_redundant_operand: And(x, y)
+    check known_zeros(x) | known_ones(y) == -1
+    => x
+
+or_redundant_operand: Or(x, y)
+    check known_ones(x) | known_zeros(y) == -1
+    => x
+
+and_or_disjoint: And(Or(x, y), z)
+    check known_zeros(y) | known_zeros(z) == -1
+    => And(x, z)
+
+select_known_true: Select(c, x, y)
+    check known_ones(c) == 1
+    => x
+
+select_known_false: Select(c, x, y)
+    check known_zeros(c) == 1
+    => y
+
+resize_u_resize_x_known_zero_roundtrip: ResizeU(ResizeX(x: T): U): T
+    where width(T) > width(U)
+    Cmask = bits(bits(-1, U), T)
+    check known_zeros(x) | Cmask == -1
+    => x
+
+resize_u_resize_u_known_zero_roundtrip: ResizeU(ResizeU(x: T): U): T
+    where width(T) > width(U)
+    Cmask = bits(bits(-1, U), T)
+    check known_zeros(x) | Cmask == -1
+    => x
+
+resize_u_resize_s_known_zero_roundtrip: ResizeU(ResizeS(x: T): U): T
+    where width(T) > width(U)
+    Cmask = bits(bits(-1, U), T)
+    check known_zeros(x) | Cmask == -1
+    => x

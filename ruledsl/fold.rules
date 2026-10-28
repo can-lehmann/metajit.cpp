@@ -1,0 +1,525 @@
+add_zero: Add(x, 0)
+    => x
+
+add_constants: Add(C1, C2)
+    C = C1 + C2
+    => C
+
+add_select_constant: Add(Select(c, C1, C2), C3)
+    Ctrue = C1 + C3
+    Cfalse = C2 + C3
+    => Select(c, Ctrue, Cfalse)
+
+add_selects: Add(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 + C3
+    Cfalse = C2 + C4
+    => Select(c, Ctrue, Cfalse)
+
+add_reassoc_constants: Add(Add(x, C1), C2)
+    C = C1 + C2
+    => Add(x, C)
+
+add_not_plus_one: Add(Add(x, Xor(y, -1)), 1)
+    => Sub(x, y)
+
+sub_self: Sub(x, x)
+    => 0
+
+sub_zero: Sub(x, 0)
+    => x
+
+sub_constant: Sub(x, C)
+    Cneg = -C
+    => Add(x, Cneg)
+
+sub_constants: Sub(C1, C2)
+    C = C1 - C2
+    => C
+
+sub_select_constant: Sub(Select(c, C1, C2), C3)
+    Ctrue = C1 - C3
+    Cfalse = C2 - C3
+    => Select(c, Ctrue, Cfalse)
+
+sub_selects: Sub(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 - C3
+    Cfalse = C2 - C4
+    => Select(c, Ctrue, Cfalse)
+
+sub_constant_select: Sub(C1, Select(c, C2, C3))
+    Ctrue = C1 - C2
+    Cfalse = C1 - C3
+    => Select(c, Ctrue, Cfalse)
+
+mul_zero: Mul(x, 0)
+    => 0
+
+mul_one: Mul(x, 1)
+    => x
+
+mul_constants: Mul(C1, C2)
+    C = C1 * C2
+    => C
+
+mul_select_constant: Mul(Select(c, C1, C2), C3)
+    Ctrue = C1 * C3
+    Cfalse = C2 * C3
+    => Select(c, Ctrue, Cfalse)
+
+mul_selects: Mul(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 * C3
+    Cfalse = C2 * C4
+    => Select(c, Ctrue, Cfalse)
+
+mul_power_of_two: Mul(x, C)
+    check C != 0 and C & (C - 1) == 0
+    Cshift = ctz(C)
+    => Shl(x, Cshift)
+
+mul_high_u_zero: MulHighU(x, 0)
+    => 0
+
+mul_high_u_one: MulHighU(x, 1)
+    => 0
+
+mul_high_u_constants: MulHighU(C1, C2)
+    C = mul_high_u(C1, C2)
+    => C
+
+mul_high_u_select_constant: MulHighU(Select(c, C1, C2), C3)
+    Ctrue = mul_high_u(C1, C3)
+    Cfalse = mul_high_u(C2, C3)
+    => Select(c, Ctrue, Cfalse)
+
+mul_high_u_selects: MulHighU(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = mul_high_u(C1, C3)
+    Cfalse = mul_high_u(C2, C4)
+    => Select(c, Ctrue, Cfalse)
+
+mul_high_u_power_of_two: MulHighU(x: T, C)
+    check C > 1 and C & (C - 1) == 0
+    Cshift = width(T) - ctz(C)
+    => ShrU(x, Cshift)
+
+bit_reverse_constant: BitReverse(C)
+    Creversed = bit_reverse(C)
+    => Creversed
+
+bit_reverse_twice: BitReverse(BitReverse(x))
+    => x
+
+bit_reverse_select: BitReverse(Select(c, C1, C2))
+    Ctrue = bit_reverse(C1)
+    Cfalse = bit_reverse(C2)
+    => Select(c, Ctrue, Cfalse)
+
+mod_u_power_of_two: ModU(x, C)
+    SORRY_Z3_SMALL_WIDTHS
+    check C != 0 and C & (C - 1) == 0
+    Cmask = C - 1
+    => And(x, Cmask)
+
+and_self: And(x, x)
+    => x
+
+and_zero: And(x, 0)
+    => 0
+
+and_all_ones: And(x, -1)
+    => x
+
+and_constants: And(C1, C2)
+    C = C1 & C2
+    => C
+
+and_select_constant: And(Select(c, C1, C2), C3)
+    Ctrue = C1 & C3
+    Cfalse = C2 & C3
+    => Select(c, Ctrue, Cfalse)
+
+and_selects: And(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 & C3
+    Cfalse = C2 & C4
+    => Select(c, Ctrue, Cfalse)
+
+and_reassoc_constants: And(And(x, C1), C2)
+    C = C1 & C2
+    => And(x, C)
+
+and_or_disjoint_masks: And(Or(x, And(y, C1)), C2)
+    check C1 & C2 == 0
+    => And(x, C2)
+
+and_complement: And(Xor(x, -1), x)
+    => 0
+
+and_xor_constant: And(Xor(x, C), x)
+    Cmask = ~C
+    => And(x, Cmask)
+
+and_xor_subset_zero: And(Xor(And(x, y), x), And(x, y))
+    => 0
+
+and_complement_or: And(Xor(x, -1), Or(x, y))
+    => And(Xor(x, -1), y)
+
+and_or_absorb: And(Or(x, y), x)
+    => x
+
+and_or_and_absorb: And(Or(x, y), And(x, z))
+    => And(x, z)
+
+and_or_common_operand: And(Or(x, y), Or(x, z))
+    => Or(x, And(y, z))
+
+and_absorb: And(And(x, y), x)
+    => And(x, y)
+
+or_self: Or(x, x)
+    => x
+
+or_zero: Or(x, 0)
+    => x
+
+or_all_ones: Or(x, -1)
+    => -1
+
+or_constants: Or(C1, C2)
+    C = C1 | C2
+    => C
+
+or_select_constant: Or(Select(c, C1, C2), C3)
+    Ctrue = C1 | C3
+    Cfalse = C2 | C3
+    => Select(c, Ctrue, Cfalse)
+
+or_selects: Or(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 | C3
+    Cfalse = C2 | C4
+    => Select(c, Ctrue, Cfalse)
+
+or_and_common_operand: Or(And(x, y), And(x, z))
+    => And(x, Or(y, z))
+
+or_and_absorb: Or(And(x, y), x)
+    => x
+
+or_and_or_absorb: Or(And(x, y), Or(x, z))
+    => Or(x, z)
+
+or_and_complement: Or(And(x, y), Xor(x, -1))
+    => Or(y, Xor(x, -1))
+
+or_absorb: Or(Or(x, y), x)
+    => Or(x, y)
+
+or_xor_absorb: Or(Xor(x, y), x)
+    => Or(x, y)
+
+or_complement_or_absorb: Or(Xor(Or(x, y), -1), x)
+    => Or(x, Xor(y, -1))
+
+xor_self: Xor(x, x)
+    => 0
+
+xor_zero: Xor(x, 0)
+    => x
+
+xor_constants: Xor(C1, C2)
+    C = C1 ^ C2
+    => C
+
+xor_select_constant: Xor(Select(c, C1, C2), C3)
+    Ctrue = C1 ^ C3
+    Cfalse = C2 ^ C3
+    => Select(c, Ctrue, Cfalse)
+
+xor_selects: Xor(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 ^ C3
+    Cfalse = C2 ^ C4
+    => Select(c, Ctrue, Cfalse)
+
+xor_double_complement: Xor(Xor(x, -1), -1)
+    => x
+
+eq_self: Eq(x, x)
+    => 1
+
+eq_constants: Eq(C1, C2)
+    C = C1 == C2
+    => C
+
+eq_select_constant: Eq(Select(c, C1, C2), C3)
+    Ctrue = C1 == C3
+    Cfalse = C2 == C3
+    => Select(c, Ctrue, Cfalse)
+
+eq_selects: Eq(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 == C3
+    Cfalse = C2 == C4
+    => Select(c, Ctrue, Cfalse)
+
+eq_bool_one: Eq(x: Bool, 1)
+    => x
+
+eq_extended_bool_one: Eq(ResizeU(c: Bool), 1)
+    => c
+
+eq_bool_zero: Eq(x: Bool, 0)
+    => Xor(x, 1)
+
+eq_xor_zero: Eq(Xor(x, y), 0)
+    => Eq(x, y)
+
+eq_sub_zero: Eq(Sub(x, y), 0)
+    => Eq(x, y)
+
+eq_masked_xor_impossible: Eq(And(Xor(x, C1), Cmask), C2)
+    check C2 & ~Cmask != 0
+    => 0: Bool
+
+eq_masked_xor: Eq(And(Xor(x, C1), Cmask), C2)
+    check C2 & ~Cmask == 0
+    Cnew = C2 ^ (C1 & Cmask)
+    => Eq(And(x, Cmask), Cnew)
+
+lt_u_self: LtU(x, x)
+    => 0
+
+lt_s_self: LtS(x, x)
+    => 0
+
+lt_u_zero: LtU(x, 0)
+    => 0
+
+lt_u_constants: LtU(C1, C2)
+    C = C1 < C2
+    => C
+
+lt_u_select_constant: LtU(Select(c, C1, C2), C3)
+    Ctrue = C1 < C3
+    Cfalse = C2 < C3
+    => Select(c, Ctrue, Cfalse)
+
+lt_u_selects: LtU(Select(c, C1, C2), Select(c, C3, C4))
+    Ctrue = C1 < C3
+    Cfalse = C2 < C4
+    => Select(c, Ctrue, Cfalse)
+
+lt_u_constant_select: LtU(C1, Select(c, C2, C3))
+    Ctrue = C1 < C2
+    Cfalse = C1 < C3
+    => Select(c, Ctrue, Cfalse)
+
+select_true: Select(1, x, y)
+    => x
+
+select_false: Select(0, x, y)
+    => y
+
+select_same: Select(c, x, x)
+    => x
+
+select_complement_condition: Select(Xor(c, 1), x, y)
+    => Select(c, y, x)
+
+select_bool_identity: Select(c, 1: Bool, 0)
+    => c
+
+select_bool_complement: Select(c, 0: Bool, 1)
+    => Xor(c, 1)
+
+select_bool_true_operand_constant: Select(c, c, C)
+    => Or(c, C)
+
+select_bool_false_operand_constant: Select(c, C, c)
+    => And(c, C)
+
+select_nested_true: Select(c, Select(c, x, y), z)
+    => Select(c, x, z)
+
+select_nested_false: Select(c, x, Select(c, y, z))
+    => Select(c, x, z)
+
+resize_u_identity: ResizeU(x: T): T
+    => x
+
+resize_u_select: ResizeU(Select(c, C1: S, C2)): T
+    Ctrue = bits(C1, T)
+    Cfalse = bits(C2, T)
+    => Select(c, Ctrue, Cfalse)
+
+resize_u_constant: ResizeU(C: S): T
+    Cresult = bits(C, T)
+    => Cresult
+
+resize_u_resize_x_roundtrip: ResizeU(ResizeX(x: T): U): T
+    Cmask = bits(bits(-1, U), T)
+    => And(x, Cmask)
+
+resize_u_resize_u_widen: ResizeU(ResizeU(x: S): U): T
+    where width(S) < width(U) < width(T)
+    => ResizeU(x): T
+
+resize_u_resize_u_truncate: ResizeU(ResizeU(x: S): U): T
+    where width(T) < width(U) < width(S)
+    => ResizeU(x): T
+
+resize_u_resize_x_truncate: ResizeU(ResizeX(x: S): U): T
+    where width(T) < width(U) < width(S)
+    => ResizeU(x): T
+
+resize_u_masked_resize_x_roundtrip: ResizeU(And(ResizeX(x: T): U, C)): T
+    Cmask = bits(C, T)
+    => And(x, Cmask)
+
+resize_s_identity: ResizeS(x: T): T
+    => x
+
+resize_x_identity: ResizeX(x: T): T
+    => x
+
+resize_x_select: ResizeX(Select(c, C1: S, C2)): T
+    where width(T) <= width(S)
+    Ctrue = bits(C1, T)
+    Cfalse = bits(C2, T)
+    => Select(c, Ctrue, Cfalse)
+
+resize_u_sign_bit: ResizeU(ShrU(x: T, C)): Bool
+    check C == width(T) - 1
+    => LtS(x, 0)
+
+resize_x_resize_x_roundtrip: ResizeX(ResizeX(x: T): U): T
+    where width(T) < width(U)
+    => x
+
+resize_x_resize_x_truncate: ResizeX(ResizeX(x: S): U): T
+    where width(T) < width(U) < width(S)
+    => ResizeX(x): T
+
+resize_x_resize_u_roundtrip: ResizeX(ResizeU(x: T): U): T
+    where width(T) < width(U)
+    => x
+
+resize_x_resize_u_truncate: ResizeX(ResizeU(x: S): U): T
+    where width(T) < width(U) < width(S)
+    => ResizeX(x): T
+
+resize_x_constant_truncate: ResizeX(C: S): T
+    where width(T) <= width(S)
+    Cresult = bits(C, T)
+    => Cresult
+
+shl_zero: Shl(x, 0)
+    => x
+
+shl_constants: Shl(C1: T, C2)
+    check C2 < width(T)
+    C = C1 << C2
+    => C
+
+shl_select_constant: Shl(Select(c, C1, C2): T, C3)
+    check C3 < width(T)
+    Ctrue = C1 << C3
+    Cfalse = C2 << C3
+    => Select(c, Ctrue, Cfalse)
+
+shl_selects: Shl(Select(c, C1, C2): T, Select(c, C3, C4))
+    check C3 < width(T) and C4 < width(T)
+    Ctrue = C1 << C3
+    Cfalse = C2 << C4
+    => Select(c, Ctrue, Cfalse)
+
+shl_constant_select: Shl(C1: T, Select(c, C2, C3))
+    check C2 < width(T) and C3 < width(T)
+    Ctrue = C1 << C2
+    Cfalse = C1 << C3
+    => Select(c, Ctrue, Cfalse)
+
+shl_shr_u_equal: Shl(ShrU(x: T, C1), C2)
+    check C1 < width(T) and C2 < width(T) and C1 == C2
+    Cmask = -1 << C2
+    => And(x, Cmask)
+
+shl_masked_shr_u_equal: Shl(And(ShrU(x: T, C1), Cmask), C2)
+    check C1 < width(T) and C2 < width(T) and C1 == C2
+    Cresult_mask = Cmask << C2
+    => And(x, Cresult_mask)
+
+shl_shl_in_range: Shl(Shl(x: T, C1), C2)
+    check C1 < width(T) and C2 < width(T)
+    Cshift = C1 + C2
+    check Cshift < width(T)
+    => Shl(x, Cshift)
+
+shl_shl_out_of_range: Shl(Shl(x: T, C1), C2)
+    check C1 < width(T) and C2 < width(T)
+    Cshift = C1 + C2
+    check Cshift >= width(T)
+    => 0
+
+shl_masked_shl_out_of_range: Shl(And(Shl(x: T, C1), Cmask), C2)
+    check C1 < width(T) and C2 < width(T)
+    Cshift = C1 + C2
+    check Cshift >= width(T)
+    => 0
+
+shl_shr_u_right: Shl(ShrU(x: T, C1), C2)
+    check C1 < width(T) and C2 < width(T) and C1 > C2
+    Cshift = C1 - C2
+    Cmask = -1 << C2
+    => And(ShrU(x, Cshift), Cmask)
+
+shl_shr_u_left: Shl(ShrU(x: T, C1), C2)
+    check C1 < width(T) and C2 < width(T) and C1 < C2
+    Cshift = C2 - C1
+    Cmask = -1 << C2
+    => And(Shl(x, Cshift), Cmask)
+
+shl_masked_shr_u_right: Shl(And(ShrU(x: T, C1), Cmask), C2)
+    check C1 < width(T) and C2 < width(T) and C1 > C2
+    Cshift = C1 - C2
+    Cresult_mask = Cmask << C2
+    => And(ShrU(x, Cshift), Cresult_mask)
+
+shl_masked_shr_u_left: Shl(And(ShrU(x: T, C1), Cmask), C2)
+    check C1 < width(T) and C2 < width(T) and C1 < C2
+    Cshift = C2 - C1
+    Cresult_mask = Cmask << C2
+    => And(Shl(x, Cshift), Cresult_mask)
+
+shl_masked_shl_in_range: Shl(And(Shl(x: T, C1), Cmask), C2)
+    check C1 < width(T) and C2 < width(T)
+    Cshift = C1 + C2
+    check Cshift < width(T)
+    Cresult_mask = Cmask << C2
+    => And(Shl(x, Cshift), Cresult_mask)
+
+shr_u_zero: ShrU(x, 0)
+    => x
+
+shr_u_constants: ShrU(C1: T, C2)
+    check C2 < width(T)
+    C = C1 >> C2
+    => C
+
+shr_u_select_constant: ShrU(Select(c, C1, C2): T, C3)
+    check C3 < width(T)
+    Ctrue = C1 >> C3
+    Cfalse = C2 >> C3
+    => Select(c, Ctrue, Cfalse)
+
+shr_u_selects: ShrU(Select(c, C1, C2): T, Select(c, C3, C4))
+    check C3 < width(T) and C4 < width(T)
+    Ctrue = C1 >> C3
+    Cfalse = C2 >> C4
+    => Select(c, Ctrue, Cfalse)
+
+shr_u_constant_select: ShrU(C1: T, Select(c, C2, C3))
+    check C2 < width(T) and C3 < width(T)
+    Ctrue = C1 >> C2
+    Cfalse = C1 >> C3
+    => Select(c, Ctrue, Cfalse)
+
+shr_s_zero: ShrS(x, 0)
+    => x
