@@ -1720,6 +1720,16 @@ namespace metajit {
         } else if (constant->value() == type_mask(a->type())) {
           return constant;
         }
+        if (dynmatch(OrInst, inner, a)) {
+          if (dynmatch(Const, inner_constant, inner->arg(1))) {
+            // (x | c1) | c2 => x | (c1 | c2)
+            uint64_t combined = inner_constant->value() | constant->value();
+            if (combined == inner_constant->value()) {
+              return inner;
+            }
+            return fold_or(inner->arg(0), build_const(a->type(), combined));
+          }
+        }
       } else if (dynmatch(AndInst, and_a, a)) {
         if (dynmatch(AndInst, and_b, b)) {
           // (x & y) | (x & z) => x & (y | z)
@@ -4948,6 +4958,7 @@ namespace metajit {
         section->autoname();
         _builder.set_next_name();
         UsedBits used_bits(section);
+        Uses uses(section);
         
         changed |= substitute([&](Inst* inst) -> Value* {
           if (is_int_or_bool(inst->type()) &&
@@ -4974,6 +4985,30 @@ namespace metajit {
             if (dynmatch(Const, b, or_inst->arg(1))) {
               if ((used.used & b->value()) == 0) {
                 return or_inst->arg(0);
+              }
+              if (dynmatch(OrInst, inner, or_inst->arg(0))) {
+                if (dynamic_cast<Const*>(inner->arg(1))) {
+                  // (x | c1) | c2 => x | (c1 | c2)
+                  return _builder.fold_or(inner, b);
+                }
+              }
+            }
+          } else if (dynmatch(ShlInst, shl, inst)) {
+            if (dynmatch(Const, shift, shl->arg(1))) {
+              if (shift->value() < type_width(shl->type())) {
+                if (dynmatch(OrInst, inner, shl->arg(0))) {
+                  if (inner->name() < section->name_count() && uses.at(inner).size() == 1 &&
+                      uses.at(inner).front().inst == shl) {
+                    for (size_t index = 0; index < 2; index++) {
+                      if (dynmatch(Const, constant, inner->arg(index))) {
+                        // (x | c) << k => (x << k) | ((c << k) & type_mask), for single-use OR and k < width
+                        uint64_t shifted = (constant->value() << shift->value()) & type_mask(shl->type());
+                        return _builder.fold_or(_builder.fold_shl(inner->arg(1 - index), shift),
+                                                _builder.build_const(shl->type(), shifted));
+                      }
+                    }
+                  }
+                }
               }
             }
           } else if (dynamic_cast<ResizeUInst*>(inst) ||
