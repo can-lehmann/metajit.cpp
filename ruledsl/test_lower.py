@@ -29,6 +29,23 @@ class LowerTests(unittest.TestCase):
         raw = self.lower("zero: Add(x, 0)\n    => x")
         self.assertEqual(raw.functions[0].body.statements[-1].expr.function.name, "build_add")
 
+    def test_handwritten_registrations_match_definitions(self):
+        root = Path(__file__).resolve().parent.parent
+        definitions = set(re.findall(r"\b(_fold_\w+)\s*\([^;{}]*\)\s*\{",
+                                     (root / "jitir.tmpl.hpp").read_text()))
+        makefile = (root / "Makefile").read_text()
+        target = re.search(r"^ruledsl/generated\.inc\.hpp:[^\n]*\n((?:\t[^\n]*\n)*)",
+                           makefile, re.MULTILINE)
+        self.assertIsNotNone(target, "rule generation target not found in Makefile")
+        recipe = target.group(1).replace("\\\n", " ")
+        registered = {"_fold_" + operation_name(name)
+                      for name in re.findall(r"--handwritten(?:=|\s+)(\w+)", recipe)}
+        missing = definitions - registered
+        stale = registered - definitions
+        self.assertFalse(missing or stale,
+                         f"Missing --handwritten registrations: {sorted(missing)}; "
+                         f"registrations without definitions: {sorted(stale)}")
+
     def test_replacement_operations_get_folding_wrappers(self):
         program = self.lower("twice: Mul(x, 2)\n    => Shl(x, 1)")
         self.assertEqual([function.name for function in program.functions], ["fold_mul", "fold_shl"])

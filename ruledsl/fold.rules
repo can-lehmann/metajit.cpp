@@ -389,6 +389,10 @@ resize_u_sign_bit: ResizeU(ShrU(x: T, C)): Bool
     check C == width(T) - 1
     => LtS(x, 0)
 
+resize_x_sign_bit: ResizeX(ShrU(x: T, C)): Bool
+    check C == width(T) - 1
+    => LtS(x, 0)
+
 resize_x_resize_x_roundtrip: ResizeX(ResizeX(x: T): U): T
     where width(T) < width(U)
     => x

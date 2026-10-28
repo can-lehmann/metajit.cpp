@@ -321,4 +321,3 @@ tests. Folding entry points retain handwritten `_fold_*` fallbacks where
 registered and otherwise use raw `build_*` methods. The generated simplifier
 returns `nullptr` without constructing instructions. Rule proofs still run
 during rule-include generation.
-
