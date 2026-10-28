@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef ternop_x86_inst
+#define ternop_x86_inst(name, lowercase, usedef, is_64_bit, opcode) x86_inst(name, lowercase, usedef, is_64_bit, opcode)
+#endif
+
 #ifndef binop_x86_inst
 #define binop_x86_inst(name, lowercase, usedef, is_64_bit, opcode) x86_inst(name, lowercase, usedef, is_64_bit, opcode)
 #endif
@@ -108,6 +112,13 @@ rev_binop_x86_inst(Add64Mem, add64_mem, binop_usedef, true, { rex_w(); byte(0x01
 
 imm_binop_x86_inst(Add64Imm, add64_imm, imm_usedef, true, { reg = Reg::phys(0); rex_w(); byte(is_sext_imm8<int64_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int64_t>(imm.value()) ? 1 : 4); })
 imm_binop_x86_inst(Sub64Imm, sub64_imm, imm_usedef, true, { reg = Reg::phys(5); rex_w(); byte(is_sext_imm8<int64_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int64_t>(imm.value()) ? 1 : 4); })
+
+ternop_x86_inst(Andn32, andn32, { use(vvvv); use(rm); def(reg); }, false, { vex(false, 0); byte(0xf2); modrm(); })
+ternop_x86_inst(Andn64, andn64, { use(vvvv); use(rm); def(reg); }, true, { vex(true, 0); byte(0xf2); modrm(); })
+ternop_x86_inst(Bextr32, bextr32, { use(vvvv); use(rm); def(reg); }, false, { vex(false, 0); byte(0xf7); modrm(); })
+ternop_x86_inst(Bextr64, bextr64, { use(vvvv); use(rm); def(reg); }, true, { vex(true, 0); byte(0xf7); modrm(); })
+ternop_x86_inst(Sarx32, sarx32, { use(vvvv); use(rm); def(reg); }, false, { vex(false, 2); byte(0xf7); modrm(); })
+ternop_x86_inst(Sarx64, sarx64, { use(vvvv); use(rm); def(reg); }, true, { vex(true, 2); byte(0xf7); modrm(); })
 
 binop_x86_inst(And32, and32, binop_usedef, false, { rex_opt(); byte(0x23); modrm(); })
 binop_x86_inst(Or32, or32, binop_usedef, false, { rex_opt(); byte(0x0b); modrm(); })
@@ -232,6 +243,7 @@ binop_x86_inst(CvtTSS2SI, cvttss2si, mov_usedef, true, { byte(0xf3); rex_w(); by
 imm_binop_x86_inst(Test32Imm, test32_imm, cmp_imm_usedef, false, { reg = Reg::phys(0); rex_opt(); byte(0xf7); modrm(); imm_n(4); })
 imm_binop_x86_inst(Test64Imm, test64_imm, cmp_imm_usedef, true, { reg = Reg::phys(0); rex_w(); byte(0xf7); modrm(); imm_n(4); })
 
+#undef ternop_x86_inst
 #undef x86_inst
 #undef binop_x86_inst
 #undef rev_binop_x86_inst

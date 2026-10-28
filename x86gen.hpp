@@ -166,7 +166,7 @@ namespace metajit {
     };
 
     using RM = std::variant<std::monostate, Reg, Mem>;
-    using Imm = std::variant<std::monostate, uint64_t, X86Block*>;
+    using Imm = std::variant<std::monostate, uint64_t, X86Block*, Reg>;
   private:
     Kind _kind;
     Reg _reg;
@@ -179,11 +179,18 @@ namespace metajit {
     
     Kind kind() const { return _kind; }
     Reg reg() const { return _reg; }
+    Reg vvvv() const {
+      if (std::holds_alternative<Reg>(_imm)) {
+        return std::get<Reg>(_imm);
+      }
+      return Reg();
+    }
     RM rm() const { return _rm; }
     Imm imm() const { return _imm; }
     void* data() const { return _data; }
 
     X86Inst& set_kind(Kind kind) { _kind = kind; return *this; }
+    X86Inst& set_vvvv(Reg reg) { _imm = reg; return *this; }
     X86Inst& set_reg(Reg reg) { _reg = reg; return *this; }
     X86Inst& set_rm(const RM& rm) { _rm = rm; return *this; }
     X86Inst& set_imm(const Imm& imm) { _imm = imm; return *this; }
@@ -196,6 +203,10 @@ namespace metajit {
     void visit_regs(const Fn& fn) {
       if (!_reg.is_invalid()) {
         fn(_reg);
+      }
+
+      if (std::holds_alternative<Reg>(_imm)) {
+        fn(std::get<Reg>(_imm));
       }
 
       if (std::holds_alternative<Reg>(_rm)) {
@@ -216,6 +227,7 @@ namespace metajit {
         reg = _reg;
       }
       RM rm = _rm;
+      RM vvvv = this->vvvv();
 
       auto use = [&](RM rm) {
         if (std::holds_alternative<Reg>(rm)) {
@@ -339,6 +351,8 @@ namespace metajit {
       stream << " imm=" << std::get<uint64_t>(_imm);
     } else if (std::holds_alternative<X86Block*>(_imm)) {
       stream << " imm=b" << std::get<X86Block*>(_imm)->name();
+    } else if (std::holds_alternative<Reg>(_imm)) {
+      stream << " vvvv=" << std::get<Reg>(_imm);
     }
   }
 
@@ -384,6 +398,11 @@ namespace metajit {
       new (block) X86Block();
       return block;
     }
+
+    #define ternop_x86_inst(kind, name, ...) \
+      X86Inst* name(Reg dst, Reg src, X86Inst::RM rm) { \
+        return &build(X86Inst::Kind::kind).set_reg(dst).set_vvvv(src).set_rm(rm); \
+      }
 
     #define binop_x86_inst(kind, name, ...) \
       X86Inst* name(Reg dst, X86Inst::RM src) { \
@@ -1296,10 +1315,47 @@ namespace metajit {
         }
       } else if (dynmatch(AndInst, and_inst, inst)) {
         auto [a, b] = commutative_args(inst);
-        _builder.mov64(vreg(inst), vreg(a));
+        if (__builtin_cpu_supports("bmi")) {
+          if (dynamic_cast<Const*>(a) || is_not(b)) {
+            std::swap(a, b);
+          }
+          if (XorInst* inversion = is_not(a)) {
+            if (inst->type() == Type::Int64) {
+              _builder.andn64(vreg(inst), vreg(inversion->arg(0)), vreg(b));
+            } else {
+              _builder.andn32(vreg(inst), vreg(inversion->arg(0)), vreg(b));
+            }
+            return;
+          }
+        }
 
         if (dynmatch(Const, constant_b, b)) {
+          Inst* shift = dynamic_cast<ShrUInst*>(a);
+          if (!shift) {
+            shift = dynamic_cast<ShrSInst*>(a);
+          }
+          uint64_t mask = constant_b->value();
+          if (__builtin_cpu_supports("bmi") && mask && (mask & (mask + 1)) == 0 &&
+              shift && _use_counts.at(shift) == 1 && _vregs.at(shift).is_invalid()) {
+            if (dynmatch(Const, amount, shift->arg(1))) {
+              size_t width = type_width(inst->type());
+              size_t start = amount->value();
+              size_t length = __builtin_popcountll(mask);
+              if (start > 0 && start < width &&
+                  (dynamic_cast<ShrUInst*>(shift) || length <= width - start)) {
+                Reg control = vreg();
+                _builder.mov32_imm(control, start | (std::min(length, width - start) << 8));
+                if (inst->type() == Type::Int64) {
+                  _builder.bextr64(vreg(inst), control, vreg(shift->arg(0)));
+                } else {
+                  _builder.bextr32(vreg(inst), control, vreg(shift->arg(0)));
+                }
+                return;
+              }
+            }
+          }
           if (is_sext_imm32(constant_b)) {
+            _builder.mov64(vreg(inst), vreg(a));
             if (type_size(inst->type()) == 8) {
               _builder.and64_imm(vreg(inst), sign_extend_imm(constant_b));
             } else {
@@ -1309,6 +1365,7 @@ namespace metajit {
           }
         }
 
+        _builder.mov64(vreg(inst), vreg(a));
         if (type_size(inst->type()) == 8) {
           _builder.and64(vreg(inst), vreg(b));
         } else {
@@ -1398,6 +1455,15 @@ namespace metajit {
         }
         _builder.pseudo_use(rcx);
       } else if (dynmatch(ShrSInst, shr_s, inst)) {
+        if (__builtin_cpu_supports("bmi2") && !dynamic_cast<Const*>(shr_s->arg(1))) {
+          if (inst->type() == Type::Int32) {
+            _builder.sarx32(vreg(inst), vreg(shr_s->arg(1)), vreg(shr_s->arg(0)));
+            return;
+          } else if (inst->type() == Type::Int64) {
+            _builder.sarx64(vreg(inst), vreg(shr_s->arg(1)), vreg(shr_s->arg(0)));
+            return;
+          }
+        }
         _builder.mov64(vreg(inst), vreg(shr_s->arg(0)));
 
         if (dynmatch(Const, constant_b, shr_s->arg(1))) {
@@ -2765,20 +2831,30 @@ namespace metajit {
         buffer.push_back(value);
       };
 
-      auto rex = [&](bool w = false) {
-        uint8_t rex = 0x40;
-        if (w) {
-          rex |= 0x08;
-        }
-        rex |= ((reg.id() >> 3) & 1) << 2; // R
+      auto reg_extensions = [&]() {
+        uint8_t bits = ((reg.id() >> 3) & 1) << 2; // R
         if (std::holds_alternative<Reg>(rm)) {
-          rex |= ((std::get<Reg>(rm).id() >> 3) & 1); // B
+          bits |= (std::get<Reg>(rm).id() >> 3) & 1; // B
         } else if (std::holds_alternative<X86Inst::Mem>(rm)) {
           X86Inst::Mem mem = std::get<X86Inst::Mem>(rm);
-          rex |= ((mem.base.id() >> 3) & 1); // B
+          bits |= (mem.base.id() >> 3) & 1; // B
           if (!mem.index.is_invalid()) {
-            rex |= ((mem.index.id() >> 3) & 1) << 1; // X
+            bits |= ((mem.index.id() >> 3) & 1) << 1; // X
           }
+        }
+        return bits;
+      };
+
+      auto vex = [&](bool w, uint8_t prefix) {
+        byte(0xc4);
+        byte(((~reg_extensions() & 7) << 5) | 2);
+        byte((uint8_t(w) << 7) | ((~inst->vvvv().id() & 15) << 3) | prefix);
+      };
+
+      auto rex = [&](bool w = false) {
+        uint8_t rex = 0x40 | reg_extensions();
+        if (w) {
+          rex |= 0x08;
         }
         byte(rex);
       };
