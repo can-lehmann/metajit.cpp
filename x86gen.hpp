@@ -1314,49 +1314,48 @@ namespace metajit {
           _builder.pseudo_use(rdx);
         }
       } else if (dynmatch(AndInst, and_inst, inst)) {
+        auto [a, b] = commutative_args(inst);
         if (__builtin_cpu_supports("bmi")) {
-          for (size_t it = 0; it < 2; it++) {
-            Value* a = inst->arg(it);
-            Value* b = inst->arg(1 - it);
-            if (XorInst* inversion = is_not(a)) {
-              if (inst->type() == Type::Int64) {
-                _builder.andn64(vreg(inst), vreg(inversion->arg(0)), vreg(b));
-              } else {
-                _builder.andn32(vreg(inst), vreg(inversion->arg(0)), vreg(b));
-              }
-              return;
+          if (dynamic_cast<Const*>(a) || is_not(b)) {
+            std::swap(a, b);
+          }
+          if (XorInst* inversion = is_not(a)) {
+            if (inst->type() == Type::Int64) {
+              _builder.andn64(vreg(inst), vreg(inversion->arg(0)), vreg(b));
+            } else {
+              _builder.andn32(vreg(inst), vreg(inversion->arg(0)), vreg(b));
             }
-            Inst* shift = dynamic_cast<ShrUInst*>(a);
-            if (!shift) {
-              shift = dynamic_cast<ShrSInst*>(a);
-            }
-            if (Const* mask = dynamic_cast<Const*>(b);
-                mask && mask->value() && (mask->value() & (mask->value() + 1)) == 0 &&
-                shift && _use_counts.at(shift) == 1 && _vregs.at(shift).is_invalid()) {
-              if (dynmatch(Const, amount, shift->arg(1))) {
-                size_t width = type_width(inst->type());
-                size_t start = amount->value();
-                size_t length = __builtin_popcountll(mask->value());
-                if (start > 0 && start < width &&
-                    (dynamic_cast<ShrUInst*>(shift) || length <= width - start)) {
-                  Reg control = vreg();
-                  _builder.mov32_imm(control, start | (std::min(length, width - start) << 8));
-                  if (inst->type() == Type::Int64) {
-                    _builder.bextr64(vreg(inst), control, vreg(shift->arg(0)));
-                  } else {
-                    _builder.bextr32(vreg(inst), control, vreg(shift->arg(0)));
-                  }
-                  return;
+            return;
+          }
+        }
+
+        if (dynmatch(Const, constant_b, b)) {
+          Inst* shift = dynamic_cast<ShrUInst*>(a);
+          if (!shift) {
+            shift = dynamic_cast<ShrSInst*>(a);
+          }
+          uint64_t mask = constant_b->value();
+          if (__builtin_cpu_supports("bmi") && mask && (mask & (mask + 1)) == 0 &&
+              shift && _use_counts.at(shift) == 1 && _vregs.at(shift).is_invalid()) {
+            if (dynmatch(Const, amount, shift->arg(1))) {
+              size_t width = type_width(inst->type());
+              size_t start = amount->value();
+              size_t length = __builtin_popcountll(mask);
+              if (start > 0 && start < width &&
+                  (dynamic_cast<ShrUInst*>(shift) || length <= width - start)) {
+                Reg control = vreg();
+                _builder.mov32_imm(control, start | (std::min(length, width - start) << 8));
+                if (inst->type() == Type::Int64) {
+                  _builder.bextr64(vreg(inst), control, vreg(shift->arg(0)));
+                } else {
+                  _builder.bextr32(vreg(inst), control, vreg(shift->arg(0)));
                 }
+                return;
               }
             }
           }
-        }
-        auto [a, b] = commutative_args(inst);
-        _builder.mov64(vreg(inst), vreg(a));
-
-        if (dynmatch(Const, constant_b, b)) {
           if (is_sext_imm32(constant_b)) {
+            _builder.mov64(vreg(inst), vreg(a));
             if (type_size(inst->type()) == 8) {
               _builder.and64_imm(vreg(inst), sign_extend_imm(constant_b));
             } else {
@@ -1366,6 +1365,7 @@ namespace metajit {
           }
         }
 
+        _builder.mov64(vreg(inst), vreg(a));
         if (type_size(inst->type()) == 8) {
           _builder.and64(vreg(inst), vreg(b));
         } else {
