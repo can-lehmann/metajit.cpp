@@ -288,26 +288,6 @@ rewrites involving these operations cannot currently be proved.
 Also check that your rule cannot repeatedly undo another rule. Successful
 proofs do not establish that rewriting terminates.
 
-### Testing rules
-
-Run the Python DSL tests with a Python environment that has Z3 installed:
-
-```sh
-python3 -m unittest discover -s ruledsl -t .
-```
-
-Add C++ regression coverage when a rule needs integration testing. For example,
-build the optimizer tests and select the relevant cases with `-k`:
-
-```sh
-make PYTHON=/path/to/venv/bin/python3 tests/test_opt
-./tests/test_opt -k 'rule DSL'
-```
-
-`tests/test_opt.cpp` exercises folding through `Builder`, `TraceBuilder`, and
-the simplification passes. Standalone native emission tests require `clang++`
-or `g++`. `make test-ruledsl` is another entry point for the Python suite;
-`make test` also includes it.
 
 ### Statistics and comparison builds
 
