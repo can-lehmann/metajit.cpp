@@ -125,6 +125,55 @@ b0(%0: Ptr, %1: Int32):
 )");
 }
 
+void test_narrowing_resize_normalization() {
+  for (Type source : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (Type target : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      if (type_width(target) >= type_width(source)) {
+        continue;
+      }
+      for (bool trace : {false, true}) {
+        for (size_t kind = 0; kind < 3; ++kind) {
+          Context context;
+          Allocator allocator;
+          Section section(context, allocator);
+          Builder builder(&section);
+          Block* block = builder.build_block({Type::Ptr, source});
+          builder.move_to_end(block);
+          Value* input = block->arg(1);
+          for (Value* operand : {input, (Value*) builder.build_poison(source)}) {
+            Value* signed_result = builder.fold_resize_s(operand, target);
+            Value* unspecified_result = builder.fold_resize_x(operand, target);
+            unittest_assert(dynamic_cast<ResizeUInst*>(signed_result));
+            unittest_assert(dynamic_cast<ResizeUInst*>(unspecified_result));
+            unittest_assert(((Inst*) signed_result)->arg(0) == operand);
+            unittest_assert(((Inst*) unspecified_result)->arg(0) == operand);
+          }
+          Value* resized = kind == 0 ? (Value*) builder.build_resize_u(input, target) :
+                           kind == 1 ? (Value*) builder.build_resize_s(input, target) :
+                                       builder.build_resize_x(input, target);
+          StoreInst* output = builder.build_store(block->arg(0), resized, 0, 0);
+          builder.build_exit();
+          section.order_blocks(BlockOrdering::Dominator);
+          section.autoname();
+          if (trace) {
+            Chain chain;
+            chain.add(block);
+            SimplifyTrace::run(&section, &chain);
+          } else {
+            Simplify::run(&section, 1);
+            unittest_assert(dynamic_cast<ResizeUInst*>(output->value()));
+            Simplify::run(&section, 4);
+          }
+          unittest_assert(dynamic_cast<ResizeUInst*>(output->value()));
+          unittest_assert(((Inst*) output->value())->arg(0) == input);
+          unittest_assert(output->value()->type() == target);
+          unittest_assert(!section.verify(std::cout));
+        }
+      }
+    }
+  }
+}
+
 void test_simplify_widening_resize_used_bits() {
   for (bool signed_ : {false, true}) {
     for (bool high_bits_used : {false, true}) {
@@ -254,7 +303,7 @@ void test_and_or_idempotence_simplify(Builder& builder, TestData& data) {
   Simplify::run(builder.section(), 1);
 
   unittest_assert(and_output->arg(1) == value);
-  unittest_assert(or_output->arg(1) == or_result);
+  unittest_assert(or_output->arg(1) == value);
 }
 
 void test_natural_order_deep_chain() {
@@ -830,6 +879,196 @@ b0(%0: Ptr, %1: Int64):
   Exit
 }
 )");
+}
+
+void check_resize_or_shl_result(Value* result, Value* input, Type type) {
+  ResizeUInst* resize = dynamic_cast<ResizeUInst*>(result);
+  unittest_assert(resize && resize->type() == type && resize->arg(0) == input);
+}
+
+void test_fold_resize_add_even_bool() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    for (uint64_t constant : {uint64_t(0), uint64_t(2), uint64_t(42), type_mask(type) - 1,
+                              uint64_t(1), uint64_t(43), type_mask(type)}) {
+      for (bool reversed : {false, true}) {
+        Value* c = builder.build_const(type, constant);
+        Value* sum = builder.build_add(reversed ? c : x, reversed ? x : c);
+        Value* folded = builder.fold_resize_u(sum, Type::Bool);
+        ResizeUInst* normalized = dynamic_cast<ResizeUInst*>(builder.fold_resize_x(sum, Type::Bool));
+        unittest_assert(normalized);
+        Inst* root = builder.build_resize_u(sum, Type::Bool);
+        if ((constant & 1) == 0) {
+          ResizeUInst* resize = dynamic_cast<ResizeUInst*>(folded);
+          unittest_assert(resize && resize->arg(0) == x && resize->type() == Type::Bool);
+          unittest_assert(normalized->arg(0) == x);
+          ResizeUInst* replacement = dynamic_cast<ResizeUInst*>(builder.try_simplify(root));
+          unittest_assert(replacement && replacement->arg(0) == x && replacement->type() == Type::Bool);
+        } else {
+          ResizeUInst* resize = dynamic_cast<ResizeUInst*>(folded);
+          unittest_assert(resize && resize->arg(0) == sum);
+          unittest_assert(normalized->arg(0) == sum);
+          unittest_assert(builder.try_simplify(root) == nullptr);
+        }
+      }
+    }
+    builder.build_exit();
+    unittest_assert(!section.verify(std::cout));
+  }
+}
+
+void test_fold_resize_or_shl() {
+  for (Type source : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({source, source, Type::Bool});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    Value* y = block->arg(1);
+    for (bool reversed : {false, true}) {
+      Value* shifted = builder.build_shl(x, y);
+      Value* shared = builder.build_or(reversed ? shifted : x, reversed ? x : shifted);
+      check_resize_or_shl_result(builder.fold_resize_u(shared, Type::Bool), x, Type::Bool);
+      check_resize_or_shl_result(builder.fold_resize_x(shared, Type::Bool), x, Type::Bool);
+      Inst* root = builder.build_resize_u(shared, Type::Bool);
+      check_resize_or_shl_result(builder.try_simplify(root), x, Type::Bool);
+      Value* unrelated = builder.build_or(x, builder.build_shl(y, x));
+      ResizeUInst* retained = dynamic_cast<ResizeUInst*>(builder.fold_resize_u(unrelated, Type::Bool));
+      unittest_assert(retained && retained->arg(0) == unrelated);
+      for (Type target : {Type::Bool, Type::Int8, Type::Int16, Type::Int32}) {
+        if (type_width(target) >= type_width(source)) {
+          continue;
+        }
+        for (uint64_t count : {uint64_t(type_width(target) - 1), uint64_t(type_width(target)),
+                               uint64_t(type_width(source) - 1), uint64_t(type_width(source))}) {
+          Value* shifted_y = builder.build_shl(y, builder.build_const(source, count));
+          Value* combined = builder.build_or(reversed ? shifted_y : x, reversed ? x : shifted_y);
+          Value* result = builder.fold_resize_u(combined, target);
+          if (count >= type_width(target)) {
+            check_resize_or_shl_result(result, x, target);
+            Inst* truncation = builder.build_resize_u(combined, target);
+            check_resize_or_shl_result(builder.try_simplify(truncation), x, target);
+          } else {
+            ResizeUInst* resize = dynamic_cast<ResizeUInst*>(result);
+            unittest_assert(resize && resize->arg(0) == combined);
+          }
+        }
+      }
+    }
+    Value* extended = builder.build_resize_u(block->arg(2), source);
+    Value* original = builder.build_or(extended, builder.build_shl(extended, extended));
+    check_resize_or_shl_result(builder.fold_resize_u(original, Type::Bool), extended, Type::Bool);
+    builder.build_exit();
+    unittest_assert(!section.verify(std::cout));
+  }
+}
+
+void test_fold_shr_u_shl_equal() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({type});
+    builder.move_to_end(block);
+    Value* x = block->arg(0);
+    for (uint64_t shift = 0; shift < type_width(type); shift++) {
+      Const* count = builder.build_const(type, shift);
+      Value* result = builder.fold_shr_u(builder.fold_shl(x, count), count);
+      if (shift == 0) {
+        unittest_assert(result == x);
+      } else {
+        AndInst* masked = dynamic_cast<AndInst*>(result);
+        unittest_assert(masked && masked->arg(0) == x);
+        check_const(masked->arg(1), type, type_mask(type) >> shift);
+      }
+    }
+    Const* invalid = builder.build_const(type, type_width(type));
+    unittest_assert(dynamic_cast<ShrUInst*>(builder.fold_shr_u(builder.build_shl(x, invalid), invalid)));
+    builder.build_exit();
+    unittest_assert(!section.verify(std::cout));
+  }
+}
+
+void test_simplify_shr_u_shl_equal() {
+  for (bool trace : {false, true}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({Type::Ptr, Type::Int8});
+    builder.move_to_end(block);
+    Value* x = block->arg(1);
+    Value* wide = builder.build_resize_x(x, Type::Int32);
+    Const* shift = builder.build_const(Type::Int32, 16);
+    Value* pair = builder.build_shr_u(builder.build_shl(wide, shift), shift);
+    StoreInst* truncated = builder.build_store(block->arg(0), builder.build_resize_x(pair, Type::Int8), 0, 0);
+    Value* zero_extended = builder.build_resize_u(x, Type::Int32);
+    Value* lossless = builder.build_shr_u(builder.build_shl(zero_extended, shift), shift);
+    StoreInst* unchanged = builder.build_store(block->arg(0), lossless, 0, 8);
+    builder.build_exit();
+    section.order_blocks(BlockOrdering::Dominator);
+    section.autoname();
+    if (trace) {
+      Chain chain;
+      chain.add(block);
+      SimplifyTrace::run(&section, &chain);
+    } else {
+      Simplify::run(&section, 3);
+    }
+    unittest_assert(truncated->value() == x);
+    unittest_assert(unchanged->value() == zero_extended);
+    unittest_assert(!section.verify(std::cout));
+  }
+}
+
+void test_simplify_shr_u_shl_known_no_loss_right() {
+  for (bool trace : {false, true}) {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      for (uint64_t left : {uint64_t(1), uint64_t(type_width(type) / 2), uint64_t(type_width(type) - 2)}) {
+        Context context;
+        Allocator allocator;
+        Section section(context, allocator);
+        Builder builder(&section);
+        Block* block = builder.build_block({Type::Ptr, type});
+        builder.move_to_end(block);
+        Value* x = builder.build_and(block->arg(1), builder.build_const(type, type_mask(type) >> left));
+        Value* shifted = builder.build_shl(x, builder.build_const(type, left));
+        StoreInst* shared = builder.build_store(block->arg(0), shifted, 0, 0);
+        Value* pair = builder.build_shr_u(shifted, builder.build_const(type, left + 1));
+        StoreInst* result = builder.build_store(block->arg(0), pair, 0, 8);
+        Inst* losing = builder.build_shr_u(builder.build_shl(block->arg(1), builder.build_const(type, left)),
+                                         builder.build_const(type, left + 1));
+        Inst* invalid = builder.build_shr_u(shifted, builder.build_const(type, type_width(type)));
+        builder.build_exit();
+        section.order_blocks(BlockOrdering::Dominator);
+        section.autoname();
+        KnownBits facts(&section);
+        unittest_assert(builder.try_simplify(losing, facts.view()) == nullptr);
+        unittest_assert(builder.try_simplify(invalid, facts.view()) == nullptr);
+        if (trace) {
+          Chain chain;
+          chain.add(block);
+          SimplifyTrace::run(&section, &chain);
+        } else {
+          Simplify::run(&section, 2);
+        }
+        ShrUInst* replacement = dynamic_cast<ShrUInst*>(result->value());
+        unittest_assert(replacement && replacement->arg(0) == x);
+        check_const(replacement->arg(1), type, 1);
+        unittest_assert(shared->value() == shifted);
+        unittest_assert(!section.verify(std::cout));
+      }
+    }
+  }
 }
 
 void test_builder_is_always_equal() {
@@ -1784,8 +2023,7 @@ void check_fold_nested_truncations(bool inner_unsigned, bool outer_unsigned) {
           Value* inner = inner_unsigned ? (Value*) builder.build_resize_u(input, intermediate) :
                                                   builder.build_resize_x(input, intermediate);
           Value* result = outer_unsigned ? builder.fold_resize_u(inner, target) : builder.fold_resize_x(inner, target);
-          unittest_assert(outer_unsigned ? dynamic_cast<ResizeUInst*>(result) != nullptr :
-                                           dynamic_cast<ResizeXInst*>(result) != nullptr);
+          unittest_assert(dynamic_cast<ResizeUInst*>(result));
           unittest_assert(result->type() == target);
           unittest_assert(((Inst*) result)->arg(0) == input);
         }
@@ -1832,6 +2070,12 @@ void test_fold_nested_unsigned_resizes() {
         for (Value* input : {(Value*) block->arg(0), (Value*) builder.build_poison(source)}) {
           Value* inner = builder.build_resize_u(input, intermediate);
           Value* result = builder.fold_resize_u(inner, target);
+          if (source == target && type_width(intermediate) < type_width(source)) {
+            AndInst* masked = dynamic_cast<AndInst*>(result);
+            unittest_assert(masked && masked->arg(0) == input);
+            check_const(masked->arg(1), target, type_mask(intermediate));
+            continue;
+          }
           unittest_assert(dynamic_cast<ResizeUInst*>(result));
           unittest_assert(result->type() == target);
           bool widening = type_width(source) < type_width(intermediate) && type_width(intermediate) < type_width(target);
@@ -1879,8 +2123,8 @@ void check_fold_extension_roundtrip(bool inner_unsigned) {
   Value* inner = inner_unsigned ? (Value*) builder.build_resize_u(block->arg(0), Type::Int64) :
                                   builder.build_resize_x(block->arg(0), Type::Int64);
   Value* different_type = builder.fold_resize_x(inner, Type::Int32);
-  unittest_assert(dynamic_cast<ResizeXInst*>(different_type));
-  unittest_assert(((ResizeXInst*) different_type)->arg(0) == inner);
+  unittest_assert(dynamic_cast<ResizeUInst*>(different_type));
+  unittest_assert(((ResizeUInst*) different_type)->arg(0) == inner);
 }
 
 void test_fold_unsigned_extension_roundtrip() {
@@ -1912,10 +2156,12 @@ void test_fold_nested_narrowing_resize_x() {
           unittest_assert(result == input);
           continue;
         }
-        unittest_assert(dynamic_cast<ResizeXInst*>(result));
+        unittest_assert(type_width(target) < type_width(intermediate) ?
+                            dynamic_cast<ResizeUInst*>(result) != nullptr :
+                            dynamic_cast<ResizeXInst*>(result) != nullptr);
         Value* expected = type_width(target) < type_width(intermediate) &&
                           type_width(intermediate) < type_width(source) ? input : inner;
-        unittest_assert(((ResizeXInst*) result)->arg(0) == expected);
+        unittest_assert(((Inst*) result)->arg(0) == expected);
       }
     }
   }
@@ -1953,22 +2199,23 @@ void test_fold_resize_x_sign_bit_negative() {
     for (uint64_t amount : {uint64_t(type_width(type) - 2), uint64_t(type_width(type)), uint64_t(type_width(type) + 1)}) {
       Value* shifted = builder.build_shr_u(input, builder.build_const(type, amount));
       Value* result = builder.fold_resize_x(shifted, Type::Bool);
-      unittest_assert(dynamic_cast<ResizeXInst*>(result));
-      unittest_assert(((ResizeXInst*) result)->arg(0) == shifted);
+      unittest_assert(dynamic_cast<ResizeUInst*>(result));
+      unittest_assert(((ResizeUInst*) result)->arg(0) == shifted);
     }
     Value* variable_shift = builder.build_shr_u(input, block->arg(1));
     Value* variable_result = builder.fold_resize_x(variable_shift, Type::Bool);
-    unittest_assert(dynamic_cast<ResizeXInst*>(variable_result));
-    unittest_assert(((ResizeXInst*) variable_result)->arg(0) == variable_shift);
+    unittest_assert(dynamic_cast<ResizeUInst*>(variable_result));
+    unittest_assert(((ResizeUInst*) variable_result)->arg(0) == variable_shift);
     Value* shifted = builder.build_shr_u(input, builder.build_const(type, type_width(type) - 1));
     Type target = type == Type::Int8 ? Type::Int16 : Type::Int8;
     Value* result = builder.fold_resize_x(shifted, target);
-    unittest_assert(dynamic_cast<ResizeXInst*>(result));
-    unittest_assert(((ResizeXInst*) result)->arg(0) == shifted);
+    unittest_assert(type_width(target) < type_width(type) ? dynamic_cast<ResizeUInst*>(result) != nullptr :
+                                                          dynamic_cast<ResizeXInst*>(result) != nullptr);
+    unittest_assert(((Inst*) result)->arg(0) == shifted);
     Value* signed_shift = builder.build_shr_s(input, builder.build_const(type, type_width(type) - 1));
     Value* signed_result = builder.fold_resize_x(signed_shift, Type::Bool);
-    unittest_assert(dynamic_cast<ResizeXInst*>(signed_result));
-    unittest_assert(((ResizeXInst*) signed_result)->arg(0) == signed_shift);
+    unittest_assert(dynamic_cast<ResizeUInst*>(signed_result));
+    unittest_assert(((ResizeUInst*) signed_result)->arg(0) == signed_shift);
   }
 }
 
@@ -1988,9 +2235,12 @@ void test_fold_masked_resize_roundtrip() {
       builder.move_to_end(block);
       Value* x = block->arg(0);
       Value* resized = builder.build_resize_x(x, intermediate);
+      Value* unsigned_resized = builder.build_resize_u(x, intermediate);
       for (uint64_t mask : masks) {
         Const* constant = builder.build_const(intermediate, mask & type_mask(intermediate));
-        for (Value* masked : {builder.build_and(resized, constant), builder.build_and(constant, resized)}) {
+        for (Value* masked : {builder.build_and(resized, constant), builder.build_and(constant, resized),
+                             builder.build_and(unsigned_resized, constant),
+                             builder.build_and(constant, unsigned_resized)}) {
           Value* result = builder.fold_resize_u(masked, source);
           uint64_t expected = mask & type_mask(intermediate) & type_mask(source);
           if (expected == 0) {
@@ -2125,12 +2375,11 @@ void test_rule_dsl_builder_integration() {
   Value* y = block->arg(1);
   Value* cond = block->arg(2);
   Value* pointer = block->arg(3);
-  Value* complement = builder.build_const(Type::Int8, 255);
-  Value* inner = builder.build_xor(x, complement);
-  unittest_assert(builder.fold_xor(inner, complement) == x);
+  Value* inner = builder.build_xor(x, y);
+  unittest_assert(builder.fold_xor(inner, y) == x);
   TraceBuilder trace(&section);
   trace.move_to_end(block);
-  unittest_assert(trace.build_xor(inner, complement) == x);
+  unittest_assert(trace.build_xor(inner, y) == x);
   unittest_assert(trace.build_select(cond, pointer, pointer) == pointer);
   Const* pointer_eq = dynamic_cast<Const*>(builder.fold_eq(pointer, pointer));
   unittest_assert(pointer_eq && pointer_eq->type() == Type::Bool && pointer_eq->value() == 1);
@@ -2185,6 +2434,42 @@ void check_fold_constant_select(Value* result, Value* cond, Type type, uint64_t 
     check_const(select->arg(1), type, t);
     check_const(select->arg(2), type, f);
   }
+}
+
+void test_fold_select_equal_arms() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Int32, Type::Int32});
+  builder.move_to_end(block);
+  Value* x = block->arg(0);
+  Value* y = block->arg(1);
+  for (bool reversed : {false, true}) {
+    Value* cond = builder.build_eq(reversed ? y : x, reversed ? x : y);
+    unittest_assert(builder.fold_select(cond, x, y) == y);
+    unittest_assert(builder.fold_select(cond, y, x) == x);
+  }
+  Value* zero = builder.build_const(Type::Int32, 0);
+  check_const(builder.fold_select(builder.build_eq(x, zero), x, zero), Type::Int32, 0);
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+}
+
+void test_fold_shift_zero_value() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Int32});
+  builder.move_to_end(block);
+  Value* zero = builder.build_const(Type::Int32, 0);
+  Value* shift = block->arg(0);
+  check_const(builder.fold_shl(zero, shift), Type::Int32, 0);
+  check_const(builder.fold_shr_u(zero, shift), Type::Int32, 0);
+  check_const(builder.fold_shr_s(zero, shift), Type::Int32, 0);
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
 }
 
 void test_fold_constant_select_propagation() {
@@ -2395,6 +2680,57 @@ void test_rule_dsl_known_resize_roundtrip() {
   }
 }
 
+void test_rule_dsl_known_bits() {
+  for (bool trace : {false, true}) {
+    for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* block = builder.build_block({Type::Ptr, type, type});
+      builder.move_to_end(block);
+      Value* x = block->arg(1);
+      Value* y = block->arg(2);
+      Const* one = builder.build_const(type, 1);
+      Const* other_bits = builder.build_const(type, type_mask(type) ^ 1);
+      Value* low = builder.build_and(x, one);
+      Value* high = builder.build_and(y, other_bits);
+      StoreInst* added = builder.build_store(block->arg(0), builder.build_add(low, high), 0, 0);
+      StoreInst* subtracted = builder.build_store(block->arg(0),
+                                   builder.build_sub(builder.build_or(low, high), high), 0, 8);
+      Value* set = builder.build_or(x, one);
+      StoreInst* cleared = builder.build_store(block->arg(0), builder.build_xor(set, one), 0, 16);
+      StoreInst* disjoint = builder.build_store(block->arg(0),
+                                 builder.build_and(builder.build_or(x, high), low), 0, 24);
+      builder.build_exit();
+      section.order_blocks(BlockOrdering::Dominator);
+      section.autoname();
+      if (trace) {
+        Chain chain;
+        chain.add(block);
+        SimplifyTrace::run(&section, &chain);
+      } else {
+        Simplify::run(&section, 2);
+      }
+      OrInst* combined = dynamic_cast<OrInst*>(added->value());
+      unittest_assert(combined && combined->arg(0) == low && combined->arg(1) == high);
+      unittest_assert(subtracted->value() == low);
+      unittest_assert(dynamic_cast<AndInst*>(cleared->value()));
+      unittest_assert(!section.verify(std::cout));
+      for (uint64_t input : {uint64_t(0), uint64_t(1), type_mask(type)}) {
+        uint64_t output[4] = {};
+        Interpreter interpreter(&section, {Interpreter::Bits::constant(output),
+                                Interpreter::Bits::constant(type, input), Interpreter::Bits::constant(type, 42)});
+        unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+        unittest_assert(output[0] == ((input & 1) | 42));
+        unittest_assert(output[1] == (input & 1));
+        unittest_assert(output[2] == (input & (type_mask(type) ^ 1)));
+        unittest_assert(output[3] == (input & 1));
+      }
+    }
+  }
+}
+
 void test_rule_dsl_resolved_arguments() {
   Context context;
   Allocator allocator;
@@ -2474,7 +2810,9 @@ void test_rule_dsl_local_rewriter() {
         Simplify::run(&section, 2);
       }
       unittest_assert(canceled->value() == x);
-      unittest_assert(rewritten->value() == sub);
+      AddInst* addition = dynamic_cast<AddInst*>(rewritten->value());
+      unittest_assert(addition && addition->arg(0) == x);
+      check_const(addition->arg(1), type, uint64_t(-7) & type_mask(type));
       unittest_assert(reused->value() == shared);
       check_const(constant->value(), type, 0);
       unittest_assert(forwarded->value() == x);
@@ -2533,7 +2871,7 @@ b0(%0: Ptr, %5787: Int8):
 b0(%0: Ptr, %1: Int8):
   %2 = And %1, 31:Int8
   %3 = ResizeU %2, type=Int64
-  %4 = ResizeX %3, type=Int32
+  %4 = ResizeU %3, type=Int32
   Store %0, 1:Bool, aliasing=0, offset=0
   Exit
 }
@@ -2574,9 +2912,12 @@ int main(int argc, char** argv) {
   suite.test("rule DSL builder integration").run(test_rule_dsl_builder_integration);
   suite.test("rule DSL local rewriter").run(test_rule_dsl_local_rewriter);
   suite.test("rule DSL resolved arguments").run(test_rule_dsl_resolved_arguments);
+  suite.test("rule DSL known bits").run(test_rule_dsl_known_bits);
   suite.test("rule DSL known select").run(test_rule_dsl_known_select);
   suite.test("rule DSL known resize roundtrip").run(test_rule_dsl_known_resize_roundtrip);
   suite.test("fold constant select propagation").run(test_fold_constant_select_propagation);
+  suite.test("fold shift zero value").run(test_fold_shift_zero_value);
+  suite.test("fold select equal arms").run(test_fold_select_equal_arms);
   suite.test("fold non integer select equality").run(test_fold_non_integer_select_equality);
   suite.test("fold mod u power of two").run(test_fold_mod_u_power_of_two);
   suite.test("fold select unselected poison").run(test_fold_select_unselected_poison);
@@ -2608,6 +2949,11 @@ int main(int argc, char** argv) {
   suite.test("fold or repeated operand").run(test_fold_or_repeated_operand);
   suite.test("fold unmasked shift pairs").run(test_fold_unmasked_shift_pairs);
   suite.test("fold shift pairs int64 boundaries").run(test_fold_shift_pairs_int64_boundaries);
+  suite.test("fold shr u shl equal").run(test_fold_shr_u_shl_equal);
+  suite.test("fold resize or shl").run(test_fold_resize_or_shl);
+  suite.test("fold resize add even bool").run(test_fold_resize_add_even_bool);
+  suite.test("simplify shr u shl equal").run(test_simplify_shr_u_shl_equal);
+  suite.test("simplify shr u shl known no loss right").run(test_simplify_shr_u_shl_known_no_loss_right);
   suite.test("builder is always equal").run(test_builder_is_always_equal);
   suite.test("fold equal constants factoring").run(test_fold_equal_constants_factoring);
   suite.test("fold equal constants absorption").run(test_fold_equal_constants_absorption);
@@ -2646,6 +2992,7 @@ int main(int argc, char** argv) {
   suite.test("simplify used bits other use").run(test_simplify_used_bits_other_use);
   suite.test("simplify used bits effects").run(test_simplify_used_bits_effects);
   suite.test("simplify used bits shl mask").run(test_simplify_used_bits_shl_mask);
+  suite.test("narrowing resize normalization").run(test_narrowing_resize_normalization);
   suite.test("simplify widening resize used bits").run(test_simplify_widening_resize_used_bits);
   suite.test("simplify used bits load address").run(test_simplify_used_bits_load_address);
   suite.test("simplify used bits alloca size").run(test_simplify_used_bits_alloca_size);

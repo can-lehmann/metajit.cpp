@@ -14,8 +14,9 @@ Run the commands below from the metajit repository root. Use Python 3 with
 components use only the standard library.
 
 Put builder folding rules in `fold.rules`. Put rules for Simplify and
-SimplifyTrace in `simplify.rules`. Each backend uses only its own rule
-file. Simplification rules can query KnownBits. Rule names must be unique
+SimplifyTrace in `simplify.rules`. Simplification also applies all builder rules;
+the regeneration command enables this with `--simplify-folds`.
+Simplification rules can query KnownBits. Rule names must be unique
 within each file.
 
 After editing rules, regenerate their C++ include:

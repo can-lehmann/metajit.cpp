@@ -127,7 +127,7 @@ jitir.hpp jitir_llvmapi.hpp genext.hpp &: jitir.py jitir.tmpl.hpp jitir_llvmapi.
 	PYTHONPATH="../lwir.cpp" $(PYTHON) jitir.py
 
 generated.inc.hpp: $(RULEDSL_FILES) Makefile
-	$(PYTHON) -m ruledsl fold.rules --include-simplify --simplify-rules simplify.rules --handwritten Eq --handwritten Select --handwritten ResizeX -o $@
+	$(PYTHON) -m ruledsl fold.rules --include-simplify --simplify-folds --simplify-rules simplify.rules --handwritten Eq --handwritten Select --handwritten ResizeX -o $@
 
 COVERAGE_PROFRAW_FILES := $(patsubst %,tests/coverage/%.profraw,$(COVERAGE_TESTS))
 COVERAGE_LCOV_FILES := $(patsubst %,tests/coverage/%.lcov,$(COVERAGE_TESTS))

@@ -20,9 +20,11 @@ from .optimize import optimize
 
 
 def generate(source, filename="<string>", handwritten=(), timeout_ms=120000, include_simplify=False,
-             simplify_source=None, simplify_filename="<simplify>"):
+             simplify_source=None, simplify_filename="<simplify>", simplify_folds=False):
     from .proof import prove
 
+    if simplify_folds and not include_simplify:
+        raise ValueError("simplify_folds requires include_simplify")
     fold_rules = prove(source, filename, timeout_ms)
     simplify_rules = ()
     if simplify_source is not None:
@@ -38,7 +40,8 @@ def generate(source, filename="<string>", handwritten=(), timeout_ms=120000, inc
     code = emit(optimize(lower(matcher, handwritten, operations)))
     if include_simplify:
         from .lower_simplify import lower as lower_simplify
-        simplify_matcher = build_matchers(simplify_rules, rule_id_offset=len(fold_rules))
+        simplify_matcher = (build_matchers(rules) if simplify_folds else
+                            build_matchers(simplify_rules, rule_id_offset=len(fold_rules)))
         code += emit(optimize(lower_simplify(simplify_matcher)), include_statistics=False)
     fallback = emit(optimize(lower(MatcherProgram((), {}), handwritten,
                                    dict.fromkeys((*matcher.matchers, *operations)))))

@@ -67,6 +67,43 @@ void check_trace_simplify(const std::string& input,
   }
 }
 
+void test_known_bits_rule_guard_facts() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Ptr, Type::Int8, Type::Int8});
+  Block* taken = builder.build_block();
+  Block* other = builder.build_block();
+  builder.move_to_end(entry);
+  Value* x = entry->arg(1);
+  Value* high = builder.build_and(entry->arg(2), builder.build_const(Type::Int8, 240));
+  StoreInst* before = builder.build_store(entry->arg(0), builder.build_add(x, high), 0, 0);
+  builder.build_branch(builder.build_lt_u(x, builder.build_const(Type::Int8, 16)), taken, other);
+  builder.move_to_end(taken);
+  StoreInst* after = builder.build_store(entry->arg(0), builder.build_add(x, high), 0, 1);
+  builder.build_exit();
+  builder.move_to_end(other);
+  builder.build_exit();
+  Chain chain;
+  chain.add(entry);
+  chain.add(taken);
+  SimplifyTrace::run(&section, &chain);
+  unittest_assert(dynamic_cast<AddInst*>(before->value()));
+  OrInst* rewritten = dynamic_cast<OrInst*>(after->value());
+  unittest_assert(rewritten && rewritten->arg(0) == x && rewritten->arg(1) == high);
+  unittest_assert(!section.verify(std::cout));
+  for (uint64_t input : {uint64_t(0), uint64_t(15), uint64_t(16), uint64_t(255)}) {
+    uint8_t output[2] = {42, 42};
+    Interpreter interpreter(&section, {Interpreter::Bits::constant(output),
+                            Interpreter::Bits::constant(Type::Int8, input),
+                            Interpreter::Bits::constant(Type::Int8, 95)});
+    unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+    unittest_assert(output[0] == uint8_t(input + 80));
+    unittest_assert(output[1] == (input < 16 ? input + 80 : 42));
+  }
+}
+
 void test_generated_rewrite_guard_facts() {
   Context context;
   Allocator allocator;
@@ -94,8 +131,7 @@ void test_generated_rewrite_guard_facts() {
   SelectInst* earlier = dynamic_cast<SelectInst*>(before->value());
   unittest_assert(earlier && earlier->cond() == guard->cond());
   EqInst* rewritten = dynamic_cast<EqInst*>(guard->cond());
-  unittest_assert(rewritten && rewritten->arg(0) == difference);
-  unittest_assert(dynamic_cast<Const*>(rewritten->arg(1))->value() == 0);
+  unittest_assert(rewritten && rewritten->arg(0) == entry->arg(1) && rewritten->arg(1) == entry->arg(2));
   Const* result = dynamic_cast<Const*>(after->value());
   unittest_assert(result && result->value() == 3);
   unittest_assert(!section.verify(std::cout));
@@ -459,6 +495,7 @@ int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
   suite.test("generated rewrite guard facts").run(test_generated_rewrite_guard_facts);
+  suite.test("known bits rule guard facts").run(test_known_bits_rule_guard_facts);
   suite.test("signed guard boundaries").run(test_signed_guard_boundaries);
   suite.test("signed guard nonconstant bounds").run(test_signed_guard_nonconstant_bounds);
   suite.test("signed guard known bits").run(test_signed_guard_known_bits);
@@ -546,7 +583,23 @@ b0(%0: Ptr):
   Exit
 }
 )";
-    check_trace_simplify(ir, {0}, ir, false);
+    check_trace_simplify(ir, {0}, R"(section {
+b0(%0: Ptr):
+  %1 = DivS 9223372036854775808:Int64, 18446744073709551615:Int64
+  %2 = ModS 9223372036854775808:Int64, 18446744073709551615:Int64
+  %3 = Shl 1:Int64, 64:Int64
+  %4 = ShrU 1:Int64, 64:Int64
+  %5 = ShrU 1:Int64, 64:Int64
+  %6 = ShrS 1:Int64, 64:Int64
+  %7 = Freeze %1
+  %8 = Freeze %2
+  %9 = Freeze %3
+  %10 = Freeze %4
+  %11 = Freeze %5
+  Store %0, 0:Int64, aliasing=0, offset=0
+  Exit
+}
+)", false);
   });
 
   suite.test("freeze_poison").run([]() {
@@ -741,7 +794,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Select %1, 4:Int8, 7:Int8
   %3 = Eq %2, 4:Int8
-  Branch %3, true_block=b1, false_block=b2
+  Branch %1, true_block=b1, false_block=b2
 b1:
   Store %0, 1:Bool, aliasing=0, offset=1
   Jump block=b2
@@ -883,7 +936,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = ResizeU %1, type=Int64
   %3 = Eq %2, 1:Int64
-  Branch %3, true_block=b1, false_block=b2
+  Branch %1, true_block=b1, false_block=b2
 b1:
   Store %0, 1:Bool, aliasing=0, offset=1
   Jump block=b2
@@ -1201,9 +1254,10 @@ b2:
 )", {0, 1}, R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
-  %2 = Sub %1, 1:Int8
-  %3 = Eq %2, 255:Int8
-  Branch %3, true_block=b1, false_block=b2
+  %2 = Add %1, 255:Int8
+  %3 = Sub %1, 1:Int8
+  %4 = Eq %2, 255:Int8
+  Branch %4, true_block=b1, false_block=b2
 b1:
   Store %0, 0:Int8, aliasing=0, offset=1
   Exit
@@ -1541,10 +1595,11 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
   %2 = ShrU %1, 63:Int64
-  %3 = ResizeX %2, type=Bool
+  %3 = LtS %1, 0:Int64
+  %4 = ResizeX %2, type=Bool
   Branch %3, true_block=b1, false_block=b2
 b1:
-  %5 = And %1, 9223372036854775808:Int64
+  %6 = And %1, 9223372036854775808:Int64
   Store %0, 9223372036854775808:Int64, aliasing=0, offset=8
   Exit
 b2:
@@ -1570,7 +1625,7 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = ShrU %1, 0:Int8
-  %3 = Eq %2, 42:Int8
+  %3 = Eq %1, 42:Int8
   Branch %3, true_block=b1, false_block=b2
 b1:
   Store %0, 42:Int8, aliasing=0, offset=1
@@ -1845,7 +1900,8 @@ b2:
 )", {0, 2}, R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
-  %2 = Eq %1, 0:Bool
+  %2 = Xor %1, 1:Bool
+  %3 = Eq %1, 0:Bool
   Branch %2, true_block=b1, false_block=b2
 b1:
   Exit
@@ -1871,7 +1927,8 @@ b2:
 )", {0, 2}, R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
-  %2 = Eq 0:Bool, %1
+  %2 = Xor %1, 1:Bool
+  %3 = Eq 0:Bool, %1
   Branch %2, true_block=b1, false_block=b2
 b1:
   Exit
@@ -1898,7 +1955,7 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Eq %1, 1:Bool
-  Branch %2, true_block=b1, false_block=b2
+  Branch %1, true_block=b1, false_block=b2
 b1:
   Exit
 b2:
@@ -1924,7 +1981,7 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Eq 1:Bool, %1
-  Branch %2, true_block=b1, false_block=b2
+  Branch %1, true_block=b1, false_block=b2
 b1:
   Exit
 b2:
@@ -2261,7 +2318,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Xor %1, 1:Bool
   %3 = And %1, %2
-  Branch %3, true_block=b1, false_block=b2
+  Branch 0:Bool, true_block=b1, false_block=b2
 b1:
   %5 = Or %1, 0:Bool
   Store %0, %5, aliasing=0, offset=1
@@ -2292,7 +2349,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Xor %1, 1:Bool
   %3 = And %2, %1
-  Branch %3, true_block=b1, false_block=b2
+  Branch 0:Bool, true_block=b1, false_block=b2
 b1:
   %5 = Or %1, 0:Bool
   Store %0, %5, aliasing=0, offset=1

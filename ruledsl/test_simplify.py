@@ -108,6 +108,12 @@ int main() {
     Inst* reversed = builder.build_bit_reverse(&x);
     assert(builder.fold_bit_reverse(reversed) == &x);
     assert(builder.try_simplify(builder.build_bit_reverse(reversed)) == &x);
+    Value* left = builder.fold_bit_reverse(builder.build_shl(reversed, &shift));
+    Value* right = builder.try_simplify(builder.build_bit_reverse(builder.build_shr_u(reversed, &shift)));
+    ShrUInst* shr = dynamic_cast<ShrUInst*>(left);
+    ShlInst* shl = dynamic_cast<ShlInst*>(right);
+    assert(shr && shr->arg(0) == &x && shr->arg(1) == &shift);
+    assert(shl && shl->arg(0) == &x && shl->arg(1) == &shift);
     unsigned before = builder.builds;
     assert(builder.try_simplify(reversed) == nullptr);
     assert(builder.builds == before);
@@ -210,6 +216,24 @@ int main() {
 }
 """, statistics=True)
 
+    def test_simplifier_can_include_builder_rules(self):
+        code = generate("zero: Add(x, 0)\n    => x\n", include_simplify=True,
+                        simplify_source="same: And(x, x)\n    => x\n", simplify_folds=True)
+        self.run_cpp(code, """
+int main() {
+  Generated builder;
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(type);
+    Const zero(type, 0);
+    assert(builder.fold_add(&x, &zero) == &x);
+    assert(builder.try_simplify(builder.build_add(&x, &zero)) == &x);
+    assert(builder.try_simplify(builder.build_and(&x, &x)) == &x);
+  }
+  assert(Generated::ruledsl_rule_counts[0] == 10);
+  assert(Generated::ruledsl_rule_counts[1] == 5);
+}
+""", statistics=True)
+
     def test_root_equivalence_reports_no_change_without_allocation(self):
         program = lower(build_matchers(prove("same: Add(x, y)\n    => Add(y, x)\n")))
         self.run_cpp(emit(program), """
@@ -234,9 +258,6 @@ int main() {
 
     def test_known_bits_matching(self):
         facts_source = (Path(__file__).resolve().parent.parent / "simplify.rules").read_text()
-        facts_source += ("disjoint: Add(x, y)\n    check known_zeros(x) | known_zeros(y) == -1\n    => Or(x, y)\n"
-                         "subtract_or: Sub(Or(x, y), y)\n    check known_zeros(x) | known_zeros(y) == -1\n    => x\n"
-                         "clear: Xor(x, C)\n    check known_ones(x) & C == C\n    Cmask = ~C\n    => And(x, Cmask)\n")
         facts_source += ("materialize: And(x, 0)\n"
                          "    Facts = known_ones(x) & 0\n    => Facts\n")
         code = generate(RULES, include_simplify=True, simplify_source=facts_source)
@@ -316,6 +337,141 @@ int main() {
         for statistics in (False, True):
             with self.subTest(statistics=statistics):
                 self.run_cpp(code, main, statistics)
+
+    def test_known_bits_candidates(self):
+        source = (Path(__file__).resolve().parent.parent / "fold.rules").read_text()
+        rule, = [rule for rule in parse(source) if rule.name == "mul_shift_one"]
+        folds = RULES + source[rule.span.start:rule.span.end] + "\n"
+        facts_source = (Path(__file__).resolve().parent.parent / "simplify.rules").read_text()
+        code = generate(folds, include_simplify=True, simplify_source=facts_source)
+        main = """
+struct Masks {
+  Value* x;
+  Value* y;
+  uint64_t zeros_x;
+  uint64_t ones_x;
+  uint64_t zeros_y;
+  uint64_t known_zeros(Value* value) const {
+    return value == x ? zeros_x : value == y ? zeros_y : 0;
+  }
+  uint64_t known_ones(Value* value) const { return value == x ? ones_x : 0; }
+};
+
+int main() {
+  Generated builder;
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(type), y(type), z(type), shift(type);
+    uint64_t mask = type_mask(type);
+    uint64_t width = type_width(type);
+    Masks disjoint{&x, &y, mask ^ 1, 0, 1};
+    Inst* subtraction = builder.build_sub(builder.build_xor(&x, &y), &y);
+    unsigned before = builder.builds;
+    assert(builder.try_simplify(subtraction, disjoint) == &x);
+    assert(builder.builds == before);
+    Const zero(type, 0), one(type, 1);
+    Inst* comparison = builder.build_eq(builder.build_or(&x, &y), &zero);
+    EqInst* reduced = dynamic_cast<EqInst*>(builder.try_simplify(comparison, disjoint));
+    assert(reduced && reduced->arg(0) == &x && reduced->arg(1) == &y);
+    Inst* bool_comparison = builder.build_eq(&x, &one);
+    ResizeXInst* truncated = dynamic_cast<ResizeXInst*>(builder.try_simplify(bool_comparison, disjoint));
+    assert(truncated && truncated->type() == Type::Bool && truncated->arg(0) == &x);
+    before = builder.builds;
+    assert(builder.try_simplify(bool_comparison) == nullptr);
+    assert(builder.builds == before);
+    Masks separate{&y, &z, mask ^ 1, 0, 1};
+    Inst* masked = builder.build_and(builder.build_xor(&x, &y), &z);
+    AndInst* filtered = dynamic_cast<AndInst*>(builder.try_simplify(masked, separate));
+    assert(filtered && filtered->arg(0) == &x && filtered->arg(1) == &z);
+    Masks nonnegative{&x, &y, uint64_t(1) << (width - 1), 0, 0};
+    Inst* arithmetic = builder.build_shr_s(&x, &shift);
+    ShrUInst* logical = dynamic_cast<ShrUInst*>(builder.try_simplify(arithmetic, nonnegative));
+    assert(logical && logical->arg(0) == &x && logical->arg(1) == &shift);
+    assert(builder.try_simplify(arithmetic) == nullptr);
+    for (uint64_t count : {uint64_t(0), uint64_t(1), width - 1, width}) {
+      Const amount(type, count);
+      Inst* left = builder.build_shl(&x, &amount);
+      Inst* unsigned_root = builder.build_shr_u(left, &amount);
+      Inst* signed_root = builder.build_shr_s(left, &amount);
+      before = builder.builds;
+      if (count == width) {
+        assert(builder.try_simplify(unsigned_root, nonnegative) == nullptr);
+        assert(builder.try_simplify(signed_root, nonnegative) == nullptr);
+      } else {
+        uint64_t lost = mask ^ (mask >> count);
+        Masks no_loss{&x, &y, lost, 0, 0};
+        assert(builder.try_simplify(unsigned_root, no_loss) == &x);
+        uint64_t top = mask & (UINT64_MAX << (width - 1 - count));
+        Masks positive{&x, &y, top, 0, 0};
+        Masks negative{&x, &y, 0, top, 0};
+        assert(builder.try_simplify(signed_root, positive) == &x);
+        assert(builder.try_simplify(signed_root, negative) == &x);
+        if (count != 0) {
+          assert(builder.try_simplify(unsigned_root) == nullptr);
+          assert(builder.try_simplify(signed_root) == nullptr);
+        }
+      }
+      assert(builder.builds == before);
+    }
+    Inst* power = builder.build_shl(&one, &shift);
+    for (bool swapped : {false, true}) {
+      ShlInst* product = dynamic_cast<ShlInst*>(swapped ? builder.fold_mul(power, &x)
+                                                     : builder.fold_mul(&x, power));
+      assert(product && product->arg(0) == &x && product->arg(1) == &shift);
+    }
+  }
+}
+"""
+        for statistics in (False, True):
+            with self.subTest(statistics=statistics):
+                self.run_cpp(code, main, statistics)
+
+    def test_shr_u_or_known_zero(self):
+        source = (Path(__file__).resolve().parent.parent / "simplify.rules").read_text()
+        selected = [rule for rule in parse(source)
+                    if rule.name in {"shr_u_or_known_zero", "shr_u_shl_known_no_loss"}]
+        code = generate("", include_simplify=True,
+                        simplify_source="\n".join(source[rule.span.start:rule.span.end] for rule in selected))
+        self.run_cpp(code, """
+struct Facts {
+  Value* value;
+  uint64_t zeros;
+  uint64_t known_zeros(Value* operand) const { return operand == value ? zeros : 0; }
+};
+
+int main() {
+  Generated builder;
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(type), y(type);
+    for (uint64_t shift = 0; shift < type_width(type); ++shift) {
+      Const count(type, shift);
+      uint64_t zeros = (type_mask(type) << shift) & type_mask(type);
+      for (bool swapped : {false, true}) {
+        Inst* joined = swapped ? builder.build_or(&y, &x) : builder.build_or(&x, &y);
+        Inst* root = builder.build_shr_u(joined, &count);
+        ShrUInst* result = dynamic_cast<ShrUInst*>(builder.try_simplify(root, Facts{&x, zeros}));
+        assert(result && result->arg(0) == &y && result->arg(1) == &count);
+        unsigned before = builder.builds;
+        assert(builder.try_simplify(root, Facts{&x, zeros ^ (uint64_t(1) << shift)}) == nullptr);
+        assert(builder.try_simplify(root) == nullptr);
+        assert(builder.builds == before);
+      }
+    }
+    Const invalid(type, type_width(type));
+    Inst* root = builder.build_shr_u(builder.build_or(&x, &y), &invalid);
+    unsigned before = builder.builds;
+    assert(builder.try_simplify(root, Facts{&x, type_mask(type)}) == nullptr);
+    assert(builder.builds == before);
+  }
+  Value x(Type::Int32), condition(Type::Bool);
+  Value* low = builder.build_resize_u(&x, Type::Int64);
+  Value* high = builder.build_resize_u(&condition, Type::Int64);
+  Const count(Type::Int64, 32);
+  Inst* shifted = builder.build_shl(high, &count);
+  Inst* root = builder.build_shr_u(builder.build_or(low, shifted), &count);
+  Value* result = builder.try_simplify(root, Facts{low, UINT64_C(0xffffffff00000000)});
+  assert(result && builder.try_simplify((Inst*) result, Facts{high, UINT64_MAX ^ 1}) == high);
+}
+""")
 
     def test_migrated_select_and_resize_rules(self):
         facts_source = (Path(__file__).resolve().parent.parent / "simplify.rules").read_text()
