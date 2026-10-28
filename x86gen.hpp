@@ -639,7 +639,6 @@ namespace metajit {
     NameMap<size_t> _use_counts;
 
     NameMap<Reg> _vregs;
-    NameMap<size_t> _use_counts;
     lwir::Span<Reg> _input_vregs;
     std::vector<VRegInfo> _vreg_info;
 
@@ -1005,68 +1004,6 @@ namespace metajit {
       return {a, b};
     }
 
-    bool build_bmi_and(AndInst* inst) {
-      if (!__builtin_cpu_supports("bmi")) {
-        return false;
-      }
-      for (size_t it = 0; it < 2; it++) {
-        Value* a = inst->arg(it);
-        Value* b = inst->arg(1 - it);
-        if (dynmatch(XorInst, inversion, a)) {
-          for (size_t index = 0; index < 2; index++) {
-            if (dynmatch(Const, ones, inversion->arg(index))) {
-              if (ones->value() == type_mask(inst->type())) {
-                if (inst->type() == Type::Int64) {
-                  _builder.andn64(vreg(inst), vreg(inversion->arg(1 - index)), vreg(b));
-                } else {
-                  _builder.andn32(vreg(inst), vreg(inversion->arg(1 - index)), vreg(b));
-                }
-                return true;
-              }
-            }
-          }
-        }
-        if (dynmatch(Const, mask, b)) {
-          uint64_t bits = mask->value();
-          if (bits == 0 || (bits & (bits + 1)) != 0) {
-            continue;
-          }
-          Inst* shift = dynamic_cast<ShrUInst*>(a);
-          bool arithmetic = false;
-          if (!shift) {
-            shift = dynamic_cast<ShrSInst*>(a);
-            arithmetic = true;
-          }
-          if (!shift || _use_counts.at(shift) != 1 || !_vregs.at(shift).is_invalid()) {
-            continue;
-          }
-          if (dynmatch(Const, amount, shift->arg(1))) {
-            size_t width = type_width(inst->type());
-            uint64_t start = amount->value();
-            if (start == 0 || start >= width) {
-              continue;
-            }
-            size_t length = __builtin_popcountll(bits);
-            if (length > width - start) {
-              if (arithmetic) {
-                continue;
-              }
-              length = width - start;
-            }
-            Reg control = vreg();
-            _builder.mov32_imm(control, start | (length << 8));
-            if (inst->type() == Type::Int64) {
-              _builder.bextr64(vreg(inst), control, vreg(shift->arg(0)));
-            } else {
-              _builder.bextr32(vreg(inst), control, vreg(shift->arg(0)));
-            }
-            return true;
-          }
-        }
-      }
-      return false;
-    }
-
     void isel(Inst* inst, Block* block) {
       if (dynmatch(FreezeInst, freeze, inst)) {
         move(vreg(inst), vreg(freeze->arg(0)));
@@ -1377,8 +1314,43 @@ namespace metajit {
           _builder.pseudo_use(rdx);
         }
       } else if (dynmatch(AndInst, and_inst, inst)) {
-        if (build_bmi_and(and_inst)) {
-          return;
+        if (__builtin_cpu_supports("bmi")) {
+          for (size_t it = 0; it < 2; it++) {
+            Value* a = inst->arg(it);
+            Value* b = inst->arg(1 - it);
+            if (XorInst* inversion = is_not(a)) {
+              if (inst->type() == Type::Int64) {
+                _builder.andn64(vreg(inst), vreg(inversion->arg(0)), vreg(b));
+              } else {
+                _builder.andn32(vreg(inst), vreg(inversion->arg(0)), vreg(b));
+              }
+              return;
+            }
+            Inst* shift = dynamic_cast<ShrUInst*>(a);
+            if (!shift) {
+              shift = dynamic_cast<ShrSInst*>(a);
+            }
+            if (Const* mask = dynamic_cast<Const*>(b);
+                mask && mask->value() && (mask->value() & (mask->value() + 1)) == 0 &&
+                shift && _use_counts.at(shift) == 1 && _vregs.at(shift).is_invalid()) {
+              if (dynmatch(Const, amount, shift->arg(1))) {
+                size_t width = type_width(inst->type());
+                size_t start = amount->value();
+                size_t length = __builtin_popcountll(mask->value());
+                if (start > 0 && start < width &&
+                    (dynamic_cast<ShrUInst*>(shift) || length <= width - start)) {
+                  Reg control = vreg();
+                  _builder.mov32_imm(control, start | (std::min(length, width - start) << 8));
+                  if (inst->type() == Type::Int64) {
+                    _builder.bextr64(vreg(inst), control, vreg(shift->arg(0)));
+                  } else {
+                    _builder.bextr32(vreg(inst), control, vreg(shift->arg(0)));
+                  }
+                  return;
+                }
+              }
+            }
+          }
         }
         auto [a, b] = commutative_args(inst);
         _builder.mov64(vreg(inst), vreg(a));
@@ -2737,16 +2709,6 @@ namespace metajit {
       _memory_deps.init(_section);
       _use_counts.init(_section);
       _vregs.init(_section);
-      _use_counts.init(_section);
-      for (Block* block : *_section) {
-        for (Inst* inst : *block) {
-          for (Value* arg : inst->args()) {
-            if (arg->is_named()) {
-              _use_counts[(NamedValue*) arg]++;
-            }
-          }
-        }
-      }
       _input_vregs = _builder.alloc_regs(_section->entry()->args().size());
 
       for (Arg* arg : _section->entry()->args()) {
@@ -2870,14 +2832,14 @@ namespace metajit {
       };
 
       auto reg_extensions = [&]() {
-        uint8_t bits = ((reg.id() >> 3) & 1) << 2;
+        uint8_t bits = ((reg.id() >> 3) & 1) << 2; // R
         if (std::holds_alternative<Reg>(rm)) {
-          bits |= (std::get<Reg>(rm).id() >> 3) & 1;
+          bits |= (std::get<Reg>(rm).id() >> 3) & 1; // B
         } else if (std::holds_alternative<X86Inst::Mem>(rm)) {
           X86Inst::Mem mem = std::get<X86Inst::Mem>(rm);
-          bits |= (mem.base.id() >> 3) & 1;
+          bits |= (mem.base.id() >> 3) & 1; // B
           if (!mem.index.is_invalid()) {
-            bits |= ((mem.index.id() >> 3) & 1) << 1;
+            bits |= ((mem.index.id() >> 3) & 1) << 1; // X
           }
         }
         return bits;
