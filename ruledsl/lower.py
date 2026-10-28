@@ -28,6 +28,7 @@ class Program:
 
 
 def operation_name(name):
+    # convert camel-case operation names to snake case names: ResizeU -> resize_u
     return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
 
 

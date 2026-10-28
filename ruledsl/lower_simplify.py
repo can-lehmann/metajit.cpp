@@ -4,6 +4,7 @@ from .signatures import SIGNATURES
 
 
 class SimplifyLowerer(Lowerer):
+    # generate code suitable for Simplify/SimplifyTrace
     def __init__(self, name):
         super().__init__(name, ())
         self.parameters = (Parameter(ir.Value("inst"), "inst"),

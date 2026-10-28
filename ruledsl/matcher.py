@@ -214,6 +214,11 @@ def matches_constant(pattern):
     return isinstance(pattern, Literal) or isinstance(pattern, Variable) and pattern.constant
 
 
+# pattern-matrix compilation, inspired by Maranget:
+# https://moscova.inria.fr/~maranget/papers/ml05e-maranget.pdf
+# Colin James's introduction:
+# https://compiler.club/compiling-pattern-matching/
+# this version uses a fixed column order and binary tests, no dags
 def decision_tree(rows, paths):
     if not rows:
         return None

@@ -1,10 +1,38 @@
 import unittest
 
 from . import TypeCheckError, check
-from .types import BIT_TYPES, BOOL, INT8, INT16, INT32, INT64, INT_TYPES
+from .types import BIT_TYPES, BOOL, INT8, INT16, INT32, INT64, INT_TYPES, TypeConflict, TypeConstraints
 
 
 class TypeCheckTests(unittest.TestCase):
+    def test_unified_domains_exist_only_at_roots(self):
+        constraints = TypeConstraints()
+        first = constraints.fresh((INT8, INT16))
+        second = constraints.fresh((INT16, INT32))
+        third = constraints.fresh()
+        constraints.unify(first, second)
+        constraints.unify(third, second)
+        self.assertIsNone(constraints.domains[first.index])
+        self.assertIsNone(constraints.domains[second.index])
+        self.assertEqual(constraints.domains[third.index], {INT16})
+        constraints.restrict(second, (INT16, INT64))
+        constraints.unify(second, first)
+        self.assertEqual(list(constraints.assignments()),
+                         [{first: INT16, second: INT16, third: INT16}])
+        self.assertEqual(constraints.resolve(second), third)
+        self.assertIsNone(constraints.domains[second.index])
+
+    def test_failed_unification_preserves_root_domains(self):
+        constraints = TypeConstraints()
+        first = constraints.fresh((INT8,))
+        second = constraints.fresh((INT16,))
+        with self.assertRaises(TypeConflict):
+            constraints.unify(first, second)
+        self.assertEqual(constraints.resolve(first), first)
+        self.assertEqual(constraints.resolve(second), second)
+        self.assertEqual(constraints.domains[first.index], {INT8})
+        self.assertEqual(constraints.domains[second.index], {INT16})
+
     def test_bit_operation_calculations_preserve_types_and_dependencies(self):
         for operation, calculation, dependencies in (
                 ("BitReverse(C)", "bit_reverse(C)", {"C"}),

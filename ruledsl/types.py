@@ -29,8 +29,11 @@ class TypeConflict(Exception):
 
 class TypeConstraints:
     def __init__(self):
-        self.parents = []
-        self.domains = []
+        # parents forms a union find of type variables
+        self.parents: list[int] = []
+        # domains store the sets of concrete types a type variable can have on
+        # the root (None otherwise)
+        self.domains: list[set[ConcreteType] | None] = []
 
     def fresh(self, domain=BIT_TYPES):
         variable = TypeVar(len(self.parents))
@@ -62,6 +65,7 @@ class TypeConstraints:
             return
         self.restrict(left, self.domains[right.index])
         self.parents[right.index] = left.index
+        self.domains[right.index] = None
 
     def assignments(self):
         roots = [TypeVar(index) for index, parent in enumerate(self.parents)
