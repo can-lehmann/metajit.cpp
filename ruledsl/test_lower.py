@@ -48,7 +48,7 @@ class LowerTests(unittest.TestCase):
         definitions = set(re.findall(r"\b(_fold_\w+)\s*\([^;{}]*\)\s*\{",
                                      (root / "jitir.tmpl.hpp").read_text()))
         makefile = (root / "Makefile").read_text()
-        target = re.search(r"^ruledsl/generated\.inc\.hpp:[^\n]*\n((?:\t[^\n]*\n)*)",
+        target = re.search(r"^generated\.inc\.hpp:[^\n]*\n((?:\t[^\n]*\n)*)",
                            makefile, re.MULTILINE)
         self.assertIsNotNone(target, "rule generation target not found in Makefile")
         recipe = target.group(1).replace("\\\n", " ")

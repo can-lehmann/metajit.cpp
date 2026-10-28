@@ -75,7 +75,7 @@ class SimplifyTests(unittest.TestCase):
             self.assertEqual(executed.returncode, 0, executed.stdout + executed.stderr)
 
     def test_migrated_bit_operations(self):
-        source = Path(__file__).with_name("fold.rules").read_text()
+        source = (Path(__file__).resolve().parent.parent / "fold.rules").read_text()
         rules = [rule for rule in parse(source)
                  if rule.name.startswith(("bit_reverse_", "mul_high_u_", "eq_masked_xor"))
                  or rule.name == "select_same"]
@@ -238,7 +238,7 @@ int main() {
 """)
 
     def test_known_bits_matching(self):
-        facts_source = Path(__file__).with_name("simplify.rules").read_text()
+        facts_source = (Path(__file__).resolve().parent.parent / "simplify.rules").read_text()
         facts_source += ("disjoint: Add(x, y)\n    check known_zeros(x) | known_zeros(y) == -1\n    => Or(x, y)\n"
                          "subtract_or: Sub(Or(x, y), y)\n    check known_zeros(x) | known_zeros(y) == -1\n    => x\n"
                          "clear: Xor(x, C)\n    check known_ones(x) & C == C\n    Cmask = ~C\n    => And(x, Cmask)\n")
@@ -323,7 +323,7 @@ int main() {
                 self.run_cpp(code, main, statistics)
 
     def test_migrated_select_and_resize_rules(self):
-        facts_source = Path(__file__).with_name("simplify.rules").read_text()
+        facts_source = (Path(__file__).resolve().parent.parent / "simplify.rules").read_text()
         code = generate(RULES, include_simplify=True, simplify_source=facts_source)
         main = """
 struct Facts {

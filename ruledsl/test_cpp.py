@@ -535,7 +535,7 @@ int main() {
                     self.assertEqual(executed.returncode, 0, executed.stdout + executed.stderr)
 
     def test_constant_select_propagation_from_fold_rules(self):
-        source = Path(__file__).with_name("fold.rules").read_text()
+        source = (Path(__file__).resolve().parent.parent / "fold.rules").read_text()
         names = {f"{name}_{form}" for name in ("add", "sub", "mul", "and", "or", "xor",
                                                "eq", "lt_u", "shl", "shr_u")
                  for form in ("select_constant", "selects")}

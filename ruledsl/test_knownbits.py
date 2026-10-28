@@ -28,7 +28,7 @@ from .types import BIT_TYPES
 
 class KnownBitsTests(unittest.TestCase):
     def test_initial_rules_prove_at_all_widths(self):
-        path = Path(__file__).with_name("simplify.rules")
+        path = Path(__file__).resolve().parent.parent / "simplify.rules"
         rules = prove(path.read_text(), str(path))
         self.assertEqual(len(rules), 10)
         self.assertEqual(rules[0].rule.name, "and_self")

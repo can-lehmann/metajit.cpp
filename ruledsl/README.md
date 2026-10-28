@@ -13,15 +13,15 @@ Run the commands below from the metajit repository root. Use Python 3 with
 `z3-solver` installed, or the distribution's `python3-z3` package. Other Python
 components use only the standard library.
 
-Put builder folding rules in `ruledsl/fold.rules`. Put rules for Simplify and
-SimplifyTrace in `ruledsl/simplify.rules`. Each backend uses only its own rule
+Put builder folding rules in `fold.rules`. Put rules for Simplify and
+SimplifyTrace in `simplify.rules`. Each backend uses only its own rule
 file. Simplification rules can query KnownBits. Rule names must be unique
 within each file.
 
 After editing rules, regenerate their C++ include:
 
 ```sh
-make PYTHON=/path/to/venv/bin/python3 ruledsl/generated.inc.hpp
+make PYTHON=/path/to/venv/bin/python3 generated.inc.hpp
 ```
 
 Generation proves the rules before writing it, and a proof failure leaves the

@@ -1,9 +1,9 @@
 LLVM_FLAGS := $(shell llvm-config --cflags --libs)
 PYTHON ?= python3
-RULEDSL_FILES := ruledsl/fold.rules ruledsl/simplify.rules $(filter-out ruledsl/test_%.py,$(wildcard ruledsl/*.py))
+RULEDSL_FILES := fold.rules simplify.rules $(filter-out ruledsl/test_%.py,$(wildcard ruledsl/*.py))
 Z3_FLAGS := -I/usr/include/z3 -lz3
 CFLAGS := ${LLVM_FLAGS} -g
-HEADER_FILES := jitir.hpp jitir_llvmapi.hpp genext.hpp ruledsl/generated.inc.hpp $(wildcard *.hpp)
+HEADER_FILES := jitir.hpp jitir_llvmapi.hpp genext.hpp generated.inc.hpp $(wildcard *.hpp)
 TEST_HEADER_FILES := $(wildcard tests/*.hpp)
 TEST_CFLAGS := ${CFLAGS} -DMETAJIT_DEBUG -DMETAJIT_SLOW_ASSERTS
 COVERAGE_CFLAGS := ${TEST_CFLAGS} -fprofile-instr-generate -fcoverage-mapping
@@ -126,8 +126,8 @@ tests/test_genext: tests/test_genext.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 jitir.hpp jitir_llvmapi.hpp genext.hpp &: jitir.py jitir.tmpl.hpp jitir_llvmapi.tmpl.hpp genext.tmpl.hpp ../lwir.cpp/lwir.py
 	PYTHONPATH="../lwir.cpp" $(PYTHON) jitir.py
 
-ruledsl/generated.inc.hpp: $(RULEDSL_FILES) Makefile
-	$(PYTHON) -m ruledsl ruledsl/fold.rules --include-simplify --simplify-rules ruledsl/simplify.rules --handwritten Eq --handwritten Select --handwritten ResizeX -o $@
+generated.inc.hpp: $(RULEDSL_FILES) Makefile
+	$(PYTHON) -m ruledsl fold.rules --include-simplify --simplify-rules simplify.rules --handwritten Eq --handwritten Select --handwritten ResizeX -o $@
 
 COVERAGE_PROFRAW_FILES := $(patsubst %,tests/coverage/%.profraw,$(COVERAGE_TESTS))
 COVERAGE_LCOV_FILES := $(patsubst %,tests/coverage/%.lcov,$(COVERAGE_TESTS))
@@ -167,7 +167,7 @@ diff-cover: tests/coverage/coverage.lcov
 	git worktree add $(WORKTREE) $(MERGE_BASE)
 	cd $(WORKTREE) && PYTHONPATH="$(abspath ../lwir.cpp)" python3 jitir.py
 	if test -d $(WORKTREE)/ruledsl; then \
-	  cd $(WORKTREE) && $(PYTHON) -m ruledsl ruledsl/fold.rules --include-simplify --simplify-rules ruledsl/simplify.rules --handwritten Eq --handwritten Select --handwritten ResizeX -o ruledsl/generated.inc.hpp; \
+	  cd $(WORKTREE) && $(PYTHON) -m ruledsl fold.rules --include-simplify --simplify-rules simplify.rules --handwritten Eq --handwritten Select --handwritten ResizeX -o generated.inc.hpp; \
 	fi
 	{ \
 	  printf 'diff --git a/jitir.hpp b/jitir.hpp\n--- a/jitir.hpp\n+++ b/jitir.hpp\n'; \
@@ -176,11 +176,11 @@ diff-cover: tests/coverage/coverage.lcov
 	  diff -u $(WORKTREE)/jitir_llvmapi.hpp jitir_llvmapi.hpp | tail -n +3; \
 	  printf 'diff --git a/genext.hpp b/genext.hpp\n--- a/genext.hpp\n+++ b/genext.hpp\n'; \
 	  diff -u $(WORKTREE)/genext.hpp genext.hpp | tail -n +3; \
-	  printf 'diff --git a/ruledsl/generated.inc.hpp b/ruledsl/generated.inc.hpp\n--- a/ruledsl/generated.inc.hpp\n+++ b/ruledsl/generated.inc.hpp\n'; \
-	  if test -f $(WORKTREE)/ruledsl/generated.inc.hpp; then \
-	    diff -u $(WORKTREE)/ruledsl/generated.inc.hpp ruledsl/generated.inc.hpp; \
+	  printf 'diff --git a/generated.inc.hpp b/generated.inc.hpp\n--- a/generated.inc.hpp\n+++ b/generated.inc.hpp\n'; \
+	  if test -f $(WORKTREE)/generated.inc.hpp; then \
+	    diff -u $(WORKTREE)/generated.inc.hpp generated.inc.hpp; \
 	  else \
-	    diff -u /dev/null ruledsl/generated.inc.hpp; \
+	    diff -u /dev/null generated.inc.hpp; \
 	  fi | tail -n +3; \
 	  git diff $(MERGE_BASE) -- . ':(exclude)jitir.hpp' ':(exclude)jitir_llvmapi.hpp' ':(exclude)genext.hpp'; \
 	} > tests/coverage/combined.diff || true
@@ -208,7 +208,7 @@ clean:
 	-rm jitir.hpp
 	-rm jitir_llvmapi.hpp
 	-rm genext.hpp
-	-rm ruledsl/generated.inc.hpp
+	-rm generated.inc.hpp
 	-rm tests/source/*.ll
 	-rm -r tests/output
 	mkdir -p tests/output/test_insts
