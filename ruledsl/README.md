@@ -302,3 +302,9 @@ tests. Folding entry points retain handwritten `_fold_*` fallbacks where
 registered and otherwise use raw `build_*` methods. The generated simplifier
 returns `nullptr` without constructing instructions. Rule proofs still run
 during rule-include generation.
+
+# Code origin
+
+The DLS was strongly inspired by the [peephole rewrite rule DSL of
+PyPy](https://github.com/pypy/pypy/tree/main/rpython/jit/metainterp/ruleopt)
+(which is MIT license) and adapted to jitir/C++/Python 3.
