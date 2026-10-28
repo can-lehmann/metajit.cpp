@@ -82,6 +82,7 @@ binop_x86_inst(MovSX32To64, movsx32to64, mov_usedef, false, { rex_w(); byte(0x63
 binop_x86_inst(MovZX8To64, movzx8to64, mov_usedef, false, { rex_w(); byte(0x0f); byte(0xb6); modrm(); })
 binop_x86_inst(MovZX16To64, movzx16to64, mov_usedef, false, { rex_w(); byte(0x0f); byte(0xb7); modrm(); })
 
+x86_inst(Lea32, lea32, { use(rm); def(reg); }, false, { rex_opt(); byte(0x8d); modrm(); })
 x86_inst(Lea64, lea64, { use(rm); def(reg); }, true, { rex_w(); byte(0x8d); modrm(); })
 
 binop_x86_inst(Add64, add64, binop_usedef, true, { rex_w(); byte(0x03); modrm(); })
@@ -135,7 +136,8 @@ imm_binop_x86_inst(And64Imm, and64_imm, imm_usedef, true, { reg = Reg::phys(4); 
 imm_binop_x86_inst(Or64Imm, or64_imm, imm_usedef, true, { reg = Reg::phys(1); rex_w(); byte(is_sext_imm8<int64_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int64_t>(imm.value()) ? 1 : 4); })
 imm_binop_x86_inst(Xor64Imm, xor64_imm, imm_usedef, true, { reg = Reg::phys(6); rex_w(); byte(is_sext_imm8<int64_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int64_t>(imm.value()) ? 1 : 4); })
 
-unop_x86_inst(Shl64, shl64, binop_usedef, true, { reg = Reg::phys(4); rex_w(); byte(0xd3); modrm(); })
+unop_x86_inst(Shl32, shl32, imm_usedef, false, { reg = Reg::phys(4); rex_opt(); byte(0xd3); modrm(); })
+unop_x86_inst(Shl64, shl64, imm_usedef, true, { reg = Reg::phys(4); rex_w(); byte(0xd3); modrm(); })
 
 unop_x86_inst(Shr8, shr8, binop_usedef, true, { reg = Reg::phys(5); rex(); byte(0xd2); modrm(); })
 unop_x86_inst(Shr16, shr16, binop_usedef, true, { reg = Reg::phys(5); byte(0x66); rex_opt(); byte(0xd3); modrm(); })
@@ -147,6 +149,7 @@ unop_x86_inst(Sar16, sar16, binop_usedef, true, { reg = Reg::phys(7); byte(0x66)
 unop_x86_inst(Sar32, sar32, binop_usedef, true, { reg = Reg::phys(7); rex_opt(); byte(0xd3); modrm(); })
 unop_x86_inst(Sar64, sar64, binop_usedef, true, { reg = Reg::phys(7); rex_w(); byte(0xd3); modrm(); })
 
+imm_binop_x86_inst(Shl32Imm, shl32_imm, imm_usedef, false, { reg = Reg::phys(4); rex_opt(); if (imm.value() == 1) { byte(0xd1); modrm(); } else { byte(0xc1); modrm(); imm_n(1); } })
 imm_binop_x86_inst(Shl64Imm, shl64_imm, imm_usedef, true, { reg = Reg::phys(4); rex_w(); if (imm.value() == 1) { byte(0xd1); modrm(); } else { byte(0xc1); modrm(); imm_n(1); } })
 
 imm_binop_x86_inst(Shr8Imm, shr8_imm, imm_usedef, true, { reg = Reg::phys(5); rex(); if (imm.value() == 1) { byte(0xd0); modrm(); } else { byte(0xc0); modrm(); imm_n(1); } })
@@ -169,6 +172,7 @@ imm_binop_x86_inst(Cmp16Imm, cmp16_imm, cmp_imm_usedef, false, { reg = Reg::phys
 imm_binop_x86_inst(Cmp32Imm, cmp32_imm, cmp_imm_usedef, false, { reg = Reg::phys(7); rex_opt(); byte(is_sext_imm8<int32_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int32_t>(imm.value()) ? 1 : 4); })
 imm_binop_x86_inst(Cmp64Imm, cmp64_imm, cmp_imm_usedef, true, { reg = Reg::phys(7); rex_w(); byte(is_sext_imm8<int64_t>(imm.value()) ? 0x83 : 0x81); modrm(); imm_n(is_sext_imm8<int64_t>(imm.value()) ? 1 : 4); })
 
+binop_x86_inst(Test8, test8, cmp_usedef, false, { rex(); byte(0x84); modrm(); })
 binop_x86_inst(Test64, test64, cmp_usedef, true, { rex_w(); byte(0x85); modrm(); })
 imm_binop_x86_inst(Test8Imm, test8_imm, cmp_imm_usedef, false, { reg = Reg::phys(0); rex(); byte(0xf6); modrm(); imm_n(1); })
 
@@ -181,9 +185,13 @@ binop_x86_inst(Popcnt16, popcnt16, { use(rm); def(reg); }, true, { byte(0x66); b
 binop_x86_inst(Popcnt32, popcnt32, { use(rm); def(reg); }, true, { byte(0xf3); rex_opt(); byte(0x0f); byte(0xb8); modrm(); })
 binop_x86_inst(Popcnt64, popcnt64, { use(rm); def(reg); }, true, { byte(0xf3); rex_w(); byte(0x0f); byte(0xb8); modrm(); })
 
+binop_x86_inst(CMovNZ32, cmovnz32, binop_usedef, false, { rex_opt(); byte(0x0f); byte(0x45); modrm(); })
 binop_x86_inst(CMovNZ64, cmovnz64, binop_usedef, true, { rex_w(); byte(0x0f); byte(0x45); modrm(); })
+binop_x86_inst(CMovE32, cmove32, binop_usedef, false, { rex_opt(); byte(0x0f); byte(0x44); modrm(); })
 binop_x86_inst(CMovE64, cmove64, binop_usedef, true, { rex_w(); byte(0x0f); byte(0x44); modrm(); })
+binop_x86_inst(CMovL32, cmovl32, binop_usedef, false, { rex_opt(); byte(0x0f); byte(0x4c); modrm(); })
 binop_x86_inst(CMovL64, cmovl64, binop_usedef, true, { rex_w(); byte(0x0f); byte(0x4c); modrm(); })
+binop_x86_inst(CMovB32, cmovb32, binop_usedef, false, { rex_opt(); byte(0x0f); byte(0x42); modrm(); })
 binop_x86_inst(CMovB64, cmovb64, binop_usedef, true, { rex_w(); byte(0x0f); byte(0x42); modrm(); })
 
 jmp_x86_inst(Jmp, jmp, {}, true, { byte(0xe9); imm_n(4); })
@@ -197,6 +205,7 @@ jmp_x86_inst(JAE, jae, {}, true, { byte(0x0f); byte(0x83); imm_n(4); })
 op0_x86_inst(Ret, ret, {}, true, { byte(0xc3); })
 
 x86_inst(Call, call, { use(rm); }, true, { reg = Reg::phys(2); rex_w(); byte(0xff); modrm(); })
+x86_inst(TailJump, tail_jump, { use(rm); }, true, { reg = Reg::phys(4); rex_w(); byte(0xff); modrm(); })
 
 x86_inst(Comment, comment, {}, false, { })
 

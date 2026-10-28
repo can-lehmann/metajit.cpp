@@ -440,6 +440,10 @@ namespace metajit {
       return &build(X86Inst::Kind::Mov64Imm64).set_rm(dst).set_imm(imm);
     }
     
+    X86Inst* lea32(Reg dst, X86Inst::Mem src) {
+      return &build(X86Inst::Kind::Lea32).set_reg(dst).set_rm(src);
+    }
+
     X86Inst* lea64(Reg dst, X86Inst::Mem src) {
       return &build(X86Inst::Kind::Lea64).set_reg(dst).set_rm(src);
     }
@@ -632,6 +636,7 @@ namespace metajit {
     X86InstBuilder _builder;
 
     NameMap<void*> _memory_deps;
+    NameMap<size_t> _use_counts;
 
     NameMap<Reg> _vregs;
     NameMap<size_t> _use_counts;
@@ -647,6 +652,11 @@ namespace metajit {
         std::unordered_map<AliasingGroup, void*> last_store;
         void* last_call = block;
         for (Inst* inst : *block) {
+          for (Value* arg : inst->args()) {
+            if (arg->is_named()) {
+              _use_counts[(NamedValue*) arg]++;
+            }
+          }
           #define find_dep(inst) \
             void* dep = last_call; \
             if (last_store.find(inst->aliasing()) != last_store.end()) { \
@@ -791,7 +801,10 @@ namespace metajit {
       }
     }
 
-    void build_add(Reg dst, Value* a, Value* b) {
+    void build_add(Reg dst, Type type, Value* a, Value* b) {
+      if (dynamic_cast<ShlInst*>(a) || dynamic_cast<MulInst*>(a)) {
+        std::swap(a, b);
+      }
       X86Inst::Mem mem;
       if (dynmatch(Const, constant_b, b)) {
         if (is_sext_imm32(constant_b)) {
@@ -813,6 +826,13 @@ namespace metajit {
             );
           }
         }
+      } else if (dynmatch(ShlInst, shift, b)) {
+        if (dynmatch(Const, amount, shift->arg(1))) {
+          if (a->is_named() && type_size(type) >= 4 && shift->type() == type &&
+              amount->value() >= 1 && amount->value() <= 3) {
+            mem = X86Inst::Mem(vreg(a), size_t(1) << amount->value(), vreg(shift->arg(0)), 0);
+          }
+        }
       }
 
       if (mem.is_invalid()) {
@@ -824,11 +844,26 @@ namespace metajit {
         );
       }
 
-      _builder.lea64(dst, mem);
+      if (type_size(type) <= 4) {
+        _builder.lea32(dst, mem);
+      } else {
+        _builder.lea64(dst, mem);
+      }
     }
 
     void build_test(Value* cond) {
-      if (dynmatch(ResizeXInst, resize, cond)) {
+      assert(cond->type() == Type::Bool);
+      if (dynmatch(AndInst, and_inst, cond)) {
+        if (_use_counts.at(and_inst) == 1) {
+          _builder.test8(vreg(and_inst->arg(0)), vreg(and_inst->arg(1)));
+          return;
+        }
+      } else if (dynmatch(XorInst, xor_inst, cond)) {
+        if (_use_counts.at(xor_inst) == 1) {
+          _builder.cmp8(vreg(xor_inst->arg(0)), vreg(xor_inst->arg(1)));
+          return;
+        }
+      } else if (dynmatch(ResizeXInst, resize, cond)) {
         if (dynmatch(ShrUInst, shift, resize->arg(0))) {
           if (dynmatch(Const, amount, shift->arg(1))) {
             if (amount->value() < 32 && amount->value() < type_width(shift->arg(0)->type())) {
@@ -898,7 +933,24 @@ namespace metajit {
       }
     }
 
-    void build_cmov(Reg res, Value* cond, Reg then) {
+    bool build_cmp_setcc(X86Inst::RM dst, Value* value) {
+      if (dynmatch(EqInst, eq, value)) {
+        build_cmp_eq(eq->arg(0), eq->arg(1));
+        _builder.sete8(dst);
+        return true;
+      } else if (dynmatch(LtSInst, lt_s, value)) {
+        build_cmp(lt_s->arg(0), lt_s->arg(1));
+        _builder.setl8(dst);
+        return true;
+      } else if (dynmatch(LtUInst, lt_u, value)) {
+        build_cmp(lt_u->arg(0), lt_u->arg(1));
+        _builder.setb8(dst);
+        return true;
+      }
+      return false;
+    }
+
+    void build_cmov(Reg res, Type type, Value* cond, Reg then) {
       if (cond->is_inst()) {
         Inst* pred_inst = (Inst*) cond;
         if (dynamic_cast<EqInst*>(pred_inst) ||
@@ -910,11 +962,23 @@ namespace metajit {
             build_cmp(pred_inst->arg(0), pred_inst->arg(1));
           }
           if (dynamic_cast<EqInst*>(pred_inst)) {
-            _builder.cmove64(res, then);
+            if (type_size(type) <= 4) {
+              _builder.cmove32(res, then);
+            } else {
+              _builder.cmove64(res, then);
+            }
           } else if (dynamic_cast<LtSInst*>(pred_inst)) {
-            _builder.cmovl64(res, then);
+            if (type_size(type) <= 4) {
+              _builder.cmovl32(res, then);
+            } else {
+              _builder.cmovl64(res, then);
+            }
           } else if (dynamic_cast<LtUInst*>(pred_inst)) {
-            _builder.cmovb64(res, then);
+            if (type_size(type) <= 4) {
+              _builder.cmovb32(res, then);
+            } else {
+              _builder.cmovb64(res, then);
+            }
           } else {
             assert(false);
           }
@@ -923,7 +987,11 @@ namespace metajit {
       }
       
       build_test(cond);
-      _builder.cmovnz64(res, then);
+      if (type_size(type) <= 4) {
+        _builder.cmovnz32(res, then);
+      } else {
+        _builder.cmovnz64(res, then);
+      }
     }
 
     std::pair<Value*, Value*> commutative_args(Inst* inst) {
@@ -1020,11 +1088,11 @@ namespace metajit {
           Reg then = vreg();
           _builder.movq_to_gp(res, vreg(select->arg(2)));
           _builder.movq_to_gp(then, vreg(select->arg(1)));
-          build_cmov(res, select->cond(), then);
+          build_cmov(res, select->type(), select->cond(), then);
           _builder.movq(vreg(inst), res);
         } else {
           _builder.mov64(vreg(inst), vreg(select->arg(2)));
-          build_cmov(vreg(inst), select->cond(), vreg(select->arg(1)));
+          build_cmov(vreg(inst), select->type(), select->cond(), vreg(select->arg(1)));
         }
       } else if (dynamic_cast<ResizeUInst*>(inst) ||
                  (inst->type() == Type::Bool &&
@@ -1110,6 +1178,12 @@ namespace metajit {
         }
       } else if (dynmatch(StoreInst, store, inst)) {
         X86Inst::Mem mem(vreg(store->arg(0)), store->offset());
+        if (store->arg(1)->type() == Type::Bool && store->arg(1)->is_named() &&
+            _use_counts.at((NamedValue*) store->arg(1)) == 1) {
+          if (build_cmp_setcc(mem, store->arg(1))) {
+            return;
+          }
+        }
         
         switch (store->arg(1)->type()) {
           case Type::Float32: _builder.movss_mem(mem, vreg(store->arg(1))); return;
@@ -1182,9 +1256,9 @@ namespace metajit {
         Reg rsp = fix_to_preg(vreg(), Reg::X86_RSP());
         _builder.lea64(vreg(inst), X86Inst::Mem(rsp, (int32_t) offset));
       } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
-        build_add(vreg(inst), add_ptr->ptr(), add_ptr->offset());
+        build_add(vreg(inst), inst->type(), add_ptr->ptr(), add_ptr->offset());
       } else if (dynmatch(AddInst, add, inst)) {
-        build_add(vreg(inst), add->arg(0), add->arg(1));
+        build_add(vreg(inst), inst->type(), add->arg(0), add->arg(1));
       } else if (dynmatch(SubInst, sub, inst)) {
         _builder.mov64(vreg(inst), vreg(sub->arg(0)));
 
@@ -1369,13 +1443,21 @@ namespace metajit {
         _builder.mov64(vreg(inst), vreg(shl->arg(0)));
 
         if (dynmatch(Const, constant_b, shl->arg(1))) {
-          _builder.shl64_imm(vreg(inst), constant_b->value());
+          if (type_size(inst->type()) <= 4) {
+            _builder.shl32_imm(vreg(inst), constant_b->value());
+          } else {
+            _builder.shl64_imm(vreg(inst), constant_b->value());
+          }
           return;
         }
 
         Reg rcx = fix_to_preg(vreg(), Reg::X86_RCX());
         _builder.mov64(rcx, vreg(shl->arg(1)));
-        _builder.shl64(vreg(inst));
+        if (type_size(inst->type()) <= 4) {
+          _builder.shl32(vreg(inst));
+        } else {
+          _builder.shl64(vreg(inst));
+        }
         _builder.pseudo_use(rcx);
       } else if (dynmatch(ShrUInst, shr_u, inst)) {
         _builder.mov64(vreg(inst), vreg(shr_u->arg(0)));
@@ -1436,20 +1518,7 @@ namespace metajit {
       } else if (dynamic_cast<EqInst*>(inst) ||
                  dynamic_cast<LtSInst*>(inst) ||
                  dynamic_cast<LtUInst*>(inst)) {
-        if (dynamic_cast<EqInst*>(inst)) {
-          build_cmp_eq(inst->arg(0), inst->arg(1));
-        } else {
-          build_cmp(inst->arg(0), inst->arg(1));
-        }
-        if (dynamic_cast<EqInst*>(inst)) {
-          _builder.sete8(vreg(inst));
-        } else if (dynamic_cast<LtSInst*>(inst)) {
-          _builder.setl8(vreg(inst));
-        } else if (dynamic_cast<LtUInst*>(inst)) {
-          _builder.setb8(vreg(inst));
-        } else {
-          assert(false);
-        }
+        build_cmp_setcc(vreg(inst), inst);
       } else if (dynmatch(BitReverseInst, bit_reverse, inst)) {
         Reg result = vreg(inst);
         size_t width = type_width(inst->type());
@@ -1479,9 +1548,17 @@ namespace metajit {
             _builder.and64_imm(other, mask);
           }
           if (shift <= 2) {
-            _builder.lea64(result, X86Inst::Mem(result, size_t(1) << shift, other, 0));
+            if (width <= 32) {
+              _builder.lea32(result, X86Inst::Mem(result, size_t(1) << shift, other, 0));
+            } else {
+              _builder.lea64(result, X86Inst::Mem(result, size_t(1) << shift, other, 0));
+            }
           } else {
-            _builder.shl64_imm(other, shift);
+            if (width <= 32) {
+              _builder.shl32_imm(other, shift);
+            } else {
+              _builder.shl64_imm(other, shift);
+            }
             _builder.or64(result, other);
           }
         }
@@ -1590,7 +1667,10 @@ namespace metajit {
         Reg ret_reg = fix_to_preg(vreg(call->type()), info.ret(ret_class));
         Reg callee_reg = fix_to_preg(vreg(), Reg::X86_R10());
         _builder.mov64(callee_reg, vreg(call->callee()));
-        _builder.call(callee_reg, ret_reg, call->call_conv(), args);
+        X86Inst* call_inst = _builder.call(callee_reg, ret_reg, call->call_conv(), args);
+        if (call->flags().has(CallFlags::MustTail)) {
+          call_inst->set_kind(X86Inst::Kind::TailJump);
+        }
 
         if (call->type() != Type::Void) {
           move(vreg(call), ret_reg);
@@ -1657,7 +1737,10 @@ namespace metajit {
         }
         _builder.jmp(_blocks[jump->block()->name()]);
       } else if (dynmatch(ExitInst, exit, inst)) {
-        _builder.ret();
+        CallInst* call = dynamic_cast<CallInst*>(exit->prev());
+        if (!call || !call->flags().has(CallFlags::MustTail)) {
+          _builder.ret();
+        }
       } else {
         inst->write(std::cerr);
         std::cerr << std::endl;
@@ -2074,7 +2157,7 @@ namespace metajit {
             _vreg_info[reg.id()].interval.incl(inst->name());
           });
 
-          if (inst->kind() == X86Inst::Kind::Call) {
+          if (inst->kind() == X86Inst::Kind::Call || inst->kind() == X86Inst::Kind::TailJump) {
             X86CallData* data = (X86CallData*) inst->data();
             for (Reg arg : data->args) {
               assert(arg.is_virtual());
@@ -2133,7 +2216,7 @@ namespace metajit {
 
             it = it.erase();
             continue;
-          } else if (inst->kind() == X86Inst::Kind::Call) {
+          } else if (inst->kind() == X86Inst::Kind::Call || inst->kind() == X86Inst::Kind::TailJump) {
             X86CallData* data = (X86CallData*) inst->data();
             CallConvInfo info(data->call_conv);
 
@@ -2632,7 +2715,7 @@ namespace metajit {
 
       for (X86Block* block : _blocks) {
         for (X86Inst* inst : *block) {
-          if (inst->kind() == X86Inst::Kind::Ret) {
+          if (inst->kind() == X86Inst::Kind::Ret || inst->kind() == X86Inst::Kind::TailJump) {
             _builder.move_before(block, inst);
             _builder.add64_imm(Reg::X86_RSP(), (uint64_t) stack_frame_size);
           }
@@ -2652,6 +2735,7 @@ namespace metajit {
       #endif
 
       _memory_deps.init(_section);
+      _use_counts.init(_section);
       _vregs.init(_section);
       _use_counts.init(_section);
       for (Block* block : *_section) {

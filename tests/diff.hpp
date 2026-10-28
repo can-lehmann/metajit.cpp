@@ -269,6 +269,7 @@ namespace metajit {
       llvm::LLVMContext llvm_context;
       std::unique_ptr<llvm::Module> module = std::make_unique<llvm::Module>("module", llvm_context);
       LLVMCodeGen::run(section, module.get(), "llvm_func");
+      module->getFunction("llvm_func")->setCallingConv(llvm::CallingConv::PreserveNone);
 
       if (!output_path.empty()) {
         std::error_code error_code;
@@ -290,7 +291,7 @@ namespace metajit {
         std::make_unique<llvm::LLVMContext>()
       )));
 
-      using LLVMFunc = void(*)(uint8_t*);
+      using LLVMFunc = void(* [[clang::preserve_none]])(uint8_t*);
       using X86Func = void(* [[clang::preserve_none]])(uint8_t*);
       LLVMFunc llvm_func = ExitOnErr(jit->lookup("llvm_func")).toPtr<LLVMFunc>();
 

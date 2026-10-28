@@ -801,16 +801,19 @@ namespace metajit {
       // Pure function of the arguments
       Pure = 1 << 0,
       Idempotent = 1 << 1,
+      // Require a tail call with no additional stack frame.
+      MustTail = 1 << 2,
     };
 
     using BaseFlags<CallFlags>::BaseFlags;
 
     constexpr static const char* NAMES[] = {
       "Pure",
-      "Idempotent"
+      "Idempotent",
+      "MustTail"
     };
 
-    constexpr static size_t COUNT = 2;
+    constexpr static size_t COUNT = 3;
   };
 
   enum class CallConv {
@@ -4825,6 +4828,15 @@ namespace metajit {
           Inst* inst = *inst_it;
           inst->substitute_args(substs);
 
+          if (inst->is_commutative() && inst->arg_count() == 2 &&
+              dynamic_cast<Const*>(inst->arg(0)) &&
+              !dynamic_cast<Const*>(inst->arg(1))) {
+            Value* constant = inst->arg(0);
+            inst->set_arg(0, inst->arg(1));
+            inst->set_arg(1, constant);
+            changed = true;
+          }
+
           _builder.move_before(block, inst);
           Value* subst = fn(inst);
           if (subst) {
@@ -4950,6 +4962,10 @@ namespace metajit {
             if (dynmatch(Const, b, and_inst->arg(1))) {
               if ((used.used & ~b->value()) == 0) {
                 return and_inst->arg(0);
+              }
+              uint64_t mask = b->value() & used.used;
+              if (mask != b->value()) {
+                return _builder.fold_and(and_inst->arg(0), _builder.build_const(inst->type(), mask));
               }
             }
           } else if (dynmatch(OrInst, or_inst, inst)) {
@@ -6905,6 +6921,23 @@ private:
             arg->write_arg(errors);
             errors << "\n";
             return true;
+          }
+        }
+
+        if (dynmatch(CallInst, call, inst)) {
+          if (call->flags().has(CallFlags::MustTail)) {
+            if (call->call_conv() != CallConv::PreserveNone) {
+              errors << "MustTail call requires PreserveNone calling convention\n";
+              return true;
+            }
+            if (call->type() != Type::Void) {
+              errors << "MustTail call requires a void return type\n";
+              return true;
+            }
+            if (!dynamic_cast<ExitInst*>(call->next())) {
+              errors << "MustTail call must be immediately followed by Exit\n";
+              return true;
+            }
           }
         }
 

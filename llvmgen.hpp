@@ -264,6 +264,10 @@ namespace metajit {
           call_inst->setCallingConv(llvm::CallingConv::PreserveNone);
         }
 
+        if (call->flags().has(CallFlags::MustTail)) {
+          call_inst->setTailCallKind(llvm::CallInst::TCK_MustTail);
+        }
+
         return call_inst;
       } else if (dynmatch(MulHighUInst, mul, inst)) {
         size_t width = type_width(mul->type());
