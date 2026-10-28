@@ -54,7 +54,22 @@ jobs:
         run: |
           make --silent coverage-report > coverage.md
           make diff-cover || true
-          gh pr comment ${{ github.event.pull_request.number }} --body "$(printf '### Coverage\n\n'; cat coverage.md; printf '\n\n<details>\n<summary>Diff Coverage</summary>\n\n'; cat tests/coverage/diff-report.md; printf '\n</details>')"
+          {
+            printf '### Coverage\n\n'
+            cat coverage.md
+            printf '\n\n<details>\n<summary>Diff Coverage</summary>\n\n'
+            cat tests/coverage/diff-report.md
+            printf '\n</details>'
+          } > coverage-comment.md
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          report = Path("coverage-comment.md")
+          if report.stat().st_size > 60000:
+              report.write_text("### Coverage\n\n" + Path("coverage.md").read_text()
+                                + "\n\nThe full diff coverage report is available in the "
+                                "coverage-report artifact for this workflow run.\n")
+          PYTHON
+          gh pr comment ${{ github.event.pull_request.number }} --body-file coverage-comment.md
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:

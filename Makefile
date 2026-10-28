@@ -144,7 +144,7 @@ tests/coverage/%.lcov: tests/coverage/%.profraw
 	llvm-profdata-20 merge -sparse $< -o tests/coverage/$*.profdata
 	llvm-cov-20 export --format=lcov --instr-profile=tests/coverage/$*.profdata \
 		-object tests/coverage/$* \
-		--ignore-filename-regex="^/usr|/tests/|lwir_utils\.hpp|unittest\.hpp" \
+		--ignore-filename-regex="^/usr|/tests/|lwir_utils\.hpp|unittest\.hpp|generated\.inc\.hpp" \
 		> $@
 
 tests/coverage/coverage.lcov: $(COVERAGE_LCOV_FILES) tests/merge_coverage.py
@@ -166,9 +166,6 @@ diff-cover: tests/coverage/coverage.lcov
 	$(eval WORKTREE := $(shell mktemp -d))
 	git worktree add $(WORKTREE) $(MERGE_BASE)
 	cd $(WORKTREE) && PYTHONPATH="$(abspath ../lwir.cpp)" python3 jitir.py
-	if test -d $(WORKTREE)/ruledsl; then \
-	  cd $(WORKTREE) && $(PYTHON) -m ruledsl fold.rules --include-simplify --simplify-rules simplify.rules --handwritten Eq --handwritten Select --handwritten ResizeX -o generated.inc.hpp; \
-	fi
 	{ \
 	  printf 'diff --git a/jitir.hpp b/jitir.hpp\n--- a/jitir.hpp\n+++ b/jitir.hpp\n'; \
 	  diff -u $(WORKTREE)/jitir.hpp jitir.hpp | tail -n +3; \
@@ -176,12 +173,6 @@ diff-cover: tests/coverage/coverage.lcov
 	  diff -u $(WORKTREE)/jitir_llvmapi.hpp jitir_llvmapi.hpp | tail -n +3; \
 	  printf 'diff --git a/genext.hpp b/genext.hpp\n--- a/genext.hpp\n+++ b/genext.hpp\n'; \
 	  diff -u $(WORKTREE)/genext.hpp genext.hpp | tail -n +3; \
-	  printf 'diff --git a/generated.inc.hpp b/generated.inc.hpp\n--- a/generated.inc.hpp\n+++ b/generated.inc.hpp\n'; \
-	  if test -f $(WORKTREE)/generated.inc.hpp; then \
-	    diff -u $(WORKTREE)/generated.inc.hpp generated.inc.hpp; \
-	  else \
-	    diff -u /dev/null generated.inc.hpp; \
-	  fi | tail -n +3; \
 	  git diff $(MERGE_BASE) -- . ':(exclude)jitir.hpp' ':(exclude)jitir_llvmapi.hpp' ':(exclude)genext.hpp'; \
 	} > tests/coverage/combined.diff || true
 	diff-cover tests/coverage/coverage.lcov --diff-file=tests/coverage/combined.diff --format markdown:tests/coverage/diff-report.md
