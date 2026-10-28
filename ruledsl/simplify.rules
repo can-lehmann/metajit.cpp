@@ -1,3 +1,10 @@
+and_self: And(x, x)
+    => x
+
+and_reassoc_constants: And(And(x, C1), C2)
+    C = C1 & C2
+    => And(x, C)
+
 and_redundant_operand: And(x, y)
     check known_zeros(x) | known_ones(y) == -1
     => x

@@ -255,10 +255,10 @@ def decision_tree(rows, paths):
     return Terminal(tuple(row.candidate for row in rows))
 
 
-def build_matchers(checked_rules, include_facts=True):
+def build_matchers(checked_rules, include_facts=True, rule_id_offset=0):
     checked_rules = tuple(checked_rules)
     per_opcode = {}
-    for rule_id, checked in enumerate(checked_rules):
+    for rule_id, checked in enumerate(checked_rules, rule_id_offset):
         if checked.requires_facts and not include_facts:
             continue
         variables = checked.type_representatives

@@ -65,7 +65,8 @@ class SimplifyTests(unittest.TestCase):
         rules = [rule for rule in parse(source)
                  if rule.name.startswith(("bit_reverse_", "mul_high_u_", "eq_masked_xor"))
                  or rule.name == "select_same"]
-        code = generate("\n".join(source[rule.span.start:rule.span.end] for rule in rules),
+        source = "\n".join(source[rule.span.start:rule.span.end] for rule in rules)
+        code = generate(source, simplify_source=source,
                         include_simplify=True, timeout_ms=10000)
         main = """
 void expect_constant(Value* value, Type type, uint64_t expected) {
@@ -129,7 +130,7 @@ int main() {
                 self.run_cpp(code, main, statistics)
 
     def test_existing_instruction_matching(self):
-        code = generate(RULES, include_simplify=True)
+        code = generate(RULES, include_simplify=True, simplify_source=RULES)
         main = """
 int main() {
   Generated builder;
@@ -177,6 +178,28 @@ int main() {
         for statistics in (False, True):
             with self.subTest(statistics=statistics):
                 self.run_cpp(code, main, statistics)
+
+    def test_backend_rule_sources_are_independent(self):
+        code = generate("zero: Add(x, 0)\n    => x\n", include_simplify=True,
+                        simplify_source="same: And(x, x)\n    => x\n")
+        self.run_cpp(code, """
+int main() {
+  Generated builder;
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(type);
+    Const zero(type, 0);
+    assert(builder.fold_add(&x, &zero) == &x);
+    Inst* add = builder.build_add(&x, &zero);
+    Inst* same = builder.build_and(&x, &x);
+    unsigned before = builder.builds;
+    assert(builder.try_simplify(add) == nullptr);
+    assert(builder.try_simplify(same) == &x);
+    assert(builder.builds == before);
+  }
+  assert(Generated::ruledsl_rule_counts[0] == 5);
+  assert(Generated::ruledsl_rule_counts[1] == 5);
+}
+""", statistics=True)
 
     def test_root_equivalence_reports_no_change_without_allocation(self):
         program = lower(build_matchers(prove("same: Add(x, y)\n    => Add(y, x)\n")))

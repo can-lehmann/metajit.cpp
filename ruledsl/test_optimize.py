@@ -25,13 +25,14 @@ class OptimizeTests(unittest.TestCase):
         ir.validate(optimized)
 
     def test_generation_cleans_both_backends(self):
-        code = generate("constants: Add(C1, C2)\n    C = C1 + C2\n    => C\n",
-                        include_simplify=True)
+        source = "constants: Add(C1, C2)\n    C = C1 + C2\n    => C\n"
+        code = generate(source, simplify_source=source, include_simplify=True)
         self.assertEqual(code.count("// constants:"), 2)
 
     def test_guarded_permutations_remain(self):
-        code = generate("constants: Add(C1, C2)\n    check C1 < C2\n"
-                        "    C = C1 + C2\n    => C\n", include_simplify=True)
+        source = ("constants: Add(C1, C2)\n    check C1 < C2\n"
+                  "    C = C1 + C2\n    => C\n")
+        code = generate(source, simplify_source=source, include_simplify=True)
         self.assertEqual(code.count("// constants:"), 4)
 
 

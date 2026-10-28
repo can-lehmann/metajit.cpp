@@ -9,22 +9,23 @@ def generate(source, filename="<string>", handwritten=(), timeout_ms=120000, inc
              simplify_source=None, simplify_filename="<simplify>"):
     from .proof import prove
 
-    rules = prove(source, filename, timeout_ms)
+    fold_rules = prove(source, filename, timeout_ms)
+    simplify_rules = ()
     if simplify_source is not None:
         if not include_simplify:
             raise ValueError("simplify_source requires include_simplify")
-        rules += prove(simplify_source, simplify_filename, timeout_ms)
-    names = [checked.rule.name for checked in rules]
-    if len(set(names)) != len(names):
-        raise ValueError("duplicate rule names across rule sources")
+        simplify_rules = prove(simplify_source, simplify_filename, timeout_ms)
+    rules = fold_rules + simplify_rules
     operations = dict.fromkeys(node.name for checked in rules
                                for node in expression_nodes(checked.rule.replacement)
                                if isinstance(node, ast.Call))
-    matcher = build_matchers(rules, include_facts=False)
+    matcher = build_matchers(fold_rules, include_facts=False)
+    matcher = MatcherProgram(tuple(checked.rule.name for checked in rules), matcher.matchers)
     code = emit(optimize(lower(matcher, handwritten, operations)))
     if include_simplify:
         from .lower_simplify import lower as lower_simplify
-        code += emit(optimize(lower_simplify(build_matchers(rules))), include_statistics=False)
+        simplify_matcher = build_matchers(simplify_rules, rule_id_offset=len(fold_rules))
+        code += emit(optimize(lower_simplify(simplify_matcher)), include_statistics=False)
     fallback = emit(optimize(lower(MatcherProgram((), {}), handwritten,
                                    dict.fromkeys((*matcher.matchers, *operations)))))
     if include_simplify:

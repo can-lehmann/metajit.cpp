@@ -94,7 +94,8 @@ void test_generated_rewrite_guard_facts() {
   SelectInst* earlier = dynamic_cast<SelectInst*>(before->value());
   unittest_assert(earlier && earlier->cond() == guard->cond());
   EqInst* rewritten = dynamic_cast<EqInst*>(guard->cond());
-  unittest_assert(rewritten && rewritten->arg(0) == entry->arg(1) && rewritten->arg(1) == entry->arg(2));
+  unittest_assert(rewritten && rewritten->arg(0) == difference);
+  unittest_assert(dynamic_cast<Const*>(rewritten->arg(1))->value() == 0);
   Const* result = dynamic_cast<Const*>(after->value());
   unittest_assert(result && result->value() == 3);
   unittest_assert(!section.verify(std::cout));
@@ -740,7 +741,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Select %1, 4:Int8, 7:Int8
   %3 = Eq %2, 4:Int8
-  Branch %1, true_block=b1, false_block=b2
+  Branch %3, true_block=b1, false_block=b2
 b1:
   Store %0, 1:Bool, aliasing=0, offset=1
   Jump block=b2
@@ -882,7 +883,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = ResizeU %1, type=Int64
   %3 = Eq %2, 1:Int64
-  Branch %1, true_block=b1, false_block=b2
+  Branch %3, true_block=b1, false_block=b2
 b1:
   Store %0, 1:Bool, aliasing=0, offset=1
   Jump block=b2
@@ -1200,10 +1201,9 @@ b2:
 )", {0, 1}, R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
-  %2 = Add %1, 255:Int8
-  %3 = Sub %1, 1:Int8
-  %4 = Eq %2, 255:Int8
-  Branch %4, true_block=b1, false_block=b2
+  %2 = Sub %1, 1:Int8
+  %3 = Eq %2, 255:Int8
+  Branch %3, true_block=b1, false_block=b2
 b1:
   Store %0, 0:Int8, aliasing=0, offset=1
   Exit
@@ -1541,11 +1541,10 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
   %2 = ShrU %1, 63:Int64
-  %3 = LtS %1, 0:Int64
-  %4 = ResizeX %2, type=Bool
+  %3 = ResizeX %2, type=Bool
   Branch %3, true_block=b1, false_block=b2
 b1:
-  %6 = And %1, 9223372036854775808:Int64
+  %5 = And %1, 9223372036854775808:Int64
   Store %0, 9223372036854775808:Int64, aliasing=0, offset=8
   Exit
 b2:
@@ -1571,7 +1570,7 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = ShrU %1, 0:Int8
-  %3 = Eq %1, 42:Int8
+  %3 = Eq %2, 42:Int8
   Branch %3, true_block=b1, false_block=b2
 b1:
   Store %0, 42:Int8, aliasing=0, offset=1
@@ -1846,8 +1845,7 @@ b2:
 )", {0, 2}, R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
-  %2 = Xor %1, 1:Bool
-  %3 = Eq %1, 0:Bool
+  %2 = Eq %1, 0:Bool
   Branch %2, true_block=b1, false_block=b2
 b1:
   Exit
@@ -1873,8 +1871,7 @@ b2:
 )", {0, 2}, R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
-  %2 = Xor %1, 1:Bool
-  %3 = Eq 0:Bool, %1
+  %2 = Eq 0:Bool, %1
   Branch %2, true_block=b1, false_block=b2
 b1:
   Exit
@@ -1901,7 +1898,7 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Eq %1, 1:Bool
-  Branch %1, true_block=b1, false_block=b2
+  Branch %2, true_block=b1, false_block=b2
 b1:
   Exit
 b2:
@@ -1927,7 +1924,7 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Eq 1:Bool, %1
-  Branch %1, true_block=b1, false_block=b2
+  Branch %2, true_block=b1, false_block=b2
 b1:
   Exit
 b2:
@@ -2264,7 +2261,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Xor %1, 1:Bool
   %3 = And %1, %2
-  Branch 0:Bool, true_block=b1, false_block=b2
+  Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = Or %1, 0:Bool
   Store %0, %5, aliasing=0, offset=1
@@ -2295,7 +2292,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Xor %1, 1:Bool
   %3 = And %2, %1
-  Branch 0:Bool, true_block=b1, false_block=b2
+  Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = Or %1, 0:Bool
   Store %0, %5, aliasing=0, offset=1

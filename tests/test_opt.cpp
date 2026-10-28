@@ -254,7 +254,7 @@ void test_and_or_idempotence_simplify(Builder& builder, TestData& data) {
   Simplify::run(builder.section(), 1);
 
   unittest_assert(and_output->arg(1) == value);
-  unittest_assert(or_output->arg(1) == value);
+  unittest_assert(or_output->arg(1) == or_result);
 }
 
 void test_natural_order_deep_chain() {
@@ -2406,16 +2406,15 @@ void test_rule_dsl_resolved_arguments() {
   Value* y = block->arg(1);
   Inst* first = builder.build_add(x, y);
   Inst* second = builder.build_sub(x, y);
-  Inst* root = builder.build_add(x, first);
+  Inst* root = builder.build_and(x, first);
   builder.build_exit();
   section.autoname();
   NameMap<Value*> substs(&section);
-  Const* zero = builder.build_const(Type::Int32, 0);
   substs[first] = second;
-  substs[second] = zero;
+  substs[second] = x;
   root->substitute_args_iterated(substs);
-  unittest_assert(root->arg(0) == x && root->arg(1) == zero);
-  unittest_assert(substs[first] == zero && substs[second] == zero);
+  unittest_assert(root->arg(0) == x && root->arg(1) == x);
+  unittest_assert(substs[first] == x && substs[second] == x);
   size_t before = builder.next_name();
   unittest_assert(builder.try_simplify(root) == x);
   unittest_assert(builder.next_name() == before);
@@ -2426,6 +2425,7 @@ void test_rule_dsl_resolved_arguments() {
   builder.move_before(block, root);
   Inst* fresh = builder.build_add(x, y);
   root->set_arg(0, fresh);
+  root->set_arg(1, fresh);
   root->substitute_args_iterated(substs);
   unittest_assert(root->arg(0) == fresh);
   unittest_assert(builder.try_simplify(root) == fresh);
@@ -2446,17 +2446,15 @@ void test_rule_dsl_local_rewriter() {
       size_t before = builder.next_name();
       unittest_assert(builder.try_simplify(miss) == nullptr);
       unittest_assert(builder.next_name() == before);
-      Value* complement = builder.build_const(type, type_mask(type));
-      Value* inner = builder.build_xor(x, complement);
-      StoreInst* canceled = builder.build_store(block->arg(0), builder.build_xor(inner, complement), 0, 0);
+      StoreInst* canceled = builder.build_store(block->arg(0), builder.build_and(x, x), 0, 0);
       Value* sub = builder.build_sub(x, builder.build_const(type, 7));
-      Value* nested = builder.build_xor(builder.build_xor(sub, complement), complement);
+      Value* nested = builder.build_and(sub, sub);
       StoreInst* rewritten = builder.build_store(block->arg(0), nested, 0, 8);
       Value* shared = builder.build_or(x, y);
-      StoreInst* reused = builder.build_store(block->arg(0), builder.build_or(shared, x), 0, 16);
+      StoreInst* reused = builder.build_store(block->arg(0), builder.build_and(shared, shared), 0, 16);
       Value* zero = builder.build_and(x, builder.build_const(type, 0));
       StoreInst* constant = builder.build_store(block->arg(0), zero, 0, 24);
-      StoreInst* forwarded = builder.build_store(block->arg(0), builder.build_add(x, zero), 0, 40);
+      StoreInst* forwarded = builder.build_store(block->arg(0), builder.build_and(x, canceled->value()), 0, 40);
       Value* select = builder.build_select(block->arg(3), builder.build_poison(type), x);
       StoreInst* selected = builder.build_store(block->arg(0), select, 0, 32);
       builder.build_exit();
@@ -2476,9 +2474,7 @@ void test_rule_dsl_local_rewriter() {
         Simplify::run(&section, 2);
       }
       unittest_assert(canceled->value() == x);
-      AddInst* addition = dynamic_cast<AddInst*>(rewritten->value());
-      unittest_assert(addition && addition->arg(0) == x);
-      check_const(addition->arg(1), type, uint64_t(-7) & type_mask(type));
+      unittest_assert(rewritten->value() == sub);
       unittest_assert(reused->value() == shared);
       check_const(constant->value(), type, 0);
       unittest_assert(forwarded->value() == x);

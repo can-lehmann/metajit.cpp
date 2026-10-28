@@ -16,10 +16,13 @@ class KnownBitsTests(unittest.TestCase):
     def test_initial_rules_prove_at_all_widths(self):
         path = Path(__file__).with_name("simplify.rules")
         rules = prove(path.read_text(), str(path))
-        self.assertEqual(len(rules), 8)
-        self.assertTrue(all(rule.requires_facts for rule in rules))
+        self.assertEqual(len(rules), 10)
+        self.assertEqual(rules[0].rule.name, "and_self")
+        self.assertEqual(rules[1].rule.name, "and_reassoc_constants")
+        self.assertTrue(all(not rule.requires_facts for rule in rules[:2]))
+        self.assertTrue(all(rule.requires_facts for rule in rules[2:]))
         self.assertEqual([len(rule.instantiations) for rule in rules],
-                         [5, 5, 5, 5, 5, 10, 10, 10])
+                         [5, 5, 5, 5, 5, 5, 5, 10, 10, 10])
 
     def test_masks_have_the_matched_type(self):
         rule, = check("mask: Or(x: T, 0)\n    C = known_zeros(x) | known_ones(x)\n    => C\n")
@@ -55,7 +58,7 @@ class KnownBitsTests(unittest.TestCase):
         self.assertEqual(len(builder.matchers["Or"].stages), 1)
         only_facts = build_matchers(rules[1:], include_facts=False)
         self.assertFalse(only_facts.matchers)
-        code = generate(source, include_simplify=True)
+        code = generate(source, include_simplify=True, simplify_source=source)
         self.assertNotIn("known_ones", code[:code.index("struct RuledslUnknownBits")])
         self.assertIn("known_ones", code[code.index("struct RuledslUnknownBits"):])
 
@@ -65,9 +68,9 @@ class KnownBitsTests(unittest.TestCase):
                                         "    check known_ones(x) | known_zeros(y) == -1\n    => x\n")
         self.assertIn('"literal", "fact"', code)
         self.assertIn("++ruledsl_rule_counts[0x1ULL]", code)
-        with self.assertRaisesRegex(ValueError, "duplicate rule names"):
-            generate("same: Or(x, 0)\n    => x\n", include_simplify=True,
-                     simplify_source="same: And(x, -1)\n    => x\n")
+        code = generate("same: Or(x, 0)\n    => x\n", include_simplify=True,
+                        simplify_source="same: And(x, -1)\n    => x\n")
+        self.assertIn('"same", "same"', code)
 
     def test_query_masks_are_sound_but_need_not_be_complete(self):
         source = "same: Or(x, 0)\n    C = known_zeros(x) | known_ones(x)\n    => x\n"

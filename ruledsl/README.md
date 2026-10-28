@@ -1,7 +1,7 @@
 # Rewrite rule DSL for integer peephole rewrites
 
 The DSL defines jitir rewrites that are proven correct with Z3. The rules are
-used by builder folding and also shared by Simplify and SimplifyTrace. Rules
+used by builder folding and by Simplify and SimplifyTrace. Rules
 are written in Python-like syntax and compiled to C++, but it's still possible
 to write handwritten folding rules.
 
@@ -13,9 +13,10 @@ Run the commands below from the metajit repository root. Use Python 3 with
 `z3-solver` installed, or the distribution's `python3-z3` package. Other Python
 components use only the standard library.
 
-Put ordinary folding rules in `ruledsl/fold.rules`. Put rules that query
-KnownBits in `ruledsl/simplify.rules`, those run only in Simplify and
-SimplifyTrace. Rule names must be unique across both files.
+Put builder folding rules in `ruledsl/fold.rules`. Put rules for Simplify and
+SimplifyTrace in `ruledsl/simplify.rules`. Each backend uses only its own rule
+file. Simplification rules can query KnownBits. Rule names must be unique
+within each file.
 
 After editing rules, regenerate their C++ include:
 
