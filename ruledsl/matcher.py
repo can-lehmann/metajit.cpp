@@ -44,6 +44,7 @@ class Literal(Pattern):
 class Operation(Pattern):
     name: str
     args: tuple[Pattern, ...]
+    single_use: bool = False
 
 
 @dataclass(frozen=True)
@@ -130,7 +131,7 @@ def normalize(node, checked, variables):
         return Literal(type_, node.value)
     if isinstance(node, ast.Call):
         return Operation(type_, node.name, tuple(normalize(arg, checked, variables)
-                                                for arg in node.args))
+                                                for arg in node.args), node.single_use)
     raise ValueError(f"unsupported pattern {node!r}")
 
 

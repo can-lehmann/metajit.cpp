@@ -115,3 +115,8 @@ shr_u_or_known_zero: ShrU(Or(x: T, y), C)
     Cmask = -1 << C
     check known_zeros(x) & Cmask == Cmask
     => ShrU(y, C)
+
+shl_or_constant_single_use: Shl(Or(x: T, C1) @single_use, C2)
+    check C2 < width(T)
+    C = C1 << C2
+    => Or(Shl(x, C2), C)

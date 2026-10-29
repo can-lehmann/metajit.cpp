@@ -20,10 +20,12 @@ import unittest
 
 from .cpp import emit
 from .generate import generate
+from .lower import candidates
 from .lower_simplify import lower
 from .matcher import build_matchers
 from .parser import parse
-from .proof import prove
+from .proof import ProofError, prove
+from .source import TypeCheckError
 
 
 RULES = """zero: Add(x, 0)
@@ -53,6 +55,57 @@ same_constants: Select(c, C, C)
 
 
 class SimplifyTests(unittest.TestCase):
+    def test_single_use_matching(self):
+        source = ("shift: Shl(Or(x: T, C1) @single_use, C2)\n"
+                  "    check C2 < width(T)\n    C = C1 << C2\n"
+                  "    => Or(Shl(x, C2), C)\n")
+        checked, = prove(source)
+        self.assertEqual(len(checked.instantiations), 4)
+        program = build_matchers((checked,))
+        for stage in program.matchers["Shl"].stages:
+            for candidate in candidates(stage):
+                self.assertTrue(candidate.pattern.args[0].single_use)
+        with self.assertRaisesRegex(TypeCheckError, "simplification backend"):
+            generate(source)
+        with self.assertRaises(ProofError):
+            prove("wrong: Shl(Or(x, C1) @single_use, C2)\n    => x\n")
+        code = generate("", simplify_source=source, include_simplify=True)
+        self.run_cpp(code, """
+struct Counts {
+  Value* value;
+  uint8_t count;
+  uint8_t at(Value* arg) const { return arg == value ? count : 255; }
+};
+int main() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Generated builder;
+    Value x(type);
+    Const one(type, 1), shift(type, 3), invalid(type, type_width(type));
+    for (bool swapped : {false, true}) {
+      Inst* inner = swapped ? builder.build_or(&one, &x) : builder.build_or(&x, &one);
+      Inst* root = builder.build_shl(inner, &shift);
+      size_t before = builder.allocated.size();
+      assert(!builder.try_simplify(root));
+      for (uint8_t count : {0, 2, 254, 255}) {
+        assert(!builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{inner, count}));
+        assert(builder.allocated.size() == before);
+      }
+      Value* replacement = builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{inner, 1});
+      OrInst* result = dynamic_cast<OrInst*>(replacement);
+      assert(result);
+      ShlInst* shl = dynamic_cast<ShlInst*>(result->arg(0));
+      Const* constant = dynamic_cast<Const*>(result->arg(1));
+      assert(shl && shl->arg(0) == &x && shl->arg(1) == &shift);
+      assert(constant && constant->value() == 8);
+      root = builder.build_shl(inner, &invalid);
+      before = builder.allocated.size();
+      assert(!builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{inner, 1}));
+      assert(builder.allocated.size() == before);
+    }
+  }
+}
+""")
+
     @classmethod
     def setUpClass(cls):
         cls.compiler = shutil.which("clang++") or shutil.which("g++")

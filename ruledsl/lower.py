@@ -117,6 +117,8 @@ class Lowerer:
         self.decision(tree.next, block, paths, constants)
 
     def candidate(self, candidate, block, paths, constants):
+        if candidate.checked.requires_use_counts and not hasattr(self, "use_counts"):
+            raise ValueError("@single_use requires the simplification backend")
         types = {}
         facts = TypeFacts(candidate.pattern)
         for binding in candidate.types:

@@ -4114,7 +4114,7 @@ namespace metajit {
     Builder _builder;
 
     template <class Fn>
-    bool substitute(const Fn& fn) {
+    bool substitute(const Fn& fn, SaturatingUseCounts* use_counts = nullptr) {
       NameMap<Value*> substs(_section);
       bool changed = false;
       for (Block* block : *_section) {
@@ -4132,8 +4132,19 @@ namespace metajit {
           }
 
           _builder.move_before(block, inst);
+          Inst* previous = inst->prev();
           Value* subst = fn(inst);
+          if (use_counts) {
+            for (Inst* added = inst->prev(); added != previous; added = added->prev()) {
+              for (Value* arg : added->args()) {
+                use_counts->invalidate(arg);
+              }
+            }
+          }
           if (subst) {
+            if (use_counts) {
+              use_counts->invalidate(subst);
+            }
             substs[inst] = subst;
             inst_it = inst_it.erase();
             changed = true;
@@ -4157,6 +4168,7 @@ namespace metajit {
         section->autoname();
         _builder.set_next_name();
         KnownBits known_bits(section);
+        SaturatingUseCounts use_counts(section);
 
         changed |= substitute([&](Inst* inst) -> Value* {
           if (!inst->has_side_effect() &&
@@ -4168,7 +4180,7 @@ namespace metajit {
             return _builder.build_const(inst->type(), known_bits.at(inst).value);
           }
 
-          if (Value* replacement = _builder.try_simplify(inst, known_bits.view())) {
+          if (Value* replacement = _builder.try_simplify(inst, known_bits.view(), use_counts)) {
             return replacement;
           }
 
@@ -4181,7 +4193,7 @@ namespace metajit {
             }
           }
           return nullptr;
-        });
+        }, &use_counts);
 
         section->autoname();
         _builder.set_next_name();

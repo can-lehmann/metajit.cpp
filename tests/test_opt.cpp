@@ -2858,6 +2858,64 @@ void test_rule_dsl_known_bits() {
   }
 }
 
+void test_rule_dsl_single_use() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (size_t mode = 0; mode < 4; mode++) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* block = builder.build_block({Type::Ptr, type});
+      builder.move_to_end(block);
+      Value* x = block->arg(1);
+      Value* one = builder.build_const(type, 1);
+      Value* shift = builder.build_const(type, 3);
+      Inst* inner = builder.build_or(x, one);
+      Value* operand = inner;
+      if (mode == 2) {
+        builder.build_xor(inner, x);
+      }
+      if (mode == 3) {
+        operand = builder.build_resize_u(inner, type);
+      }
+      StoreInst* extra = nullptr;
+      if (mode == 1 || mode == 3) {
+        extra = builder.build_store(block->arg(0), operand, 0, 8);
+      }
+      Inst* root = builder.build_shl(operand, shift);
+      StoreInst* output = builder.build_store(block->arg(0), root, 0, 0);
+      builder.build_exit();
+      section.order_blocks(BlockOrdering::Dominator);
+      section.autoname();
+      unittest_assert(!section.verify(std::cout));
+      Simplify::run(&section, 1);
+      if (mode == 0 || mode == 2) {
+        OrInst* result = dynamic_cast<OrInst*>(output->value());
+        unittest_assert(result);
+        ShlInst* shifted = dynamic_cast<ShlInst*>(result->arg(0));
+        unittest_assert(shifted && shifted->arg(0) == x);
+        check_const(result->arg(1), type, 8);
+      } else {
+        unittest_assert(output->value() == root);
+        unittest_assert(root->arg(0) == inner);
+        unittest_assert(extra->value() == inner);
+      }
+      DeadCodeElim::run(&section);
+      unittest_assert(!section.verify(std::cout));
+      for (uint64_t input : {uint64_t(0), uint64_t(1), uint64_t(42), type_mask(type)}) {
+        uint64_t values[2] = {};
+        Interpreter interpreter(&section, {Interpreter::Bits::constant(values),
+                                 Interpreter::Bits::constant(type, input)});
+        unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+        unittest_assert(values[0] == (((input | 1) << 3) & type_mask(type)));
+        if (extra) {
+          unittest_assert(values[1] == (input | 1));
+        }
+      }
+    }
+  }
+}
+
 void test_rule_dsl_resolved_arguments() {
   Context context;
   Allocator allocator;
@@ -3042,6 +3100,7 @@ int main(int argc, char** argv) {
   suite.test("rule DSL builder integration").run(test_rule_dsl_builder_integration);
   suite.test("rule DSL local rewriter").run(test_rule_dsl_local_rewriter);
   suite.test("rule DSL resolved arguments").run(test_rule_dsl_resolved_arguments);
+  suite.test("rule DSL single use").run(test_rule_dsl_single_use);
   suite.test("rule DSL known bits").run(test_rule_dsl_known_bits);
   suite.test("rule DSL known select").run(test_rule_dsl_known_select);
   suite.test("rule DSL known resize roundtrip").run(test_rule_dsl_known_resize_roundtrip);

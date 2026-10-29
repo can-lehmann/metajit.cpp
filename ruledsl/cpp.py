@@ -31,7 +31,7 @@ synchronized template this thread_local throw true try typedef typeid typename u
 unsigned using virtual void volatile wchar_t while xor xor_eq
 """.split())
 RESERVED = KEYWORDS | {"Type", "Value", "Const", "Facts", "RuledslUnknownBits", "uint64_t",
-                       "ruledsl_rule_counts", "ruledsl_rule_names"}
+                       "ruledsl_rule_counts", "ruledsl_rule_names", "UseCounts", "RuledslUnknownUseCounts"}
 
 
 class Emitter:
@@ -132,11 +132,12 @@ class Emitter:
         ir.validate(function.body, tuple(parameter.value for parameter in function.parameters))
         parameters = []
         if any(parameter.kind == "facts" for parameter in function.parameters):
-            self.line("template<class Facts = RuledslUnknownBits>")
+            self.line("template<class Facts = RuledslUnknownBits, class UseCounts = RuledslUnknownUseCounts>")
         for parameter in function.parameters:
             type_ = {"value": "Value*", "type": "Type", "inst": "Inst*",
-                     "facts": "[[maybe_unused]] const Facts&"}[parameter.kind]
-            default = " = {}" if parameter.kind == "facts" else ""
+                     "facts": "[[maybe_unused]] const Facts&",
+                     "use_counts": "[[maybe_unused]] const UseCounts&"}[parameter.kind]
+            default = " = {}" if parameter.kind in {"facts", "use_counts"} else ""
             parameters.append(f"{type_} {self.name_for(parameter.value)}{default}")
         self.line(f"Value* {function.name}({', '.join(parameters)}) {{")
         self.indent += 1
@@ -152,6 +153,11 @@ def emit(program, include_statistics=True):
         emitter.indent += 1
         emitter.line("uint64_t known_zeros(Value*) const { return 0; }")
         emitter.line("uint64_t known_ones(Value*) const { return 0; }")
+        emitter.indent -= 1
+        emitter.line("};")
+        emitter.line("struct RuledslUnknownUseCounts {")
+        emitter.indent += 1
+        emitter.line("uint8_t at(Value*) const { return 255; }")
         emitter.indent -= 1
         emitter.line("};")
     if include_statistics and program.rule_names:

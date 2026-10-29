@@ -17,6 +17,7 @@ from . import ast
 from .lower import expression_nodes, lower
 from .matcher import MatcherProgram, build_matchers
 from .optimize import optimize
+from .source import TypeCheckError
 
 
 def generate(source, filename="<string>", handwritten=(), timeout_ms=120000, include_simplify=False,
@@ -26,6 +27,10 @@ def generate(source, filename="<string>", handwritten=(), timeout_ms=120000, inc
     if simplify_folds and not include_simplify:
         raise ValueError("simplify_folds requires include_simplify")
     fold_rules = prove(source, filename, timeout_ms)
+    for checked in fold_rules:
+        if checked.requires_use_counts:
+            raise TypeCheckError("@single_use requires simplify.rules and the simplification backend",
+                                 checked.rule.span, source, filename)
     simplify_rules = ()
     if simplify_source is not None:
         if not include_simplify:

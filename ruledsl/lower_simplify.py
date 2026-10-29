@@ -22,9 +22,11 @@ class SimplifyLowerer(Lowerer):
     def __init__(self, name):
         super().__init__(name, ())
         self.parameters = (Parameter(ir.Value("inst"), "inst"),
-                           Parameter(ir.Value("facts"), "facts"))
+                           Parameter(ir.Value("facts"), "facts"),
+                           Parameter(ir.Value("use_counts"), "use_counts"))
         self.root = ir.Ref(self.parameters[0].value)
         self.facts = ir.Unary("&", ir.Ref(self.parameters[1].value))
+        self.use_counts = ir.Unary("&", ir.Ref(self.parameters[2].value))
         self.result_type = member_call(self.root, "type")
         self.paths = {}
 
@@ -33,6 +35,10 @@ class SimplifyLowerer(Lowerer):
                                         candidate.checked.type_representatives)
         if matcher.equivalent(candidate.pattern, replacement):
             return
+        for path, node in matcher.pattern_positions(candidate.pattern):
+            if isinstance(node, matcher.Operation) and node.single_use:
+                block = self.guard(block, ir.Binary("==", member_call(self.use_counts, "at", paths[path]),
+                                                   ir.Literal(1)))
         super().candidate(candidate, block, paths, constants)
 
     def function(self, opcode_matcher):
@@ -51,6 +57,7 @@ def lower(program):
                  for name, opcode_matcher in program.matchers.items()]
     parameter = Parameter(ir.Value("inst"), "inst")
     facts = Parameter(ir.Value("facts"), "facts")
+    counts = Parameter(ir.Value("use_counts"), "use_counts")
     root = ir.Ref(parameter.value)
     block = ir.Block()
     if not program.matchers:
@@ -59,8 +66,8 @@ def lower(program):
         matched = ir.Value("matched")
         block.statements.append(ir.Bind(matched, call(f"dynamic_cast<{name}Inst*>", root)))
         body = ir.Block([ir.Return(call("try_simplify_" + operation_name(name),
-                                       ir.Ref(matched), ir.Ref(facts.value)))])
+                                       ir.Ref(matched), ir.Ref(facts.value), ir.Ref(counts.value)))])
         block.statements.append(ir.If(ir.Binary("!=", ir.Ref(matched), ir.Literal(None)), body))
     block.statements.append(ir.Return(ir.Literal(None)))
-    functions.append(Function("try_simplify", (parameter, facts), block))
+    functions.append(Function("try_simplify", (parameter, facts, counts), block))
     return Program(program.rule_names, tuple(functions))

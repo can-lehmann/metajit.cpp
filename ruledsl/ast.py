@@ -36,6 +36,7 @@ class Number(Expr):
 class Call(Expr):
     name: str
     args: tuple[Expr, ...]
+    single_use: bool = False
 
 
 @dataclass(frozen=True)
@@ -93,9 +94,13 @@ def format_pattern(node):
     if isinstance(node, Number):
         return str(node.value)
     if isinstance(node, Call):
-        return f"{node.name}({', '.join(format_pattern(arg) for arg in node.args)})"
+        suffix = " @single_use" if node.single_use else ""
+        return f"{node.name}({', '.join(format_pattern(arg) for arg in node.args)}){suffix}"
     if isinstance(node, Typed):
-        return f"{format_pattern(node.value)}: {node.type_name}"
+        value = format_pattern(node.value)
+        if isinstance(node.value, Call) and node.value.single_use:
+            return f"{value.removesuffix(' @single_use')}: {node.type_name} @single_use"
+        return f"{value}: {node.type_name}"
     raise ValueError(f"unsupported pattern {node!r}")
 
 

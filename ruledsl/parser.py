@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from dataclasses import replace
+
 from . import ast
 from .lexer import tokenize
 from .source import ParseError, Span
@@ -139,7 +141,19 @@ class Parser:
                 value = ast.Name(name.span, name.text)
         else:
             self.error("expected value, constant, or operation pattern")
-        return self.annotation(value)
+        value = self.annotation(value)
+        if self.accept("@"):
+            name = self.expect("NAME")
+            if name.text != "single_use":
+                self.error(f"unknown pattern annotation {name.text!r}")
+            operation = value.value if isinstance(value, ast.Typed) else value
+            if not isinstance(operation, ast.Call):
+                self.error("@single_use requires an operation")
+            if operation.single_use:
+                self.error("duplicate @single_use annotation")
+            operation = replace(operation, single_use=True)
+            value = replace(value, value=operation) if isinstance(value, ast.Typed) else operation
+        return value
 
     def arguments(self, pattern=False):
         args = []

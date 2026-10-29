@@ -22,7 +22,7 @@ TOKEN_RE = re.compile(
     r"(?P<SPACE>[ \t]+)"
     r"|(?P<NUMBER>0[xX][0-9a-fA-F]+|0[bB][01]+|[0-9]+)"
     r"|(?P<NAME>[A-Za-z_][A-Za-z_0-9]*)"
-    r"|(?P<OP>=>|<<|>>|<=|>=|==|!=|//|[():,=+\-*/%&|^~<>])"
+    r"|(?P<OP>=>|<<|>>|<=|>=|==|!=|//|[@():,=+\-*/%&|^~<>])"
     r"|(?P<COMMENT>\#.*)"
 )
 KEYWORDS = {"check", "where", "and", "or", "not", "SORRY_Z3_SMALL_WIDTHS"}

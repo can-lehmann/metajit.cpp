@@ -52,6 +52,10 @@ class CheckedRule:
         return any(isinstance(node, ast.Call) and node.name in KNOWN_BITS_FUNCTIONS
                    for node in self.expressions)
 
+    @property
+    def requires_use_counts(self):
+        return any(isinstance(node, ast.Call) and node.single_use for node in self.expressions)
+
 
 BINARY_OPERATORS = {
     "+": operator.add, "-": operator.sub, "*": operator.mul,
@@ -152,6 +156,8 @@ class Checker:
         elif isinstance(node, ast.Number):
             info = ExprInfo("constant", self.constraints.fresh())
         elif isinstance(node, ast.Call):
+            if node.single_use and not introduce:
+                self.error(node, "@single_use is only allowed on input-pattern operations")
             if node.name not in SIGNATURES:
                 self.error(node, f"unknown or unsupported instruction {node.name!r}")
             signature = SIGNATURES[node.name]
@@ -243,6 +249,11 @@ class Checker:
         return ExprInfo("constant", args[0].type, args[0].dependencies | args[1].dependencies)
 
     def check(self):
+        root_node = self.rule.pattern
+        while isinstance(root_node, ast.Typed):
+            root_node = root_node.value
+        if root_node.single_use:
+            self.error(root_node, "@single_use is only allowed on nested input operations")
         root = self.pattern(self.rule.pattern, introduce=True)
         self.pattern_bindings = frozenset(self.bindings)
         for statement in self.rule.body:

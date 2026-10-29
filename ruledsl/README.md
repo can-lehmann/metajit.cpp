@@ -143,6 +143,25 @@ in a `where` condition through an alias.
 Conditions materialize as `Bool` constants when used as replacement IR values;
 type references cannot be used as IR values.
 
+### Single-use guards in Simplify rules
+
+Put `@single_use` after a nested input operation to require exactly one live
+operand use of that operation:
+
+```text
+shl_or_constant_single_use: Shl(Or(x: T, C1) @single_use, C2)
+    check C2 < width(T)
+    C = C1 << C2
+    => Or(Shl(x, C2), C)
+```
+
+This permits distributing the shift without duplicating a shared computation.
+Put these rules in `simplify.rules`; builder folding cannot use this guard.
+The guard affects profitability only: the proof must hold regardless of sharing.
+Unknown use counts prevent the rule from firing. Currently only Simplify supplies
+counts, so SimplifyTrace does not apply these rules. The annotation is not allowed
+on the root operation or in a replacement.
+
 ### KnownBits conditions in Simplify/SimplifyTrace rules
 
 `known_zeros(x)` and `known_ones(x)` return compile-time masks with the same
