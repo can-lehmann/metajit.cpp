@@ -338,6 +338,26 @@ eq_masked_xor: Eq(And(Xor(x, C1), Cmask), C2)
     Cnew = C2 ^ (C1 & Cmask)
     => Eq(And(x, Cmask), Cnew)
 
+# eq_masked_shr_u_zero: Eq(And(ShrU(x: T, Cshift), Cmask), 0)
+#     check Cshift < width(T)
+#     Cnew = Cmask << Cshift
+#     => Eq(And(x, Cnew), 0)
+
+# eq_shr_u_zero: Eq(ShrU(x: T, Cshift), 0)
+#     check Cshift < width(T)
+#     Cmask = -1 << Cshift
+#     => Eq(And(x, Cmask), 0)
+
+# eq_masked_shl_zero: Eq(And(Shl(x: T, Cshift), Cmask), 0)
+#     check Cshift < width(T)
+#     Cnew = Cmask >> Cshift
+#     => Eq(And(x, Cnew), 0)
+
+# eq_shl_zero: Eq(Shl(x: T, Cshift), 0)
+#     check Cshift < width(T)
+#     Cmask = -1 >> Cshift
+#     => Eq(And(x, Cmask), 0)
+
 lt_u_self: LtU(x, x)
     => 0
 
@@ -393,6 +413,12 @@ select_bool_true_operand_constant: Select(c, c, C)
 select_bool_false_operand_constant: Select(c, C, c)
     => And(c, C)
 
+# select_constant_mask: Select(c, C: T, 0)
+#     => And(ResizeS(c): T, C)
+
+# select_constant_mask_false: Select(c, 0, C: T)
+#     => And(ResizeS(Xor(c, 1)): T, C)
+
 select_nested_true: Select(c, Select(c, x, y), z)
     => Select(c, x, z)
 
@@ -415,6 +441,11 @@ resize_u_select: ResizeU(Select(c, C1: S, C2)): T
 resize_u_constant: ResizeU(C: S): T
     Cresult = bits(C, T)
     => Cresult
+
+resize_u_masked_truncation: ResizeU(And(ResizeU(x: T): U, C)): T
+    where width(U) < width(T)
+    Cwide = bits(C, T)
+    => And(x, Cwide)
 
 resize_u_resize_x_roundtrip: ResizeU(ResizeX(x: T): U): T
     Cmask = bits(bits(-1, U), T)

@@ -74,6 +74,116 @@ class SimplifyTests(unittest.TestCase):
             executed = subprocess.run([str(executable)], capture_output=True, text=True, timeout=60)
             self.assertEqual(executed.returncode, 0, executed.stdout + executed.stderr)
 
+    def test_mask_select_widening_and_shifted_zero_tests(self):
+        source = (Path(__file__).resolve().parent.parent / "fold.rules").read_text()
+        names = {"select_constant_mask", "select_constant_mask_false",
+                 "resize_u_masked_truncation", "eq_masked_shr_u_zero", "eq_shr_u_zero",
+                 "eq_masked_shl_zero", "eq_shl_zero"}
+        active_names = {rule.name for rule in parse(source)} & names
+        self.assertEqual(active_names, {"resize_u_masked_truncation"})
+        candidates = [block for block in source.split("\n\n")
+                      if block.split(":", 1)[0] in {"# " + name for name in names}]
+        source += "\n\n" + "\n\n".join(
+            "\n".join(line[2:] for line in block.splitlines()) for block in candidates)
+        rules = [rule for rule in parse(source) if rule.name in names]
+        self.assertEqual({rule.name for rule in rules}, names)
+        source = "\n".join(source[rule.span.start:rule.span.end] for rule in rules)
+        code = generate(source, simplify_source=source, include_simplify=True)
+        main = """
+void expect_constant(Value* value, Type type, uint64_t expected) {
+  Const* constant = dynamic_cast<Const*>(value);
+  assert(constant && constant->type() == type && constant->value() == expected);
+}
+void expect_mask(Value* value, Value* x, uint64_t expected) {
+  AndInst* masked = dynamic_cast<AndInst*>(value);
+  assert(masked && masked->arg(0) == x);
+  expect_constant(masked->arg(1), x->type(), expected);
+}
+void expect_zero_test(Value* value, Value* x, uint64_t expected) {
+  EqInst* equal = dynamic_cast<EqInst*>(value);
+  assert(equal);
+  expect_mask(equal->arg(0), x, expected);
+  expect_constant(equal->arg(1), x->type(), 0);
+}
+int main() {
+  Generated builder;
+  Value condition(Type::Bool);
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(type);
+    uint64_t width = type_width(type), mask = type_mask(type);
+    Const zero(type, 0), constant(type, mask ^ (mask >> 1));
+    for (bool reverse : {false, true}) {
+      Value* a = reverse ? &zero : &constant;
+      Value* b = reverse ? &constant : &zero;
+      Value* results[] = {builder.fold_select(&condition, a, b),
+                         builder.try_simplify(builder.build_select(&condition, a, b))};
+      for (Value* result : results) {
+        AndInst* masked = dynamic_cast<AndInst*>(result);
+        assert(masked);
+        expect_constant(masked->arg(1), type, constant.value());
+        ResizeSInst* extended = dynamic_cast<ResizeSInst*>(masked->arg(0));
+        assert(extended && extended->type() == type);
+        if (reverse) {
+          XorInst* inverted = dynamic_cast<XorInst*>(extended->arg(0));
+          assert(inverted && inverted->arg(0) == &condition);
+          expect_constant(inverted->arg(1), Type::Bool, 1);
+        } else {
+          assert(extended->arg(0) == &condition);
+        }
+      }
+    }
+    for (Type narrow : {Type::Bool, Type::Int8, Type::Int16, Type::Int32}) {
+      if (type_width(narrow) >= width) continue;
+      Const narrow_mask(narrow, type_mask(narrow));
+      Value* truncated = builder.build_resize_u(&x, narrow);
+      for (bool swapped : {false, true}) {
+        Value* masked = swapped ? builder.build_and(&narrow_mask, truncated)
+                               : builder.build_and(truncated, &narrow_mask);
+        expect_mask(builder.fold_resize_u(masked, type), &x, narrow_mask.value());
+        expect_mask(builder.try_simplify(builder.build_resize_u(masked, type)),
+                    &x, narrow_mask.value());
+      }
+    }
+    if (type == Type::Bool) continue;
+    for (uint64_t count : {uint64_t(0), width - 1, width}) {
+      Const shift(type, count);
+      for (bool left : {false, true}) {
+        Value* shifted;
+        if (left) shifted = builder.build_shl(&x, &shift);
+        else shifted = builder.build_shr_u(&x, &shift);
+        for (uint64_t bits : {uint64_t(0), uint64_t(7), mask}) {
+          Const field_mask(type, bits);
+          for (bool masked : {false, true}) {
+            for (bool swapped : {false, true}) {
+              Value* tested = shifted;
+              if (masked) {
+                tested = swapped ? builder.build_and(&field_mask, shifted)
+                                 : builder.build_and(shifted, &field_mask);
+              }
+              Value* a = swapped ? &zero : tested;
+              Value* b = swapped ? tested : &zero;
+              Inst* equal = builder.build_eq(a, b);
+              if (count == width) {
+                unsigned before = builder.builds;
+                assert(builder.try_simplify(equal) == nullptr);
+                assert(builder.builds == before);
+              } else {
+                uint64_t original_mask = masked ? bits : mask;
+                uint64_t expected = left ? original_mask >> count
+                                         : (original_mask << count) & mask;
+                expect_zero_test(builder.fold_eq(a, b), &x, expected);
+                expect_zero_test(builder.try_simplify(equal), &x, expected);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+        self.run_cpp(code, main)
+
     def test_migrated_bit_operations(self):
         source = (Path(__file__).resolve().parent.parent / "fold.rules").read_text()
         rules = [rule for rule in parse(source)
