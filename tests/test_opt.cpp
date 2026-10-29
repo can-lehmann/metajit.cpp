@@ -19,6 +19,133 @@
 using namespace metajit;
 using namespace metajit::test;
 
+void test_saturating_use_counts() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Int32, Type::Int32, Type::Ptr});
+  Block* next = builder.build_block({Type::Int32});
+  builder.move_to_end(entry);
+  Inst* shared = builder.build_add(entry->arg(0), entry->arg(0));
+  Inst* unused = builder.build_sub(entry->arg(0), entry->arg(1));
+  builder.build_or(unused, shared);
+  builder.build_jump(next, {shared});
+  builder.move_to_end(next);
+  Inst* result = builder.build_xor(shared, next->arg(0));
+  builder.build_store(entry->arg(2), result, 0, 0);
+  builder.build_exit();
+  section.autoname();
+
+  SaturatingUseCounts counts(&section);
+  unittest_assert(counts.at(entry->arg(0)) == 2);
+  unittest_assert(counts.at(entry->arg(1)) == 0);
+  unittest_assert(counts.at(shared) == 2);
+  unittest_assert(counts.at(unused) == 0);
+  unittest_assert(counts.at(next->arg(0)) == 1);
+  counts.remove_use(shared);
+  unittest_assert(counts.at(shared) == 1);
+  counts.remove_use(shared);
+  unittest_assert(counts.at(shared) == 0);
+  counts.add_use(shared);
+  unittest_assert(counts.at(shared) == 1);
+  counts.invalidate(shared);
+  counts.remove_use(shared);
+  counts.add_use(shared);
+  unittest_assert(counts.at(shared) == SaturatingUseCounts::unknown);
+
+  Value* constant = builder.build_const(Type::Int32, 7);
+  counts.add_use(constant);
+  counts.remove_use(constant);
+  counts.invalidate(constant);
+  unittest_assert(counts.at(constant) == SaturatingUseCounts::unknown);
+
+  builder.set_next_name();
+  builder.move_before(next, next->terminator());
+  Inst* fresh = builder.build_add(shared, constant);
+  counts.add_use(fresh);
+  counts.remove_use(fresh);
+  counts.invalidate(fresh);
+  unittest_assert(counts.at(fresh) == SaturatingUseCounts::unknown);
+  section.autoname();
+  SaturatingUseCounts recomputed(&section);
+  unittest_assert(recomputed.at(shared) == 2);
+  unittest_assert(recomputed.at(fresh) == 0);
+}
+
+void test_saturating_use_counts_saturation() {
+  for (size_t uses : {size_t(254), size_t(255), size_t(256)}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({Type::Int32, Type::Ptr});
+    builder.move_to_end(block);
+    Value* value = block->arg(0);
+    Value* constant = builder.build_const(Type::Int32, 7);
+    for (size_t index = 0; index < uses; index++) {
+      builder.build_store(block->arg(1), builder.build_add(value, constant), 0, 0);
+    }
+    builder.build_exit();
+    section.autoname();
+    SaturatingUseCounts counts(&section);
+    unittest_assert(counts.at(value) == std::min(uses, size_t(255)));
+    counts.remove_use(value);
+    unittest_assert(counts.at(value) == (uses == 254 ? 253 : 255));
+    counts.add_use(value);
+    counts.add_use(value);
+    counts.remove_use(value);
+    unittest_assert(counts.at(value) == SaturatingUseCounts::unknown);
+  }
+}
+
+void test_saturating_use_counts_loop() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Int32, Type::Bool, Type::Ptr});
+  Block* loop = builder.build_block({Type::Int32});
+  Block* backedge = builder.build_block();
+  Block* exit = builder.build_block();
+  builder.move_to_end(entry);
+  Inst* shared = builder.build_add(entry->arg(0), entry->arg(0));
+  builder.build_jump(loop, {shared});
+  builder.move_to_end(loop);
+  Inst* dead = builder.build_sub(shared, loop->arg(0));
+  builder.build_xor(dead, shared);
+  builder.build_branch(entry->arg(1), backedge, exit);
+  builder.move_to_end(backedge);
+  Inst* carried = builder.build_add(loop->arg(0), shared);
+  builder.build_jump(loop, {carried});
+  builder.move_to_end(exit);
+  builder.build_store(entry->arg(2), loop->arg(0), 0, 0);
+  builder.build_exit();
+  section.order_blocks(BlockOrdering::Dominator);
+  section.autoname();
+  unittest_assert(!section.verify(std::cout));
+
+  SaturatingUseCounts counts(&section);
+  unittest_assert(counts.at(entry->arg(0)) == 2);
+  unittest_assert(counts.at(entry->arg(1)) == 1);
+  unittest_assert(counts.at(shared) == 2);
+  unittest_assert(counts.at(loop->arg(0)) == 2);
+  unittest_assert(counts.at(carried) == 1);
+  unittest_assert(counts.at(dead) == 0);
+
+  DeadCodeElim::run(&section);
+  SaturatingUseCounts recomputed(&section);
+  Uses uses(&section);
+  for (Block* block : section) {
+    for (Arg* arg : block->args()) {
+      unittest_assert(recomputed.at(arg) == uses.at(arg).size());
+    }
+    for (Inst* inst : *block) {
+      unittest_assert(recomputed.at(inst) == uses.at(inst).size());
+    }
+  }
+}
+
 void check_simplify(const std::string& expected, Section* section) {
   metajit::Simplify::run(section, 1);
   std::stringstream ss;
@@ -2907,6 +3034,9 @@ int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
   DiffTestSuite suite("tests/output/test_opt", argc, argv);
+  suite.test("saturating use counts").run(test_saturating_use_counts);
+  suite.test("saturating use counts saturation").run(test_saturating_use_counts_saturation);
+  suite.test("saturating use counts loop").run(test_saturating_use_counts_loop);
   suite.test("knownbits variable shift witness").run(test_knownbits_variable_shift_witness);
 
   suite.test("rule DSL builder integration").run(test_rule_dsl_builder_integration);

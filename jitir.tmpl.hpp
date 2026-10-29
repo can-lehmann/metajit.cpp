@@ -4028,6 +4028,54 @@ namespace metajit {
     }
   };
 
+  class SaturatingUseCounts {
+  private:
+    NameMap<uint8_t> _counts;
+  public:
+    static constexpr uint8_t unknown = 255;
+
+    explicit SaturatingUseCounts(Section* section): _counts(section) {
+      for (Block* block : section->rev_range()) {
+        for (Inst* inst : block->rev_range()) {
+          if (at(inst) != 0 ||
+              inst->has_side_effect() ||
+              inst->is_terminator() ||
+              dynamic_cast<CommentInst*>(inst)) {
+            for (Value* arg : inst->args()) {
+              add_use(arg);
+            }
+          }
+        }
+      }
+    }
+
+    uint8_t at(Value* value) const {
+      if (!value->is_named() || ((NamedValue*) value)->name() >= _counts.size()) {
+        return unknown;
+      }
+      return _counts.at((NamedValue*) value);
+    }
+
+    void add_use(Value* value) {
+      if (at(value) != unknown) {
+        _counts.at((NamedValue*) value)++;
+      }
+    }
+
+    void remove_use(Value* value) {
+      if (at(value) != unknown) {
+        assert(at(value) > 0);
+        _counts.at((NamedValue*) value)--;
+      }
+    }
+
+    void invalidate(Value* value) {
+      if (value->is_named() && ((NamedValue*) value)->name() < _counts.size()) {
+        _counts.at((NamedValue*) value) = unknown;
+      }
+    }
+  };
+
   class Uses {
   public:
     struct Use {
