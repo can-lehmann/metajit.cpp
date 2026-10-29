@@ -32,7 +32,7 @@ jobs:
           chmod +x llvm.sh
           sudo ./llvm.sh 20
           sudo apt-get update
-          sudo apt-get install -y llvm-20-dev llvm-20-tools
+          sudo apt-get install -y llvm-20-dev llvm-20-tools python3-z3
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 200
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 200
           sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-20 200

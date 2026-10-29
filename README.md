@@ -70,6 +70,14 @@ A subset of LLVM IR can be automatically translated to metajit.cpp's JITIR.
 This allows us to use clang as a frontend for metajit.cpp.
 See https://github.com/can-lehmann/uxnjit for an example of using the LLVM frontend to automatically generate a JIT from a interpreter written in C.
 
+## Header Generation
+
+Header generation proves the [rewrite rules](ruledsl/README.md) with Z3 before
+writing the generated builders. Install Python's `z3-solver` package or the
+distribution's `python3-z3` package. Select a virtual environment with
+`make PYTHON=/path/to/venv/bin/python3`. The DSL tests run as part of `make test`
+and can also be run separately with `make test-ruledsl`.
+
 ## Differential Testing
 
 Since we have two backends (LLVM and x86), we can use differential testing to find bugs.

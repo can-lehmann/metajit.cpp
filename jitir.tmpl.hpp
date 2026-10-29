@@ -1205,6 +1205,8 @@ namespace metajit {
 
     /* ${builder} */
 
+    #include "generated.inc.hpp"
+
     ShlInst* build_shl(Value* a, size_t shift) {
       assert(shift <= type_size(a->type()) * 8);
       return build_shl(a, build_const(a->type(), shift));
@@ -1306,247 +1308,6 @@ namespace metajit {
 
     // Folding
 
-  private:
-    Value* other_operand(Inst* inst, Value* operand) {
-      assert(inst->arg_count() == 2);
-      if (is_always_equal(inst->arg(0), operand)) {
-        return inst->arg(1);
-      }
-      if (is_always_equal(inst->arg(1), operand)) {
-        return inst->arg(0);
-      }
-      return nullptr;
-    }
-
-    struct ConstSelect {
-      Value* cond = nullptr;
-      Const* true_const = nullptr;
-      Const* false_const = nullptr;
-
-      operator bool() const {
-        return cond != nullptr;
-      }
-    };
-
-    ConstSelect is_const_select(Value* value) {
-      if (dynmatch(SelectInst, select, value)) {
-        dynmatch(Const, true_const, select->arg(1));
-        dynmatch(Const, false_const, select->arg(2));
-
-        if (true_const && false_const) {
-          return {
-            select->cond(),
-            true_const,
-            false_const
-          };
-        }
-      }
-
-      return {};
-    }
-
-    ConstSelect is_const_select_like(Value* value, Value* cond) {
-      if (dynmatch(Const, const_value, value)) {
-        return {
-          cond,
-          const_value,
-          const_value
-        };
-      } else if (ConstSelect const_select = is_const_select(value)) {
-        if (const_select.cond == cond) {
-          return const_select;
-        }
-      }
-
-      return {};
-    }
-
-    Value* fold_select(Value* cond, Type type, uint64_t true_value, uint64_t false_value) {
-      true_value &= type_mask(type);
-      false_value &= type_mask(type);
-
-      if (true_value == false_value) {
-        return build_const(type, true_value);
-      } else {
-        return fold_select(
-          cond,
-          build_const(type, true_value),
-          build_const(type, false_value)
-        );
-      }
-    }
-
-    template <class Fn>
-    __attribute__((always_inline))
-    inline Value* do_binop_const_prop(ConstSelect a, ConstSelect b, Type type, const Fn& const_prop) {
-      assert(a.cond && b.cond && a.cond == b.cond);
-
-      // For a binary operator # and constants a, b, c and d:
-      //   (cond ? a : b) # (cond ? c : d) => (cond ? (a # c) : (b # d))
-      // where both (a # c) and (b # d) are constant folded.
-
-      uint64_t true_prop = const_prop(a.true_const, b.true_const);
-      uint64_t false_prop = const_prop(a.false_const, b.false_const);
-      return fold_select(a.cond, type, true_prop, false_prop);
-    }
-
-    template <class Fn>
-    __attribute__((always_inline))
-    inline Value* do_binop_const_prop(Value* a, Value* b, Type type, const Fn& const_prop) {
-      dynmatch(Const, const_a, a);
-      dynmatch(Const, const_b, b);
-
-      if (const_a && const_b) {
-        uint64_t result = const_prop(const_a, const_b);
-        return build_const(type, result);
-      } else if (ConstSelect const_select_a = is_const_select(a)) {
-        ConstSelect const_select_b = is_const_select_like(b, const_select_a.cond);
-        if (const_select_b) {
-          return do_binop_const_prop(const_select_a, const_select_b, type, const_prop);
-        }
-      } else if (ConstSelect const_select_b = is_const_select(b)) {
-        ConstSelect const_select_a = is_const_select_like(a, const_select_b.cond);
-        if (const_select_a) {
-          return do_binop_const_prop(const_select_a, const_select_b, type, const_prop);
-        }
-      }
-
-      return nullptr;
-    }
-
-    template <class Fn>
-    __attribute__((always_inline))
-    inline Value* do_unop_const_prop(Value* a, Type type, const Fn& const_prop) {
-      dynmatch(Const, const_a, a);
-
-      if (const_a) {
-        uint64_t result = const_prop(const_a);
-        return build_const(type, result);
-      } else if (ConstSelect const_select_a = is_const_select(a)) {
-        // For a unary operator # and constants a, b and c:
-        //   #(cond ? a : b) => (cond ? (#a) : (#b))
-        // where both (#a) and (#b) are constant folded.
-
-        uint64_t true_prop = const_prop(const_select_a.true_const);
-        uint64_t false_prop = const_prop(const_select_a.false_const);
-        return fold_select(const_select_a.cond, type, true_prop, false_prop);
-      }
-
-      return nullptr;
-    }
-
-    #define binop_const_prop(type, expr) \
-      if (Value* res = do_binop_const_prop(a, b, type, [](Const* const_a, Const* const_b) { \
-        return (expr); \
-      })) { \
-        return res; \
-      }
-  
-    #define unop_const_prop(type, expr) \
-      if (Value* res = do_unop_const_prop(a, type, [](Const* const_a) { \
-        return (expr); \
-      })) { \
-        return res; \
-      }
-
-  public:
-
-    Value* fold_add(Value* a, Value* b) {
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-
-      if (dynmatch(Const, const_b, b)) {
-        if (const_b->value() == 0) {
-          return a;
-        }
-
-        if (dynmatch(AddInst, add_a, a)) {
-          if (const_b->value() == 1) {
-            // (x + ~y) + 1 => x - y
-            if (XorInst* not_b = is_not(add_a->arg(1))) {
-              return fold_sub(add_a->arg(0), not_b->arg(0));
-            }
-            if (XorInst* not_a = is_not(add_a->arg(0))) {
-              return fold_sub(add_a->arg(1), not_a->arg(0));
-            }
-          }
-          if (dynmatch(Const, const_a_b, add_a->arg(1))) {
-            return fold_add(
-              add_a->arg(0),
-              build_const(
-                a->type(),
-                (const_a_b->value() + const_b->value()) & type_mask(a->type())
-              )
-            );
-          }
-        }
-      }
-
-      binop_const_prop(a->type(), const_a->value() + const_b->value());
-
-      return build_add(a, b);
-    }
-
-    Value* fold_sub(Value* a, Value* b) {
-      if (a == b) {
-        // x - x => 0
-        return build_const(a->type(), 0);
-      }
-
-      if (dynmatch(Const, const_b, b)) {
-        if (const_b->value() == 0) {
-          return a;
-        } else {
-          Const* b_neg = build_const(b->type(), -const_b->value());
-          return fold_add(a, b_neg);
-        }
-      }
-
-      binop_const_prop(a->type(), const_a->value() - const_b->value());
-
-      return build_sub(a, b);
-    }
-
-    Value* fold_mul(Value* a, Value* b) {
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-
-      if (dynmatch(Const, const_b, b)) {
-        if (const_b->value() == 0) {
-          return b;
-        } else if (const_b->value() == 1) {
-          return a;
-        } else if (is_power_of_two(const_b->value())) {
-          // x * 2^n => x << n
-          return fold_shl(a, size_t(__builtin_ctzll(const_b->value())));
-        }
-      }
-
-      binop_const_prop(a->type(), const_a->value() * const_b->value());
-
-      return build_mul(a, b);
-    }
-
-    Value* fold_mul_high_u(Value* a, Value* b) {
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-
-      if (dynmatch(Const, const_b, b)) {
-        if (const_b->value() <= 1) {
-          return build_const(a->type(), 0);
-        } else if (is_power_of_two(const_b->value())) {
-          return fold_shr_u(a, type_width(a->type()) - __builtin_ctzll(const_b->value()));
-        }
-      }
-
-      binop_const_prop(a->type(), uint64_t((__uint128_t(const_a->value()) * const_b->value()) >> type_width(const_a->type())));
-
-      return build_mul_high_u(a, b);
-    }
-
     Value* fold_div_s(Value* a, Value* b) {
       return build_div_s(a, b);
     }
@@ -1559,375 +1320,42 @@ namespace metajit {
       return build_mod_s(a, b);
     }
   
-  private:
-    bool is_power_of_two(uint64_t value) {
-      return value != 0 && (value & (value - 1)) == 0;
-    }
-
-  public:
-    Value* fold_mod_u(Value* a, Value* b) {
-      if (dynmatch(Const, const_b, b)) {
-        if (is_power_of_two(const_b->value())) {
-          // x %u 2^n => x & (2^n - 1)
-          uint64_t mask = const_b->value() - 1;
-          return fold_and(a, build_const(a->type(), mask));
-        }
-      }
-
-      return build_mod_u(a, b);
-    }
-
-    Value* fold_and(Value* a, Value* b) {
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-
-      if (a == b) {
-        // (a & a) => a
-        return a;
-      }
-
-      binop_const_prop(a->type(), const_a->value() & const_b->value());
-
-      if (dynmatch(Const, const_b, b)) {
-        if (const_b->value() == type_mask(a->type())) {
-          return a;
-        } else if (const_b->value() == 0) {
-          return const_b;
-        } else if (dynmatch(AndInst, and_a, a)) {
-          if (dynmatch(Const, const_a, and_a->arg(1))) {
-            return fold_and(and_a->arg(0), build_const(a->type(), const_a->value() & const_b->value()));
-          }
-        } else if (dynmatch(OrInst, or_a, a)) {
-          if (dynmatch(AndInst, and_arg1_a, or_a->arg(1))) {
-            if (dynmatch(Const, const2, and_arg1_a->arg(1))) {
-              if ((const2->value() & const_b->value()) == 0) {
-                // (x | (y & m1)) & m2 == x & m2 if m1 & m2 == 0
-                return fold_and(or_a->arg(0), const_b);
-              }
-            }
-          }
-        }
-      }
-
-      for (size_t i = 0; i < 2; i++) {
-        Value* xored = i == 0 ? a : b;
-        Value* other = i == 0 ? b : a;
-        if (dynmatch(XorInst, xor_inst, xored)) {
-          if (Value* remaining = other_operand(xor_inst, other)) {
-            if (dynmatch(AndInst, subset, other)) {
-              if (other_operand(subset, remaining)) {
-                // ((x & y) ^ x) & (x & y) => 0
-                return build_const(a->type(), 0);
-              }
-            }
-            if (dynmatch(Const, constant, remaining)) {
-              // (a ^ C) & a => a & ~C
-              return fold_and(other, build_const(a->type(), ~constant->value()));
-            }
-          }
-        }
-      }
-
-      if (XorInst* not_a = is_not(a)) {
-        // !a & a => 0
-        if (not_a->arg(0) == b) {
-          return build_const(a->type(), 0);
-        }
-        if (dynmatch(OrInst, or_b, b)) {
-          // ~x & (x | y) => ~x & y
-          if (Value* other = other_operand(or_b, not_a->arg(0))) {
-            return fold_and(a, other);
-          }
-        }
-      } else if (XorInst* not_b = is_not(b)) {
-        // a & !a => 0
-        if (not_b->arg(0) == a) {
-          return build_const(a->type(), 0);
-        }
-        if (dynmatch(OrInst, or_a, a)) {
-          // (x | y) & ~x => y & ~x
-          if (Value* other = other_operand(or_a, not_b->arg(0))) {
-            return fold_and(other, b);
-          }
-        }
-      }
-
-      if (dynmatch(OrInst, or_a, a)) {
-        // (x | y) & x => x
-        if (other_operand(or_a, b)) {
-          return b;
-        }
-        if (dynmatch(AndInst, and_b, b)) {
-          // (x | y) & (x & z) => x & z
-          if (other_operand(or_a, and_b->arg(0)) || other_operand(or_a, and_b->arg(1))) {
-            return b;
-          }
-        }
-        if (dynmatch(OrInst, or_b, b)) {
-          // (x | y) & (x | z) => x | (y & z)
-          for (size_t i = 0; i < 2; i++) {
-            if (Value* other = other_operand(or_b, or_a->arg(i))) {
-              return fold_or(or_a->arg(i), fold_and(or_a->arg(1 - i), other));
-            }
-          }
-        }
-      }
-      if (dynmatch(OrInst, or_b, b)) {
-        // x & (x | y) => x
-        if (other_operand(or_b, a)) {
-          return a;
-        }
-        if (dynmatch(AndInst, and_a, a)) {
-          // (x & z) & (x | y) => x & z
-          if (other_operand(and_a, or_b->arg(0)) || other_operand(and_a, or_b->arg(1))) {
-            return a;
-          }
-        }
-      }
-
-      if (dynmatch(AndInst, and_a, a)) {
-        // (x & y) & x => x & y
-        if (other_operand(and_a, b)) {
-          return a;
-        }
-      }
-      if (dynmatch(AndInst, and_b, b)) {
-        // x & (x & y) => x & y
-        if (other_operand(and_b, a)) {
-          return b;
-        }
-      }
-
-      return build_and(a, b);
-    }
-
-    Value* fold_or(Value* a, Value* b) {
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-
-      if (a == b) {
-        // (a | a) => a
-        return a;
-      }
-
-      binop_const_prop(a->type(), const_a->value() | const_b->value());
-
-      if (dynmatch(Const, constant, b)) {
-        if (constant->value() == 0) {
-          return a;
-        } else if (constant->value() == type_mask(a->type())) {
-          return constant;
-        }
-      } else if (dynmatch(AndInst, and_a, a)) {
-        if (dynmatch(AndInst, and_b, b)) {
-          // (x & y) | (x & z) => x & (y | z)
-          for (size_t i = 0; i < 2; i++) {
-            if (Value* other = other_operand(and_b, and_a->arg(i))) {
-              return fold_and(and_a->arg(i), fold_or(and_a->arg(1 - i), other));
-            }
-          }
-        }
-      }
-      if (dynmatch(AndInst, and_a, a)) {
-        // (x & y) | x => x
-        if (other_operand(and_a, b)) {
-          return b;
-        }
-        if (dynmatch(OrInst, or_b, b)) {
-          // (x & y) | (x | z) => x | z
-          if (other_operand(and_a, or_b->arg(0)) || other_operand(and_a, or_b->arg(1))) {
-            return b;
-          }
-        }
-        if (XorInst* not_b = is_not(b)) {
-          // (x & y) | ~x => y | ~x
-          if (Value* other = other_operand(and_a, not_b->arg(0))) {
-            return fold_or(other, b);
-          }
-        }
-      }
-      if (dynmatch(AndInst, and_b, b)) {
-        // x | (x & y) => x
-        if (other_operand(and_b, a)) {
-          return a;
-        }
-        if (dynmatch(OrInst, or_a, a)) {
-          // (x | z) | (x & y) => x | z
-          if (other_operand(or_a, and_b->arg(0)) || other_operand(or_a, and_b->arg(1))) {
-            return a;
-          }
-        }
-        if (XorInst* not_a = is_not(a)) {
-          // ~x | (x & y) => ~x | y
-          if (Value* other = other_operand(and_b, not_a->arg(0))) {
-            return fold_or(a, other);
-          }
-        }
-      }
-
-      if (dynmatch(OrInst, or_a, a)) {
-        // (x | y) | x => x | y
-        if (other_operand(or_a, b)) {
-          return a;
-        }
-      }
-      if (dynmatch(OrInst, or_b, b)) {
-        // x | (x | y) => x | y
-        if (other_operand(or_b, a)) {
-          return b;
-        }
-      }
-
-      if (dynmatch(XorInst, xor_a, a)) {
-        // (x ^ y) | x => x | y
-        if (Value* other = other_operand(xor_a, b)) {
-          return fold_or(other, b);
-        }
-        if (is_not(a)) {
-          if (dynmatch(OrInst, inner, xor_a->arg(0))) {
-            // ~(x | y) | x => x | ~y
-            if (Value* other = other_operand(inner, b)) {
-              return fold_or(b, fold_not(other));
-            }
-          }
-        }
-      }
-      if (dynmatch(XorInst, xor_b, b)) {
-        // x | (x ^ y) => x | y
-        if (Value* other = other_operand(xor_b, a)) {
-          return fold_or(a, other);
-        }
-        if (is_not(b)) {
-          if (dynmatch(OrInst, inner, xor_b->arg(0))) {
-            // x | ~(x | y) => x | ~y
-            if (Value* other = other_operand(inner, a)) {
-              return fold_or(a, fold_not(other));
-            }
-          }
-        }
-      }
-
-      return build_or(a, b);
-    }
-  
-    Value* fold_xor(Value* a, Value* b) {
-      if (a == b) {
-        // x ^ x => 0
-        return build_const(a->type(), 0);
-      }
-
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-
-      binop_const_prop(a->type(), const_a->value() ^ const_b->value());
-
-      if (dynmatch(Const, constant, b)) {
-        if (constant->value() == 0) {
-          return a;
-        } else if (constant->value() == type_mask(a->type())) {
-          // (a ^ -1) ^ -1 => a
-          if (XorInst* not_a = is_not(a)) {
-            return not_a->arg(0);
-          }
-        }
-      }
-      return build_xor(a, b);
-    }
-
     Value* fold_not(Value* a) {
       return fold_xor(a, build_const(a->type(), type_mask(a->type())));
     }
 
-    Value* fold_eq(Value* a, Value* b) {
-      if (dynamic_cast<Const*>(a)) {
-        std::swap(a, b);
-      }
-
+    Value* _fold_eq(Value* a, Value* b) {
       if (a == b) {
-        // (a == a) => 1
         return build_const(Type::Bool, 1);
       }
 
-      binop_const_prop(Type::Bool, const_a->value() == const_b->value());
-
-      if (dynmatch(Const, const_b, b)) {
-        if (a->type() == Type::Bool) {
-          if (const_b->value()) {
-            // a == 1 => a
-            return a;
-          } else {
-            // a == 0 => !a
-            return fold_not(a);
-          }
+      if (dynmatch(Const, const_a, a)) {
+        if (dynmatch(Const, const_b, b)) {
+          return build_const(Type::Bool, const_a->value() == const_b->value());
         }
+      }
 
-        if (dynmatch(AndInst, and_inst, a)) {
-          if (dynmatch(Const, mask, and_inst->arg(1))) {
-            if (dynmatch(XorInst, xor_inst, and_inst->arg(0))) {
-              if (dynmatch(Const, constant, xor_inst->arg(1))) {
-                if (const_b->value() & ~mask->value()) {
-                  return build_const(Type::Bool, 0);
-                }
-                // ((x ^ const1) & mask) == const2 => (x & mask) == (const2 ^ (const1 & mask))
-                return fold_eq(
-                  fold_and(xor_inst->arg(0), mask),
-                  build_const(
-                    a->type(),
-                    const_b->value() ^ (constant->value() & mask->value())
-                  )
-                );
+      if (!is_int_or_bool(a->type())) {
+        if (dynmatch(SelectInst, left, a)) {
+          if (dynamic_cast<Const*>(left->arg(1)) && dynamic_cast<Const*>(left->arg(2))) {
+            if (dynamic_cast<Const*>(b)) {
+              return fold_select(left->cond(), fold_eq(left->arg(1), b), fold_eq(left->arg(2), b));
+            }
+            if (dynmatch(SelectInst, right, b)) {
+              if (right->cond() == left->cond() && dynamic_cast<Const*>(right->arg(1)) &&
+                  dynamic_cast<Const*>(right->arg(2))) {
+                return fold_select(left->cond(), fold_eq(left->arg(1), right->arg(1)),
+                                   fold_eq(left->arg(2), right->arg(2)));
               }
             }
           }
         }
-
-        if (const_b->value() == 0) {
-          if (dynmatch(XorInst, xor_a, a)) {
-            // (a ^ b) == 0 => a == b
-            return fold_eq(xor_a->arg(0), xor_a->arg(1));
-          }
-          if (dynmatch(SubInst, sub_a, a)) {
-            // (a - b) == 0 => a == b
-            return fold_eq(sub_a->arg(0), sub_a->arg(1));
-          }
-        }
       }
-
       return build_eq(a, b);
     }
 
     Value* fold_ne(Value* a, Value* b) {
       return fold_not(fold_eq(a, b));
-    }
-
-    Value* fold_lt_s(Value* a, Value* b) {
-      if (a == b) {
-        // x <s x => false
-        return build_const(Type::Bool, 0);
-      }
-
-      return build_lt_s(a, b);
-    }
-
-    Value* fold_lt_u(Value* a, Value* b) {
-      if (a == b) {
-        // x <u x => false
-        return build_const(Type::Bool, 0);
-      }
-
-      binop_const_prop(Type::Bool, const_a->value() < const_b->value());
-
-      if (dynmatch(Const, const_b, b)) {
-        if (const_b->value() == 0) {
-          // a < 0 => 0
-          return build_const(Type::Bool, 0);
-        }
-      }
-
-      return build_lt_u(a, b);
     }
 
     Value* fold_gt_s(Value* a, Value* b) {
@@ -1954,7 +1382,7 @@ namespace metajit {
       return fold_le_u(b, a);
     }
 
-    Value* fold_select(Value* cond, Value* true_value, Value* false_value) {
+    Value* _fold_select(Value* cond, Value* true_value, Value* false_value) {
       if (dynmatch(Const, const_cond, cond)) {
         if (const_cond->value() != 0) {
           return true_value;
@@ -1969,28 +1397,6 @@ namespace metajit {
         // (cond ^ -1 ? a : b) => (cond ? b : a)
         cond = not_cond->arg(0);
         std::swap(true_value, false_value);
-      }
-
-      if (true_value->type() == Type::Bool) {
-        dynmatch(Const, true_const, true_value);
-        dynmatch(Const, false_const, false_value);
-        if (true_const && false_const) {
-          if (true_const->value() == 1 && false_const->value() == 0) {
-            // (cond ? 1 : 0) => cond
-            return cond;
-          } else if (true_const->value() == 0 && false_const->value() == 1) {
-            // (cond ? 0 : 1) => !cond
-            return fold_xor(cond, build_const(Type::Bool, 1));
-          }
-        }
-        if (cond == true_value) {
-          // (cond ? cond : x) => cond | x
-          return fold_or(cond, false_value);
-        }
-        if (cond == false_value) {
-          // (cond ? x : cond) => cond & x
-          return fold_and(cond, true_value);
-        }
       }
 
       if (dynmatch(SelectInst, true_select, true_value)) {
@@ -2041,99 +1447,15 @@ namespace metajit {
       return fold_add_ptr(ptr, offset);
     }
 
-    Value* fold_resize_u(Value* a, Type type) {
-      if (a->type() == type) {
-        return a;
-      } else if (dynmatch(Const, constant, a)) {
-        uint64_t value = constant->value() & type_mask(type);
-        return build_const(type, value);
-      } else if (dynmatch(ResizeXInst, resize_a, a)) {
-        if (resize_a->arg(0)->type() == type) {
-          // ResizeU(ResizeX(x, M), N) => x & mask(M), where x has type N
-          return fold_and(resize_a->arg(0), build_const(type, type_mask(resize_a->type())));
-        }
-        if (type_width(type) < type_width(a->type()) &&
-            type_width(a->type()) < type_width(resize_a->arg(0)->type())) {
-          // ResizeU(ResizeX(x, M), N) => ResizeU(x, N) if N < M < width(x)
-          return fold_resize_u(resize_a->arg(0), type);
-        }
-      } else if (dynmatch(ResizeUInst, resize_a, a)) {
-        if (type_width(resize_a->arg(0)->type()) < type_width(a->type()) &&
-            type_width(a->type()) < type_width(type)) {
-          // ResizeU(ResizeU(x, M), N) => ResizeU(x, N) if width(x) < M < N
-          return fold_resize_u(resize_a->arg(0), type);
-        }
-        if (type_width(type) < type_width(a->type()) &&
-            type_width(a->type()) < type_width(resize_a->arg(0)->type())) {
-          // ResizeU(ResizeU(x, M), N) => ResizeU(x, N) if N < M < width(x)
-          return fold_resize_u(resize_a->arg(0), type);
-        }
-      } else if (dynmatch(AndInst, and_a, a)) {
-        Value* resized = and_a->arg(0);
-        Const* mask = dynamic_cast<Const*>(and_a->arg(1));
-        if (!mask) {
-          mask = dynamic_cast<Const*>(and_a->arg(0));
-          resized = and_a->arg(1);
-        }
-        if (mask) {
-          if (dynmatch(ResizeXInst, resize, resized)) {
-            if (resize->arg(0)->type() == type) {
-              // ResizeU(ResizeX(x, M) & m, N) => x & (m & mask(M) & mask(N)), where x has type N
-              return fold_and(resize->arg(0), build_const(type, mask->value() & type_mask(resize->type()) & type_mask(type)));
-            }
-          }
+    Value* _fold_resize_x(Value* a, Type type) {
+      if (dynmatch(Const, constant, a)) {
+        return build_const(type, constant->value());
+      }
+      if (dynmatch(SelectInst, select, a)) {
+        if (dynamic_cast<Const*>(select->arg(1)) && dynamic_cast<Const*>(select->arg(2))) {
+          return fold_resize_u(a, type);
         }
       }
-      unop_const_prop(type, const_a->value());
-      return build_resize_u(a, type);
-    }
-
-    Value* fold_resize_s(Value* a, Type type) {
-      if (a->type() == type) {
-        return a;
-      }
-
-      return build_resize_s(a, type);
-    }
-
-    Value* fold_resize_x(Value* a, Type type) {
-      if (a->type() == type) {
-        return a;
-      }
-
-      if (dynmatch(ResizeXInst, resize, a)) {
-        if (resize->arg(0)->type() == type && type_width(type) < type_width(a->type())) {
-          // ResizeX(ResizeX(x, M), N) => x if width(x) == N < M
-          return resize->arg(0);
-        }
-        if (type_width(type) < type_width(a->type()) &&
-            type_width(a->type()) < type_width(resize->arg(0)->type())) {
-          // ResizeX(ResizeX(x, M), N) => ResizeX(x, N) if N < M < width(x)
-          return fold_resize_x(resize->arg(0), type);
-        }
-      } else if (dynmatch(ResizeUInst, resize, a)) {
-        if (resize->arg(0)->type() == type && type_width(type) < type_width(a->type())) {
-          // ResizeX(ResizeU(x, M), N) => x if width(x) == N < M
-          return resize->arg(0);
-        }
-        if (type_width(type) < type_width(a->type()) &&
-            type_width(a->type()) < type_width(resize->arg(0)->type())) {
-          // ResizeX(ResizeU(x, M), N) => ResizeX(x, N) if N < M < width(x)
-          return fold_resize_x(resize->arg(0), type);
-        }
-      } else if (dynmatch(ShrUInst, shift, a)) {
-        if (type == Type::Bool) {
-          if (dynmatch(Const, amount, shift->arg(1))) {
-            if (amount->value() == type_width(a->type()) - 1) {
-              // ResizeX(x >>u (width(x) - 1), Bool) => x <s 0
-              return fold_lt_s(shift->arg(0), build_const(a->type(), 0));
-            }
-          }
-        }
-      }
-
-      unop_const_prop(type, const_a->value());
-      
       return build_resize_x(a, type);
     }
 
@@ -2141,95 +1463,14 @@ namespace metajit {
       return build_ptr_to_int(a, type);
     }
 
-    Value* fold_shl(Value* a, Value* b) {
-      binop_const_prop(a->type(), const_a->value() << const_b->value());
-
-      if (dynmatch(Const, const_b, b)) {
-        if (dynmatch(Const, const_a, a)) {
-          uint64_t result = const_a->value() << const_b->value();
-          result &= type_mask(a->type());
-          return build_const(a->type(), result);
-        } else if (const_b->value() == 0) {
-          return a;
-        }
-        // Treat a missing & m as an all-ones mask.
-        Value* shifted = a;
-        uint64_t mask = type_mask(a->type());
-        if (dynmatch(AndInst, andinst, a)) {
-          if (dynmatch(Const, constant, andinst->arg(1))) {
-            shifted = andinst->arg(0);
-            mask = constant->value();
-          }
-        }
-        uint64_t c2 = const_b->value();
-        uint64_t width = type_width(a->type());
-        if (c2 < width) {
-          mask = (mask << c2) & type_mask(a->type());
-          if (dynmatch(ShrUInst, shr_u, shifted)) {
-            if (dynmatch(Const, constant, shr_u->arg(1))) {
-              uint64_t c1 = constant->value();
-              if (c1 < width) {
-                Value* input = shr_u->arg(0);
-                // ((x >>u c1) & m) << c2 => x & (m << c2) if c1 == c2
-                if (c1 > c2) {
-                  // ((x >>u c1) & m) << c2 => (x >>u (c1 - c2)) & (m << c2)
-                  input = fold_shr_u(input, build_const(a->type(), c1 - c2));
-                } else if (c1 < c2) {
-                  // ((x >>u c1) & m) << c2 => (x << (c2 - c1)) & (m << c2)
-                  input = fold_shl(input, build_const(a->type(), c2 - c1));
-                }
-                return fold_and(input, build_const(a->type(), mask));
-              }
-            }
-          } else if (dynmatch(ShlInst, shl, shifted)) {
-            if (dynmatch(Const, constant, shl->arg(1))) {
-              uint64_t c1 = constant->value();
-              if (c1 < width) {
-                if (c1 + c2 >= width) {
-                  // ((x << c1) & m) << c2 => 0 if c1 + c2 >= width(x)
-                  return build_const(a->type(), 0);
-                }
-                // ((x << c1) & m) << c2 => (x << (c1 + c2)) & (m << c2)
-                return fold_and(fold_shl(shl->arg(0), build_const(a->type(), c1 + c2)),
-                                build_const(a->type(), mask));
-              }
-            }
-          }
-        }
-      }
-
-      return build_shl(a, b);
-    }
-
     Value* fold_shl(Value* a, size_t shift) {
       assert(shift <= type_size(a->type()) * 8);
       return fold_shl(a, build_const(a->type(), shift));
     }
 
-    Value* fold_shr_u(Value* a, Value* b) {
-      binop_const_prop(a->type(), const_a->value() >> const_b->value());
-      
-      if (dynmatch(Const, constant, b)) {
-        if (constant->value() == 0) {
-          return a;
-        }
-      }
-
-      return build_shr_u(a, b);
-    }
-
     Value* fold_shr_u(Value* a, size_t shift) {
       assert(shift <= type_size(a->type()) * 8);
       return fold_shr_u(a, build_const(a->type(), shift));
-    }
-
-    Value* fold_shr_s(Value* a, Value* b) {
-      if (dynmatch(Const, constant, b)) {
-        if (constant->value() == 0) {
-          return a;
-        }
-      }
-      return build_shr_s(a, b);
     }
 
     Value* fold_shr_s(Value* a, size_t shift) {
@@ -2281,20 +1522,10 @@ namespace metajit {
       return build_promote(a);
     }
 
-    Value* fold_bit_reverse(Value* a) {
-      unop_const_prop(a->type(), metajit::bit_reverse(const_a->type(), const_a->value()));
-      if (dynmatch(BitReverseInst, bit_reverse, a)) {
-        return bit_reverse->arg(0);
-      }
-      return build_bit_reverse(a);
-    }
-
     Value* fold_popcount(Value* a) {
       return build_popcount(a);
     }
 
-    #undef binop_const_prop
-    #undef unop_const_prop
   };
 
   struct Pointer {
@@ -2854,7 +2085,7 @@ namespace metajit {
   void Inst::substitute_args(NameMap<Value*>& substs) {
     for (size_t it = 0; it < arg_count(); it++) {
       Value* argument = arg(it);
-      if (argument->is_inst()) {
+      if (argument->is_inst() && ((Inst*) argument)->name() < substs.size()) {
         if (substs[(Inst*) argument]) {
           set_arg(it, substs[(Inst*) argument]);
         }
@@ -3903,7 +3134,7 @@ namespace metajit {
           );
         } else if (value->is_named()) {
           NamedValue* named_value = (NamedValue*) value;
-          if (named_value->name() > values.size()) {
+          if (named_value->name() >= values.size() || values.at(named_value).type == Type::Void) {
             return Bits(value->type(), 0, 0);
           }
           return values.at(named_value);
@@ -4000,6 +3231,22 @@ namespace metajit {
       }
     };
 
+    class View {
+    private:
+      const NameMap<Bits>& _values;
+    public:
+      explicit View(const NameMap<Bits>& values): _values(values) {}
+
+      uint64_t known_zeros(Value* value) const {
+        Bits bits = Bits::at(_values, value);
+        return bits.mask & ~bits.value;
+      }
+
+      uint64_t known_ones(Value* value) const {
+        return Bits::at(_values, value).value;
+      }
+    };
+
   private:
     Section* _section;
     NameMap<Bits> _values;
@@ -4020,6 +3267,8 @@ namespace metajit {
     Bits at(Value* value) const {
       return Bits::at(_values, value);
     }
+
+    View view() const { return View(_values); }
 
     void write(std::ostream& stream) {
       InfoWriter info_writer([&](std::ostream& stream, Inst* inst){
@@ -4823,7 +4072,7 @@ namespace metajit {
       for (Block* block : *_section) {
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
-          inst->substitute_args(substs);
+          inst->substitute_args_iterated(substs);
 
           if (inst->is_commutative() && inst->arg_count() == 2 &&
               dynamic_cast<Const*>(inst->arg(0)) &&
@@ -4871,71 +4120,15 @@ namespace metajit {
             return _builder.build_const(inst->type(), known_bits.at(inst).value);
           }
 
-          if (dynmatch(AndInst, and_inst, inst)) {
-            if (and_inst->arg(0) == and_inst->arg(1)) {
-              return and_inst->arg(0);
-            }
-            KnownBits::Bits a = known_bits.at(and_inst->arg(0));
-            KnownBits::Bits b = known_bits.at(and_inst->arg(1));
+          if (Value* replacement = _builder.try_simplify(inst, known_bits.view())) {
+            return replacement;
+          }
 
-            if (a.and_idempotent_condition(b)) {
-              return and_inst->arg(0);
-            }
-            if (b.and_idempotent_condition(a)) {
-              return and_inst->arg(1);
-            }
-            while (dynmatch(OrInst, or_inst, and_inst->arg(0))) {
-              // (x | y) & b => x & b if y & b == 0
-              Value* x = or_inst->arg(0);
-              Value* y = or_inst->arg(1);
-              KnownBits::Bits bits_x = known_bits.at(x);
-              KnownBits::Bits bits_y = known_bits.at(y);
-              KnownBits::Bits x_and_b = bits_x & b;
-              KnownBits::Bits y_and_b = bits_y & b;
-              if (x_and_b.is_const() and x_and_b.value == 0) {
-                and_inst->set_arg(0, y);
-                continue; // if y is also Or, we can maybe simplify further
-              } else if (y_and_b.is_const() and y_and_b.value == 0) {
-                and_inst->set_arg(0, x);
-                continue;
-              }
-              break;
-            }
-          } else if (dynmatch(OrInst, or_inst, inst)) {
-            if (or_inst->arg(0) == or_inst->arg(1)) {
-              return or_inst->arg(0);
-            }
-            KnownBits::Bits a = known_bits.at(or_inst->arg(0));
-            KnownBits::Bits b = known_bits.at(or_inst->arg(1));
-
-            if (a.or_idempotent_condition(b)) {
-              return or_inst->arg(0);
-            }
-            if (b.or_idempotent_condition(a)) {
-              return or_inst->arg(1);
-            }
-          } else if (dynmatch(ResizeUInst, resize_u, inst)) {
-            if (dynamic_cast<ResizeXInst*>(resize_u->arg(0)) ||
-                dynamic_cast<ResizeUInst*>(resize_u->arg(0)) ||
-                dynamic_cast<ResizeSInst*>(resize_u->arg(0))) {
-
-              // ResizeU(ResizeX/U/S(arg)) => arg if all upper bits of arg are known
-              // to be zero and the source type is equal to the target type
-              Value* arg = ((Inst*) resize_u->arg(0))->arg(0);
-              KnownBits::Bits arg_bits = known_bits.at(arg);
-              if (arg->type() == resize_u->type() &&
-                  type_width(resize_u->type()) > type_width(resize_u->arg(0)->type()) &&
-                  ((~arg_bits.mask | arg_bits.value) & ~type_mask(resize_u->arg(0)->type()) & type_mask(resize_u->type())) == 0) {
-                return arg;
-              }
-            }
-          } else if (dynmatch(SelectInst, select, inst)) {
-            KnownBits::Bits cond = known_bits.at(select->cond());
-            if (cond.is_const()) {
-              if (cond.value != 0) {
-                return select->arg(1);
-              } else {
-                return select->arg(2);
+          if (!is_int_or_bool(inst->type())) {
+            if (dynmatch(SelectInst, select, inst)) {
+              KnownBits::Bits cond = known_bits.at(select->cond());
+              if (cond.is_const()) {
+                return select->arg(cond.value ? 1 : 2);
               }
             }
           }
@@ -4973,8 +4166,9 @@ namespace metajit {
                 return or_inst->arg(0);
               }
             }
-          } else if (dynamic_cast<ResizeUInst*>(inst) ||
-                     dynamic_cast<ResizeSInst*>(inst)) {
+          } else if ((dynamic_cast<ResizeUInst*>(inst) ||
+                      dynamic_cast<ResizeSInst*>(inst)) &&
+                     type_width(inst->arg(0)->type()) < type_width(inst->type())) {
             UsedBits::Bits used = used_bits.at(inst);
             uint64_t mask = type_mask(inst->type()) & type_mask(inst->arg(0)->type());
             if ((used.used & ~mask) == 0) {
@@ -5002,58 +4196,17 @@ private:
   bool _contradiction = false;
 
   void _add_subst(Inst* inst, Value* value) {
+    _values.ensure_size(_builder.next_name());
+    _substs.ensure_size(_builder.next_name());
     _substs[inst] = value;
   }
 
-  void _reassociate_and(AndInst* inst) {
-    Value* value = inst->arg(0);
-    Const* mask = dynamic_cast<Const*>(inst->arg(1));
-    if (!mask) {
-      mask = dynamic_cast<Const*>(inst->arg(0));
-      value = inst->arg(1);
-    }
-    if (!mask) {
-      return;
-    }
-    while (dynmatch(AndInst, inner, value)) {
-      Value* base = inner->arg(0);
-      Const* inner_mask = dynamic_cast<Const*>(inner->arg(1));
-      if (!inner_mask) {
-        inner_mask = dynamic_cast<Const*>(inner->arg(0));
-        base = inner->arg(1);
-      }
-      if (!inner_mask) {
-        break;
-      }
-      mask = _builder.build_const(inst->type(), mask->value() & inner_mask->value());
-      value = base;
-      inst->set_arg(0, value);
-      inst->set_arg(1, mask);
-    }
-  }
-
   Value* _resolve_subst(Value* value) {
-    Value* replacement = value;
-    while (replacement->is_named()) {
-      Value* next = _substs[(NamedValue*) replacement];
-      if (!next) {
-        break;
-      }
-      replacement = next;
-    }
-    while (value != replacement) {
-      Value*& next = _substs[(NamedValue*) value];
-      Value* old_next = next;
-      next = replacement;
-      value = old_next;
-    }
-    return replacement;
+    return resolve_substitution(value, _substs);
   }
 
   void _substitute_args(Inst* inst) {
-    for (size_t arg_index = 0; arg_index < inst->arg_count(); arg_index++) {
-      inst->set_arg(arg_index, _resolve_subst(inst->arg(arg_index)));
-    }
+    inst->substitute_args_iterated(_substs);
   }
 
 public:
@@ -5066,6 +4219,7 @@ public:
     }
     section->autoname();
 
+    _builder.set_next_name();
     _init_values();
     BlockMap<size_t> incoming(section);
     for (Block* block : *section) {
@@ -5083,55 +4237,24 @@ public:
       Block* block = chain->at(index);
       for (Inst* inst : *block) {
         _substitute_args(inst);
+        _builder.move_before(block, inst);
         if (inst->has_side_effect() ||
             inst->is_terminator() ||
             inst->type() == Type::Void ||
             inst->type() == Type::Ptr) {
           continue;
         }
-        if (dynmatch(AndInst, and_inst, inst)) {
-          _reassociate_and(and_inst);
-        }
         Bits bits = Bits::eval(inst, _values);
         _values[inst] = bits;
         if (bits.is_const()) {
           _add_subst(inst, _builder.build_const(inst->type(), bits.value));
-        } else if (dynmatch(SelectInst, select, inst)) {
-          KnownBits::Bits cond = Bits::at(_values, select->cond());
-          if (cond.is_const()) {
-            if (cond.value != 0) {
-              _add_subst(inst, select->arg(1));
-            } else {
-              _add_subst(inst, select->arg(2));
-            }
-          }
-        } else if (dynmatch(AndInst, and_inst, inst)) {
-          Bits a = Bits::at(_values, and_inst->arg(0));
-          Bits b = Bits::at(_values, and_inst->arg(1));
-
-          // If there is no case where b_i is 0 and a_i is 1 or _, then a & b == a
-          if (((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
-            _add_subst(inst, and_inst->arg(0));
-          }
-        } else if (dynmatch(OrInst, or_inst, inst)) {
-          KnownBits::Bits a = Bits::at(_values, or_inst->arg(0));
-          KnownBits::Bits b = Bits::at(_values, or_inst->arg(1));
-
-          // If there is no case where b_i is 0 and a_i is 1 or _, then a | b == b
-          if (((b.value ^ type_mask(b.type)) & (~a.mask | a.value)) == 0) {
-            _add_subst(inst, or_inst->arg(1));
-          }
-          if (((a.value ^ type_mask(a.type)) & (~b.mask | b.value)) == 0) {
-            _add_subst(inst, or_inst->arg(0));
-          }
-        } else if (dynmatch(EqInst, eqinst, inst)) {
-          if (dynmatch(Const, const_b, eqinst->arg(1))) {
-            if (const_b->value() == 1) {
-              if (dynmatch(ResizeUInst, resizeu, eqinst->arg(0))) {
-                if (resizeu->arg(0)->type() == Type::Bool) {
-                  _add_subst(inst, resizeu->arg(0));
-                }
-              }
+        } else if (Value* replacement = _builder.try_simplify(inst, KnownBits::View(_values))) {
+          _add_subst(inst, replacement);
+        } else if (!is_int_or_bool(inst->type())) {
+          if (dynmatch(SelectInst, select, inst)) {
+            KnownBits::Bits cond = Bits::at(_values, select->cond());
+            if (cond.is_const()) {
+              _add_subst(inst, select->arg(cond.value ? 1 : 2));
             }
           }
         }
@@ -5178,6 +4301,9 @@ public:
 private:
   void _enqueue(Value* value, const Bits& bits) {
     if (_contradiction) {
+      return;
+    }
+    if (value->is_named() && ((NamedValue*) value)->name() >= _values.size()) {
       return;
     }
     Bits old_bits = Bits::at(_values, value);

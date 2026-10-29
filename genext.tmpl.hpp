@@ -921,6 +921,23 @@ namespace metajit {
       _builder.move_to_end(continuation);
     }
 
+    Value* emit_build_dynamic_inst(Inst* inst, const std::vector<Value*>& args) {
+      if (dynmatch(SelectInst, select, inst)) {
+        return emit_branch(
+          is_const(select->cond()),
+          Type::Ptr,
+          [&]() -> Value* {
+            Value* cond = _builder.build_freeze(emit_arg(select->cond()));
+            return _builder.fold_select(cond, args[1], args[2]);
+          },
+          [&]() -> Value* {
+            return build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
+          }
+        );
+      }
+      return build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
+    }
+
     Value* emit_build_inst(Inst* inst) {
       if (_config.comments &&
           !dynamic_cast<CommentInst*>(inst)) {
@@ -1001,7 +1018,7 @@ namespace metajit {
                 trace_const,
                 [&]() -> Value* {
                   if (_trace_capabilities.can_trace_inst(inst)) {
-                    return build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
+                    return emit_build_dynamic_inst(inst, args);
                   }
                   return _builder.build_const(Type::Ptr, 0);
                 }
@@ -1009,7 +1026,7 @@ namespace metajit {
             }
           } else {
             if (_trace_capabilities.any(inst)) {
-              return build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
+              return emit_build_dynamic_inst(inst, args);
             }
           }
 

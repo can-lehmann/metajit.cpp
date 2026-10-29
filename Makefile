@@ -1,7 +1,9 @@
 LLVM_FLAGS := $(shell llvm-config --cflags --libs)
+PYTHON ?= python3
+RULEDSL_FILES := fold.rules simplify.rules $(filter-out ruledsl/test_%.py,$(wildcard ruledsl/*.py))
 Z3_FLAGS := -I/usr/include/z3 -lz3
 CFLAGS := ${LLVM_FLAGS} -g
-HEADER_FILES := jitir.hpp jitir_llvmapi.hpp genext.hpp $(wildcard *.hpp)
+HEADER_FILES := jitir.hpp jitir_llvmapi.hpp genext.hpp generated.inc.hpp $(wildcard *.hpp)
 TEST_HEADER_FILES := $(wildcard tests/*.hpp)
 TEST_CFLAGS := ${CFLAGS} -DMETAJIT_DEBUG -DMETAJIT_SLOW_ASSERTS
 COVERAGE_CFLAGS := ${TEST_CFLAGS} -fprofile-instr-generate -fcoverage-mapping
@@ -12,7 +14,12 @@ COVERAGE_TESTS := test_bitprovenance test_knownbits test_insts test_interpreter 
 run: main
 	./main
 
-test: tests/test_bitprovenance tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_code_sinking tests/test_simplify_trace tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
+.PHONY: test test-ruledsl
+
+test-ruledsl:
+	$(PYTHON) -m unittest discover -s ruledsl -t .
+
+test: test-ruledsl tests/test_bitprovenance tests/test_knownbits tests/test_insts tests/test_interpreter tests/test_clone tests/test_cfg tests/test_fuzzer tests/test_opt tests/test_code_sinking tests/test_simplify_trace tests/test_reentry tests/test_mem2reg tests/test_source tests/test_genext
 	./tests/test_bitprovenance
 	./tests/test_knownbits
 	./tests/test_insts
@@ -116,8 +123,11 @@ tests/test_tv: tests/test_tv.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 tests/test_genext: tests/test_genext.cpp ${HEADER_FILES} ${TEST_HEADER_FILES}
 	clang++ ${TEST_CFLAGS} -o $@ $<
 
-jitir.hpp jitir_llvmapi.hpp genext.hpp &: jitir.py jitir.tmpl.hpp jitir_llvmapi.tmpl.hpp genext.tmpl.hpp
-	PYTHONPATH="../lwir.cpp" python3 jitir.py
+jitir.hpp jitir_llvmapi.hpp genext.hpp &: jitir.py jitir.tmpl.hpp jitir_llvmapi.tmpl.hpp genext.tmpl.hpp ../lwir.cpp/lwir.py
+	PYTHONPATH="../lwir.cpp" $(PYTHON) jitir.py
+
+generated.inc.hpp: $(RULEDSL_FILES) Makefile
+	$(PYTHON) -m ruledsl fold.rules --include-simplify --simplify-rules simplify.rules --handwritten Eq --handwritten Select --handwritten ResizeX -o $@
 
 COVERAGE_PROFRAW_FILES := $(patsubst %,tests/coverage/%.profraw,$(COVERAGE_TESTS))
 COVERAGE_LCOV_FILES := $(patsubst %,tests/coverage/%.lcov,$(COVERAGE_TESTS))
@@ -134,7 +144,7 @@ tests/coverage/%.lcov: tests/coverage/%.profraw
 	llvm-profdata-20 merge -sparse $< -o tests/coverage/$*.profdata
 	llvm-cov-20 export --format=lcov --instr-profile=tests/coverage/$*.profdata \
 		-object tests/coverage/$* \
-		--ignore-filename-regex="^/usr|/tests/|lwir_utils\.hpp|unittest\.hpp" \
+		--ignore-filename-regex="^/usr|/tests/|lwir_utils\.hpp|unittest\.hpp|generated\.inc\.hpp" \
 		> $@
 
 tests/coverage/coverage.lcov: $(COVERAGE_LCOV_FILES) tests/merge_coverage.py
@@ -189,6 +199,7 @@ clean:
 	-rm jitir.hpp
 	-rm jitir_llvmapi.hpp
 	-rm genext.hpp
+	-rm generated.inc.hpp
 	-rm tests/source/*.ll
 	-rm -r tests/output
 	mkdir -p tests/output/test_insts

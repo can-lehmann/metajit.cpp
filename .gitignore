@@ -3,6 +3,7 @@ __pycache__
 genext.hpp
 jitir.hpp
 jitir_llvmapi.hpp
+generated.inc.hpp
 main
 asm.bin
 section.json

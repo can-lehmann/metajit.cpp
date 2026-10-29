@@ -105,6 +105,17 @@ void captured_constant_block_argument(Builder& builder, TraceTestData& data) {
   builder.build_exit();
 }
 
+void static_select_omitted_arm(Builder& builder, TraceTestData& data) {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64, Type::Ptr, Type::Float32, Type::Float64}) {
+    for (uint64_t condition : {0, 1}) {
+      Value* cond = data.static_input(RandomRange(Type::Bool, condition, condition));
+      Value* yes = builder.build_freeze(data.input(RandomRange(type)));
+      Value* no = builder.build_freeze(data.input(RandomRange(type)));
+      data.output(builder.build_select(cond, yes, no));
+    }
+  }
+}
+
 void mul_high_u_promoted(Builder& builder, TraceTestData& data) {
   Value* a = data.static_input(RandomRange(Type::Int64));
   Value* b = data.input(RandomRange(Type::Int64));
@@ -121,6 +132,7 @@ int main(int argc, char** argv) {
   for (bool record_replay : {false, true}) {
     suite.set_record_replay(record_replay);
 
+    suite.gen_ext_test("static_select_omitted_arm").samples(2, 4).run(static_select_omitted_arm);
     suite.gen_ext_test("mul_high_u_promoted").samples(4, 16).run(mul_high_u_promoted);
 
     suite.gen_ext_test("captured_constant_block_argument").run(captured_constant_block_argument);

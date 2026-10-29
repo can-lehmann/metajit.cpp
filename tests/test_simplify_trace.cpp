@@ -67,6 +67,48 @@ void check_trace_simplify(const std::string& input,
   }
 }
 
+void test_generated_rewrite_guard_facts() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Ptr, Type::Int8, Type::Int8});
+  Block* taken = builder.build_block();
+  Block* other = builder.build_block();
+  builder.move_to_end(entry);
+  Value* difference = builder.build_xor(entry->arg(1), entry->arg(2));
+  Value* condition = builder.build_eq(difference, builder.build_const(Type::Int8, 0));
+  Value* three = builder.build_const(Type::Int8, 3);
+  Value* five = builder.build_const(Type::Int8, 5);
+  StoreInst* before = builder.build_store(entry->arg(0), builder.build_select(condition, three, five), 0, 0);
+  BranchInst* guard = builder.build_branch(condition, taken, other);
+  builder.move_to_end(taken);
+  StoreInst* after = builder.build_store(entry->arg(0), builder.build_select(condition, three, five), 0, 1);
+  builder.build_exit();
+  builder.move_to_end(other);
+  builder.build_exit();
+  Chain chain;
+  chain.add(entry);
+  chain.add(taken);
+  SimplifyTrace::run(&section, &chain);
+  SelectInst* earlier = dynamic_cast<SelectInst*>(before->value());
+  unittest_assert(earlier && earlier->cond() == guard->cond());
+  EqInst* rewritten = dynamic_cast<EqInst*>(guard->cond());
+  unittest_assert(rewritten && rewritten->arg(0) == difference);
+  unittest_assert(dynamic_cast<Const*>(rewritten->arg(1))->value() == 0);
+  Const* result = dynamic_cast<Const*>(after->value());
+  unittest_assert(result && result->value() == 3);
+  unittest_assert(!section.verify(std::cout));
+  for (uint64_t y : {uint64_t(1), uint64_t(2)}) {
+    uint8_t output[2] = {42, 42};
+    Interpreter interpreter(&section, {Interpreter::Bits::constant(output),
+                            Interpreter::Bits::constant(Type::Int8, 1), Interpreter::Bits::constant(Type::Int8, y)});
+    unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+    unittest_assert(output[0] == (y == 1 ? 3 : 5));
+    unittest_assert(output[1] == (y == 1 ? 3 : 42));
+  }
+}
+
 void test_unsigned_guard_known_bits() {
   const uint64_t bounds[] = {1, 2, 3, 7, 8, 9, 127, 128, 129, 255, 256,
                              16777215, 16777216, 16777217,
@@ -416,6 +458,7 @@ int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
+  suite.test("generated rewrite guard facts").run(test_generated_rewrite_guard_facts);
   suite.test("signed guard boundaries").run(test_signed_guard_boundaries);
   suite.test("signed guard nonconstant bounds").run(test_signed_guard_nonconstant_bounds);
   suite.test("signed guard known bits").run(test_signed_guard_known_bits);
@@ -592,11 +635,11 @@ b2:
 )");
   });
 
-  suite.test("const_prop_resize_x_backwards").run([]() {
+  suite.test("const_prop_resize_u_backwards").run([]() {
     check_trace_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
-  %2 = ResizeX %1, type=Bool
+  %2 = ResizeU %1, type=Bool
   Branch %2, true_block=b1, false_block=b2
 b1:
   %4 = And %1, 1:Int8
@@ -608,7 +651,7 @@ b2:
 )", {0, 1}, R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
-  %2 = ResizeX %1, type=Bool
+  %2 = ResizeU %1, type=Bool
   Branch %2, true_block=b1, false_block=b2
 b1:
   %4 = And %1, 1:Int8
@@ -625,7 +668,7 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = Or %1, 6:Int8
-  %3 = ResizeX %2, type=Bool
+  %3 = ResizeU %2, type=Bool
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %2, 7:Int8
@@ -638,7 +681,7 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = Or %1, 6:Int8
-  %3 = ResizeX %2, type=Bool
+  %3 = ResizeU %2, type=Bool
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %2, 7:Int8
@@ -840,7 +883,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = ResizeU %1, type=Int64
   %3 = Eq %2, 1:Int64
-  Branch %1, true_block=b1, false_block=b2
+  Branch %3, true_block=b1, false_block=b2
 b1:
   Store %0, 1:Bool, aliasing=0, offset=1
   Jump block=b2
@@ -1235,7 +1278,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = And %2, 254:Int8
   %4 = Sub %1, %3
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %5, true_block=b1, false_block=b2
 b1:
   %7 = And %1, 1:Int8
@@ -1250,7 +1293,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = And %2, 254:Int8
   %4 = Sub %1, %3
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %5, true_block=b1, false_block=b2
 b1:
   %7 = And %1, 1:Int8
@@ -1269,7 +1312,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = And %2, 254:Int8
   %4 = Sub %3, %1
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %5, true_block=b1, false_block=b2
 b1:
   %7 = And %1, 1:Int8
@@ -1284,7 +1327,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = And %2, 254:Int8
   %4 = Sub %3, %1
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %5, true_block=b1, false_block=b2
 b1:
   %7 = And %1, 1:Int8
@@ -1455,7 +1498,7 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = ShrU %1, 3:Int8
-  %3 = ResizeX %2, type=Bool
+  %3 = ResizeU %2, type=Bool
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %1, 8:Int8
@@ -1468,7 +1511,7 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = ShrU %1, 3:Int8
-  %3 = ResizeX %2, type=Bool
+  %3 = ResizeU %2, type=Bool
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %1, 8:Int8
@@ -1664,7 +1707,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
   %4 = Select %1, %2, %3
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %1, true_block=b1, false_block=b2
 b1:
   Branch %5, true_block=b3, false_block=b2
@@ -1683,7 +1726,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
   %4 = Select %1, %2, %3
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %1, true_block=b1, false_block=b2
 b1:
   Branch %5, true_block=b3, false_block=b2
@@ -1748,7 +1791,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
   %4 = Select %1, %2, %3
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %1, true_block=b1, false_block=b2
 b1:
   Exit
@@ -1769,7 +1812,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=2
   %4 = Select %1, %2, %3
-  %5 = ResizeX %4, type=Bool
+  %5 = ResizeU %4, type=Bool
   Branch %1, true_block=b1, false_block=b2
 b1:
   Exit
@@ -1974,6 +2017,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And %1, 15:Int8
   %3 = And %1, 6:Int8
+  %4 = And %2, 6:Int8
   Store %0, %2, aliasing=0, offset=1
   Store %0, %3, aliasing=0, offset=2
   Exit
@@ -1996,6 +2040,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And %1, 15:Int8
   %3 = And %1, 6:Int8
+  %4 = And 6:Int8, %2
   Store %0, %2, aliasing=0, offset=1
   Store %0, %3, aliasing=0, offset=2
   Exit
@@ -2018,6 +2063,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And 15:Int8, %1
   %3 = And %1, 6:Int8
+  %4 = And %2, 6:Int8
   Store %0, %2, aliasing=0, offset=1
   Store %0, %3, aliasing=0, offset=2
   Exit
@@ -2040,6 +2086,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And 15:Int8, %1
   %3 = And %1, 6:Int8
+  %4 = And 6:Int8, %2
   Store %0, %2, aliasing=0, offset=1
   Store %0, %3, aliasing=0, offset=2
   Exit
@@ -2062,8 +2109,10 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And %1, 63:Int8
   %3 = And %1, 30:Int8
-  %4 = And %1, 20:Int8
-  Store %0, %4, aliasing=0, offset=1
+  %4 = And %2, 30:Int8
+  %5 = And %1, 20:Int8
+  %6 = And %3, 21:Int8
+  Store %0, %5, aliasing=0, offset=1
   Exit
 }
 )");
@@ -2082,7 +2131,7 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And %1, 15:Int8
-  %3 = And %1, 0:Int8
+  %3 = And %2, 240:Int8
   Store %0, 0:Int8, aliasing=0, offset=1
   Exit
 }
@@ -2103,6 +2152,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
   %2 = And %1, 9223372036854775823:Int64
   %3 = And %1, 9223372036854775814:Int64
+  %4 = And %2, 9223372036854775814:Int64
   Store %0, %3, aliasing=0, offset=8
   Exit
 }
@@ -2206,7 +2256,20 @@ b2:
   Exit
 }
 )";
-    check_trace_simplify(ir, {0, 1}, ir);
+    check_trace_simplify(ir, {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Xor %1, 1:Bool
+  %3 = And %1, %2
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = Or %1, 0:Bool
+  Store %0, %5, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)");
   });
 
   suite.test("contradiction_while_enqueuing").run([]() {
@@ -2224,7 +2287,20 @@ b2:
   Exit
 }
 )";
-    check_trace_simplify(ir, {0, 1}, ir);
+    check_trace_simplify(ir, {0, 1}, R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Xor %1, 1:Bool
+  %3 = And %2, %1
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = Or %1, 0:Bool
+  Store %0, %5, aliasing=0, offset=1
+  Exit
+b2:
+  Exit
+}
+)");
   });
 
   suite.test("deep_backwards_propagation").run([]() {
@@ -2366,7 +2442,7 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = And %1, %1
-  Branch %2, true_block=b1, false_block=b2
+  Branch %1, true_block=b1, false_block=b2
 b1:
   Store %0, 1:Bool, aliasing=0, offset=1
   Exit
