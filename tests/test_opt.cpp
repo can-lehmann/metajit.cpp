@@ -2702,6 +2702,9 @@ void test_rule_dsl_known_bits() {
       StoreInst* cleared = builder.build_store(block->arg(0), builder.build_xor(set, one), 0, 16);
       StoreInst* disjoint = builder.build_store(block->arg(0),
                                  builder.build_and(builder.build_or(x, high), low), 0, 24);
+      StoreInst* canceled = builder.build_store(block->arg(0),
+                                 builder.build_xor(builder.build_or(low, high), high), 0, 32);
+      StoreInst* without_borrow = builder.build_store(block->arg(0), builder.build_sub(set, low), 0, 40);
       builder.build_exit();
       section.order_blocks(BlockOrdering::Dominator);
       section.autoname();
@@ -2716,9 +2719,12 @@ void test_rule_dsl_known_bits() {
       unittest_assert(combined && combined->arg(0) == low && combined->arg(1) == high);
       unittest_assert(subtracted->value() == low);
       unittest_assert(dynamic_cast<AndInst*>(cleared->value()));
+      unittest_assert(canceled->value() == low);
+      XorInst* difference = dynamic_cast<XorInst*>(without_borrow->value());
+      unittest_assert(difference && difference->arg(0) == set && difference->arg(1) == low);
       unittest_assert(!section.verify(std::cout));
       for (uint64_t input : {uint64_t(0), uint64_t(1), type_mask(type)}) {
-        uint64_t output[4] = {};
+        uint64_t output[6] = {};
         Interpreter interpreter(&section, {Interpreter::Bits::constant(output),
                                 Interpreter::Bits::constant(type, input), Interpreter::Bits::constant(type, 42)});
         unittest_assert(interpreter.run() == Interpreter::Event::Exit);
@@ -2726,6 +2732,8 @@ void test_rule_dsl_known_bits() {
         unittest_assert(output[1] == (input & 1));
         unittest_assert(output[2] == (input & (type_mask(type) ^ 1)));
         unittest_assert(output[3] == (input & 1));
+        unittest_assert(output[4] == (input & 1));
+        unittest_assert(output[5] == ((input | 1) - (input & 1)));
       }
     }
   }

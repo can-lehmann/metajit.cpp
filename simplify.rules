@@ -35,7 +35,15 @@ add_disjoint: Add(x, y)
     check known_zeros(x) | known_zeros(y) == -1
     => Or(x, y)
 
+sub_without_borrow: Sub(x, y)
+    check known_ones(x) | known_zeros(y) == -1
+    => Xor(x, y)
+
 sub_or_disjoint: Sub(Or(x, y), y)
+    check known_zeros(x) | known_zeros(y) == -1
+    => x
+
+xor_or_disjoint: Xor(Or(x, y), y)
     check known_zeros(x) | known_zeros(y) == -1
     => x
 

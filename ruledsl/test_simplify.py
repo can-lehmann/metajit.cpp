@@ -368,6 +368,28 @@ int main() {
     unsigned before = builder.builds;
     assert(builder.try_simplify(subtraction, disjoint) == &x);
     assert(builder.builds == before);
+    for (bool outer_swapped : {false, true}) {
+      for (bool inner_swapped : {false, true}) {
+        Inst* joined = builder.build_or(inner_swapped ? &y : &x, inner_swapped ? &x : &y);
+        Inst* root = builder.build_xor(outer_swapped ? &y : joined, outer_swapped ? joined : &y);
+        Inst* different = builder.build_xor(joined, &z);
+        before = builder.builds;
+        assert(builder.try_simplify(root, disjoint) == &x);
+        assert(builder.try_simplify(root) == nullptr);
+        assert(builder.try_simplify(different, disjoint) == nullptr);
+        assert(builder.builds == before);
+      }
+    }
+    Inst* difference = builder.build_sub(&x, &y);
+    for (uint64_t bit : {uint64_t(1), uint64_t(1) << (width - 1)}) {
+      Masks subset{&x, &y, 0, bit, mask ^ bit};
+      XorInst* toggled = dynamic_cast<XorInst*>(builder.try_simplify(difference, subset));
+      assert(toggled && toggled->arg(0) == &x && toggled->arg(1) == &y);
+      before = builder.builds;
+      assert(builder.try_simplify(difference) == nullptr);
+      assert(builder.try_simplify(difference, Masks{&x, &y, 0, 0, mask ^ bit}) == nullptr);
+      assert(builder.builds == before);
+    }
     Const zero(type, 0), one(type, 1);
     Inst* comparison = builder.build_eq(builder.build_or(&x, &y), &zero);
     EqInst* reduced = dynamic_cast<EqInst*>(builder.try_simplify(comparison, disjoint));

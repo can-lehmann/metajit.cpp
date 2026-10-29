@@ -30,13 +30,13 @@ class KnownBitsTests(unittest.TestCase):
     def test_initial_rules_prove_at_all_widths(self):
         path = Path(__file__).resolve().parent.parent / "simplify.rules"
         rules = prove(path.read_text(), str(path))
-        self.assertEqual(len(rules), 22)
+        self.assertEqual(len(rules), 24)
         self.assertEqual(rules[0].rule.name, "and_self")
         self.assertEqual(rules[1].rule.name, "and_reassoc_constants")
         self.assertTrue(all(not rule.requires_facts for rule in rules[:2]))
         self.assertTrue(all(rule.requires_facts for rule in rules[2:]))
         self.assertEqual([len(rule.instantiations) for rule in rules],
-                         [5, 5, 5, 5, 5, 4, 4, 5, 4, 5, 5, 4, 4, 4, 4, 5, 5, 5, 10, 10, 10, 4])
+                         [5, 5, 5, 5, 5, 4, 4, 4, 5, 5, 4, 5, 5, 4, 4, 4, 4, 5, 5, 5, 10, 10, 10, 4])
 
     def test_masks_have_the_matched_type(self):
         rule, = check("mask: Or(x: T, 0)\n    C = known_zeros(x) | known_ones(x)\n    => C\n")
