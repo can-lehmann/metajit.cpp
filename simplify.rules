@@ -120,3 +120,15 @@ shl_or_constant_single_use: Shl(Or(x: T, C1) @single_use, C2)
     check C2 < width(T)
     C = C1 << C2
     => Or(Shl(x, C2), C)
+
+or_collect_constants: Or(Or(Or(x, C1), y) @single_use, C2)
+    C = C1 | C2
+    => Or(Or(x, y), C)
+
+and_collect_constants: And(And(And(x, C1), y) @single_use, C2)
+    C = C1 & C2
+    => And(And(x, y), C)
+
+xor_collect_constants: Xor(Xor(Xor(x, C1), y) @single_use, C2)
+    C = C1 ^ C2
+    => Xor(Xor(x, y), C)

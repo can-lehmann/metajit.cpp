@@ -55,6 +55,51 @@ same_constants: Select(c, C, C)
 
 
 class SimplifyTests(unittest.TestCase):
+    def test_single_use_constant_collection(self):
+        source = (Path(__file__).resolve().parent.parent / "simplify.rules").read_text()
+        rules = {rule.name: source[rule.span.start:rule.span.end] for rule in parse(source)
+                 if rule.name.endswith("_collect_constants")}
+        for opcode, operator in (("Or", "|"), ("And", "&"), ("Xor", "^")):
+            with self.subTest(opcode=opcode):
+                code = generate("", simplify_source=rules[opcode.lower() + "_collect_constants"],
+                                include_simplify=True)
+                main = """
+struct Counts {
+  Value* middle;
+  uint8_t count;
+  uint8_t at(Value* arg) const { return arg == middle ? count : 255; }
+};
+int main() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (unsigned swapped = 0; swapped < 8; swapped++) {
+      Generated builder;
+      Value x(type), y(type);
+      Const first(type, 5), last(type, 10);
+      Inst* inner = swapped & 1 ? builder.build_OP(&first, &x) : builder.build_OP(&x, &first);
+      Inst* middle = swapped & 2 ? builder.build_OP(&y, inner) : builder.build_OP(inner, &y);
+      Inst* root = swapped & 4 ? builder.build_OP(&last, middle) : builder.build_OP(middle, &last);
+      size_t before = builder.allocated.size();
+      assert(!builder.try_simplify(root));
+      for (uint8_t count : {0, 2, 254, 255}) {
+        assert(!builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{middle, count}));
+        assert(builder.allocated.size() == before);
+      }
+      Value* replacement = builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{middle, 1});
+      OPInst* result = dynamic_cast<OPInst*>(replacement);
+      assert(result);
+      OPInst* combined = dynamic_cast<OPInst*>(result->arg(0));
+      assert(combined && combined->arg(0) == &x && combined->arg(1) == &y);
+      Const* constant = dynamic_cast<Const*>(result->arg(1));
+      assert(constant && constant->type() == type);
+      assert(constant->value() == (first.value() OPERATOR last.value()));
+      assert(inner->arg(swapped & 1 ? 1 : 0) == &x);
+    }
+  }
+}
+"""
+                main = main.replace("OPERATOR", operator).replace("build_OP", "build_" + opcode.lower())
+                self.run_cpp(code, main.replace("OPInst", opcode + "Inst"))
+
     def test_single_use_matching(self):
         source = ("shift: Shl(Or(x: T, C1) @single_use, C2)\n"
                   "    check C2 < width(T)\n    C = C1 << C2\n"
