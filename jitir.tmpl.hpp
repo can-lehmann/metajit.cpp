@@ -3272,25 +3272,22 @@ namespace metajit {
       NameMap<bool> used(section);
 
       for (Block* block : section->rev_range()) {
-        for (Inst* inst : block->rev_range()) {
+        for (auto it = block->rbegin(); it != block->rend(); ) {
+          Inst* inst = *it;
           if (used[inst] ||
               inst->has_side_effect() ||
               inst->is_terminator() ||
               dynamic_cast<CommentInst*>(inst)) {
-            used[inst] = true;
             for (Value* arg : inst->args()) {
               if (arg->is_inst()) {
                 used[(Inst*) arg] = true;
               }
             }
+            it++;
+          } else {
+            it = it.erase();
           }
         }
-      }
-
-      for (Block* block : *section) {
-        block->filter_inplace([&](Inst* inst) {
-          return used[inst];
-        });
       }
     }
   };
