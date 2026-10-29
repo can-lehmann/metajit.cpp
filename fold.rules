@@ -169,6 +169,10 @@ and_reassoc_constants: And(And(x, C1), C2)
     C = C1 & C2
     => And(x, C)
 
+and_reassoc_redundant_constant: And(And(x, C1), C2)
+    check C1 & C2 == C1
+    => And(x, C1) # reuse inner op
+
 and_or_disjoint_masks: And(Or(x, And(y, C1)), C2)
     check C1 & C2 == 0
     => And(x, C2)
@@ -233,6 +237,10 @@ or_selects: Or(Select(c, C1, C2), Select(c, C3, C4))
 or_reassoc_constants: Or(Or(x, C1), C2)
     C = C1 | C2
     => Or(x, C)
+
+or_reassoc_redundant_constant: Or(Or(x, C1), C2)
+    check C1 | C2 == C1
+    => Or(x, C1) # reuse inner op
 
 or_and_common_operand: Or(And(x, y), And(x, z))
     => And(x, Or(y, z))

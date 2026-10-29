@@ -2916,6 +2916,44 @@ void test_rule_dsl_single_use() {
   }
 }
 
+void test_rule_dsl_redundant_constants() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (bool is_or : {false, true}) {
+      for (bool inner_swapped : {false, true}) {
+        for (bool outer_swapped : {false, true}) {
+          Context context;
+          Allocator allocator;
+          Section section(context, allocator);
+          Builder builder(&section);
+          Block* block = builder.build_block({type});
+          builder.move_to_end(block);
+          Value* x = block->arg(0);
+          Value* c1 = builder.build_const(type, 5);
+          Value* c2 = builder.build_const(type, is_or ? 1 : 7);
+          Value* left = inner_swapped ? c1 : x;
+          Value* right = inner_swapped ? x : c1;
+          Inst* inner = is_or ? (Inst*) builder.build_or(left, right) : builder.build_and(left, right);
+          left = outer_swapped ? c2 : inner;
+          right = outer_swapped ? inner : c2;
+          size_t before = builder.next_name();
+          Value* result = is_or ? builder.fold_or(left, right) : builder.fold_and(left, right);
+          unittest_assert(result == inner);
+          unittest_assert(builder.next_name() == before);
+          Inst* root = is_or ? (Inst*) builder.build_or(left, right) : builder.build_and(left, right);
+          before = builder.next_name();
+          unittest_assert(builder.try_simplify(root) == inner);
+          unittest_assert(builder.next_name() == before);
+          Value* changed = builder.build_const(type, is_or ? 2 : 1);
+          result = is_or ? builder.fold_or(inner, changed) : builder.fold_and(inner, changed);
+          Inst* combined = dynamic_cast<Inst*>(result);
+          unittest_assert(combined && combined != inner && combined->arg(0) == x);
+          check_const(combined->arg(1), type, is_or ? 7 : 1);
+        }
+      }
+    }
+  }
+}
+
 void test_rule_dsl_resolved_arguments() {
   Context context;
   Allocator allocator;
@@ -3100,6 +3138,7 @@ int main(int argc, char** argv) {
   suite.test("rule DSL builder integration").run(test_rule_dsl_builder_integration);
   suite.test("rule DSL local rewriter").run(test_rule_dsl_local_rewriter);
   suite.test("rule DSL resolved arguments").run(test_rule_dsl_resolved_arguments);
+  suite.test("rule DSL redundant constants").run(test_rule_dsl_redundant_constants);
   suite.test("rule DSL single use").run(test_rule_dsl_single_use);
   suite.test("rule DSL known bits").run(test_rule_dsl_known_bits);
   suite.test("rule DSL known select").run(test_rule_dsl_known_select);
