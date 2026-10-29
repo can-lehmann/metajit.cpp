@@ -108,6 +108,17 @@ class SemanticsTests(unittest.TestCase):
 
 
 class ProofTests(unittest.TestCase):
+    def test_narrowing_resize_rules(self):
+        source = (Path(__file__).resolve().parent.parent / "fold.rules").read_text()
+        rules = [rule for rule in parse(source) if rule.name in {"resize_s_narrow", "resize_x_narrow"}]
+        self.assertEqual(len(rules), 2)
+        expected = {(s, t) for s in BIT_TYPES for t in BIT_TYPES if t.width < s.width}
+        for rule in rules:
+            checked = prove(source[rule.span.start:rule.span.end])[0]
+            pairs = {(assignment[checked.type_variables["S"]], assignment[checked.type_variables["T"]])
+                     for assignment in checked.instantiations}
+            self.assertEqual(pairs, expected)
+
     def test_bit_operations_reject_incorrect_rewrites(self):
         for source in ("bad: BitReverse(x)\n    => x",
                        "bad: MulHighU(x, 1)\n    => x",

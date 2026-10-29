@@ -31,6 +31,59 @@ and_or_disjoint: And(Or(x, y), z)
     check known_zeros(y) | known_zeros(z) == -1
     => And(x, z)
 
+add_disjoint: Add(x, y)
+    check known_zeros(x) | known_zeros(y) == -1
+    => Or(x, y)
+
+sub_or_disjoint: Sub(Or(x, y), y)
+    check known_zeros(x) | known_zeros(y) == -1
+    => x
+
+xor_clear_known_ones: Xor(x, C)
+    check known_ones(x) & C == C
+    Cmask = ~C
+    => And(x, Cmask)
+
+sub_xor_disjoint: Sub(Xor(x, y), y)
+    check known_zeros(x) | known_zeros(y) == -1
+    => x
+
+eq_or_disjoint_zero: Eq(Or(x, y), 0)
+    check known_zeros(x) | known_zeros(y) == -1
+    => Eq(x, y)
+
+eq_boolean_one: Eq(x, 1)
+    check known_zeros(x) | 1 == -1
+    => ResizeX(x): Bool
+
+shr_u_shl_known_no_loss: ShrU(Shl(x: T, C), C)
+    check C < width(T)
+    Cmask = -1 >> C
+    check known_zeros(x) | Cmask == -1
+    => x
+
+shr_u_shl_known_no_loss_right: ShrU(Shl(x: T, C1), C2)
+    check C1 < C2 and C2 < width(T)
+    Cmask = -1 >> C1
+    check known_zeros(x) | Cmask == -1
+    Cshift = C2 - C1
+    => ShrU(x, Cshift)
+
+shr_s_shl_known_no_loss: ShrS(Shl(x: T, C), C)
+    check C < width(T)
+    Ctop = -1 << (width(T) - 1 - C)
+    check known_zeros(x) & Ctop == Ctop or known_ones(x) & Ctop == Ctop
+    => x
+
+shr_s_nonnegative: ShrS(x: T, y)
+    Csign = 1 << (width(T) - 1)
+    check known_zeros(x) & Csign != 0
+    => ShrU(x, y)
+
+and_xor_disjoint: And(Xor(x, y), z)
+    check known_zeros(y) | known_zeros(z) == -1
+    => And(x, z)
+
 select_known_true: Select(c, x, y)
     check known_ones(c) == 1
     => x
@@ -56,3 +109,9 @@ resize_u_resize_s_known_zero_roundtrip: ResizeU(ResizeS(x: T): U): T
     Cmask = bits(bits(-1, U), T)
     check known_zeros(x) | Cmask == -1
     => x
+
+shr_u_or_known_zero: ShrU(Or(x: T, y), C)
+    check C < width(T)
+    Cmask = -1 << C
+    check known_zeros(x) & Cmask == Cmask
+    => ShrU(y, C)
