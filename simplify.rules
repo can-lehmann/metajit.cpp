@@ -132,3 +132,18 @@ and_collect_constants: And(And(And(x, C1), y) @single_use, C2)
 xor_collect_constants: Xor(Xor(Xor(x, C1), y) @single_use, C2)
     C = C1 ^ C2
     => Xor(Xor(x, y), C)
+
+eq_masked_shr_u_zero: Eq(And(ShrU(x: T, C), Cmask) @single_use, 0)
+    check C < width(T)
+    Cnew = Cmask << C
+    => Eq(And(x, Cnew), 0)
+
+eq_shr_u_zero: Eq(ShrU(x: T, C) @single_use, 0)
+    check C < width(T)
+    Cmask = -1 << C
+    => Eq(And(x, Cmask), 0)
+
+eq_masked_shl_zero: Eq(And(Shl(x: T, C), Cmask) @single_use, 0)
+    check C < width(T)
+    Cnew = Cmask >> C
+    => Eq(And(x, Cnew), 0)

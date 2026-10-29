@@ -55,6 +55,65 @@ same_constants: Select(c, C, C)
 
 
 class SimplifyTests(unittest.TestCase):
+    def test_single_use_shifted_zero_comparisons(self):
+        source = (Path(__file__).resolve().parent.parent / "simplify.rules").read_text()
+        rules = {rule.name: source[rule.span.start:rule.span.end] for rule in parse(source)}
+        for name, opcode, masked, operator in (
+                ("eq_masked_shr_u_zero", "shr_u", True, "<<"),
+                ("eq_shr_u_zero", "shr_u", False, "<<"),
+                ("eq_masked_shl_zero", "shl", True, ">>")):
+            with self.subTest(rule=name):
+                code = generate("", simplify_source=rules[name], include_simplify=True)
+                main = """
+struct Counts {
+  Value* matched;
+  uint8_t count;
+  uint8_t at(Value* arg) const { return arg == matched ? count : 255; }
+};
+int main() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t width = type_width(type);
+    for (uint64_t amount : {uint64_t(0), uint64_t(1), width - 1, width, width + 1}) {
+      for (uint64_t bits : {uint64_t(7), uint64_t(1) << (width - 1), type_mask(type)}) {
+        for (unsigned swapped = 0; swapped < 4; swapped++) {
+          Generated builder;
+          Value x(type);
+          Const shift(type, amount), mask(type, bits), zero(type, 0);
+          Inst* shifted = builder.build_OP(&x, &shift);
+          Inst* matched = shifted;
+          if (MASKED) {
+            matched = swapped & 1 ? builder.build_and(&mask, shifted) : builder.build_and(shifted, &mask);
+          }
+          Inst* root = swapped & 2 ? builder.build_eq(&zero, matched) : builder.build_eq(matched, &zero);
+          size_t before = builder.allocated.size();
+          assert(!builder.try_simplify(root));
+          for (uint8_t count : {0, 2, 254, 255}) {
+            assert(!builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{matched, count}));
+            assert(builder.allocated.size() == before);
+          }
+          Value* replacement = builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{matched, 1});
+          if (amount >= width) {
+            assert(!replacement && builder.allocated.size() == before);
+            continue;
+          }
+          EqInst* result = dynamic_cast<EqInst*>(replacement);
+          assert(result && result->type() == Type::Bool);
+          AndInst* tested = dynamic_cast<AndInst*>(result->arg(0));
+          assert(tested && tested->arg(0) == &x);
+          Const* constant = dynamic_cast<Const*>(tested->arg(1));
+          assert(constant && constant->type() == type);
+          uint64_t expected = ((MASKED ? bits : type_mask(type)) OPERATOR amount) & type_mask(type);
+          assert(constant->value() == expected);
+          assert(dynamic_cast<Const*>(result->arg(1))->value() == 0);
+        }
+      }
+    }
+  }
+}
+"""
+                main = main.replace("build_OP", "build_" + opcode).replace("MASKED", str(masked).lower())
+                self.run_cpp(code, main.replace("OPERATOR", operator))
+
     def test_single_use_constant_collection(self):
         source = (Path(__file__).resolve().parent.parent / "simplify.rules").read_text()
         rules = {rule.name: source[rule.span.start:rule.span.end] for rule in parse(source)
