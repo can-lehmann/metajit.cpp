@@ -1631,14 +1631,30 @@ namespace metajit {
             preg = info.int_arg(int_index++);
           }
           Reg arg_reg = fix_to_preg(vreg(type), preg);
-          move(arg_reg, vreg(call->arg(it)));
+          if (call->callee() == Intrinsic::memset && it == 2) {
+            _builder.movzx8to64(arg_reg, vreg(call->arg(it)));
+          } else {
+            move(arg_reg, vreg(call->arg(it)));
+          }
           args[it - 1] = arg_reg;
         }
 
         RegClass ret_class = reg_class(call->type());
         Reg ret_reg = fix_to_preg(vreg(call->type()), info.ret(ret_class));
         Reg callee_reg = fix_to_preg(vreg(), Reg::X86_R10());
-        _builder.mov64(callee_reg, vreg(call->callee()));
+        if (dynmatch(Intrinsic, intrinsic, call->callee())) {
+          uint64_t target = 0;
+          if (intrinsic == Intrinsic::memset) {
+            target = (uint64_t) (uintptr_t) &std::memset;
+          } else if (intrinsic == Intrinsic::memcpy) {
+            target = (uint64_t) (uintptr_t) &std::memcpy;
+          } else {
+            assert(false && "Unsupported intrinsic");
+          }
+          _builder.mov64_imm64(callee_reg, target);
+        } else {
+          _builder.mov64(callee_reg, vreg(call->callee()));
+        }
         X86Inst* call_inst = _builder.call(callee_reg, ret_reg, call->call_conv(), args);
         if (call->flags().has(CallFlags::MustTail)) {
           call_inst->set_kind(X86Inst::Kind::TailJump);
@@ -2378,6 +2394,15 @@ namespace metajit {
     }
 
     void graph_coloring_regalloc() {
+      for (X86Block* block : _blocks) {
+        for (X86Inst* inst : *block) {
+          if (inst->kind() == X86Inst::Kind::Call || inst->kind() == X86Inst::Kind::TailJump) {
+            regalloc();
+            return;
+          }
+        }
+      }
+
       // Not performance critical, since it is not used for JIT, so we can afford to be a bit naive here
 
       std::vector<std::set<X86Block*>> incoming(_blocks.size());

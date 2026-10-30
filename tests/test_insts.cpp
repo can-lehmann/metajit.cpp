@@ -386,6 +386,95 @@ void test_alloca(DiffTestSuite& suite) {
 }
 
 void test_call(DiffTestSuite& suite) {
+  for (Intrinsic* intrinsic : {Intrinsic::memset, Intrinsic::memcpy}) {
+    std::string name(intrinsic->name().data(), intrinsic->name().size());
+    suite.test("intrinsic_" + name + "_signature").run([intrinsic, name]() {
+      for (size_t invalid = 0; invalid < 9; invalid++) {
+        Context context;
+        Allocator allocator;
+        Section section(context, allocator);
+        Builder builder(&section);
+        builder.move_to_end(builder.build_block({Type::Ptr}));
+        Value* source = builder.entry_arg(0);
+        if (intrinsic == Intrinsic::memset) {
+          source = builder.build_const(Type::Int8, 0xab);
+        }
+        std::vector<Value*> args = {builder.entry_arg(0), source, builder.build_const(Type::Int64, 8)};
+        if (invalid == 1) args.pop_back();
+        if (invalid == 2) args.push_back(builder.build_const(Type::Bool, 0));
+        if (invalid == 3) args[1] = builder.build_const(Type::Int32, 0xab);
+        if (invalid == 8) args[0] = intrinsic;
+        CallInst* call = builder.build_call(
+          intrinsic,
+          invalid == 4 ? Type::Int64 : Type::Void,
+          args,
+          invalid == 5 ? CallConv::PreserveNone : CallConv::Default,
+          invalid == 6 ? CallFlags::Pure : CallFlags::None
+        );
+        if (invalid == 7) call->set_flags(CallFlags::MustTail);
+        builder.build_exit();
+        std::ostringstream errors;
+        unittest_assert(section.verify(errors) == (invalid != 0));
+        const std::string expected_errors[] = {
+          "",
+          "Intrinsic " + name + " expects 3 arguments, got 2\n",
+          "Intrinsic " + name + " expects 3 arguments, got 4\n",
+          "Intrinsic " + name + " argument 1 expects type " +
+            to_string(intrinsic->args()[1]) + ", got Int32\n",
+          "Intrinsic " + name + " expects return type Void, got Int64\n",
+          "Intrinsic " + name + " expects calling convention Default, got PreserveNone\n",
+          "Intrinsic call requires empty flags\n",
+          "Intrinsic call requires empty flags\n",
+          "Intrinsic can only be used as a call callee\n"
+        };
+        unittest_assert(errors.str() == expected_errors[invalid]);
+        std::vector<Type> expected_args = {
+          Type::Ptr,
+          intrinsic == Intrinsic::memset ? Type::Int8 : Type::Ptr,
+          Type::Int64
+        };
+        unittest_assert(intrinsic->args() == expected_args);
+        unittest_assert(intrinsic->ret() == Type::Void);
+        unittest_assert(intrinsic->call_conv() == CallConv::Default);
+      }
+    });
+  }
+
+  for (bool dynamic : {false, true}) {
+    suite.diff_test(dynamic ? "intrinsic_memset_dynamic" : "intrinsic_memset_constant").run([dynamic](Builder& builder, TestData& data) {
+      Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 24), 8);
+      for (size_t offset : {0, 8, 16}) {
+        builder.build_store(ptr, builder.build_const(Type::Int64, UINT64_MAX), AliasingGroup(0), offset);
+      }
+      Value* value = dynamic ? data.input(Type::Int8) : builder.build_const(Type::Int8, 0xab);
+      Value* size = dynamic ? data.input(RandomRange(Type::Int64, 0, 16)) : builder.build_const(Type::Int64, 16);
+      Value* start = builder.build_add_ptr(ptr, builder.build_const(Type::Int64, 1));
+      builder.build_call(Intrinsic::memset, Type::Void, {start, value, size});
+      for (size_t offset = 0; offset < 24; offset++) {
+        data.output(builder.build_load(ptr, Type::Int8, LoadFlags::None, AliasingGroup(0), offset));
+      }
+    });
+  }
+
+  for (bool dynamic : {false, true}) {
+    suite.diff_test(dynamic ? "intrinsic_memcpy_dynamic" : "intrinsic_memcpy_constant").run([dynamic](Builder& builder, TestData& data) {
+      Value* dest = builder.build_alloca(builder.build_const(Type::Int64, 24), 8);
+      Value* source = builder.build_alloca(builder.build_const(Type::Int64, 24), 8);
+      for (size_t offset : {0, 8, 16}) {
+        builder.build_store(dest, builder.build_const(Type::Int64, UINT64_MAX), AliasingGroup(0), offset);
+        builder.build_store(source, data.input(Type::Int64), AliasingGroup(0), offset);
+      }
+      Value* size = dynamic ? data.input(RandomRange(Type::Int64, 0, 16)) : builder.build_const(Type::Int64, 16);
+      Value* dest_start = builder.build_add_ptr(dest, builder.build_const(Type::Int64, 1));
+      Value* source_start = builder.build_add_ptr(source, builder.build_const(Type::Int64, 3));
+      builder.build_call(Intrinsic::memcpy, Type::Void, {dest_start, source_start, size});
+      for (size_t offset = 0; offset < 24; offset++) {
+        data.output(builder.build_load(dest, Type::Int8, LoadFlags::None, AliasingGroup(0), offset));
+        data.output(builder.build_load(source, Type::Int8, LoadFlags::None, AliasingGroup(0), offset));
+      }
+    });
+  }
+
   suite.diff_test("call_must_tail").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     data.alloc_output(Type::Int64);
     Value* callee = builder.build_const(Type::Ptr, (uint64_t)(void*) test_call_must_tail_target);
