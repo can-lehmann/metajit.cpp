@@ -132,6 +132,19 @@ int main(int argc, char** argv) {
   for (bool record_replay : {false, true}) {
     suite.set_record_replay(record_replay);
 
+    suite.gen_ext_test("intrinsic_memset_memcpy").samples(2, 4).run([](Builder& builder, TraceTestData& data) {
+      Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
+      Value* value = data.input(Type::Int8);
+      builder.build_call(
+        Intrinsic::memset,
+        Type::Void,
+        std::vector<Value*>({ptr, value, builder.build_const(Type::Int64, 8)})
+      );
+      Value* dest = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
+      builder.build_call(Intrinsic::memcpy, Type::Void, {dest, ptr, builder.build_const(Type::Int64, 8)});
+      data.output(builder.build_load(dest, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+    });
+
     suite.gen_ext_test("static_select_omitted_arm").samples(2, 4).run(static_select_omitted_arm);
     suite.gen_ext_test("mul_high_u_promoted").samples(4, 16).run(mul_high_u_promoted);
 

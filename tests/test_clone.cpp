@@ -70,6 +70,20 @@ namespace metajit {
 int main(int argc, char** argv) {
   CloneTestSuite suite(argc, argv);
 
+  suite.clone_test("intrinsic").run([](Builder& builder) {
+    builder.move_to_end(builder.build_block({Type::Ptr}));
+    builder.build_call(
+      Intrinsic::memset,
+      Type::Void,
+      std::vector<Value*>({builder.entry_arg(0), builder.build_const(Type::Int8, 0xab), builder.build_const(Type::Int64, 8)})
+    );
+    builder.build_call(
+      Intrinsic::memcpy,
+      Type::Void,
+      std::vector<Value*>({builder.entry_arg(0), builder.entry_arg(0), builder.build_const(Type::Int64, 0)})
+    );
+  });
+
   #define binop(name) \
     suite.clone_test(#name).run([](Builder& builder) { \
       builder.move_to_end(builder.build_block({Type::Int32, Type::Int32, Type::Ptr})); \

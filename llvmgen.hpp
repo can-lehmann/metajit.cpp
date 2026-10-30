@@ -240,6 +240,27 @@ namespace metajit {
           {emit_arg(add_ptr->arg(1))}
         );
       } else if (dynmatch(CallInst, call, inst)) {
+        if (dynmatch(Intrinsic, intrinsic, call->callee())) {
+          if (intrinsic == Intrinsic::memset) {
+            return _builder.CreateMemSet(
+              emit_arg(call->arg(1)),
+              emit_arg(call->arg(2)),
+              emit_arg(call->arg(3)),
+              llvm::MaybeAlign()
+            );
+          } else if (intrinsic == Intrinsic::memcpy) {
+            return _builder.CreateMemCpy(
+              emit_arg(call->arg(1)),
+              llvm::MaybeAlign(),
+              emit_arg(call->arg(2)),
+              llvm::MaybeAlign(),
+              emit_arg(call->arg(3))
+            );
+          } else {
+            assert(false && "Unsupported intrinsic");
+            return nullptr;
+          }
+        }
         std::vector<llvm::Type*> arg_types;
         std::vector<llvm::Value*> args;
         for (size_t it = 1; it < call->arg_count(); it++) {

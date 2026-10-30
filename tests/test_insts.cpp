@@ -385,6 +385,22 @@ void test_alloca(DiffTestSuite& suite) {
   });
 }
 
+void test_intrinsics(DiffTestSuite& suite) {
+  suite.diff_test("intrinsic_memset").aot(false).run([](Builder& builder, TestData& data) {
+    Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
+    builder.build_call(Intrinsic::memset, Type::Void, {ptr, data.input(Type::Int8), builder.build_const(Type::Int64, 8)});
+    data.output(builder.build_load(ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+  });
+
+  suite.diff_test("intrinsic_memcpy").aot(false).run([](Builder& builder, TestData& data) {
+    Value* source = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
+    Value* dest = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
+    builder.build_store(source, data.input(Type::Int64), AliasingGroup(0), 0);
+    builder.build_call(Intrinsic::memcpy, Type::Void, {dest, source, builder.build_const(Type::Int64, 8)});
+    data.output(builder.build_load(dest, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+  });
+}
+
 void test_call(DiffTestSuite& suite) {
   suite.diff_test("call_must_tail").aot(false).interpreter(false).run([](Builder& builder, TestData& data) {
     data.alloc_output(Type::Int64);
@@ -768,6 +784,7 @@ int main(int argc, char** argv) {
   test_freeze(suite);
   test_assume_const(suite);
   test_alloca(suite);
+  test_intrinsics(suite);
   test_call(suite);
   test_call_fp<float>(suite, Type::Float32);
   test_call_fp<double>(suite, Type::Float64);
