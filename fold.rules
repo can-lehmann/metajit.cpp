@@ -266,6 +266,12 @@ or_and_or_absorb: Or(And(x, y), Or(x, z))
 or_and_complement: Or(And(x, y), Xor(x, -1))
     => Or(y, Xor(x, -1))
 
+or_nested_complement: Or(Or(Xor(x, -1), y), x)
+    => -1
+
+or_nested_and_absorb: Or(Or(And(x, y), z), x)
+    => Or(x, z)
+
 or_absorb: Or(Or(x, y), x)
     => Or(x, y)
 
@@ -345,6 +351,10 @@ eq_bool_zero: Eq(x: Bool, 0)
 
 eq_xor_zero: Eq(Xor(x, y), 0)
     => Eq(x, y)
+
+eq_xor_constant: Eq(Xor(x, C1), C2)
+    C = C1 ^ C2
+    => Eq(x, C)
 
 eq_sub_zero: Eq(Sub(x, y), 0)
     => Eq(x, y)

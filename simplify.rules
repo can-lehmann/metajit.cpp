@@ -150,3 +150,14 @@ eq_masked_shl_zero: Eq(And(Shl(x: T, C), Cmask) @single_use, 0)
 
 select_add_same_condition: Select(c, Add(Select(c, x, C1), C2) @single_use, C3)
     => Select(c, Add(x, C2), C3)
+
+eq_truncated_add_constant: Eq(ResizeU(Add(x: S, C1) @single_use): T @single_use, C2)
+    where width(T) < width(S)
+    C = C2 - bits(C1, T)
+    => Eq(ResizeU(x): T, C)
+
+eq_extended_constant: Eq(ResizeU(x: S): T @single_use, C)
+    where width(T) > width(S)
+    Cnarrow = bits(C, S)
+    check bits(Cnarrow, T) == C
+    => Eq(x, Cnarrow)
