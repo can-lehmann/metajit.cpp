@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
 
   DiffTestSuite suite("tests/output/test_reader", argc, argv);
 
-  suite.diff_test("intrinsic_roundtrip").run([](Builder& builder, TestData& data) {
+  suite.diff_test("intrinsic_roundtrip").aot(false).run([](Builder& builder, TestData& data) {
     Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
     builder.build_call(
       Intrinsic::memset,

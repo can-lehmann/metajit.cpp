@@ -574,6 +574,18 @@ namespace metajit {
       Timer peephole;
     };
   private:
+    static void intrinsic_memset(void* ptr, uint8_t value, uint64_t size) {
+      if (size != 0) {
+        std::memset(ptr, value, size);
+      }
+    }
+
+    static void intrinsic_memcpy(void* dest, const void* source, uint64_t size) {
+      if (size != 0) {
+        std::memcpy(dest, source, size);
+      }
+    }
+
     static RegClass reg_class(Reg preg) {
       assert(preg.is_physical());
       if (preg.id() < Reg::X86_XMM(0).id()) {
@@ -1631,11 +1643,7 @@ namespace metajit {
             preg = info.int_arg(int_index++);
           }
           Reg arg_reg = fix_to_preg(vreg(type), preg);
-          if (call->callee() == Intrinsic::memset && it == 2) {
-            _builder.movzx8to64(arg_reg, vreg(call->arg(it)));
-          } else {
-            move(arg_reg, vreg(call->arg(it)));
-          }
+          move(arg_reg, vreg(call->arg(it)));
           args[it - 1] = arg_reg;
         }
 
@@ -1645,9 +1653,9 @@ namespace metajit {
         if (dynmatch(Intrinsic, intrinsic, call->callee())) {
           uint64_t target = 0;
           if (intrinsic == Intrinsic::memset) {
-            target = (uint64_t) (uintptr_t) &std::memset;
+            target = (uint64_t) (uintptr_t) &intrinsic_memset;
           } else if (intrinsic == Intrinsic::memcpy) {
-            target = (uint64_t) (uintptr_t) &std::memcpy;
+            target = (uint64_t) (uintptr_t) &intrinsic_memcpy;
           } else {
             assert(false && "Unsupported intrinsic");
           }
@@ -2394,15 +2402,6 @@ namespace metajit {
     }
 
     void graph_coloring_regalloc() {
-      for (X86Block* block : _blocks) {
-        for (X86Inst* inst : *block) {
-          if (inst->kind() == X86Inst::Kind::Call || inst->kind() == X86Inst::Kind::TailJump) {
-            regalloc();
-            return;
-          }
-        }
-      }
-
       // Not performance critical, since it is not used for JIT, so we can afford to be a bit naive here
 
       std::vector<std::set<X86Block*>> incoming(_blocks.size());

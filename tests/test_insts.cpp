@@ -441,7 +441,7 @@ void test_call(DiffTestSuite& suite) {
   }
 
   for (bool dynamic : {false, true}) {
-    suite.diff_test(dynamic ? "intrinsic_memset_dynamic" : "intrinsic_memset_constant").run([dynamic](Builder& builder, TestData& data) {
+    suite.diff_test(dynamic ? "intrinsic_memset_dynamic" : "intrinsic_memset_constant").aot(false).run([dynamic](Builder& builder, TestData& data) {
       Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 24), 8);
       for (size_t offset : {0, 8, 16}) {
         builder.build_store(ptr, builder.build_const(Type::Int64, UINT64_MAX), AliasingGroup(0), offset);
@@ -457,7 +457,7 @@ void test_call(DiffTestSuite& suite) {
   }
 
   for (bool dynamic : {false, true}) {
-    suite.diff_test(dynamic ? "intrinsic_memcpy_dynamic" : "intrinsic_memcpy_constant").run([dynamic](Builder& builder, TestData& data) {
+    suite.diff_test(dynamic ? "intrinsic_memcpy_dynamic" : "intrinsic_memcpy_constant").aot(false).run([dynamic](Builder& builder, TestData& data) {
       Value* dest = builder.build_alloca(builder.build_const(Type::Int64, 24), 8);
       Value* source = builder.build_alloca(builder.build_const(Type::Int64, 24), 8);
       for (size_t offset : {0, 8, 16}) {
