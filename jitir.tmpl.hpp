@@ -4248,6 +4248,7 @@ private:
   metajit::Builder _builder;
   NameMap<Bits> _values;
   NameMap<Value*> _substs;
+  SaturatingUseCounts _use_counts;
   struct PendingFact {
     Value* value;
     Bits bits;
@@ -4258,6 +4259,7 @@ private:
   void _add_subst(Inst* inst, Value* value) {
     _values.ensure_size(_builder.next_name());
     _substs.ensure_size(_builder.next_name());
+    _use_counts.invalidate(value);
     _substs[inst] = value;
   }
 
@@ -4273,7 +4275,7 @@ public:
 
   SimplifyTrace(metajit::Section* section, metajit::Chain* chain):
                  Pass(section), _section(section), _builder(section),
-                 _values(section), _substs(section) {
+                 _values(section), _substs(section), _use_counts(section) {
     if (chain->size() == 0) {
       return;
     }
@@ -4306,9 +4308,10 @@ public:
         }
         Bits bits = Bits::eval(inst, _values);
         _values[inst] = bits;
+        Inst* previous = inst->prev();
         if (bits.is_const()) {
           _add_subst(inst, _builder.build_const(inst->type(), bits.value));
-        } else if (Value* replacement = _builder.try_simplify(inst, KnownBits::View(_values))) {
+        } else if (Value* replacement = _builder.try_simplify(inst, KnownBits::View(_values), _use_counts)) {
           _add_subst(inst, replacement);
         } else if (!is_int_or_bool(inst->type())) {
           if (dynmatch(SelectInst, select, inst)) {
@@ -4316,6 +4319,11 @@ public:
             if (cond.is_const()) {
               _add_subst(inst, select->arg(cond.value ? 1 : 2));
             }
+          }
+        }
+        for (Inst* added = inst->prev(); added != previous; added = added->prev()) {
+          for (Value* arg : added->args()) {
+            _use_counts.invalidate(arg);
           }
         }
       }

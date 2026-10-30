@@ -2858,7 +2858,7 @@ void test_rule_dsl_known_bits() {
   }
 }
 
-void test_rule_dsl_single_use() {
+void check_rule_dsl_single_use(bool trace) {
   for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
     for (size_t mode = 0; mode < 4; mode++) {
       Context context;
@@ -2888,7 +2888,13 @@ void test_rule_dsl_single_use() {
       section.order_blocks(BlockOrdering::Dominator);
       section.autoname();
       unittest_assert(!section.verify(std::cout));
-      Simplify::run(&section, 1);
+      if (trace) {
+        Chain chain;
+        chain.add(block);
+        SimplifyTrace::run(&section, &chain);
+      } else {
+        Simplify::run(&section, 1);
+      }
       if (mode == 0 || mode == 2) {
         OrInst* result = dynamic_cast<OrInst*>(output->value());
         unittest_assert(result);
@@ -2914,6 +2920,14 @@ void test_rule_dsl_single_use() {
       }
     }
   }
+}
+
+void test_rule_dsl_single_use() {
+  check_rule_dsl_single_use(false);
+}
+
+void test_rule_dsl_single_use_trace() {
+  check_rule_dsl_single_use(true);
 }
 
 void test_rule_dsl_redundant_constants() {
@@ -3140,6 +3154,7 @@ int main(int argc, char** argv) {
   suite.test("rule DSL resolved arguments").run(test_rule_dsl_resolved_arguments);
   suite.test("rule DSL redundant constants").run(test_rule_dsl_redundant_constants);
   suite.test("rule DSL single use").run(test_rule_dsl_single_use);
+  suite.test("rule DSL single use trace").run(test_rule_dsl_single_use_trace);
   suite.test("rule DSL known bits").run(test_rule_dsl_known_bits);
   suite.test("rule DSL known select").run(test_rule_dsl_known_select);
   suite.test("rule DSL known resize roundtrip").run(test_rule_dsl_known_resize_roundtrip);

@@ -67,6 +67,91 @@ void check_trace_simplify(const std::string& input,
   }
 }
 
+void test_single_use_rules_across_blocks() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (size_t mode = 0; mode < 4; mode++) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* entry = builder.build_block({Type::Ptr, type, Type::Bool});
+      Block* taken = builder.build_block();
+      Block* other = builder.build_block();
+      builder.move_to_end(entry);
+      Value* x = entry->arg(1);
+      Inst* inner = builder.build_or(x, builder.build_const(type, 1));
+      builder.build_branch(entry->arg(2), taken, other);
+      builder.move_to_end(taken);
+      Inst* root = builder.build_shl(inner, builder.build_const(type, 3));
+      StoreInst* output = builder.build_store(entry->arg(0), root, 0, 0);
+      if (mode == 2) {
+        builder.build_store(entry->arg(0), inner, 0, 8);
+      }
+      builder.build_exit();
+      builder.move_to_end(other);
+      if (mode == 1 || mode == 3) {
+        size_t uses = mode == 3 ? 255 : 1;
+        for (size_t index = 0; index < uses; index++) {
+          builder.build_store(entry->arg(0), inner, 0, 8);
+        }
+      }
+      builder.build_exit();
+      section.order_blocks(BlockOrdering::Dominator);
+      Chain chain;
+      chain.add(entry);
+      chain.add(taken);
+      SimplifyTrace::run(&section, &chain);
+      if (mode == 0) {
+        OrInst* replacement = dynamic_cast<OrInst*>(output->value());
+        unittest_assert(replacement);
+        ShlInst* shifted = dynamic_cast<ShlInst*>(replacement->arg(0));
+        unittest_assert(shifted && shifted->arg(0) == x);
+        Const* constant = dynamic_cast<Const*>(replacement->arg(1));
+        unittest_assert(constant && constant->value() == 8);
+      } else {
+        unittest_assert(output->value() == root);
+      }
+      unittest_assert(!section.verify(std::cout));
+      for (bool condition : {false, true}) {
+        for (uint64_t input : {uint64_t(0), uint64_t(42), type_mask(type)}) {
+          uint64_t values[2] = {42, 42};
+          Interpreter interpreter(&section, {Interpreter::Bits::constant(values),
+                                   Interpreter::Bits::constant(type, input),
+                                   Interpreter::Bits::constant(Type::Bool, condition)});
+          unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+          unittest_assert(values[0] == (condition ? ((input | 1) << 3) & type_mask(type) : 42));
+          bool stored = condition ? mode == 2 : mode == 1 || mode == 3;
+          unittest_assert(values[1] == (stored ? input | 1 : 42));
+        }
+      }
+    }
+  }
+}
+
+void test_single_use_rules_fresh_values() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({Type::Ptr, type, Type::Bool});
+    builder.move_to_end(block);
+    Value* condition = block->arg(2);
+    Inst* inner = builder.build_select(condition, block->arg(1), builder.build_const(type, 17));
+    Inst* difference = builder.build_sub(inner, builder.build_const(type, 1));
+    Inst* root = builder.build_select(condition, difference, builder.build_const(type, 23));
+    StoreInst* output = builder.build_store(block->arg(0), root, 0, 0);
+    builder.build_exit();
+    Chain chain;
+    chain.add(block);
+    SimplifyTrace::run(&section, &chain);
+    unittest_assert(output->value() == root);
+    AddInst* fresh = dynamic_cast<AddInst*>(root->arg(1));
+    unittest_assert(fresh && fresh->arg(0) == inner);
+    unittest_assert(!section.verify(std::cout));
+  }
+}
+
 void test_known_bits_rule_guard_facts() {
   Context context;
   Allocator allocator;
@@ -496,6 +581,8 @@ int main(int argc, char** argv) {
 
   suite.test("generated rewrite guard facts").run(test_generated_rewrite_guard_facts);
   suite.test("known bits rule guard facts").run(test_known_bits_rule_guard_facts);
+  suite.test("single use rules across blocks").run(test_single_use_rules_across_blocks);
+  suite.test("single use rules fresh values").run(test_single_use_rules_fresh_values);
   suite.test("signed guard boundaries").run(test_signed_guard_boundaries);
   suite.test("signed guard nonconstant bounds").run(test_signed_guard_nonconstant_bounds);
   suite.test("signed guard known bits").run(test_signed_guard_known_bits);
