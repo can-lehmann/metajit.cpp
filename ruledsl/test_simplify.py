@@ -55,6 +55,117 @@ same_constants: Select(c, C, C)
 
 
 class SimplifyTests(unittest.TestCase):
+    def test_paired_select_or(self):
+        source = (Path(__file__).resolve().parent.parent / "fold.rules").read_text()
+        names = {"or_select_value", "or_select_redundant_mask", "or_resized_select_redundant_mask"}
+        source = "\n".join(source[rule.span.start:rule.span.end] for rule in parse(source)
+                           if rule.name in names)
+        self.assertEqual([len(rule.instantiations) for rule in prove(source)], [5, 5, 25])
+        code = generate(source, include_simplify=True, simplify_folds=True)
+        self.run_cpp(code, """
+int main() {
+  Generated builder;
+  Value c(Type::Bool), other(Type::Bool);
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(type);
+    Const zero(type, 0);
+    for (uint64_t a : {uint64_t(1), uint64_t(5), type_mask(type)}) {
+      for (uint64_t b : {uint64_t(0), uint64_t(2), type_mask(type)}) {
+        Const first(type, a), second(type, b);
+        Inst* left = builder.build_select(&c, &x, &first);
+        Inst* right = builder.build_select(&c, &zero, &second);
+        for (bool swapped : {false, true}) {
+          Inst* root = swapped ? builder.build_or(right, left) : builder.build_or(left, right);
+          for (bool simplify : {false, true}) {
+            size_t before = builder.allocated.size();
+            Value* replacement = simplify ? builder.try_simplify(root)
+                                         : builder.fold_or(root->arg(0), root->arg(1));
+            if ((first.value() | second.value()) == first.value()) {
+              assert(replacement == left);
+              assert(builder.allocated.size() == before);
+            } else {
+              SelectInst* result = dynamic_cast<SelectInst*>(replacement);
+              assert(result && result->arg(0) == &c && result->arg(1) == &x);
+              Const* constant = dynamic_cast<Const*>(result->arg(2));
+              assert(constant && constant->value() == (first.value() | second.value()));
+            }
+          }
+        }
+        Inst* different = builder.build_select(&other, &zero, &second);
+        Inst* miss = builder.build_or(left, different);
+        size_t before = builder.allocated.size();
+        assert(!builder.try_simplify(miss));
+        assert(builder.allocated.size() == before);
+      }
+    }
+  }
+  for (Type source : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(source);
+    Const first(source, type_mask(source));
+    Inst* selected = builder.build_select(&c, &x, &first);
+    for (Type target : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      Const zero(target, 0), second(target, first.value()), wrong(target, 0);
+      Inst* resized = builder.build_resize_u(selected, target);
+      Inst* mask = builder.build_select(&c, &zero, &second);
+      for (bool swapped : {false, true}) {
+        Inst* root = swapped ? builder.build_or(mask, resized) : builder.build_or(resized, mask);
+        size_t before = builder.allocated.size();
+        assert(builder.try_simplify(root) == resized);
+        assert(builder.fold_or(root->arg(0), root->arg(1)) == resized);
+        assert(builder.allocated.size() == before);
+      }
+      Inst* miss = builder.build_or(resized, builder.build_select(&c, &zero, &wrong));
+      size_t before = builder.allocated.size();
+      assert(!builder.try_simplify(miss));
+      assert(builder.allocated.size() == before);
+    }
+  }
+}
+""")
+
+    def test_select_add_same_condition(self):
+        source = (Path(__file__).resolve().parent.parent / "simplify.rules").read_text()
+        rule, = [rule for rule in parse(source) if rule.name == "select_add_same_condition"]
+        source = source[rule.span.start:rule.span.end]
+        checked, = prove(source)
+        self.assertEqual(len(checked.instantiations), 4)
+        code = generate("", simplify_source=source, include_simplify=True)
+        self.run_cpp(code, """
+struct Counts {
+  Value* value;
+  uint8_t count;
+  uint8_t at(Value* arg) const { return arg == value ? count : 255; }
+};
+int main() {
+  Generated builder;
+  Value c(Type::Bool), other(Type::Bool);
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(type);
+    Const first(type, 17), increment(type, 1), last(type, type_mask(type));
+    Inst* inner = builder.build_select(&c, &x, &first);
+    for (bool swapped : {false, true}) {
+      Inst* added = swapped ? builder.build_add(&increment, inner) : builder.build_add(inner, &increment);
+      Inst* root = builder.build_select(&c, added, &last);
+      size_t before = builder.allocated.size();
+      assert(!builder.try_simplify(root));
+      for (uint8_t count : {0, 2, 254, 255}) {
+        assert(!builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{added, count}));
+        assert(builder.allocated.size() == before);
+      }
+      SelectInst* result = dynamic_cast<SelectInst*>(
+          builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{added, 1}));
+      assert(result && result->arg(0) == &c && result->arg(2) == &last);
+      AddInst* sum = dynamic_cast<AddInst*>(result->arg(1));
+      assert(sum && sum->arg(0) == &x && sum->arg(1) == &increment);
+      Inst* miss = builder.build_select(&other, added, &last);
+      before = builder.allocated.size();
+      assert(!builder.try_simplify(miss, Generated::RuledslUnknownBits{}, Counts{added, 1}));
+      assert(builder.allocated.size() == before);
+    }
+  }
+}
+""")
+
     def test_single_use_shifted_zero_comparisons(self):
         source = (Path(__file__).resolve().parent.parent / "simplify.rules").read_text()
         rules = {rule.name: source[rule.span.start:rule.span.end] for rule in parse(source)}

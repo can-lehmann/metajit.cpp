@@ -147,3 +147,6 @@ eq_masked_shl_zero: Eq(And(Shl(x: T, C), Cmask) @single_use, 0)
     check C < width(T)
     Cnew = Cmask >> C
     => Eq(And(x, Cnew), 0)
+
+select_add_same_condition: Select(c, Add(Select(c, x, C1), C2) @single_use, C3)
+    => Select(c, Add(x, C2), C3)

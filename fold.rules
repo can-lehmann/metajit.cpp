@@ -234,6 +234,18 @@ or_selects: Or(Select(c, C1, C2), Select(c, C3, C4))
     Cfalse = C2 | C4
     => Select(c, Ctrue, Cfalse)
 
+or_select_value: Or(Select(c, x, C1), Select(c, 0, C2))
+    C = C1 | C2
+    => Select(c, x, C)
+
+or_select_redundant_mask: Or(Select(c, x, C1), Select(c, 0, C2))
+    check C1 | C2 == C1
+    => Select(c, x, C1)
+
+or_resized_select_redundant_mask: Or(ResizeU(Select(c, x: S, C1)): T, Select(c, 0, C2))
+    check bits(C1, T) == C2
+    => ResizeU(Select(c, x, C1)): T
+
 or_reassoc_constants: Or(Or(x, C1), C2)
     C = C1 | C2
     => Or(x, C)
