@@ -438,7 +438,7 @@ namespace metajit {
     Type ret() const { return _ret; }
 
     void write_arg(PrettyStream& stream) const override {
-      stream << Highlight::Constant << "@intrinsic:" << _name << Highlight::None;
+      stream << Highlight::Constant << "@intrinsic::" << _name << Highlight::None;
     }
 
     void write_arg_json(std::ostream& stream) const override {
@@ -2352,7 +2352,8 @@ namespace metajit {
         get_char(); // consume '@'
         std::string sym_name = get_word();
         expect_char(':');
-        if (sym_name == "intrinsic") {
+        if (sym_name == "intrinsic" && _stream.peek() == ':') {
+          get_char();
           std::string name = get_word();
           if (name == "memset") {
             return Intrinsic::memset;
