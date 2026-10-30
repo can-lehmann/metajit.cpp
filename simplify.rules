@@ -161,3 +161,15 @@ eq_extended_constant: Eq(ResizeU(x: S): T @single_use, C)
     Cnarrow = bits(C, S)
     check bits(Cnarrow, T) == C
     => Eq(x, Cnarrow)
+
+not_eq_zero_single_use: Xor(Eq(x, 0) @single_use, 1)
+    => LtU(0, x)
+
+eq_select_impossible: Eq(Select(c, x, y), C)
+    check (known_ones(x) & ~C) | (known_zeros(x) & C) != 0
+    check (known_ones(y) & ~C) | (known_zeros(y) & C) != 0
+    => 0: Bool
+
+lt_u_select_known_range: LtU(Select(c, x, C1), C2)
+    check ~known_zeros(x) < C2 and C1 >= C2
+    => c

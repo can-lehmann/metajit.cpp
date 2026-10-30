@@ -659,3 +659,16 @@ shr_s_zero: ShrS(x, 0)
 
 shr_s_zero_value: ShrS(0, x)
     => 0
+
+and_select_false_bit_complement: And(c, Xor(ResizeU(Select(c, x: T, C)): Bool, 1))
+    check C & 1 == 1
+    => Xor(ResizeU(Select(c, x, C)): Bool, 1)
+
+and_select_false_shifted_bit_complement: And(c, Xor(ResizeU(ShrU(Select(c, x: T, C1), C2)): Bool, 1))
+    check C2 < width(T)
+    check (C1 >> C2) & 1 == 1
+    => Xor(ResizeU(ShrU(Select(c, x, C1), C2)): Bool, 1)
+
+and_select_lt_u: And(c, LtU(Select(c, x, C1), C2))
+    check C1 >= C2
+    => LtU(Select(c, x, C1), C2)
