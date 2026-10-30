@@ -413,6 +413,63 @@ namespace metajit {
     }
   };
 
+  enum class CallConv;
+
+  class Intrinsic final: public Value {
+  private:
+    lwir::Span<const char> _name;
+    CallConv _call_conv;
+    std::vector<Type> _args;
+    Type _ret;
+
+    Intrinsic(const char* name, CallConv call_conv, std::vector<Type> args, Type ret):
+        Value(Type::Ptr),
+        _name(name, std::strlen(name)),
+        _call_conv(call_conv),
+        _args(std::move(args)),
+        _ret(ret) {}
+
+    Intrinsic(const Intrinsic&) = delete;
+    Intrinsic& operator=(const Intrinsic&) = delete;
+  public:
+    lwir::Span<const char> name() const { return _name; }
+    CallConv call_conv() const { return _call_conv; }
+    const std::vector<Type>& args() const { return _args; }
+    Type ret() const { return _ret; }
+
+    void write_arg(PrettyStream& stream) const override {
+      stream << Highlight::Constant << "@intrinsic::" << _name << Highlight::None;
+    }
+
+    void write_arg_json(std::ostream& stream) const override {
+      stream << "{";
+      stream << "\"kind\": \"Intrinsic\", ";
+      stream << "\"name\": \"" << escape_json(std::string(_name.data(), _name.size())) << "\"";
+      stream << "}";
+    }
+
+    bool equals(const Value* other) const override {
+      if (typeid(*this) != typeid(*other)) {
+        return false;
+      }
+
+      const Intrinsic* intrinsic_other = (const Intrinsic*) other;
+      return _name.size() == intrinsic_other->_name.size() &&
+             std::memcmp(_name.data(), intrinsic_other->_name.data(), _name.size()) == 0;
+    }
+
+    size_t hash() const override {
+      size_t result = std::hash<Type>()(type()) ^ std::hash<size_t>()(4);
+      for (char chr : _name) {
+        result = result * 31 + std::hash<char>()(chr);
+      }
+      return result;
+    }
+
+    static Intrinsic* const memset;
+    static Intrinsic* const memcpy;
+  };
+
   class Context {
   private:
     Allocator _allocator;
@@ -820,6 +877,19 @@ namespace metajit {
     Default,
     PreserveNone
   };
+
+  inline Intrinsic* const Intrinsic::memset = new Intrinsic(
+    "memset",
+    CallConv::Default,
+    {Type::Ptr, Type::Int8, Type::Int64},
+    Type::Void
+  );
+  inline Intrinsic* const Intrinsic::memcpy = new Intrinsic(
+    "memcpy",
+    CallConv::Default,
+    {Type::Ptr, Type::Ptr, Type::Int64},
+    Type::Void
+  );
 }
 
 #define define_flags_overloads(Flags) \
@@ -2199,7 +2269,9 @@ namespace metajit {
 
     Type read_type() {
       std::string type_name = get_word();
-      if (type_name == "Int8") {
+      if (type_name == "Void") {
+        return Type::Void;
+      } else if (type_name == "Int8") {
         return Type::Int8;
       } else if (type_name == "Int16") {
         return Type::Int16;
@@ -2280,6 +2352,16 @@ namespace metajit {
         get_char(); // consume '@'
         std::string sym_name = get_word();
         expect_char(':');
+        if (sym_name == "intrinsic" && _stream.peek() == ':') {
+          get_char();
+          std::string name = get_word();
+          if (name == "memset") {
+            return Intrinsic::memset;
+          } else if (name == "memcpy") {
+            return Intrinsic::memcpy;
+          }
+          error("Unknown intrinsic '" + name + "'");
+        }
         Type type = read_type();
         return _builder.build_symbol(type, sym_name);
       } else {
@@ -3138,7 +3220,8 @@ namespace metajit {
             return Bits(value->type(), 0, 0);
           }
           return values.at(named_value);
-        } else if (dynamic_cast<Symbol*>(value) || dynamic_cast<Poison*>(value)) {
+        } else if (dynamic_cast<Symbol*>(value) || dynamic_cast<Poison*>(value) ||
+                   dynamic_cast<Intrinsic*>(value)) {
           return Bits(value->type(), 0, 0);
         } else {
           assert(false); // Unreachable
@@ -3694,6 +3777,35 @@ namespace metajit {
         uint8_t* ptr = (uint8_t*) ptr_bits.value + store->offset();
         value_bits.store(ptr);
         _values[store] = Bits();
+      } else if (dynmatch(CallInst, call, _inst)) {
+        if (dynmatch(Intrinsic, intrinsic, call->callee())) {
+          if (intrinsic == Intrinsic::memset) {
+            Bits ptr = at(call->arg(1));
+            Bits value = at(call->arg(2));
+            Bits size = at(call->arg(3));
+            assert(!ptr.is_poison && !value.is_poison && !size.is_poison);
+            if (size.value != 0) {
+              std::memset((void*) (uintptr_t) ptr.value, value.value, size.value);
+            }
+          } else if (intrinsic == Intrinsic::memcpy) {
+            Bits dest = at(call->arg(1));
+            Bits source = at(call->arg(2));
+            Bits size = at(call->arg(3));
+            assert(!dest.is_poison && !source.is_poison && !size.is_poison);
+            if (size.value != 0) {
+              std::memcpy(
+                (void*) (uintptr_t) dest.value,
+                (const void*) (uintptr_t) source.value,
+                size.value
+              );
+            }
+          } else {
+            assert(false && "Unsupported intrinsic in interpreter");
+          }
+          _values[call] = Bits();
+        } else {
+          assert(false && "Unsupported call in interpreter");
+        }
       } else if (dynmatch(AllocaInst, alloca_inst, _inst)) {
         Bits size_bits = at(alloca_inst->size());
         assert(!size_bits.is_poison);
@@ -5153,7 +5265,7 @@ private:
     }
 
     size_t at(Value* value) const {
-      if (dynmatch(Const, constant, value)) {
+      if (dynamic_cast<Const*>(value) || dynamic_cast<Intrinsic*>(value)) {
         return ALWAYS;
       } else if (value->is_named()) {
         return _groups.at((NamedValue*) value);
@@ -6028,11 +6140,18 @@ private:
           return true;
         }
 
-        for (Value* arg : inst->args()) {
+        for (size_t arg_index = 0; arg_index < inst->arg_count(); arg_index++) {
+          Value* arg = inst->arg(arg_index);
           if (arg == nullptr) {
             errors << "Instruction ";
             inst->write_arg(errors);
             errors << " has null argument\n";
+            return true;
+          }
+
+          if (dynamic_cast<Intrinsic*>(arg) &&
+              (!dynamic_cast<CallInst*>(inst) || arg_index != 0)) {
+            errors << "Intrinsic can only be used as a call callee\n";
             return true;
           }
 
@@ -6048,6 +6167,35 @@ private:
         }
 
         if (dynmatch(CallInst, call, inst)) {
+          if (dynmatch(Intrinsic, intrinsic, call->callee())) {
+            if (call->call_conv() != intrinsic->call_conv()) {
+              errors << "Intrinsic " << intrinsic->name() << " expects calling convention "
+                     << intrinsic->call_conv() << ", got " << call->call_conv() << "\n";
+              return true;
+            }
+            if (call->type() != intrinsic->ret()) {
+              errors << "Intrinsic " << intrinsic->name() << " expects return type "
+                     << intrinsic->ret() << ", got " << call->type() << "\n";
+              return true;
+            }
+            if (call->arg_count() != intrinsic->args().size() + 1) {
+              errors << "Intrinsic " << intrinsic->name() << " expects "
+                     << intrinsic->args().size() << " arguments, got " << call->arg_count() - 1 << "\n";
+              return true;
+            }
+            for (size_t it = 0; it < intrinsic->args().size(); it++) {
+              if (call->arg(it + 1)->type() != intrinsic->args()[it]) {
+                errors << "Intrinsic " << intrinsic->name() << " argument " << it
+                       << " expects type " << intrinsic->args()[it]
+                       << ", got " << call->arg(it + 1)->type() << "\n";
+                return true;
+              }
+            }
+            if ((uint32_t) call->flags() != CallFlags::None) {
+              errors << "Intrinsic call requires empty flags\n";
+              return true;
+            }
+          }
           if (call->flags().has(CallFlags::MustTail)) {
             if (call->call_conv() != CallConv::PreserveNone) {
               errors << "MustTail call requires PreserveNone calling convention\n";
@@ -6195,6 +6343,8 @@ private:
         return builder.build_const(constant->type(), constant->value());
       } else if (dynmatch(Poison, poison, value)) {
         return builder.build_poison(poison->type());
+      } else if (dynmatch(Intrinsic, intrinsic, value)) {
+        return intrinsic;
       } else if (dynmatch(Symbol, symbol, value)) {
         return builder.build_symbol(
           symbol->type(),

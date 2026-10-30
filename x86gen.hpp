@@ -574,6 +574,18 @@ namespace metajit {
       Timer peephole;
     };
   private:
+    static void intrinsic_memset(void* ptr, uint8_t value, uint64_t size) {
+      if (size != 0) {
+        std::memset(ptr, value, size);
+      }
+    }
+
+    static void intrinsic_memcpy(void* dest, const void* source, uint64_t size) {
+      if (size != 0) {
+        std::memcpy(dest, source, size);
+      }
+    }
+
     static RegClass reg_class(Reg preg) {
       assert(preg.is_physical());
       if (preg.id() < Reg::X86_XMM(0).id()) {
@@ -1638,7 +1650,19 @@ namespace metajit {
         RegClass ret_class = reg_class(call->type());
         Reg ret_reg = fix_to_preg(vreg(call->type()), info.ret(ret_class));
         Reg callee_reg = fix_to_preg(vreg(), Reg::X86_R10());
-        _builder.mov64(callee_reg, vreg(call->callee()));
+        if (dynmatch(Intrinsic, intrinsic, call->callee())) {
+          uint64_t target = 0;
+          if (intrinsic == Intrinsic::memset) {
+            target = (uint64_t) (uintptr_t) &intrinsic_memset;
+          } else if (intrinsic == Intrinsic::memcpy) {
+            target = (uint64_t) (uintptr_t) &intrinsic_memcpy;
+          } else {
+            assert(false && "Unsupported intrinsic");
+          }
+          _builder.mov64_imm64(callee_reg, target);
+        } else {
+          _builder.mov64(callee_reg, vreg(call->callee()));
+        }
         X86Inst* call_inst = _builder.call(callee_reg, ret_reg, call->call_conv(), args);
         if (call->flags().has(CallFlags::MustTail)) {
           call_inst->set_kind(X86Inst::Kind::TailJump);

@@ -575,6 +575,8 @@ namespace metajit {
     Value* emit_arg(Value* value) {
       if (dynmatch(Const, constant, value)) {
         return _builder.build_const(constant->type(), constant->value());
+      } else if (dynmatch(Intrinsic, intrinsic, value)) {
+        return intrinsic;
       } else if (value->is_named()) {
         return _values.at((NamedValue*) value);
       } else {
@@ -658,7 +660,7 @@ namespace metajit {
     }
 
     Value* is_const(Value* value, bool allow_overapproximation = false) {
-      if (dynmatch(Const, constant, value)) {
+      if (dynamic_cast<Const*>(value) || dynamic_cast<Intrinsic*>(value)) {
         return _builder.build_const(Type::Bool, 1);
       } else if (value->is_named()) {
         Value* is_const = _is_const.at((NamedValue*) value);
@@ -812,6 +814,8 @@ namespace metajit {
         return _builder.build_const(
           Type::Ptr, (uint64_t)(void*) constant
         );
+      } else if (dynmatch(Intrinsic, intrinsic, value)) {
+        return _builder.build_const(Type::Ptr, (uint64_t)(void*) intrinsic);
       } else if (dynmatch(Symbol, symbol, value)) {
         return _builder.build_const(
           Type::Ptr, (uint64_t)(void*) symbol

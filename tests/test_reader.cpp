@@ -45,6 +45,20 @@ int main(int argc, char** argv) {
 
   DiffTestSuite suite("tests/output/test_reader", argc, argv);
 
+  suite.diff_test("intrinsic_roundtrip").aot(false).run([](Builder& builder, TestData& data) {
+    Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
+    builder.build_call(
+      Intrinsic::memset,
+      Type::Void,
+      std::vector<Value*>({ptr, builder.build_const(Type::Int8, 0xab), builder.build_const(Type::Int64, 8)})
+    );
+    Value* dest = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
+    builder.build_call(Intrinsic::memcpy, Type::Void, {dest, ptr, builder.build_const(Type::Int64, 8)});
+    data.output(builder.build_load(dest, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
+    builder.build_exit();
+    check_roundtrip(builder.section());
+  });
+
   suite.diff_test("refined_aliasing_roundtrip").run([](Builder& builder, TestData& data) {
     Value* value = data.input(RandomRange(Type::Int64));
     data.output(value);
