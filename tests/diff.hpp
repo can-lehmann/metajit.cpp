@@ -905,7 +905,8 @@ namespace metajit {
       void* reentry_func = ExitOnErr(jit->lookup("reentry_func")).toPtr<void*>();
 
       uint8_t* static_data = new uint8_t[data.data_size()]();
-      uint8_t* tape = new uint8_t[std::max((size_t) 1, max_write_size) * 1024]();
+      size_t tape_size = max_write_size == SIZE_MAX ? 64 * 1024 : std::max((size_t) 1, max_write_size) * 1024;
+      uint8_t* tape = new uint8_t[tape_size]();
 
       for (size_t static_sample = 0; static_sample < static_sample_count; static_sample++) {
         // Pick random values for static inputs
@@ -1119,7 +1120,7 @@ namespace metajit {
 
           unittest_assert(!section->verify(std::cout));
 
-          OrderBlocks::run(section, BlockOrdering::Topological);
+          OrderBlocks::run(section, BlockOrdering::Natural);
 
           unittest_assert(!section->verify(std::cout));
 

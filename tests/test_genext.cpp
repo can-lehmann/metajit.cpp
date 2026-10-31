@@ -129,8 +129,72 @@ int main(int argc, char** argv) {
 
   GenExtTestSuite suite("tests/output/test_genext", argc, argv);
 
+  suite.test("loop_binding_times").run([]() {
+    for (size_t dynamic = 0; dynamic < 3; dynamic++) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      builder.move_to_end(builder.build_block({Type::Ptr}));
+      Value* limit = builder.build_const(Type::Int32, 4);
+      if (dynamic == 1) {
+        limit = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+      }
+      Block* header = builder.build_block({Type::Int32});
+      Block* body = builder.build_block();
+      Block* end = builder.build_block();
+      builder.build_jump(header, {builder.build_const(Type::Int32, 0)});
+      builder.move_to_end(header);
+      Value* cond = builder.build_lt_u(header->arg(0), limit);
+      builder.build_branch(cond, body, end);
+      builder.move_to_end(body);
+      Value* step = builder.build_const(Type::Int32, 1);
+      if (dynamic == 2) {
+        step = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+      }
+      Value* next = builder.build_add(header->arg(0), step);
+      builder.build_jump(header, {next});
+      builder.move_to_end(end);
+      builder.build_exit();
+      OrderBlocks::run(&section, BlockOrdering::Natural);
+      BindingTimeGroups groups(&section);
+      unittest_assert(groups.is_static(header->arg(0)) == !dynamic);
+      unittest_assert(groups.is_static(cond) == !dynamic);
+      unittest_assert(groups.is_static(next) == !dynamic);
+      if (dynamic != 2) {
+        unittest_assert(groups.at(next) == groups.at(header->arg(0)));
+      }
+    }
+  });
+
   for (bool record_replay : {false, true}) {
     suite.set_record_replay(record_replay);
+
+    suite.gen_ext_test("loop").run([](Builder& builder, TraceTestData& data) {
+      Value* limit = builder.build_add(
+        data.static_input(RandomRange(Type::Int32, 0, 4)),
+        data.input(RandomRange(Type::Int32, 0, 4))
+      );
+      Block* header = builder.build_block({Type::Int32, Type::Int32});
+      Block* body = builder.build_block();
+      Block* end = builder.build_block();
+      Value* zero = builder.build_const(Type::Int32, 0);
+      builder.build_jump(header, {zero, zero});
+
+      builder.move_to_end(header);
+      builder.build_branch(builder.build_lt_u(header->arg(0), limit), body, end);
+
+      builder.move_to_end(body);
+      data.keep(header->arg(0));
+      builder.build_jump(header, {
+        builder.build_add(header->arg(0), builder.build_const(Type::Int32, 1)),
+        builder.build_add(header->arg(1), data.input(RandomRange(Type::Int32)))
+      });
+
+      builder.move_to_end(end);
+      data.output(header->arg(0));
+      data.output(header->arg(1));
+    });
 
     suite.gen_ext_test("intrinsic_memset_memcpy").samples(2, 4).run([](Builder& builder, TraceTestData& data) {
       Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
