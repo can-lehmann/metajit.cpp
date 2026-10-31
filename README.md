@@ -56,10 +56,6 @@ b0:
 b1:
 ```
 
-Deploy x86 code with `void* entry = codegen.deploy(heap)`, where `heap` is a
-`CodeHeap`. Each deployment allocates executable pages, which the heap tracks
-in a vector and releases on destruction. The heap must outlive every use of its deployed code.
-
 ### Aliasing
 
 Aliasing information is encoded using aliasing groups.
