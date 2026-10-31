@@ -81,19 +81,17 @@ namespace metajit {
                 if (_alloca_types.at(alloca) == Type::Void) {
                   _alloca_types.at(alloca) = type;
                 }
-                if (dynmatch(Const, size, alloca->size())) {
-                  if (offset != 0 || size->value() != type_size(type) || _alloca_types.at(alloca) != type) {
-                    _alloca_types.erase(alloca);
-                  }
-                } else {
+                dynmatch(Const, size, alloca->size());
+                if (offset != 0 || !size || size->value() != type_size(type) || _alloca_types.at(alloca) != type) {
                   _alloca_types.erase(alloca);
                 }
               }
             }
           } else {
             for (Value* arg : inst->args()) {
-              dynmatch(AllocaInst, alloca, arg);
-              _alloca_types.erase(alloca);
+              if (dynmatch(AllocaInst, alloca, arg)) {
+                _alloca_types.erase(alloca);
+              }
             }
           }
         }
