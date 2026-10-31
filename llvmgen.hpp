@@ -90,6 +90,12 @@ namespace metajit {
                 }
               }
             }
+          } else {
+            for (Value* arg : inst->args()) {
+              if (dynmatch(AllocaInst, alloca, arg)) {
+                _alloca_types.erase(alloca);
+              }
+            }
           }
         }
       }
