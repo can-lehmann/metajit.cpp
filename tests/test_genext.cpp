@@ -132,6 +132,32 @@ int main(int argc, char** argv) {
   for (bool record_replay : {false, true}) {
     suite.set_record_replay(record_replay);
 
+    suite.gen_ext_test("loop").run([](Builder& builder, TraceTestData& data) {
+      Value* limit = builder.build_add(
+        data.static_input(RandomRange(Type::Int32, 0, 4)),
+        data.input(RandomRange(Type::Int32, 0, 4))
+      );
+      Block* header = builder.build_block({Type::Int32, Type::Int32});
+      Block* body = builder.build_block();
+      Block* end = builder.build_block();
+      Value* zero = builder.build_const(Type::Int32, 0);
+      builder.build_jump(header, {zero, zero});
+
+      builder.move_to_end(header);
+      builder.build_branch(builder.build_lt_u(header->arg(0), limit), body, end);
+
+      builder.move_to_end(body);
+      data.keep(header->arg(0));
+      builder.build_jump(header, {
+        builder.build_add(header->arg(0), builder.build_const(Type::Int32, 1)),
+        builder.build_add(header->arg(1), data.input(RandomRange(Type::Int32)))
+      });
+
+      builder.move_to_end(end);
+      data.output(header->arg(0));
+      data.output(header->arg(1));
+    });
+
     suite.gen_ext_test("intrinsic_memset_memcpy").samples(2, 4).run([](Builder& builder, TraceTestData& data) {
       Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
       Value* value = data.input(Type::Int8);
