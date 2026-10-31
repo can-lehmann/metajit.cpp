@@ -54,11 +54,9 @@ namespace metajit {
     std::map<Block*, llvm::BasicBlock*> _end_blocks;
 
     NameMap<llvm::Value*> _values;
-    NameMap<Type> _alloca_types;
+    std::unordered_map<AllocaInst*, Type> _alloca_types;
 
     void find_alloca_types() {
-      _alloca_types.init(_section);
-      _alloca_types.fill(Type::Void);
       for (Block* block : *_section) {
         for (Inst* inst : *block) {
           Value* ptr;
