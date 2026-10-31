@@ -5189,58 +5189,58 @@ private:
         }
       }
 
-      for (Block* block : *section) {
-        for (Arg* arg : block->args()) {
-          if (_groups[arg] == NEW_GROUP || _section->ordering() < BlockOrdering::Topological) {
-            _groups[arg] = _next_group++;
-          }
-        }
-
-        for (Inst* inst : *block) {
-          if (dynmatch(PromoteInst, promote, inst)) {
-            _groups[inst] = ALWAYS;
-          } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
-            _groups[inst] = ALWAYS;
-          } else if (dynmatch(LoadInst, load, inst)) {
-            if (load->flags().has(LoadFlags::Pure)) {
-              _groups[inst] = at(load->ptr());
-            } else {
-              _groups[inst] = _next_group++;
+        for (Block* block : *section) {
+          for (Arg* arg : block->args()) {
+            if (_groups[arg] == NEW_GROUP || _section->ordering() < BlockOrdering::Topological) {
+              _groups[arg] = _next_group++;
             }
-          } else if (inst->has_side_effect() || inst->is_terminator()) {
-            _groups[inst] = _next_group++;
-          } else {
-            size_t group = ALWAYS;
-            for (Value* arg : inst->args()) {
-              size_t arg_group = at(arg);
-              if (arg_group != ALWAYS && arg_group != group) {
-                if (group == ALWAYS) {
-                  group = arg_group;
-                } else {
+          }
+
+          for (Inst* inst : *block) {
+            if (dynmatch(PromoteInst, promote, inst)) {
+              _groups[inst] = ALWAYS;
+            } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
+              _groups[inst] = ALWAYS;
+            } else if (dynmatch(LoadInst, load, inst)) {
+              if (load->flags().has(LoadFlags::Pure)) {
+                _groups[inst] = at(load->ptr());
+              } else {
+                _groups[inst] = _next_group++;
+              }
+            } else if (inst->has_side_effect() || inst->is_terminator()) {
+              _groups[inst] = _next_group++;
+            } else {
+              size_t group = ALWAYS;
+              for (Value* arg : inst->args()) {
+                size_t arg_group = at(arg);
+                if (arg_group != ALWAYS && arg_group != group) {
+                  if (group == ALWAYS) {
+                    group = arg_group;
+                  } else {
+                    group = _next_group;
+                  }
+                }
+              }
+
+              // Instructions for which we implement short-circuiting
+              // inside the generating extension may be const even though
+              // not all arguments are const. This means they need to be
+              // in a separate group.
+              if (dynamic_cast<AndInst*>(inst) ||
+                  dynamic_cast<OrInst*>(inst) ||
+                  dynamic_cast<SelectInst*>(inst)) {
+                if (group != ALWAYS) {
                   group = _next_group;
                 }
               }
-            }
 
-            // Instructions for which we implement short-circuiting
-            // inside the generating extension may be const even though
-            // not all arguments are const. This means they need to be
-            // in a separate group.
-            if (dynamic_cast<AndInst*>(inst) ||
-                dynamic_cast<OrInst*>(inst) ||
-                dynamic_cast<SelectInst*>(inst)) {
-              if (group != ALWAYS) {
-                group = _next_group;
+              if (group == _next_group) {
+                _next_group++;
               }
-            }
 
-            if (group == _next_group) {
-              _next_group++;
+              _groups[inst] = group;
             }
-
-            _groups[inst] = group;
           }
-        }
 
         if (_section->ordering() >= BlockOrdering::Topological) {
           bool dynamic_branch = _dynamic_branch[block->name()];
@@ -5261,7 +5261,7 @@ private:
             }
           }
         }
-      }
+        }
     }
 
     size_t at(Value* value) const {
@@ -6527,38 +6527,38 @@ private:
 
     void populate_closures_and_frontiers() {
       std::vector<std::set<NamedValue*>> live_before_block(_section->block_count());
-      for (Block* block : _section->rev_range()) {
-        std::set<NamedValue*> live;
-        for (Block* succ : block->successors()) {
-          for (NamedValue* value : live_before_block[succ->name()]) {
-            live.insert(value);
-          }
-        }
-
-        for (Inst* inst : block->rev_range()) {
-          live.erase(inst);
-          for (Value* arg : inst->args()) {
-            if (arg->is_named()) {
-              live.insert((NamedValue*) arg);
+        for (Block* block : _section->rev_range()) {
+          std::set<NamedValue*> live;
+          for (Block* succ : block->successors()) {
+            for (NamedValue* value : live_before_block[succ->name()]) {
+              live.insert(value);
             }
           }
 
-          if (_closures.find(inst) != _closures.end()) {
-            Closure& closure = _closures.at(inst);
-            if (!closure.reuse) {
-              for (NamedValue* value : live) {
-                closure.add(value);
+          for (Inst* inst : block->rev_range()) {
+            live.erase(inst);
+            for (Value* arg : inst->args()) {
+              if (arg->is_named()) {
+                live.insert((NamedValue*) arg);
+              }
+            }
+
+            if (_closures.find(inst) != _closures.end()) {
+              Closure& closure = _closures.at(inst);
+              if (!closure.reuse) {
+                for (NamedValue* value : live) {
+                  closure.add(value);
+                }
               }
             }
           }
-        }
 
-        for (Arg* arg : block->args()) {
-          live.erase(arg);
-        }
+          for (Arg* arg : block->args()) {
+            live.erase(arg);
+          }
 
-        live_before_block[block->name()] = live;
-      }
+          live_before_block[block->name()] = live;
+        }
 
       for (auto& [block, frontier] : _frontiers) {
         for (NamedValue* value : live_before_block[block->name()]) {

@@ -233,7 +233,7 @@ namespace metajit {
       _groups.push_back(group);
       return group;
     }
-  
+
   private:
     void write_escaped(std::ostream& stream, const std::string& str) {
       for (char chr : str) {
@@ -460,35 +460,35 @@ namespace metajit {
         }
       }
 
-      for (Block* block : section->rev_range()) {
-        for (Inst* inst : block->rev_range()) {
-          if (inst->has_side_effect() ||
-              inst->is_terminator() ||
-              dynamic_cast<PromoteInst*>(inst) ||
-              dynamic_cast<AssumeConstInst*>(inst) ||
-              dynamic_cast<CommentInst*>(inst) ||
-              (reentry_closures && reentry_closures->is_captured(inst))) {
-            _can_trace_inst[inst] = true;
-            _can_trace_const[inst] = true;
-          }
-
-          if (dynmatch(JumpInst, jump, inst)) {
-            // Jump arguments are passed to block arguments
-            for (Arg* block_arg : jump->block()->args()) {
-              Value* arg = jump->arg(block_arg->index());
-              if (arg->is_named()) {
-                used_by((NamedValue*) arg, block_arg);
-              }
+        for (Block* block : section->rev_range()) {
+          for (Inst* inst : block->rev_range()) {
+            if (inst->has_side_effect() ||
+                inst->is_terminator() ||
+                dynamic_cast<PromoteInst*>(inst) ||
+                dynamic_cast<AssumeConstInst*>(inst) ||
+                dynamic_cast<CommentInst*>(inst) ||
+                (reentry_closures && reentry_closures->is_captured(inst))) {
+              _can_trace_inst[inst] = true;
+              _can_trace_const[inst] = true;
             }
-          } else {
-            for (Value* arg : inst->args()) {
-              if (arg->is_named()) {
-                used_by((NamedValue*) arg, inst);
+
+            if (dynmatch(JumpInst, jump, inst)) {
+              // Jump arguments are passed to block arguments
+              for (Arg* block_arg : jump->block()->args()) {
+                Value* arg = jump->arg(block_arg->index());
+                if (arg->is_named()) {
+                  used_by((NamedValue*) arg, block_arg);
+                }
+              }
+            } else {
+              for (Value* arg : inst->args()) {
+                if (arg->is_named()) {
+                  used_by((NamedValue*) arg, inst);
+                }
               }
             }
           }
         }
-      }
     }
 
     bool can_trace_const(NamedValue* value) const {
