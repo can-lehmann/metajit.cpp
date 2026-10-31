@@ -255,6 +255,14 @@ int main(int argc, char** argv) {
     check_no_allocas(section);
   });
 
+  suite.opt_test("no_lowering_mixed_types").run([](Builder& builder, TestData& data) {
+    Value* alloca = builder.build_alloca(Type::Int64);
+    builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
+    data.output(builder.build_load(alloca, Type::Int8, LoadFlags::None, AliasingGroup(0), 0));
+  }, [](Section* section) {
+    Mem2Reg::run(section);
+  });
+
   suite.opt_test("no_lowering_escape").run([](Builder& builder, TestData& data) {
     Value* alloca = builder.build_alloca(Type::Int64);
     builder.build_store(alloca, data.input(Type::Int64), AliasingGroup(0), 0);
