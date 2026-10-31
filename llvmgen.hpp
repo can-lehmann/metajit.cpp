@@ -16,7 +16,6 @@
 
 #include <map>
 #include <unordered_map>
-#include <unordered_set>
 #include <queue>
 #include <fstream>
 
@@ -58,11 +57,10 @@ namespace metajit {
     std::unordered_map<AllocaInst*, Type> _alloca_types;
 
     void find_alloca_types() {
-      std::unordered_set<AllocaInst*> pending;
       for (Block* block : *_section) {
         for (Inst* inst : *block) {
           if (dynmatch(AllocaInst, alloca, inst)) {
-            pending.insert(alloca);
+            _alloca_types.emplace(alloca, Type::Void);
           } else if (dynamic_cast<StoreInst*>(inst) || dynamic_cast<LoadInst*>(inst)) {
             Value* ptr;
             Type type;
@@ -71,18 +69,19 @@ namespace metajit {
               ptr = store->ptr();
               type = store->value()->type();
               offset = store->offset();
-            } else {
-              LoadInst* load = static_cast<LoadInst*>(inst);
+            } else if (dynmatch(LoadInst, load, inst)) {
               ptr = load->ptr();
               type = load->type();
               offset = load->offset();
+            } else {
+              assert(false);
             }
             if (dynmatch(AllocaInst, alloca, ptr)) {
-              if (pending.erase(alloca)) {
-                _alloca_types.emplace(alloca, type);
-              }
               if (_alloca_types.find(alloca) == _alloca_types.end()) {
                 continue;
+              }
+              if (_alloca_types.at(alloca) == Type::Void) {
+                _alloca_types.at(alloca) = type;
               }
               Const* size = dynamic_cast<Const*>(alloca->size());
               if (offset != 0 || !size || size->value() != type_size(type) || _alloca_types.at(alloca) != type) {
@@ -255,7 +254,7 @@ namespace metajit {
         );
       } else if (dynmatch(AllocaInst, alloca, inst)) {
         llvm::AllocaInst* llvm_alloca;
-        if (_alloca_types.find(alloca) != _alloca_types.end()) {
+        if (_alloca_types.find(alloca) != _alloca_types.end() && _alloca_types.at(alloca) != Type::Void) {
           llvm_alloca = _builder.CreateAlloca(emit_type(_alloca_types.at(alloca)));
         } else {
           llvm_alloca = _builder.CreateAlloca(llvm::Type::getInt8Ty(_context), emit_arg(alloca->size()));
