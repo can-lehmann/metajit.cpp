@@ -49,11 +49,7 @@ namespace metajit {
     size_t _max_write_size = 0;
 
     void find_max_write_size() {
-      assert(_section->ordering() >= BlockOrdering::Natural);
-      if (_section->ordering() < BlockOrdering::Topological) {
-        _max_write_size = SIZE_MAX;
-        return;
-      }
+      assert(_section->ordering() >= BlockOrdering::Topological);
 
       _max_write_size = 0;
       size_t max_load_size = 0;
@@ -237,7 +233,7 @@ namespace metajit {
       _groups.push_back(group);
       return group;
     }
-
+  
   private:
     void write_escaped(std::ostream& stream, const std::string& str) {
       for (char chr : str) {
@@ -418,11 +414,7 @@ namespace metajit {
     NameMap<bool> _can_trace_inst;
     NameMap<bool> _can_trace_const;
 
-    bool _changed = false;
-
     void used_by(NamedValue* value, NamedValue* by) {
-      bool was_inst = _can_trace_inst.at(value);
-      bool was_const = _can_trace_const.at(value);
       if (_can_trace_inst.at(by)) {
         if (_binding_time_groups.at(by) != _binding_time_groups.at(value) ||
             (is_int_or_bool(value->type()) && !is_int_or_bool(by->type()))) {
@@ -446,7 +438,6 @@ namespace metajit {
         _can_trace_inst[value] = true;
         _can_trace_const[value] = true;
       }
-      _changed |= was_inst != _can_trace_inst.at(value) || was_const != _can_trace_const.at(value);
     }
   public:
     TraceCapabilities(Section* section, BindingTimeGroups& constness,
@@ -469,38 +460,35 @@ namespace metajit {
         }
       }
 
-      do {
-        _changed = false;
-        for (Block* block : section->rev_range()) {
-          for (Inst* inst : block->rev_range()) {
-            if (inst->has_side_effect() ||
-                inst->is_terminator() ||
-                dynamic_cast<PromoteInst*>(inst) ||
-                dynamic_cast<AssumeConstInst*>(inst) ||
-                dynamic_cast<CommentInst*>(inst) ||
-                (reentry_closures && reentry_closures->is_captured(inst))) {
-              _can_trace_inst[inst] = true;
-              _can_trace_const[inst] = true;
-            }
+      for (Block* block : section->rev_range()) {
+        for (Inst* inst : block->rev_range()) {
+          if (inst->has_side_effect() ||
+              inst->is_terminator() ||
+              dynamic_cast<PromoteInst*>(inst) ||
+              dynamic_cast<AssumeConstInst*>(inst) ||
+              dynamic_cast<CommentInst*>(inst) ||
+              (reentry_closures && reentry_closures->is_captured(inst))) {
+            _can_trace_inst[inst] = true;
+            _can_trace_const[inst] = true;
+          }
 
-            if (dynmatch(JumpInst, jump, inst)) {
-              // Jump arguments are passed to block arguments
-              for (Arg* block_arg : jump->block()->args()) {
-                Value* arg = jump->arg(block_arg->index());
-                if (arg->is_named()) {
-                  used_by((NamedValue*) arg, block_arg);
-                }
+          if (dynmatch(JumpInst, jump, inst)) {
+            // Jump arguments are passed to block arguments
+            for (Arg* block_arg : jump->block()->args()) {
+              Value* arg = jump->arg(block_arg->index());
+              if (arg->is_named()) {
+                used_by((NamedValue*) arg, block_arg);
               }
-            } else {
-              for (Value* arg : inst->args()) {
-                if (arg->is_named()) {
-                  used_by((NamedValue*) arg, inst);
-                }
+            }
+          } else {
+            for (Value* arg : inst->args()) {
+              if (arg->is_named()) {
+                used_by((NamedValue*) arg, inst);
               }
             }
           }
         }
-      } while (_changed && section->ordering() < BlockOrdering::Topological);
+      }
     }
 
     bool can_trace_const(NamedValue* value) const {
