@@ -54,6 +54,40 @@ namespace metajit {
     std::map<Block*, llvm::BasicBlock*> _end_blocks;
 
     NameMap<llvm::Value*> _values;
+    NameMap<Type> _alloca_types;
+
+    void find_alloca_types() {
+      _alloca_types.init(_section);
+      _alloca_types.fill(Type::Void);
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          Value* ptr;
+          Type type;
+          uint64_t offset;
+          if (dynmatch(LoadInst, load, inst)) {
+            ptr = load->ptr();
+            type = load->type();
+            offset = load->offset();
+          } else if (dynmatch(StoreInst, store, inst)) {
+            ptr = store->ptr();
+            type = store->value()->type();
+            offset = store->offset();
+          } else {
+            continue;
+          }
+          if (dynmatch(AllocaInst, alloca, ptr)) {
+            Const* size = dynamic_cast<Const*>(alloca->size());
+            Type& inferred = _alloca_types[alloca];
+            if (offset != 0 || !size || size->value() != type_size(type) ||
+                (inferred != Type::Void && inferred != type)) {
+              inferred = Type::Int8;
+            } else {
+              inferred = type;
+            }
+          }
+        }
+      }
+    }
 
     void emit_branch(llvm::Value* cond,
                      const std::function<void()>& emit_then,
@@ -215,9 +249,13 @@ namespace metajit {
           emit_add_offset(emit_arg(store->arg(0)), store->offset())
         );
       } else if (dynmatch(AllocaInst, alloca, inst)) {
+        Type type = _alloca_types[alloca];
+        if (type == Type::Void) {
+          type = Type::Int8;
+        }
         llvm::AllocaInst* llvm_alloca = _builder.CreateAlloca(
-          llvm::Type::getInt8Ty(_context),
-          emit_arg(alloca->size())
+          emit_type(type),
+          type_size(type) == 1 ? emit_arg(alloca->size()) : _builder.getInt64(1)
         );
         llvm_alloca->setAlignment(llvm::Align(alloca->align()));
         return llvm_alloca;
@@ -403,6 +441,7 @@ namespace metajit {
 
       section->autoname();
       _values.init(section);
+      find_alloca_types();
 
       llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(_context, "entry", _function);
       for (Block* block : *_section) {
