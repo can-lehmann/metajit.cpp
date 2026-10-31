@@ -54,6 +54,49 @@ namespace metajit {
     std::map<Block*, llvm::BasicBlock*> _end_blocks;
 
     NameMap<llvm::Value*> _values;
+    std::unordered_map<AllocaInst*, Type> _alloca_types;
+
+    void find_alloca_types() {
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(AllocaInst, alloca, inst)) {
+            _alloca_types.emplace(alloca, Type::Void);
+          } else if (dynamic_cast<StoreInst*>(inst) || dynamic_cast<LoadInst*>(inst)) {
+            Value* ptr;
+            Type type;
+            uint64_t offset;
+            if (dynmatch(StoreInst, store, inst)) {
+              ptr = store->ptr();
+              type = store->value()->type();
+              offset = store->offset();
+            } else if (dynmatch(LoadInst, load, inst)) {
+              ptr = load->ptr();
+              type = load->type();
+              offset = load->offset();
+            } else {
+              assert(false);
+            }
+            if (dynmatch(AllocaInst, alloca, ptr)) {
+              if (_alloca_types.find(alloca) != _alloca_types.end()) {
+                if (_alloca_types.at(alloca) == Type::Void) {
+                  _alloca_types.at(alloca) = type;
+                }
+                dynmatch(Const, size, alloca->size());
+                if (offset != 0 || !size || size->value() != type_size(type) || _alloca_types.at(alloca) != type) {
+                  _alloca_types.erase(alloca);
+                }
+              }
+            }
+          } else {
+            for (Value* arg : inst->args()) {
+              if (dynmatch(AllocaInst, alloca, arg)) {
+                _alloca_types.erase(alloca);
+              }
+            }
+          }
+        }
+      }
+    }
 
     void emit_branch(llvm::Value* cond,
                      const std::function<void()>& emit_then,
@@ -215,10 +258,12 @@ namespace metajit {
           emit_add_offset(emit_arg(store->arg(0)), store->offset())
         );
       } else if (dynmatch(AllocaInst, alloca, inst)) {
-        llvm::AllocaInst* llvm_alloca = _builder.CreateAlloca(
-          llvm::Type::getInt8Ty(_context),
-          emit_arg(alloca->size())
-        );
+        llvm::AllocaInst* llvm_alloca;
+        if (_alloca_types.find(alloca) != _alloca_types.end() && _alloca_types.at(alloca) != Type::Void) {
+          llvm_alloca = _builder.CreateAlloca(emit_type(_alloca_types.at(alloca)));
+        } else {
+          llvm_alloca = _builder.CreateAlloca(llvm::Type::getInt8Ty(_context), emit_arg(alloca->size()));
+        }
         llvm_alloca->setAlignment(llvm::Align(alloca->align()));
         return llvm_alloca;
       } else if (dynmatch(PopcountInst, popcount, inst)) {
@@ -403,6 +448,7 @@ namespace metajit {
 
       section->autoname();
       _values.init(section);
+      find_alloca_types();
 
       llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(_context, "entry", _function);
       for (Block* block : *_section) {
