@@ -295,6 +295,7 @@ namespace metajit {
       using X86Func = void(* [[clang::preserve_none]])(uint8_t*);
       LLVMFunc llvm_func = ExitOnErr(jit->lookup("llvm_func")).toPtr<LLVMFunc>();
 
+      CodeHeap heap;
       X86Func x86_func = nullptr;
       if (verify_x86) {
         X86CodeGen x86cg(section, { Reg::phys(12) });
@@ -305,7 +306,7 @@ namespace metajit {
           x86cg.save(output_path + "_x86.bin");
         }
         
-        x86_func = (X86Func) x86cg.deploy();
+        x86_func = (X86Func) x86cg.deploy(heap);
       }
 
       X86Func aot_func = nullptr;
@@ -318,7 +319,7 @@ namespace metajit {
           aot_x86cg.save(output_path + "_aot_x86.bin");
         }
 
-        aot_func = (X86Func) aot_x86cg.deploy();
+        aot_func = (X86Func) aot_x86cg.deploy(heap);
       }
 
       Section* folded_section = nullptr;

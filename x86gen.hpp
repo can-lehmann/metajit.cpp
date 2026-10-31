@@ -18,10 +18,9 @@
 #include <fstream>
 
 #include <stdlib.h>
-#include <sys/mman.h>
-#include <unistd.h>
 
 #include "jitir.hpp"
+#include "codeheap.hpp"
 
 namespace metajit {
   class RegClass {
@@ -3016,29 +3015,10 @@ namespace metajit {
       }
     }
 
-    void* deploy() {
+    void* deploy(CodeHeap& heap) {
       std::vector<uint8_t> bytes;
       emit(bytes);
-
-      void* buffer = mmap(
-        nullptr,
-        bytes.size(),
-        PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANONYMOUS,
-        -1,
-        0
-      );
-      assert(buffer != nullptr);
-
-      memcpy(buffer, bytes.data(), bytes.size());
-
-      if (mprotect(buffer, bytes.size(), PROT_READ | PROT_EXEC) == -1) {
-        std::cerr << "Failed to set memory protection: ";
-        std::cerr << strerrorname_np(errno) << " " << strerror(errno) << std::endl;
-        exit(1);
-      }
-
-      return buffer;
+      return heap.alloc(bytes.data(), bytes.size());
     }
 
     size_t inst_count() const {
