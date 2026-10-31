@@ -16,6 +16,7 @@
 
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <queue>
 #include <fstream>
 
@@ -57,35 +58,35 @@ namespace metajit {
     std::unordered_map<AllocaInst*, Type> _alloca_types;
 
     void find_alloca_types() {
-      for (bool infer : {true, false}) {
-        for (Block* block : *_section) {
-          for (Inst* inst : *block) {
+      std::unordered_set<AllocaInst*> pending;
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(AllocaInst, alloca, inst)) {
+            pending.insert(alloca);
+          } else if (dynamic_cast<StoreInst*>(inst) || dynamic_cast<LoadInst*>(inst)) {
             Value* ptr;
             Type type;
             uint64_t offset;
-            if (dynmatch(LoadInst, load, inst)) {
-              ptr = load->ptr();
-              type = load->type();
-              offset = load->offset();
-            } else if (dynmatch(StoreInst, store, inst)) {
+            if (dynmatch(StoreInst, store, inst)) {
               ptr = store->ptr();
               type = store->value()->type();
               offset = store->offset();
             } else {
-              continue;
+              LoadInst* load = static_cast<LoadInst*>(inst);
+              ptr = load->ptr();
+              type = load->type();
+              offset = load->offset();
             }
             if (dynmatch(AllocaInst, alloca, ptr)) {
-              if (infer) {
+              if (pending.erase(alloca)) {
                 _alloca_types.emplace(alloca, type);
-                continue;
               }
-              auto it = _alloca_types.find(alloca);
-              if (it == _alloca_types.end()) {
+              if (_alloca_types.find(alloca) == _alloca_types.end()) {
                 continue;
               }
               Const* size = dynamic_cast<Const*>(alloca->size());
-              if (offset != 0 || !size || size->value() != type_size(type) || it->second != type) {
-                _alloca_types.erase(it);
+              if (offset != 0 || !size || size->value() != type_size(type) || _alloca_types.at(alloca) != type) {
+                _alloca_types.erase(alloca);
               }
             }
           }
@@ -253,10 +254,9 @@ namespace metajit {
           emit_add_offset(emit_arg(store->arg(0)), store->offset())
         );
       } else if (dynmatch(AllocaInst, alloca, inst)) {
-        auto it = _alloca_types.find(alloca);
         llvm::AllocaInst* llvm_alloca;
-        if (it != _alloca_types.end()) {
-          llvm_alloca = _builder.CreateAlloca(emit_type(it->second));
+        if (_alloca_types.find(alloca) != _alloca_types.end()) {
+          llvm_alloca = _builder.CreateAlloca(emit_type(_alloca_types.at(alloca)));
         } else {
           llvm_alloca = _builder.CreateAlloca(llvm::Type::getInt8Ty(_context), emit_arg(alloca->size()));
         }
