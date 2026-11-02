@@ -142,16 +142,24 @@ class Parser:
         else:
             self.error("expected value, constant, or operation pattern")
         value = self.annotation(value)
-        if self.accept("@"):
+        while self.accept("@"):
             name = self.expect("NAME")
-            if name.text != "single_use":
+            if name.text not in {"single_use", "used_bits"}:
                 self.error(f"unknown pattern annotation {name.text!r}")
             operation = value.value if isinstance(value, ast.Typed) else value
             if not isinstance(operation, ast.Call):
-                self.error("@single_use requires an operation")
-            if operation.single_use:
-                self.error("duplicate @single_use annotation")
-            operation = replace(operation, single_use=True)
+                self.error(f"@{name.text} requires an operation")
+            if name.text == "single_use":
+                if operation.single_use:
+                    self.error("duplicate @single_use annotation")
+                operation = replace(operation, single_use=True)
+            else:
+                if operation.used_bits is not None:
+                    self.error("duplicate @used_bits annotation")
+                self.expect("(")
+                binding = self.expect("NAME")
+                self.expect(")")
+                operation = replace(operation, used_bits=binding.text)
             value = replace(value, value=operation) if isinstance(value, ast.Typed) else operation
         return value
 

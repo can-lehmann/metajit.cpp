@@ -4124,12 +4124,13 @@ namespace metajit {
     }
 
     Bits at(Value* value) const {
-      if (value->is_inst()) {
-        return _values.at((Inst*) value);
-      } else {
-        assert(false); // Unreachable
-        return Bits();
+      if (value->is_inst() && ((Inst*) value)->name() < _values.size()) {
+        Bits bits = _values.at((Inst*) value);
+        if (bits.type == value->type()) {
+          return bits;
+        }
       }
+      return Bits::all(value->type());
     }
 
     void write(std::ostream& stream) {
@@ -4310,6 +4311,7 @@ namespace metajit {
         section->autoname();
         _builder.set_next_name();
         UsedBits used_bits(section);
+        SaturatingUseCounts used_use_counts(section);
         
         changed |= substitute([&](Inst* inst) -> Value* {
           if (is_int_or_bool(inst->type()) &&
@@ -4318,37 +4320,8 @@ namespace metajit {
               used_bits.at(inst).used == 0) {
             return _builder.build_const(inst->type(), 0);
           }
-          if (dynmatch(AndInst, and_inst, inst)) {
-            UsedBits::Bits used = used_bits.at(inst);
-
-            if (dynmatch(Const, b, and_inst->arg(1))) {
-              if ((used.used & ~b->value()) == 0) {
-                return and_inst->arg(0);
-              }
-              uint64_t mask = b->value() & used.used;
-              if (mask != b->value()) {
-                return _builder.fold_and(and_inst->arg(0), _builder.build_const(inst->type(), mask));
-              }
-            }
-          } else if (dynmatch(OrInst, or_inst, inst)) {
-            UsedBits::Bits used = used_bits.at(inst);
-
-            if (dynmatch(Const, b, or_inst->arg(1))) {
-              if ((used.used & b->value()) == 0) {
-                return or_inst->arg(0);
-              }
-            }
-          } else if ((dynamic_cast<ResizeUInst*>(inst) ||
-                      dynamic_cast<ResizeSInst*>(inst)) &&
-                     type_width(inst->arg(0)->type()) < type_width(inst->type())) {
-            UsedBits::Bits used = used_bits.at(inst);
-            uint64_t mask = type_mask(inst->type()) & type_mask(inst->arg(0)->type());
-            if ((used.used & ~mask) == 0) {
-              return _builder.build_resize_x(inst->arg(0), inst->type());
-            }
-          }
-          return nullptr;
-        });
+          return _builder.try_simplify_used_bits(inst, used_bits.at(inst).used, used_use_counts);
+        }, &used_use_counts);
       }
     }
   };

@@ -131,12 +131,18 @@ class Emitter:
         self.used_names.add(function.name)
         ir.validate(function.body, tuple(parameter.value for parameter in function.parameters))
         parameters = []
+        templates = []
         if any(parameter.kind == "facts" for parameter in function.parameters):
-            self.line("template<class Facts = RuledslUnknownBits, class UseCounts = RuledslUnknownUseCounts>")
+            templates.append("class Facts = RuledslUnknownBits")
+        if any(parameter.kind == "use_counts" for parameter in function.parameters):
+            templates.append("class UseCounts = RuledslUnknownUseCounts")
+        if templates:
+            self.line(f"template<{', '.join(templates)}>")
         for parameter in function.parameters:
             type_ = {"value": "Value*", "type": "Type", "inst": "Inst*",
                      "facts": "[[maybe_unused]] const Facts&",
-                     "use_counts": "[[maybe_unused]] const UseCounts&"}[parameter.kind]
+                     "use_counts": "[[maybe_unused]] const UseCounts&",
+                     "bits": "[[maybe_unused]] uint64_t"}[parameter.kind]
             default = " = {}" if parameter.kind in {"facts", "use_counts"} else ""
             parameters.append(f"{type_} {self.name_for(parameter.value)}{default}")
         self.line(f"Value* {function.name}({', '.join(parameters)}) {{")
@@ -146,15 +152,16 @@ class Emitter:
         self.line("}")
 
 
-def emit(program, include_statistics=True):
+def emit(program, include_statistics=True, include_context=True):
     emitter = Emitter()
-    if any(parameter.kind == "facts" for function in program.functions for parameter in function.parameters):
+    if include_context and any(parameter.kind == "facts" for function in program.functions for parameter in function.parameters):
         emitter.line("struct RuledslUnknownBits {")
         emitter.indent += 1
         emitter.line("uint64_t known_zeros(Value*) const { return 0; }")
         emitter.line("uint64_t known_ones(Value*) const { return 0; }")
         emitter.indent -= 1
         emitter.line("};")
+    if include_context and any(parameter.kind == "use_counts" for function in program.functions for parameter in function.parameters):
         emitter.line("struct RuledslUnknownUseCounts {")
         emitter.indent += 1
         emitter.line("uint8_t at(Value*) const { return 255; }")

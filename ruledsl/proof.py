@@ -78,6 +78,13 @@ class Prover:
         self.known_bits = {}
         self.select_condition = None
         self.before = self.pattern(checked.rule.pattern, introduce=True)
+        self.used_mask = None
+        if checked.used_bits_binding is not None:
+            name = checked.used_bits_binding
+            mask = Value.fresh(name, self.before.type, may_be_poison=False)
+            self.inputs[name] = mask
+            self.calculations[name] = Calculation(mask.bits, z3.BoolVal(True))
+            self.used_mask = mask.bits
         self.after = None
         self.conditions = z3.BoolVal(True)
 
@@ -291,7 +298,10 @@ class Prover:
         if not refinement:
             return
         self.after = self.pattern(self.checked.rule.replacement)
-        violation = z3.Or(self.after.poison, self.before.bits != self.after.bits)
+        different = self.before.bits != self.after.bits
+        if self.used_mask is not None:
+            different = ((self.before.bits ^ self.after.bits) & self.used_mask) != 0
+        violation = z3.Or(self.after.poison, different)
         if self.query(self.checked.rule, self.conditions, z3.Not(self.before.poison), violation,
                       split=self.select_condition) == z3.sat:
             self.error(self.checked.rule, "could not prove refinement", self.solver.model())
@@ -304,10 +314,10 @@ def ir_types(checked, assignment):
                                             for span in spans)}
 
 
-def prove(source, filename="<string>", timeout_ms=120000):
+def prove(source, filename="<string>", timeout_ms=120000, *, used_bits=False):
     if timeout_ms <= 0:
         raise ValueError("proof timeout must be positive")
-    checked_rules = check(source, filename)
+    checked_rules = check(source, filename, used_bits=used_bits)
     for checked in checked_rules:
         unproved = []
         for assignment in checked.instantiations:

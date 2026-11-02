@@ -19,18 +19,27 @@ from .signatures import SIGNATURES
 
 class SimplifyLowerer(Lowerer):
     # generate code suitable for Simplify/SimplifyTrace
-    def __init__(self, name):
+    def __init__(self, name, used_bits=False):
         super().__init__(name, ())
         self.parameters = (Parameter(ir.Value("inst"), "inst"),
                            Parameter(ir.Value("facts"), "facts"),
                            Parameter(ir.Value("use_counts"), "use_counts"))
         self.root = ir.Ref(self.parameters[0].value)
-        self.facts = ir.Unary("&", ir.Ref(self.parameters[1].value))
+        self.prefix = "try_simplify_"
+        if used_bits:
+            self.parameters = (self.parameters[0], Parameter(ir.Value("used_mask"), "bits"),
+                               self.parameters[2])
+            self.used_mask = ir.Ref(self.parameters[1].value)
+            self.prefix = "try_simplify_used_bits_"
+        else:
+            self.facts = ir.Unary("&", ir.Ref(self.parameters[1].value))
         self.use_counts = ir.Unary("&", ir.Ref(self.parameters[2].value))
         self.result_type = member_call(self.root, "type")
         self.paths = {}
 
     def candidate(self, candidate, block, paths, constants):
+        if (candidate.checked.used_bits_binding is not None) != hasattr(self, "used_mask"):
+            raise ValueError("UsedBits and full-value rules require separate simplification backends")
         replacement = matcher.normalize(candidate.checked.rule.replacement, candidate.checked,
                                         candidate.checked.type_representatives)
         if matcher.equivalent(candidate.pattern, replacement):
@@ -49,14 +58,16 @@ class SimplifyLowerer(Lowerer):
             self.decision(stage, block, self.paths, {})
         block.statements.append(ir.Return(ir.Literal(None)))
         ir.validate(block, tuple(parameter.value for parameter in self.parameters))
-        return Function("try_simplify_" + operation_name(self.name), self.parameters, block)
+        return Function(self.prefix + operation_name(self.name), self.parameters, block)
 
 
-def lower(program):
-    functions = [SimplifyLowerer(name).function(opcode_matcher)
+def lower(program, *, used_bits=False):
+    prefix = "try_simplify_used_bits_" if used_bits else "try_simplify_"
+    functions = [SimplifyLowerer(name, used_bits=used_bits).function(opcode_matcher)
                  for name, opcode_matcher in program.matchers.items()]
     parameter = Parameter(ir.Value("inst"), "inst")
-    facts = Parameter(ir.Value("facts"), "facts")
+    facts = (Parameter(ir.Value("used_mask"), "bits") if used_bits else
+             Parameter(ir.Value("facts"), "facts"))
     counts = Parameter(ir.Value("use_counts"), "use_counts")
     root = ir.Ref(parameter.value)
     block = ir.Block()
@@ -65,9 +76,9 @@ def lower(program):
     for name in program.matchers:
         matched = ir.Value("matched")
         block.statements.append(ir.Bind(matched, call(f"dynamic_cast<{name}Inst*>", root)))
-        body = ir.Block([ir.Return(call("try_simplify_" + operation_name(name),
+        body = ir.Block([ir.Return(call(prefix + operation_name(name),
                                        ir.Ref(matched), ir.Ref(facts.value), ir.Ref(counts.value)))])
         block.statements.append(ir.If(ir.Binary("!=", ir.Ref(matched), ir.Literal(None)), body))
     block.statements.append(ir.Return(ir.Literal(None)))
-    functions.append(Function("try_simplify", (parameter, facts, counts), block))
+    functions.append(Function(prefix.removesuffix("_"), (parameter, facts, counts), block))
     return Program(program.rule_names, tuple(functions))

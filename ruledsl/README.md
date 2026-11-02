@@ -19,6 +19,10 @@ the regeneration command enables this with `--simplify-folds`.
 Simplification rules can query KnownBits. Rule names must be unique
 within each file.
 
+Put demanded-bit rewrites in `usedbits.rules`. They run only in Simplify's
+separate UsedBits phase and require a root `@used_bits` annotation. The Makefile
+includes them during regeneration with `--usedbits-rules usedbits.rules`.
+
 After editing rules, regenerate their C++ include:
 
 ```sh
@@ -178,10 +182,38 @@ add_disjoint: Add(x, y)
     => Or(x, y)
 ```
 
+### UsedBits rules
+
+Use `@used_bits(Cused)` on the root operation to bind its demanded-bit mask.
+The mask is a compile-time constant with the root result's type and width:
+
+```text
+and_used_mask: And(x, C) @used_bits(Cused)
+    Cnew = C & Cused
+    check Cnew != C
+    => And(x, Cnew)
+```
+
+These rules must preserve the observed bits, where `Cused` has a one, and must
+not introduce poison even when the mask is zero. They need not preserve other
+bits. Proofs check every mask satisfying the conditions, independently of how
+the analysis computes masks.
+
+UsedBits rules cannot query `known_zeros` or `known_ones`, including in unused
+calculations. Ordinary calculations, `where`, `check`, and nested `@single_use`
+guards remain available. The mask binding cannot appear in a `where` condition.
+The annotation is required in `usedbits.rules` and rejected in the other files.
+
+These replacements are safe only for the root's existing consumers. Builder
+folding and SimplifyTrace do not apply them. Simplify computes fresh demand
+masks and use counts before its forward sweep; new instructions are not
+revisited in that sweep. Missing information means all bits are used.
+
 ### Proofs and diagnostics
 
-Every rule is checked automatically during regeneration. It must preserve the
-result values whenever the original expression has a defined result. It may
+Every rule is checked automatically during regeneration. Full-value rules must
+preserve the result values whenever the original expression has a defined result;
+UsedBits rules preserve the bits selected by their mask. A rule may
 replace poison with a defined result, but must not turn a defined result into
 poison (this is refinement). The rule must work at every type allowed by its
 pattern and `where` conditions.

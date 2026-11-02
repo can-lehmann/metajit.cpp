@@ -20,7 +20,7 @@ from . import ast
 from .parser import parse
 from .signatures import SIGNATURES
 from .source import TypeCheckError
-from .types import BOOL, ConcreteType, CONCRETE_TYPES, INT64, TypeConflict, TypeConstraints, TypeVar
+from .types import BIT_TYPES, BOOL, ConcreteType, CONCRETE_TYPES, INT64, TypeConflict, TypeConstraints, TypeVar
 
 
 KNOWN_BITS_FUNCTIONS = frozenset({"known_zeros", "known_ones"})
@@ -56,6 +56,13 @@ class CheckedRule:
     def requires_use_counts(self):
         return any(isinstance(node, ast.Call) and node.single_use for node in self.expressions)
 
+    @property
+    def used_bits_binding(self):
+        root = self.rule.pattern
+        while isinstance(root, ast.Typed):
+            root = root.value
+        return root.used_bits
+
 
 BINARY_OPERATORS = {
     "+": operator.add, "-": operator.sub, "*": operator.mul,
@@ -86,7 +93,7 @@ CALCULATION_FUNCTIONS = {"bit_reverse": bit_reverse, "mul_high_u": mul_high_u}
 
 
 class Checker:
-    def __init__(self, rule, source, filename):
+    def __init__(self, rule, source, filename, used_bits=False):
         self.rule = rule
         self.source = source
         self.filename = filename
@@ -96,6 +103,7 @@ class Checker:
         self.expressions = {}
         self.definitions = {}
         self.anchors = set()
+        self.used_bits = used_bits
 
     def error(self, node, message):
         raise TypeCheckError(message, node.span, self.source, self.filename)
@@ -158,6 +166,12 @@ class Checker:
         elif isinstance(node, ast.Call):
             if node.single_use and not introduce:
                 self.error(node, "@single_use is only allowed on input-pattern operations")
+            if node.used_bits is not None:
+                root = self.rule.pattern
+                while isinstance(root, ast.Typed):
+                    root = root.value
+                if not introduce or node is not root:
+                    self.error(node, "@used_bits is only allowed on the root input operation")
             if node.name not in SIGNATURES:
                 self.error(node, f"unknown or unsupported instruction {node.name!r}")
             signature = SIGNATURES[node.name]
@@ -218,6 +232,8 @@ class Checker:
         return self.remember(node, info)
 
     def call(self, node):
+        if self.used_bits and node.name in KNOWN_BITS_FUNCTIONS:
+            self.error(node, "KnownBits queries are not allowed in UsedBits rules")
         arities = {"width": 1, "bits": 2, "min": 2, "max": 2, "ctz": 1,
                    "bit_reverse": 1, "mul_high_u": 2,
                    "known_zeros": 1, "known_ones": 1}
@@ -254,8 +270,19 @@ class Checker:
             root_node = root_node.value
         if root_node.single_use:
             self.error(root_node, "@single_use is only allowed on nested input operations")
+        if self.used_bits and root_node.used_bits is None:
+            self.error(root_node, "UsedBits rules require a root @used_bits binding")
+        if not self.used_bits and root_node.used_bits is not None:
+            self.error(root_node, "@used_bits requires usedbits.rules and the masked proof contract")
         root = self.pattern(self.rule.pattern, introduce=True)
         self.pattern_bindings = frozenset(self.bindings)
+        if root_node.used_bits is not None:
+            name = root_node.used_bits
+            if not name.startswith("C"):
+                self.error(root_node, "UsedBits mask bindings must start with C")
+            self.available_name(name, root_node)
+            self.unify(root.type, self.constraints.fresh(BIT_TYPES), root_node)
+            self.bindings[name] = ExprInfo("constant", root.type, frozenset((name,)))
         for statement in self.rule.body:
             if isinstance(statement, ast.Binding):
                 self.available_name(statement.name, statement)
@@ -367,12 +394,12 @@ class Checker:
         return result
 
 
-def check(source, filename="<string>"):
+def check(source, filename="<string>", *, used_bits=False):
     checked = []
     names = set()
     for rule in parse(source, filename):
         if rule.name in names:
             raise TypeCheckError(f"duplicate rule name {rule.name!r}", rule.span, source, filename)
         names.add(rule.name)
-        checked.append(Checker(rule, source, filename).check())
+        checked.append(Checker(rule, source, filename, used_bits=used_bits).check())
     return tuple(checked)

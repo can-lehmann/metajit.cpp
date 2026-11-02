@@ -194,6 +194,68 @@ b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
 )");
 }
 
+void test_used_bits_missing_values() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Ptr, Type::Int32});
+  builder.move_to_end(block);
+  Value* x = block->arg(1);
+  Inst* masked = builder.build_and(x, builder.build_const(Type::Int32, 255));
+  Value* narrowed = builder.build_resize_u(masked, Type::Int8);
+  builder.build_store(block->arg(0), narrowed, 0, 0);
+  builder.build_exit();
+  section.order_blocks(BlockOrdering::Dominator);
+  section.autoname();
+  UsedBits used(&section);
+  unittest_assert(used.at(masked).used == 255);
+  unittest_assert(used.at(x).used == type_mask(Type::Int32));
+  unittest_assert(used.at(builder.build_const(Type::Int8, 0)).used == 255);
+  builder.set_next_name();
+  builder.move_before(block, block->terminator());
+  Inst* fresh = builder.build_and(x, builder.build_const(Type::Int32, 1));
+  unittest_assert(used.at(fresh).type == Type::Int32);
+  unittest_assert(used.at(fresh).used == type_mask(Type::Int32));
+  section.autoname();
+  UsedBits recomputed(&section);
+  unittest_assert(recomputed.at(fresh).used == 0);
+}
+
+void test_simplify_used_bits_recompute() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Ptr, Type::Int16});
+  builder.move_to_end(block);
+  Value* x = block->arg(1);
+  Inst* masked = builder.build_and(x, builder.build_const(Type::Int16, 255));
+  Value* resized = builder.build_resize_s(masked, Type::Int32);
+  Value* shifted = builder.build_shl(resized, builder.build_const(Type::Int32, 24));
+  StoreInst* output = builder.build_store(block->arg(0), shifted, 0, 0);
+  builder.build_exit();
+  section.order_blocks(BlockOrdering::Dominator);
+  Simplify::run(&section, 1);
+  ShlInst* result = dynamic_cast<ShlInst*>(output->value());
+  unittest_assert(result);
+  ResizeXInst* first = dynamic_cast<ResizeXInst*>(result->arg(0));
+  unittest_assert(first && first->arg(0) == masked);
+  Simplify::run(&section, 1);
+  result = dynamic_cast<ShlInst*>(output->value());
+  unittest_assert(result);
+  ResizeXInst* second = dynamic_cast<ResizeXInst*>(result->arg(0));
+  unittest_assert(second && second->arg(0) == x);
+  unittest_assert(!section.verify(std::cout));
+  for (uint64_t input : {uint64_t(0), uint64_t(1), uint64_t(0x1234), uint64_t(0xffff)}) {
+    uint64_t value = 0;
+    Interpreter interpreter(&section, {Interpreter::Bits::constant(&value),
+                             Interpreter::Bits::constant(Type::Int16, input)});
+    unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+    unittest_assert(value == ((input & 255) << 24));
+  }
+}
+
 void test_simplify_used_bits_other_use() {
   const std::string input = R"(section {
 b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
@@ -3233,6 +3295,8 @@ int main(int argc, char** argv) {
   suite.test("fold sub same operand").run(test_fold_sub_same_operand);
   suite.test("simplify overwritten bytes").run(test_simplify_overwritten_bytes);
   suite.test("simplify used bits other use").run(test_simplify_used_bits_other_use);
+  suite.test("used bits missing values").run(test_used_bits_missing_values);
+  suite.test("simplify used bits recompute").run(test_simplify_used_bits_recompute);
   suite.test("simplify used bits effects").run(test_simplify_used_bits_effects);
   suite.test("simplify used bits shl mask").run(test_simplify_used_bits_shl_mask);
   suite.test("narrowing resize normalization").run(test_narrowing_resize_normalization);

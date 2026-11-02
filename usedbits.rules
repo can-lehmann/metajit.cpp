@@ -1,0 +1,38 @@
+# Copyright 2026 Can Joshua Lehmann
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+and_used_redundant: And(x, C) @used_bits(Cused)
+    check Cused & ~C == 0
+    => x
+
+and_used_mask: And(x, C) @used_bits(Cused)
+    Cnew = C & Cused
+    check Cnew != C
+    => And(x, Cnew)
+
+or_used_redundant: Or(x, C) @used_bits(Cused)
+    check Cused & C == 0
+    => x
+
+resize_u_unused_upper: ResizeU(x: T): U @used_bits(Cused)
+    where width(T) < width(U)
+    Cmask = bits(bits(-1, T), U)
+    check Cused & ~Cmask == 0
+    => ResizeX(x): U
+
+resize_s_unused_upper: ResizeS(x: T): U @used_bits(Cused)
+    where width(T) < width(U)
+    Cmask = bits(bits(-1, T), U)
+    check Cused & ~Cmask == 0
+    => ResizeX(x): U
