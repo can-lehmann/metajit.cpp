@@ -71,3 +71,13 @@ shr_u_used_zero: ShrU(x: T, C) @used_bits(Cused)
     check C < width(T)
     check Cused << C == 0
     => 0
+
+or_used_shl: Or(x, Shl(y: T, C)) @used_bits(Cused)
+    check C < width(T)
+    check Cused >> C == 0
+    => x
+
+or_used_shr_u: Or(x, ShrU(y: T, C)) @used_bits(Cused)
+    check C < width(T)
+    check Cused << C == 0
+    => x
