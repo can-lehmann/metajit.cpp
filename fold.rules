@@ -374,6 +374,15 @@ eq_masked_xor: Eq(And(Xor(x, C1), Cmask), C2)
     Cnew = C2 ^ (C1 & Cmask)
     => Eq(And(x, Cmask), Cnew)
 
+eq_shifted_bool_bit: Eq(And(Shl(ResizeX(Shl(ResizeX(x: Bool): U, C1)): T, C2), Cmask), Cmask)
+    where width(U) > 1 and width(T) > width(U)
+    check C1 < width(U) and C2 < width(T)
+    Csum = bits(C1, T) + C2
+    check Csum < width(T)
+    Cbit = 1 << Csum
+    check Cmask == Cbit
+    => x
+
 lt_u_self: LtU(x, x)
     => 0
 
@@ -413,6 +422,9 @@ select_same: Select(c, x, x)
 
 select_equal_arms: Select(Eq(x, y), x, y)
     => y
+
+select_eq_true_constant: Select(Eq(x, C), x, y)
+    => Select(Eq(x, C), C, y)
 
 select_equal_resize: Select(Eq(x: S, C1), C2: T, ResizeU(x): T)
     check bits(C1, T) == C2
