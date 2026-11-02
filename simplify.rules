@@ -204,3 +204,10 @@ resize_u_or_known_zero: ResizeU(Or(x: S, y)): T
     Cmask = bits(bits(-1, T), S)
     check known_zeros(y) & Cmask == Cmask
     => ResizeU(x): T
+
+eq_lossless_truncate: Eq(ResizeU(x: S): T, C)
+    where width(T) < width(S)
+    Cmask = bits(bits(-1, T), S)
+    check known_zeros(x) | Cmask == -1
+    Cwide = bits(C, S)
+    => Eq(x, Cwide)
