@@ -268,8 +268,10 @@ void test_simplify_used_bits_xor_or_constants() {
     uint64_t high = type_mask(type) & ~uint64_t(255);
     Value* inverted = builder.build_xor(x, builder.build_const(type, high));
     Value* set = builder.build_or(x, builder.build_const(type, high | 3));
+    Value* flipped = builder.build_xor(x, builder.build_const(type, high | 3));
     StoreInst* xor_output = builder.build_store(block->arg(0), builder.build_resize_u(inverted, Type::Int8), 0, 0);
     StoreInst* or_output = builder.build_store(block->arg(0), builder.build_resize_u(set, Type::Int8), 0, 8);
+    StoreInst* flipped_output = builder.build_store(block->arg(0), builder.build_resize_u(flipped, Type::Int8), 0, 16);
     builder.build_exit();
     section.order_blocks(BlockOrdering::Dominator);
     Simplify::run(&section, 1);
@@ -281,14 +283,57 @@ void test_simplify_used_bits_xor_or_constants() {
     unittest_assert(result && result->arg(0) == x);
     Const* mask = dynamic_cast<Const*>(result->arg(1));
     unittest_assert(mask && mask->value() == 3);
+    ResizeUInst* flipped_resize = dynamic_cast<ResizeUInst*>(flipped_output->value());
+    unittest_assert(flipped_resize);
+    XorInst* flipped_result = dynamic_cast<XorInst*>(flipped_resize->arg(0));
+    unittest_assert(flipped_result && flipped_result->arg(0) == x);
+    Const* flipped_mask = dynamic_cast<Const*>(flipped_result->arg(1));
+    unittest_assert(flipped_mask && flipped_mask->value() == 3);
     unittest_assert(!section.verify(std::cout));
     for (uint64_t input : {uint64_t(0), uint64_t(1), uint64_t(42), type_mask(type)}) {
-      uint64_t values[2] = {};
+      uint64_t values[3] = {};
       Interpreter interpreter(&section, {Interpreter::Bits::constant(values),
                                Interpreter::Bits::constant(type, input)});
       unittest_assert(interpreter.run() == Interpreter::Event::Exit);
       unittest_assert(values[0] == (input & 255));
       unittest_assert(values[1] == ((input | 3) & 255));
+      unittest_assert(values[2] == ((input ^ 3) & 255));
+    }
+  }
+}
+
+void test_simplify_used_bits_add_constant() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (bool shared : {false, true}) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* block = builder.build_block({Type::Ptr, type});
+      builder.move_to_end(block);
+      Value* x = block->arg(1);
+      Inst* sum = builder.build_add(x, builder.build_const(type, 8));
+      Value* low_bits = builder.build_and(sum, builder.build_const(type, 7));
+      StoreInst* output = builder.build_store(block->arg(0), low_bits, 0, 0);
+      if (shared) {
+        builder.build_store(block->arg(0), sum, 0, 8);
+      }
+      builder.build_exit();
+      section.order_blocks(BlockOrdering::Dominator);
+      Simplify::run(&section, 1);
+      AndInst* masked = dynamic_cast<AndInst*>(output->value());
+      unittest_assert(masked && masked->arg(0) == (shared ? (Value*) sum : x));
+      unittest_assert(!section.verify(std::cout));
+      for (uint64_t input : {uint64_t(0), uint64_t(1), uint64_t(7), type_mask(type)}) {
+        uint64_t values[2] = {};
+        Interpreter interpreter(&section, {Interpreter::Bits::constant(values),
+                                 Interpreter::Bits::constant(type, input)});
+        unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+        unittest_assert(values[0] == (input & 7));
+        if (shared) {
+          unittest_assert(values[1] == ((input + 8) & type_mask(type)));
+        }
+      }
     }
   }
 }
@@ -3335,6 +3380,7 @@ int main(int argc, char** argv) {
   suite.test("used bits missing values").run(test_used_bits_missing_values);
   suite.test("simplify used bits recompute").run(test_simplify_used_bits_recompute);
   suite.test("simplify used bits xor or constants").run(test_simplify_used_bits_xor_or_constants);
+  suite.test("simplify used bits add constant").run(test_simplify_used_bits_add_constant);
   suite.test("simplify used bits effects").run(test_simplify_used_bits_effects);
   suite.test("simplify used bits shl mask").run(test_simplify_used_bits_shl_mask);
   suite.test("narrowing resize normalization").run(test_narrowing_resize_normalization);

@@ -45,3 +45,13 @@ or_used_mask: Or(x, C) @used_bits(Cused)
     Cnew = C & Cused
     check Cnew != C
     => Or(x, Cnew)
+
+add_unused_constant: Add(x, C) @used_bits(Cused)
+    Clow = C & -C
+    check Cused < Clow
+    => x
+
+xor_used_mask: Xor(x, C) @used_bits(Cused)
+    Cnew = C & Cused
+    check Cnew != C
+    => Xor(x, Cnew)

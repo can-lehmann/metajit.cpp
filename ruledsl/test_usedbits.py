@@ -91,7 +91,7 @@ class UsedBitsTests(unittest.TestCase):
 
     def test_rules_prove(self):
         rules = prove(RULES, used_bits=True)
-        self.assertEqual([len(rule.instantiations) for rule in rules], [5, 5, 5, 10, 10, 5, 5])
+        self.assertEqual([len(rule.instantiations) for rule in rules], [5, 5, 5, 10, 10, 5, 5, 4, 5])
         for checked in rules:
             for assignment in checked.instantiations:
                 prover = Prover(checked, assignment, RULES, "usedbits.rules", 10000)
@@ -123,6 +123,14 @@ class UsedBitsTests(unittest.TestCase):
     def test_all_ones_mask_requires_full_equality(self):
         with self.assertRaises(ProofError):
             prove("wrong: And(x, C) @used_bits(Cused)\n    check Cused == -1\n    => x\n", used_bits=True)
+
+    def test_addition_can_carry_into_observed_bits(self):
+        source = ("wrong: Add(x: Int32, 1) @used_bits(Cused)\n"
+                  "    check Cused == 8\n    => x\n")
+        with self.assertRaises(ProofError) as raised:
+            prove(source, used_bits=True)
+        example = raised.exception.counterexample
+        self.assertNotEqual((example.before.value ^ example.after.value) & 8, 0)
 
     def test_masked_matchers_cannot_use_full_value_backend(self):
         checked = check("same: And(x, C) @used_bits(Cused)\n    => x\n", used_bits=True)
@@ -197,12 +205,12 @@ int main() {
   }
   assert(Generated::ruledsl_rule_counts[1] > 0);
   assert(Generated::ruledsl_rule_counts[2] > 0);
-  assert(Generated::ruledsl_rule_counts[9] > 0);
+  assert(Generated::ruledsl_rule_counts[11] > 0);
 }
 """
         test_simplify.SimplifyTests.run_cpp(self, code, main, statistics=True)
 
-    def test_xor_elimination_and_or_mask_shrinking(self):
+    def test_xor_and_or_mask_shrinking(self):
         code = generate("", include_simplify=True, used_bits_source=RULES)
         main = """
 int main() {
@@ -220,13 +228,23 @@ int main() {
           size_t before = builder.allocated.size();
           assert(!builder.try_simplify(root));
           Value* replacement = builder.try_simplify_used_bits(root, demand);
-          assert(replacement == ((constant.value() & used) == 0 ? &x : nullptr));
-          assert(builder.allocated.size() == before);
+          uint64_t narrowed = constant.value() & used;
+          if (narrowed == 0) {
+            assert(replacement == &x);
+            assert(builder.allocated.size() == before);
+          } else if (narrowed == constant.value()) {
+            assert(!replacement);
+            assert(builder.allocated.size() == before);
+          } else {
+            XorInst* result = dynamic_cast<XorInst*>(replacement);
+            Const* result_bits = result ? dynamic_cast<Const*>(result->arg(1)) : nullptr;
+            assert(result && result->arg(0) == &x);
+            assert(result_bits && result_bits->value() == narrowed);
+          }
           root = swapped ? builder.build_or(&constant, &x) : builder.build_or(&x, &constant);
           before = builder.allocated.size();
           assert(!builder.try_simplify(root));
           replacement = builder.try_simplify_used_bits(root, demand);
-          uint64_t narrowed = constant.value() & used;
           if (narrowed == 0) {
             assert(replacement == &x);
             assert(builder.allocated.size() == before);
@@ -239,6 +257,34 @@ int main() {
             assert(result && result->arg(0) == &x);
             assert(result_bits && result_bits->value() == narrowed);
           }
+        }
+      }
+    }
+  }
+}
+"""
+        test_simplify.SimplifyTests.run_cpp(self, code, main)
+
+    def test_add_unused_constant(self):
+        code = generate("", include_simplify=True, used_bits_source=RULES)
+        main = """
+int main() {
+  Generated builder;
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(type);
+    uint64_t mask = type_mask(type);
+    uint64_t top = uint64_t(1) << (type_width(type) - 1);
+    for (uint64_t bits : {uint64_t(0), uint64_t(1), uint64_t(8), uint64_t(12), top, mask}) {
+      Const constant(type, bits);
+      uint64_t low = constant.value() & -constant.value();
+      for (uint64_t demand : {uint64_t(0), uint64_t(1), uint64_t(7), uint64_t(8), uint64_t(9), mask}) {
+        for (bool swapped : {false, true}) {
+          Inst* root = swapped ? builder.build_add(&constant, &x) : builder.build_add(&x, &constant);
+          size_t before = builder.allocated.size();
+          assert(!builder.try_simplify(root));
+          Value* result = builder.try_simplify_used_bits(root, demand);
+          assert(result == ((demand & mask) < low ? &x : nullptr));
+          assert(builder.allocated.size() == before);
         }
       }
     }
