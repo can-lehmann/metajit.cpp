@@ -23,6 +23,10 @@ and_redundant_operand: And(x, y)
     check known_zeros(x) | known_ones(y) == -1
     => x
 
+and_shifted_known_mask: And(ResizeU(ShrU(x: S, s)): T, ResizeU(ShrU(C: S, s)): T)
+    check known_zeros(x) | C == -1
+    => ResizeU(ShrU(x, s)): T
+
 or_redundant_operand: Or(x, y)
     check known_ones(x) | known_zeros(y) == -1
     => x

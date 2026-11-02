@@ -453,6 +453,11 @@ resize_u_add_even_bool: ResizeU(Add(x, C)): Bool
     check C & 1 == 0
     => ResizeU(x): Bool
 
+resize_u_add_shift_above_width: ResizeU(Add(Shl(x: S, C), y)): T
+    where width(T) < width(S)
+    check C >= width(T) and C < width(S)
+    => ResizeU(y): T
+
 resize_u_select: ResizeU(Select(c, C1: S, C2)): T
     Ctrue = bits(C1, T)
     Cfalse = bits(C2, T)
