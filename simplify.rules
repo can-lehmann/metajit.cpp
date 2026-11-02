@@ -158,6 +158,15 @@ select_add_same_condition: Select(c, Add(Select(c, x, C1), C2) @single_use, C3)
 select_factor_complementary_conditions: Select(And(a, b), x, Select(And(Xor(a, 1), b), y, z) @single_use)
     => Select(b, Select(a, x, y), z)
 
+select_factor_false_bit: Select(And(c, ResizeU(Select(c, v: S, C)): Bool), x, Select(ResizeU(Select(c, v: S, C)): Bool, z, y) @single_use)
+    check C & 1 == 1
+    => Select(c, Select(ResizeU(Select(c, v, C)): Bool, x, y), z)
+
+select_factor_false_shifted_bit: Select(And(c, ResizeU(ShrU(Select(c, v: S, C1), C2)): Bool), x, Select(ResizeU(ShrU(Select(c, v: S, C1), C2)): Bool, z, y) @single_use)
+    check C2 < width(S)
+    check (C1 >> C2) & 1 == 1
+    => Select(c, Select(ResizeU(ShrU(Select(c, v, C1), C2)): Bool, x, y), z)
+
 eq_truncated_add_constant: Eq(ResizeU(Add(x: S, C1) @single_use): T @single_use, C2)
     where width(T) < width(S)
     C = C2 - bits(C1, T)

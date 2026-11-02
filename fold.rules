@@ -702,6 +702,15 @@ and_select_false_shifted_bit_complement: And(c, Xor(ResizeU(ShrU(Select(c, x: T,
     check (C1 >> C2) & 1 == 1
     => Xor(ResizeU(ShrU(Select(c, x, C1), C2)): Bool, 1)
 
+or_select_false_bit: Or(ResizeU(Select(c, x: T, C)): Bool, Xor(c, 1))
+    check C & 1 == 1
+    => ResizeU(Select(c, x, C)): Bool
+
+or_select_false_shifted_bit: Or(ResizeU(ShrU(Select(c, x: T, C1), C2)): Bool, Xor(c, 1))
+    check C2 < width(T)
+    check (C1 >> C2) & 1 == 1
+    => ResizeU(ShrU(Select(c, x, C1), C2)): Bool
+
 and_select_lt_u: And(c, LtU(Select(c, x, C1), C2))
     check C1 >= C2
     => LtU(Select(c, x, C1), C2)
