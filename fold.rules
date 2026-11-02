@@ -748,3 +748,6 @@ resize_u_select_packed_constants: ResizeU(Select(c, Select(d, C1: S, C2), Or(Sel
     Cfalse = bits(C2, T)
     check Ctrue == bits(C3, T) and Cfalse == bits(C4, T)
     => Select(d, Ctrue, Cfalse)
+
+and_not_or_complement_absorb: And(Xor(Or(y, Xor(x, -1)), -1), x)
+    => Xor(Or(y, Xor(x, -1)), -1)
