@@ -186,3 +186,9 @@ and_xor_operand_single_use: And(Xor(x, y) @single_use, y)
 
 xor_nonzero_single_use: Xor(LtU(0, x) @single_use, 1)
     => Eq(x, 0)
+
+resize_u_or_known_zero: ResizeU(Or(x: S, y)): T
+    where width(T) < width(S)
+    Cmask = bits(bits(-1, T), S)
+    check known_zeros(y) & Cmask == Cmask
+    => ResizeU(x): T

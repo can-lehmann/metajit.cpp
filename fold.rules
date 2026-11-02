@@ -715,3 +715,27 @@ eq_masked_shl: Eq(Shl(And(x: T, Cmask), Cshift), Cvalue)
 
 and_complement_or_absorb: And(Xor(Or(x, y), -1), Xor(y, -1))
     => Xor(Or(x, y), -1)
+
+and_select_complement: And(c, Xor(Select(c, x, 0: Bool), 1))
+    => Xor(c, Select(c, x, 0: Bool))
+
+lt_u_independent_selects_or: LtU(Select(c, C1, C2), Select(d, C3, C4))
+    check C1 < C3 and C1 < C4 and C2 < C3 and C2 >= C4
+    => Or(c, d)
+
+lt_u_independent_selects_and: LtU(Select(c, C1, C2), Select(d, C3, C4))
+    check C1 < C3 and C1 >= C4 and C2 >= C3 and C2 >= C4
+    => And(c, d)
+
+lt_s_nested_select_sign: LtS(Select(And(c, d), C1: T, Select(c, C2, C3)), 0)
+    Csign = 1 << (width(T) - 1)
+    check C1 & Csign != 0 and C2 & Csign != 0 and C3 & Csign == 0
+    => c
+
+resize_u_select_packed_constants: ResizeU(Select(c, Select(d, C1: S, C2), Or(Select(d, C3, C4), Shl(x, Cshift)))): T
+    where width(T) < width(S)
+    check Cshift >= width(T) and Cshift < width(S)
+    Ctrue = bits(C1, T)
+    Cfalse = bits(C2, T)
+    check Ctrue == bits(C3, T) and Cfalse == bits(C4, T)
+    => Select(d, Ctrue, Cfalse)
