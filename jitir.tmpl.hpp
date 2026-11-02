@@ -4391,7 +4391,6 @@ public:
     if (chain->size() == 0) {
       return;
     }
-    section->autoname();
 
     _builder.set_next_name();
     _init_values();
