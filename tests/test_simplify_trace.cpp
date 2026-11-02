@@ -966,7 +966,8 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = ResizeU %1, type=Int64
-  %3 = Eq %2, 4:Int64
+  %3 = Eq %1, 4:Int8
+  %4 = Eq %2, 4:Int64
   Branch %3, true_block=b1, false_block=b2
 b1:
   Store %0, 4:Int8, aliasing=0, offset=1
