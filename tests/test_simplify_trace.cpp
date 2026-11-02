@@ -750,7 +750,11 @@ b0(%0: Ptr):
   %8 = Freeze %3
   %9 = Freeze %4
   %10 = Freeze %5
-  Store %0, 0:Int64, aliasing=0, offset=0
+  Store %0, %6, aliasing=0, offset=0
+  Store %0, %7, aliasing=0, offset=8
+  Store %0, %8, aliasing=0, offset=16
+  Store %0, %9, aliasing=0, offset=24
+  Store %0, %10, aliasing=0, offset=32
   Exit
 }
 )";
@@ -767,7 +771,11 @@ b0(%0: Ptr):
   %9 = Freeze %3
   %10 = Freeze %4
   %11 = Freeze %5
-  Store %0, 0:Int64, aliasing=0, offset=0
+  Store %0, %7, aliasing=0, offset=0
+  Store %0, %8, aliasing=0, offset=8
+  Store %0, %9, aliasing=0, offset=16
+  Store %0, %10, aliasing=0, offset=24
+  Store %0, %11, aliasing=0, offset=32
   Exit
 }
 )", false);

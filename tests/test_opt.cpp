@@ -33,8 +33,9 @@ void test_saturating_use_counts() {
   builder.build_jump(next, {shared});
   builder.move_to_end(next);
   Inst* result = builder.build_xor(shared, next->arg(0));
-  builder.build_store(entry->arg(2), result, 0, 0);
-  builder.build_exit();
+  StoreInst* store = builder.build_store(entry->arg(2), result, 0, 0);
+  CommentInst* comment = builder.build_comment("retained");
+  Inst* exit = builder.build_exit();
   section.autoname();
 
   SaturatingUseCounts counts(&section);
@@ -42,6 +43,13 @@ void test_saturating_use_counts() {
   unittest_assert(counts.at(entry->arg(1)) == 0);
   unittest_assert(counts.at(shared) == 2);
   unittest_assert(counts.at(unused) == 0);
+  unittest_assert(counts.is_dead(unused));
+  unittest_assert(!counts.is_dead(shared));
+  unittest_assert(counts.at(store) == 0 && !counts.is_dead(store));
+  unittest_assert(counts.at(comment) == 0 && !counts.is_dead(comment));
+  unittest_assert(counts.at(exit) == 0 && !counts.is_dead(exit));
+  counts.invalidate(unused);
+  unittest_assert(!counts.is_dead(unused));
   unittest_assert(counts.at(next->arg(0)) == 1);
   counts.remove_use(shared);
   unittest_assert(counts.at(shared) == 1);
@@ -67,6 +75,7 @@ void test_saturating_use_counts() {
   counts.remove_use(fresh);
   counts.invalidate(fresh);
   unittest_assert(counts.at(fresh) == SaturatingUseCounts::unknown);
+  unittest_assert(!counts.is_dead(fresh));
   section.autoname();
   SaturatingUseCounts recomputed(&section);
   unittest_assert(recomputed.at(shared) == 2);
@@ -146,6 +155,72 @@ void test_saturating_use_counts_loop() {
   }
 }
 
+void test_simplify_skip_dead() {
+  for (bool trace : {false, true}) {
+    for (size_t uses : {size_t(1), size_t(255)}) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* entry = builder.build_block({Type::Ptr, Type::Int32});
+      Block* next = builder.build_block();
+      builder.move_to_end(entry);
+      Value* x = entry->arg(1);
+      Value* zero = builder.build_const(Type::Int32, 0);
+      Inst* dead = builder.build_add(x, zero);
+      Inst* dead_chain = builder.build_or(dead, zero);
+      Inst* dead_constant = builder.build_add(builder.build_const(Type::Int32, 1),
+                                              builder.build_const(Type::Int32, 2));
+      Inst* dead_constant_user = builder.build_add(dead_constant, x);
+      Inst* live = builder.build_add(x, zero);
+      std::vector<StoreInst*> stores;
+      for (size_t index = 0; index < uses; index++) {
+        stores.push_back(builder.build_store(entry->arg(0), live, 0, 0));
+      }
+      Inst* dead_live_user = builder.build_add(live, zero);
+      Inst* outside = builder.build_add(x, zero);
+      Inst* dead_outside_user = builder.build_add(outside, zero);
+      builder.build_jump(next);
+      builder.move_to_end(next);
+      StoreInst* outside_store = builder.build_store(entry->arg(0), outside, 0, 8);
+      builder.build_exit();
+      section.order_blocks(BlockOrdering::Dominator);
+      if (trace) {
+        Chain chain;
+        chain.add(entry);
+        SimplifyTrace::run(&section, &chain);
+      } else {
+        Simplify::run(&section, 2);
+        unittest_assert(outside_store->value() == x);
+      }
+      bool found_dead = false;
+      bool found_chain = false;
+      for (Inst* inst : *entry) {
+        found_dead |= inst == dead;
+        found_chain |= inst == dead_chain;
+      }
+      unittest_assert(found_dead && found_chain);
+      unittest_assert(dead_chain->arg(0) == dead);
+      unittest_assert(dead_constant_user->arg(0) == dead_constant);
+      unittest_assert(dead_live_user->arg(0) == x);
+      unittest_assert(dead_outside_user->arg(0) == x);
+      for (StoreInst* store : stores) {
+        unittest_assert(store->value() == x);
+      }
+      unittest_assert(!section.verify(std::cout));
+      DeadCodeElim::run(&section);
+      unittest_assert(!section.verify(std::cout));
+      for (uint64_t input : {uint64_t(0), uint64_t(42), uint64_t(0xffffffff)}) {
+        uint64_t values[2] = {};
+        Interpreter interpreter(&section, {Interpreter::Bits::constant(values),
+                                 Interpreter::Bits::constant(Type::Int32, input)});
+        unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+        unittest_assert(values[0] == input && values[1] == input);
+      }
+    }
+  }
+}
+
 void check_simplify(const std::string& expected, Section* section) {
   metajit::Simplify::run(section, 1);
   std::stringstream ss;
@@ -186,9 +261,12 @@ b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
 }
 )", R"(section {
 b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
-  %5 = And %3, 255:Int16
-  %6 = Or %5, %4
-  Store %0, %6, aliasing=0, offset=0
+  %5 = Or %1, %2
+  %6 = And %5, 65280:Int16
+  %7 = Or %6, %3
+  %8 = And %3, 255:Int16
+  %9 = Or %8, %4
+  Store %0, %9, aliasing=0, offset=0
   Exit
 }
 )");
@@ -355,9 +433,11 @@ b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
 b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
   %5 = Or %1, %2
   Store %0, %5, aliasing=0, offset=2
-  %7 = And %3, 255:Int16
-  %8 = Or %7, %4
-  Store %0, %8, aliasing=0, offset=0
+  %7 = And %5, 65280:Int16
+  %8 = Or %7, %3
+  %9 = And %3, 255:Int16
+  %10 = Or %9, %4
+  Store %0, %10, aliasing=0, offset=0
   Exit
 }
 )");
@@ -3253,6 +3333,7 @@ b0(%0: Ptr, %1: Int8):
   %2 = And %1, 31:Int8
   %3 = ResizeU %2, type=Int64
   %4 = ResizeU %3, type=Int32
+  %5 = ShrU 4294967295:Int32, %4
   Store %0, 1:Bool, aliasing=0, offset=0
   Exit
 }
@@ -3291,6 +3372,7 @@ int main(int argc, char** argv) {
   suite.test("saturating use counts").run(test_saturating_use_counts);
   suite.test("saturating use counts saturation").run(test_saturating_use_counts_saturation);
   suite.test("saturating use counts loop").run(test_saturating_use_counts_loop);
+  suite.test("simplify skip dead").run(test_simplify_skip_dead);
   suite.test("knownbits variable shift witness").run(test_knownbits_variable_shift_witness);
 
   suite.test("rule DSL builder integration").run(test_rule_dsl_builder_integration);
@@ -3425,8 +3507,9 @@ int main(int argc, char** argv) {
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = And %1, 255:Int64
-  Store %0, %2, aliasing=0, offset=8
+  %2 = ResizeU %1, type=Int8
+  %3 = And %1, 255:Int64
+  Store %0, %3, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3443,8 +3526,10 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = And %1, 6:Int64
-  Store %0, %2, aliasing=0, offset=8
+  %2 = ShrU %1, 1:Int64
+  %3 = And %2, 3:Int64
+  %4 = And %1, 6:Int64
+  Store %0, %4, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3461,9 +3546,11 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = ShrU %1, 9:Int64
-  %3 = And %2, 2:Int64
-  Store %0, %3, aliasing=0, offset=8
+  %2 = ShrU %1, 10:Int64
+  %3 = And %2, 1:Int64
+  %4 = ShrU %1, 9:Int64
+  %5 = And %4, 2:Int64
+  Store %0, %5, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3479,9 +3566,11 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = Shl %1, 2:Int64
-  %3 = And %2, 8:Int64
-  Store %0, %3, aliasing=0, offset=8
+  %2 = ShrU %1, 1:Int64
+  %3 = And %2, 1:Int64
+  %4 = Shl %1, 2:Int64
+  %5 = And %4, 8:Int64
+  Store %0, %5, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3498,9 +3587,11 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = Shl %1, 4:Int64
-  %3 = And %2, 2040:Int64
-  Store %0, %3, aliasing=0, offset=8
+  %2 = Shl %1, 1:Int64
+  %3 = And %2, 255:Int64
+  %4 = Shl %1, 4:Int64
+  %5 = And %4, 2040:Int64
+  Store %0, %5, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3515,8 +3606,10 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = And %1, 15:Int64
-  Store %0, %2, aliasing=0, offset=8
+  %2 = And %1, 3:Int64
+  %3 = And %1, 12:Int64
+  %4 = And %1, 15:Int64
+  Store %0, %4, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3533,8 +3626,10 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
-  %3 = And %2, 4294902015:Int64
-  Store %0, %3, aliasing=0, offset=16
+  %3 = And %1, 65280:Int64
+  %4 = Or %2, %3
+  %5 = And %2, 4294902015:Int64
+  Store %0, %5, aliasing=0, offset=16
 }
 )", builder.section());
   });
@@ -3581,6 +3676,7 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
+  %3 = ResizeU %1, type=Int64
   Store %0, %2, aliasing=0, offset=16
 }
 )", builder.section());
@@ -3598,6 +3694,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = And %1, 240:Int8
+  %4 = Or %2, 240:Int8
   Store %0, %3, aliasing=0, offset=2
 }
 )", builder.section());
@@ -3655,8 +3752,12 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int16, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int16, flags={}, aliasing=0, offset=2
   %3 = Load %0, type=Int16, flags={}, aliasing=0, offset=4
-  %4 = And %1, 4095:Int16
-  Store %0, %4, aliasing=0, offset=6
+  %4 = And %3, 61440:Int16
+  %5 = Shl %2, 14:Int16
+  %6 = Or %4, %1
+  %7 = Or %6, %5
+  %8 = And %1, 4095:Int16
+  Store %0, %8, aliasing=0, offset=6
 }
 )", builder.section());
   });

@@ -4150,10 +4150,7 @@ namespace metajit {
     explicit SaturatingUseCounts(Section* section): _counts(section) {
       for (Block* block : section->rev_range()) {
         for (Inst* inst : block->rev_range()) {
-          if (at(inst) != 0 ||
-              inst->has_side_effect() ||
-              inst->is_terminator() ||
-              dynamic_cast<CommentInst*>(inst)) {
+          if (!is_dead(inst)) {
             for (Value* arg : inst->args()) {
               add_use(arg);
             }
@@ -4167,6 +4164,13 @@ namespace metajit {
         return unknown;
       }
       return _counts.at((NamedValue*) value);
+    }
+
+    bool is_dead(Inst* inst) const {
+      return at(inst) == 0 &&
+             !inst->has_side_effect() &&
+             !inst->is_terminator() &&
+             !dynamic_cast<CommentInst*>(inst);
     }
 
     void add_use(Value* value) {
@@ -4234,6 +4238,11 @@ namespace metajit {
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
           inst->substitute_args_iterated(substs);
+
+          if (use_counts && use_counts->is_dead(inst)) {
+            inst_it++;
+            continue;
+          }
 
           if (inst->is_commutative() && inst->arg_count() == 2 &&
               dynamic_cast<Const*>(inst->arg(0)) &&
@@ -4406,6 +4415,9 @@ public:
       Block* block = chain->at(index);
       for (Inst* inst : *block) {
         _substitute_args(inst);
+        if (_use_counts.is_dead(inst)) {
+          continue;
+        }
         if (!_refresh_arguments(inst)) {
           return;
         }
