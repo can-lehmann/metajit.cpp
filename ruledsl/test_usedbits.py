@@ -91,7 +91,7 @@ class UsedBitsTests(unittest.TestCase):
 
     def test_rules_prove(self):
         rules = prove(RULES, used_bits=True)
-        self.assertEqual([len(rule.instantiations) for rule in rules], [5, 5, 5, 10, 10, 5, 5, 4, 5])
+        self.assertEqual([len(rule.instantiations) for rule in rules], [5, 5, 5, 10, 10, 5, 5, 4, 5, 5])
         for checked in rules:
             for assignment in checked.instantiations:
                 prover = Prover(checked, assignment, RULES, "usedbits.rules", 10000)

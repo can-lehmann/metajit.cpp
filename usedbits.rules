@@ -55,3 +55,9 @@ xor_used_mask: Xor(x, C) @used_bits(Cused)
     Cnew = C & Cused
     check Cnew != C
     => Xor(x, Cnew)
+
+select_used_constants: Select(c, C1, C2) @used_bits(Cused)
+    Ctrue = C1 & Cused
+    Cfalse = C2 & Cused
+    check Ctrue != C1 or Cfalse != C2
+    => Select(c, Ctrue, Cfalse)
