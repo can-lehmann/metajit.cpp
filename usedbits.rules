@@ -61,3 +61,8 @@ select_used_constants: Select(c, C1, C2) @used_bits(Cused)
     Cfalse = C2 & Cused
     check Ctrue != C1 or Cfalse != C2
     => Select(c, Ctrue, Cfalse)
+
+shl_used_zero: Shl(x: T, C) @used_bits(Cused)
+    check C < width(T)
+    check Cused >> C == 0
+    => 0
