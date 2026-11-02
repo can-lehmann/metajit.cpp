@@ -751,3 +751,15 @@ resize_u_select_packed_constants: ResizeU(Select(c, Select(d, C1: S, C2), Or(Sel
 
 and_not_or_complement_absorb: And(Xor(Or(y, Xor(x, -1)), -1), x)
     => Xor(Or(y, Xor(x, -1)), -1)
+
+and_select_zero_absorb: And(c, Select(c, x, 0: Bool))
+    => Select(c, x, 0: Bool)
+
+and_not_select_zero_absorb: And(Xor(c, 1), Select(c, 0: Bool, x))
+    => Select(c, 0: Bool, x)
+
+or_select_one_absorb: Or(c, Select(c, 1: Bool, x))
+    => Select(c, 1: Bool, x)
+
+or_not_select_one_absorb: Or(Xor(c, 1), Select(c, x, 1: Bool))
+    => Select(c, x, 1: Bool)
