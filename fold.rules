@@ -287,6 +287,12 @@ or_common_operand: Or(Or(x, y), Or(x, z))
 or_xor_absorb: Or(Xor(x, y), x)
     => Or(x, y)
 
+or_pair_xor_absorb: Or(Or(x, y), Xor(x, y))
+    => Or(x, y)
+
+or_nested_xor_complement: Or(Or(Xor(x, -1), Xor(x, y)), y)
+    => -1
+
 or_complement_or_absorb: Or(Xor(Or(x, y), -1), x)
     => Or(x, Xor(y, -1))
 
@@ -407,6 +413,16 @@ select_same: Select(c, x, x)
 
 select_equal_arms: Select(Eq(x, y), x, y)
     => y
+
+select_equal_resize: Select(Eq(x: S, C1), C2: T, ResizeU(x): T)
+    check bits(C1, T) == C2
+    => ResizeU(x): T
+
+select_bool_complement_arms: Select(c, c, Xor(c, 1))
+    => 1
+
+select_and_nested: Select(And(c, d), x, Select(c, x, y))
+    => Select(c, x, y)
 
 select_complement_condition: Select(Xor(c, 1), x, y)
     => Select(c, y, x)
