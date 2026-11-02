@@ -66,3 +66,8 @@ shl_used_zero: Shl(x: T, C) @used_bits(Cused)
     check C < width(T)
     check Cused >> C == 0
     => 0
+
+shr_u_used_zero: ShrU(x: T, C) @used_bits(Cused)
+    check C < width(T)
+    check Cused << C == 0
+    => 0
