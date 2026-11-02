@@ -763,3 +763,17 @@ or_select_one_absorb: Or(c, Select(c, 1: Bool, x))
 
 or_not_select_one_absorb: Or(Xor(c, 1), Select(c, x, 1: Bool))
     => Select(c, x, 1: Bool)
+
+eq_nested_select_unique_true: Eq(Select(c, Select(d, C1, C2), C3), C1)
+    check C1 != C2 and C1 != C3
+    => Select(c, d, 0: Bool)
+
+eq_nested_select_unique_outer: Eq(Select(c, C1, Select(d, C2, C3)), C1)
+    check C1 != C2 and C1 != C3
+    => c
+
+eq_nested_select_encoding_low_bit: Eq(Select(c, C1: S, Select(d, C2, C3)), Cvalue)
+    check (C1 == Cvalue) == ((C1 & 1) == 1)
+    check (C2 == Cvalue) == ((C2 & 1) == 1)
+    check (C3 == Cvalue) == ((C3 & 1) == 1)
+    => ResizeU(Select(c, C1, Select(d, C2, C3))): Bool

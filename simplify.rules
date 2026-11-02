@@ -211,3 +211,15 @@ eq_lossless_truncate: Eq(ResizeU(x: S): T, C)
     check known_zeros(x) | Cmask == -1
     Cwide = bits(C, S)
     => Eq(x, Cwide)
+
+eq_nested_select_true_constants: Eq(Select(c, Select(d, C1, C2), C3) @single_use, C4)
+    Ctrue = C1 == C4
+    Cfalse = C2 == C4
+    Couter = C3 == C4
+    => Select(c, Select(d, Ctrue, Cfalse), Couter)
+
+eq_nested_select_false_constants: Eq(Select(c, C1, Select(d, C2, C3)) @single_use, C4)
+    Couter = C1 == C4
+    Ctrue = C2 == C4
+    Cfalse = C3 == C4
+    => Select(c, Couter, Select(d, Ctrue, Cfalse))
