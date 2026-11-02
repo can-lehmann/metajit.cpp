@@ -256,6 +256,43 @@ void test_simplify_used_bits_recompute() {
   }
 }
 
+void test_simplify_used_bits_xor_or_constants() {
+  for (Type type : {Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({Type::Ptr, type});
+    builder.move_to_end(block);
+    Value* x = block->arg(1);
+    uint64_t high = type_mask(type) & ~uint64_t(255);
+    Value* inverted = builder.build_xor(x, builder.build_const(type, high));
+    Value* set = builder.build_or(x, builder.build_const(type, high | 3));
+    StoreInst* xor_output = builder.build_store(block->arg(0), builder.build_resize_u(inverted, Type::Int8), 0, 0);
+    StoreInst* or_output = builder.build_store(block->arg(0), builder.build_resize_u(set, Type::Int8), 0, 8);
+    builder.build_exit();
+    section.order_blocks(BlockOrdering::Dominator);
+    Simplify::run(&section, 1);
+    ResizeUInst* xor_resize = dynamic_cast<ResizeUInst*>(xor_output->value());
+    ResizeUInst* or_resize = dynamic_cast<ResizeUInst*>(or_output->value());
+    unittest_assert(xor_resize && xor_resize->arg(0) == x);
+    unittest_assert(or_resize);
+    OrInst* result = dynamic_cast<OrInst*>(or_resize->arg(0));
+    unittest_assert(result && result->arg(0) == x);
+    Const* mask = dynamic_cast<Const*>(result->arg(1));
+    unittest_assert(mask && mask->value() == 3);
+    unittest_assert(!section.verify(std::cout));
+    for (uint64_t input : {uint64_t(0), uint64_t(1), uint64_t(42), type_mask(type)}) {
+      uint64_t values[2] = {};
+      Interpreter interpreter(&section, {Interpreter::Bits::constant(values),
+                               Interpreter::Bits::constant(type, input)});
+      unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+      unittest_assert(values[0] == (input & 255));
+      unittest_assert(values[1] == ((input | 3) & 255));
+    }
+  }
+}
+
 void test_simplify_used_bits_other_use() {
   const std::string input = R"(section {
 b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
@@ -3297,6 +3334,7 @@ int main(int argc, char** argv) {
   suite.test("simplify used bits other use").run(test_simplify_used_bits_other_use);
   suite.test("used bits missing values").run(test_used_bits_missing_values);
   suite.test("simplify used bits recompute").run(test_simplify_used_bits_recompute);
+  suite.test("simplify used bits xor or constants").run(test_simplify_used_bits_xor_or_constants);
   suite.test("simplify used bits effects").run(test_simplify_used_bits_effects);
   suite.test("simplify used bits shl mask").run(test_simplify_used_bits_shl_mask);
   suite.test("narrowing resize normalization").run(test_narrowing_resize_normalization);

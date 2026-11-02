@@ -89,9 +89,9 @@ class UsedBitsTests(unittest.TestCase):
         with self.assertRaisesRegex(TypeCheckError, "require a root"):
             generate("", include_simplify=True, used_bits_source="plain: And(x, C)\n    => x\n")
 
-    def test_migrated_rules_prove(self):
+    def test_rules_prove(self):
         rules = prove(RULES, used_bits=True)
-        self.assertEqual([len(rule.instantiations) for rule in rules], [5, 5, 5, 10, 10])
+        self.assertEqual([len(rule.instantiations) for rule in rules], [5, 5, 5, 10, 10, 5, 5])
         for checked in rules:
             for assignment in checked.instantiations:
                 prover = Prover(checked, assignment, RULES, "usedbits.rules", 10000)
@@ -197,10 +197,55 @@ int main() {
   }
   assert(Generated::ruledsl_rule_counts[1] > 0);
   assert(Generated::ruledsl_rule_counts[2] > 0);
-  assert(Generated::ruledsl_rule_counts[7] > 0);
+  assert(Generated::ruledsl_rule_counts[9] > 0);
 }
 """
         test_simplify.SimplifyTests.run_cpp(self, code, main, statistics=True)
+
+    def test_xor_elimination_and_or_mask_shrinking(self):
+        code = generate("", include_simplify=True, used_bits_source=RULES)
+        main = """
+int main() {
+  Generated builder;
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(type);
+    uint64_t mask = type_mask(type);
+    uint64_t top = uint64_t(1) << (type_width(type) - 1);
+    for (uint64_t bits : {uint64_t(0), uint64_t(1), uint64_t(5), top, mask}) {
+      Const constant(type, bits);
+      for (uint64_t demand : {uint64_t(0), uint64_t(1), uint64_t(3), top, mask}) {
+        uint64_t used = demand & mask;
+        for (bool swapped : {false, true}) {
+          Inst* root = swapped ? builder.build_xor(&constant, &x) : builder.build_xor(&x, &constant);
+          size_t before = builder.allocated.size();
+          assert(!builder.try_simplify(root));
+          Value* replacement = builder.try_simplify_used_bits(root, demand);
+          assert(replacement == ((constant.value() & used) == 0 ? &x : nullptr));
+          assert(builder.allocated.size() == before);
+          root = swapped ? builder.build_or(&constant, &x) : builder.build_or(&x, &constant);
+          before = builder.allocated.size();
+          assert(!builder.try_simplify(root));
+          replacement = builder.try_simplify_used_bits(root, demand);
+          uint64_t narrowed = constant.value() & used;
+          if (narrowed == 0) {
+            assert(replacement == &x);
+            assert(builder.allocated.size() == before);
+          } else if (narrowed == constant.value()) {
+            assert(!replacement);
+            assert(builder.allocated.size() == before);
+          } else {
+            OrInst* result = dynamic_cast<OrInst*>(replacement);
+            Const* result_bits = result ? dynamic_cast<Const*>(result->arg(1)) : nullptr;
+            assert(result && result->arg(0) == &x);
+            assert(result_bits && result_bits->value() == narrowed);
+          }
+        }
+      }
+    }
+  }
+}
+"""
+        test_simplify.SimplifyTests.run_cpp(self, code, main)
 
     def test_subtree_reuse_and_single_use_guards(self):
         source = ("reuse: Or(Or(x, C) @single_use, C) @used_bits(Cused)\n"

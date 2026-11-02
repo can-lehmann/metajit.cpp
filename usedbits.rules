@@ -36,3 +36,12 @@ resize_s_unused_upper: ResizeS(x: T): U @used_bits(Cused)
     Cmask = bits(bits(-1, T), U)
     check Cused & ~Cmask == 0
     => ResizeX(x): U
+
+xor_unused_constant: Xor(x, C) @used_bits(Cused)
+    check Cused & C == 0
+    => x
+
+or_used_mask: Or(x, C) @used_bits(Cused)
+    Cnew = C & Cused
+    check Cnew != C
+    => Or(x, Cnew)
