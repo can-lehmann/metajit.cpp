@@ -672,3 +672,13 @@ and_select_false_shifted_bit_complement: And(c, Xor(ResizeU(ShrU(Select(c, x: T,
 and_select_lt_u: And(c, LtU(Select(c, x, C1), C2))
     check C1 >= C2
     => LtU(Select(c, x, C1), C2)
+
+eq_masked_shl: Eq(Shl(And(x: T, Cmask), Cshift), Cvalue)
+    check Cshift < width(T)
+    check Cmask & ~(-1 >> Cshift) == 0
+    check (Cvalue >> Cshift) << Cshift == Cvalue
+    Cnew = Cvalue >> Cshift
+    => Eq(And(x, Cmask), Cnew)
+
+and_complement_or_absorb: And(Xor(Or(x, y), -1), Xor(y, -1))
+    => Xor(Or(x, y), -1)

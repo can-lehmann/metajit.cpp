@@ -173,3 +173,12 @@ eq_select_impossible: Eq(Select(c, x, y), C)
 lt_u_select_known_range: LtU(Select(c, x, C1), C2)
     check ~known_zeros(x) < C2 and C1 >= C2
     => c
+
+xor_or_operand_single_use: Xor(Or(x, y) @single_use, x)
+    => And(y, Xor(x, -1))
+
+and_xor_operand_single_use: And(Xor(x, y) @single_use, y)
+    => And(y, Xor(x, -1))
+
+xor_nonzero_single_use: Xor(LtU(0, x) @single_use, 1)
+    => Eq(x, 0)
