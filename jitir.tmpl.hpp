@@ -4356,6 +4356,29 @@ private:
     inst->substitute_args_iterated(_substs);
   }
 
+  bool _refresh_arguments(Inst* inst) {
+    for (size_t index = 0; index < inst->arg_count(); index++) {
+      Value* arg = inst->arg(index);
+      if (!arg->is_inst() || !is_int_or_bool(arg->type())) {
+        continue;
+      }
+      Bits bits = Bits::at(_values, arg);
+      if (!bits.is_const()) {
+        auto refined = bits.intersect(Bits::eval((Inst*) arg, _values));
+        if (!refined.has_value()) {
+          _contradiction = true;
+          return false;
+        }
+        bits = refined.value();
+        _values[(Inst*) arg] = bits;
+      }
+      if (bits.is_const()) {
+        inst->set_arg(index, _builder.build_const(arg->type(), bits.value));
+      }
+    }
+    return true;
+  }
+
 public:
 
   SimplifyTrace(metajit::Section* section, metajit::Chain* chain):
@@ -4383,6 +4406,9 @@ public:
       Block* block = chain->at(index);
       for (Inst* inst : *block) {
         _substitute_args(inst);
+        if (!_refresh_arguments(inst)) {
+          return;
+        }
         _builder.move_before(block, inst);
         if (inst->has_side_effect() ||
             inst->is_terminator() ||
