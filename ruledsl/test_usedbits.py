@@ -203,9 +203,15 @@ int main() {
       }
     }
   }
-  assert(Generated::ruledsl_rule_counts[1] > 0);
-  assert(Generated::ruledsl_rule_counts[2] > 0);
-  assert(Generated::ruledsl_rule_counts[11] > 0);
+  for (const char* name : {"full_id", "and_used_redundant", "mask_value"}) {
+    bool fired = false;
+    for (size_t index = 0; index < sizeof(Generated::ruledsl_rule_names) / sizeof(const char*); index++) {
+      if (std::strcmp(Generated::ruledsl_rule_names[index], name) == 0) {
+        fired = Generated::ruledsl_rule_counts[index] > 0;
+      }
+    }
+    assert(fired);
+  }
 }
 """
         test_simplify.SimplifyTests.run_cpp(self, code, main, statistics=True)

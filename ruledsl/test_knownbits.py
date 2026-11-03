@@ -30,14 +30,64 @@ class KnownBitsTests(unittest.TestCase):
     def test_initial_rules_prove_at_all_widths(self):
         path = Path(__file__).resolve().parent.parent / "simplify.rules"
         rules = prove(path.read_text(), str(path))
-        self.assertEqual(len(rules), 35)
-        self.assertEqual(rules[0].rule.name, "and_self")
-        self.assertEqual(rules[1].rule.name, "and_reassoc_constants")
-        self.assertTrue(all(not rule.requires_facts for rule in rules[:2]))
-        self.assertTrue(all(rule.requires_facts for rule in rules[2:22] + rules[-2:]))
-        self.assertTrue(all(rule.requires_use_counts for rule in rules[22:-2]))
-        self.assertEqual([len(rule.instantiations) for rule in rules],
-                         [5, 5, 5, 5, 5, 4, 4, 5, 4, 5, 5, 4, 4, 4, 4, 5, 5, 5, 10, 10, 10, 4, 4, 5, 5, 5, 4, 4, 4, 4, 10, 10, 4, 5, 4])
+        expected = {
+            "and_self": (5, False, False),
+            "and_reassoc_constants": (5, False, False),
+            "and_redundant_operand": (5, True, False),
+            "and_shifted_known_mask": (20, True, False),
+            "or_redundant_operand": (5, True, False),
+            "and_or_disjoint": (5, True, False),
+            "add_disjoint": (4, True, False),
+            "sub_or_disjoint": (4, True, False),
+            "xor_clear_known_ones": (5, True, False),
+            "sub_xor_disjoint": (4, True, False),
+            "eq_or_disjoint_zero": (5, True, False),
+            "eq_boolean_one": (5, True, False),
+            "shr_u_shl_known_no_loss": (4, True, False),
+            "shr_u_shl_known_no_loss_right": (4, True, False),
+            "shr_s_shl_known_no_loss": (4, True, False),
+            "shr_s_nonnegative": (4, True, False),
+            "and_xor_disjoint": (5, True, False),
+            "select_known_true": (5, True, False),
+            "select_known_false": (5, True, False),
+            "resize_u_resize_x_known_zero_roundtrip": (10, True, False),
+            "resize_u_resize_u_known_zero_roundtrip": (10, True, False),
+            "resize_u_resize_s_known_zero_roundtrip": (10, True, False),
+            "shr_u_or_known_zero": (4, True, False),
+            "shl_or_constant_single_use": (4, False, True),
+            "or_collect_constants": (5, False, True),
+            "and_collect_constants": (5, False, True),
+            "xor_collect_constants": (5, False, True),
+            "eq_masked_shr_u_zero": (4, False, True),
+            "eq_shr_u_zero": (4, False, True),
+            "eq_masked_shl_zero": (4, False, True),
+            "select_add_same_condition": (4, False, True),
+            "select_factor_complementary_conditions": (5, False, True),
+            "select_factor_false_bit": (25, False, True),
+            "select_factor_false_shifted_bit": (20, False, True),
+            "eq_truncated_add_constant": (10, False, True),
+            "eq_extended_constant": (10, False, True),
+            "not_eq_zero_single_use": (4, False, True),
+            "eq_select_impossible": (5, True, False),
+            "lt_u_select_known_range": (4, True, False),
+            "xor_or_operand_single_use": (5, False, True),
+            "and_xor_operand_single_use": (5, False, True),
+            "xor_nonzero_single_use": (4, False, True),
+            "resize_u_or_known_zero": (10, True, False),
+            "eq_lossless_truncate": (10, True, False),
+            "eq_nested_select_true_constants": (5, False, True),
+            "eq_nested_select_false_constants": (5, False, True),
+            "eq_masked_remove_known_bits": (5, True, True),
+            "and_or_keep_fitting_operand": (5, True, True),
+            "masked_shift_resize_x_field": (10, False, True),
+            "resize_shift_or_known_zero": (10, True, True),
+            "mask_shift_or_known_zero": (4, True, True),
+        }
+        self.assertEqual({rule.rule.name for rule in rules}, expected.keys())
+        for rule in rules:
+            with self.subTest(rule=rule.rule.name):
+                self.assertEqual((len(rule.instantiations), rule.requires_facts,
+                                  rule.requires_use_counts), expected[rule.rule.name])
 
     def test_masks_have_the_matched_type(self):
         rule, = check("mask: Or(x: T, 0)\n    C = known_zeros(x) | known_ones(x)\n    => C\n")
