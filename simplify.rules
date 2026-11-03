@@ -234,5 +234,6 @@ eq_masked_remove_known_bits: Eq(And(x, Cmask) @single_use, Cvalue)
     => Eq(And(x, Cnew), Cexpect)
 
 and_or_keep_fitting_operand: And(Or(x, y) @single_use, C)
+    check known_zeros(x) | known_ones(x) != -1
     check known_zeros(x) | C == -1
     => Or(x, And(y, C))
