@@ -423,6 +423,120 @@ b2:
     check_sinking(ir, ir, true);
   });
 
+  suite.test("branch region moves past a guard").run([]() {
+    check_sinking(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Jump 10:Int8, block=b3
+b2:
+  Jump 20:Int8, block=b3
+b3(%5: Int8):
+  %6 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %6, true_block=b4, false_block=b5
+b4:
+  Store %0, %5, aliasing=0, offset=8
+  Exit
+b5:
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Jump block=b1
+b1:
+  %3 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %3, true_block=b2, false_block=b6
+b2:
+  Branch %1, true_block=b3, false_block=b4
+b3:
+  Jump 10:Int8, block=b5
+b4:
+  Jump 20:Int8, block=b5
+b5(%8: Int8):
+  Store %0, %8, aliasing=0, offset=8
+  Exit
+b6:
+  Exit
+}
+)");
+  });
+
+  suite.test("branch region load does not cross a write").run([]() {
+    const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  %3 = Load %0, type=Int8, flags={}, aliasing=0, offset=8
+  Jump %3, block=b3
+b2:
+  Jump 42:Int8, block=b3
+b3(%6: Int8):
+  Store %0, 99:Int8, aliasing=0, offset=8
+  %8 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %8, true_block=b4, false_block=b5
+b4:
+  Store %0, %6, aliasing=0, offset=9
+  Exit
+b5:
+  Exit
+}
+)";
+    check_sinking(ir, ir);
+  });
+
+  suite.test("nested branch region moves past a guard").run([]() {
+    check_sinking(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %1, true_block=b1, false_block=b4
+b1:
+  Branch %2, true_block=b2, false_block=b3
+b2:
+  Jump 10:Int8, block=b5
+b3:
+  Jump 20:Int8, block=b5
+b4:
+  Jump 30:Int8, block=b5
+b5(%7: Int8):
+  %8 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %8, true_block=b6, false_block=b7
+b6:
+  Store %0, %7, aliasing=0, offset=8
+  Exit
+b7:
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Jump block=b1
+b1:
+  %4 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %4, true_block=b2, false_block=b8
+b2:
+  Branch %1, true_block=b3, false_block=b6
+b3:
+  Branch %2, true_block=b4, false_block=b5
+b4:
+  Jump 10:Int8, block=b7
+b5:
+  Jump 20:Int8, block=b7
+b6:
+  Jump 30:Int8, block=b7
+b7(%11: Int8):
+  Store %0, %11, aliasing=0, offset=8
+  Exit
+b8:
+  Exit
+}
+)");
+  });
+
   suite.test("branch sinking preserves continuation dominance").run([]() {
     check_sinking(R"(section {
 b0(%0: Ptr):
