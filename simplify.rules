@@ -20,13 +20,46 @@ and_shifted_known_mask: And(ResizeU(ShrU(x: S, s)): T, ResizeU(ShrU(C: S, s)): T
     check known_zeros(x) | C == -1
     => ResizeU(ShrU(x, s)): T
 
+and_or_disjoint: And(Or(x, y), z)
+    check known_zeros(y) | known_zeros(z) == -1
+    => And(x, z)
+
+and_xor_disjoint: And(Xor(x, y), z)
+    check known_zeros(y) | known_zeros(z) == -1
+    => And(x, z)
+
+and_collect_constants: And(And(And(x, C1), y) @single_use, C2)
+    C = C1 & C2
+    => And(And(x, y), C)
+
+and_xor_operand_single_use: And(Xor(x, y) @single_use, y)
+    => And(y, Xor(x, -1))
+
+and_or_keep_fitting_operand: And(Or(x, y) @single_use, C)
+    check known_zeros(x) | known_ones(x) != -1
+    check known_zeros(x) | C == -1
+    => Or(x, And(y, C))
+
+masked_shift_resize_x_field: And(Shl(ResizeX(x: S): T, Cshift) @single_use, Cmask)
+    where width(S) < width(T)
+    check Cshift < width(T)
+    Cdefined = bits(bits(-1, S), T) << Cshift
+    check Cmask & (-1 << Cshift) == Cdefined
+    => Shl(ResizeU(x): T, Cshift)
+
+mask_shift_or_known_zero: And(ShrU(Or(x: T, y), Cshift) @single_use, Cmask)
+    check Cshift < width(T)
+    Cobserved = Cmask << Cshift
+    check known_zeros(y) & Cobserved == Cobserved
+    => And(ShrU(x, Cshift), Cmask)
+
 or_redundant_operand: Or(x, y)
     check known_ones(x) | known_zeros(y) == -1
     => x
 
-and_or_disjoint: And(Or(x, y), z)
-    check known_zeros(y) | known_zeros(z) == -1
-    => And(x, z)
+or_collect_constants: Or(Or(Or(x, C1), y) @single_use, C2)
+    C = C1 | C2
+    => Or(Or(x, y), C)
 
 add_disjoint: Add(x, y)
     check known_zeros(x) | known_zeros(y) == -1
@@ -36,14 +69,27 @@ sub_or_disjoint: Sub(Or(x, y), y)
     check known_zeros(x) | known_zeros(y) == -1
     => x
 
+sub_xor_disjoint: Sub(Xor(x, y), y)
+    check known_zeros(x) | known_zeros(y) == -1
+    => x
+
 xor_clear_known_ones: Xor(x, C)
     check known_ones(x) & C == C
     Cmask = ~C
     => And(x, Cmask)
 
-sub_xor_disjoint: Sub(Xor(x, y), y)
-    check known_zeros(x) | known_zeros(y) == -1
-    => x
+xor_collect_constants: Xor(Xor(Xor(x, C1), y) @single_use, C2)
+    C = C1 ^ C2
+    => Xor(Xor(x, y), C)
+
+not_eq_zero_single_use: Xor(Eq(x, 0) @single_use, 1)
+    => LtU(0, x)
+
+xor_or_operand_single_use: Xor(Or(x, y) @single_use, x)
+    => And(y, Xor(x, -1))
+
+xor_nonzero_single_use: Xor(LtU(0, x) @single_use, 1)
+    => Eq(x, 0)
 
 eq_or_disjoint_zero: Eq(Or(x, y), 0)
     check known_zeros(x) | known_zeros(y) == -1
@@ -52,83 +98,6 @@ eq_or_disjoint_zero: Eq(Or(x, y), 0)
 eq_boolean_one: Eq(x, 1)
     check known_zeros(x) | 1 == -1
     => ResizeX(x): Bool
-
-shr_u_shl_known_no_loss: ShrU(Shl(x: T, C), C)
-    check C < width(T)
-    Cmask = -1 >> C
-    check known_zeros(x) | Cmask == -1
-    => x
-
-shr_u_shl_known_no_loss_right: ShrU(Shl(x: T, C1), C2)
-    check C1 < C2 and C2 < width(T)
-    Cmask = -1 >> C1
-    check known_zeros(x) | Cmask == -1
-    Cshift = C2 - C1
-    => ShrU(x, Cshift)
-
-shr_s_shl_known_no_loss: ShrS(Shl(x: T, C), C)
-    check C < width(T)
-    Ctop = -1 << (width(T) - 1 - C)
-    check known_zeros(x) & Ctop == Ctop or known_ones(x) & Ctop == Ctop
-    => x
-
-shr_s_nonnegative: ShrS(x: T, y)
-    Csign = 1 << (width(T) - 1)
-    check known_zeros(x) & Csign != 0
-    => ShrU(x, y)
-
-and_xor_disjoint: And(Xor(x, y), z)
-    check known_zeros(y) | known_zeros(z) == -1
-    => And(x, z)
-
-select_known_true: Select(c, x, y)
-    check known_ones(c) == 1
-    => x
-
-select_known_false: Select(c, x, y)
-    check known_zeros(c) == 1
-    => y
-
-resize_u_resize_x_known_zero_roundtrip: ResizeU(ResizeX(x: T): U): T
-    where width(T) > width(U)
-    Cmask = bits(bits(-1, U), T)
-    check known_zeros(x) | Cmask == -1
-    => x
-
-resize_u_resize_u_known_zero_roundtrip: ResizeU(ResizeU(x: T): U): T
-    where width(T) > width(U)
-    Cmask = bits(bits(-1, U), T)
-    check known_zeros(x) | Cmask == -1
-    => x
-
-resize_u_resize_s_known_zero_roundtrip: ResizeU(ResizeS(x: T): U): T
-    where width(T) > width(U)
-    Cmask = bits(bits(-1, U), T)
-    check known_zeros(x) | Cmask == -1
-    => x
-
-shr_u_or_known_zero: ShrU(Or(x: T, y), C)
-    check C < width(T)
-    Cmask = -1 << C
-    check known_zeros(x) & Cmask == Cmask
-    => ShrU(y, C)
-
-shl_or_constant_single_use: Shl(Or(x: T, C1) @single_use, C2)
-    check C2 < width(T)
-    C = C1 << C2
-    => Or(Shl(x, C2), C)
-
-or_collect_constants: Or(Or(Or(x, C1), y) @single_use, C2)
-    C = C1 | C2
-    => Or(Or(x, y), C)
-
-and_collect_constants: And(And(And(x, C1), y) @single_use, C2)
-    C = C1 & C2
-    => And(And(x, y), C)
-
-xor_collect_constants: Xor(Xor(Xor(x, C1), y) @single_use, C2)
-    C = C1 ^ C2
-    => Xor(Xor(x, y), C)
 
 eq_masked_shr_u_constant: Eq(And(ShrU(x: T, C), Cmask) @single_use, Cvalue)
     check C < width(T)
@@ -149,24 +118,6 @@ eq_masked_shl_zero: Eq(And(Shl(x: T, C), Cmask) @single_use, 0)
     Cnew = Cmask >> C
     => Eq(And(x, Cnew), 0)
 
-select_add_same_condition: Select(c, Add(Select(c, x, C1), C2) @single_use, C3)
-    => Select(c, Add(x, C2), C3)
-
-select_add_same_condition_unshared: Select(c, Add(Select(c, x, y) @single_use, z) @single_use, w)
-    => Select(c, Add(x, z), w)
-
-select_factor_complementary_conditions: Select(And(a, b), x, Select(And(Xor(a, 1), b), y, z) @single_use)
-    => Select(b, Select(a, x, y), z)
-
-select_factor_false_bit: Select(And(c, ResizeU(Select(c, v: S, C)): Bool), x, Select(ResizeU(Select(c, v: S, C)): Bool, z, y) @single_use)
-    check C & 1 == 1
-    => Select(c, Select(ResizeU(Select(c, v, C)): Bool, x, y), z)
-
-select_factor_false_shifted_bit: Select(And(c, ResizeU(ShrU(Select(c, v: S, C1), C2)): Bool), x, Select(ResizeU(ShrU(Select(c, v: S, C1), C2)): Bool, z, y) @single_use)
-    check C2 < width(S)
-    check (C1 >> C2) & 1 == 1
-    => Select(c, Select(ResizeU(ShrU(Select(c, v, C1), C2)): Bool, x, y), z)
-
 eq_truncated_add_constant: Eq(ResizeU(Add(x: S, C1) @single_use): T @single_use, C2)
     where width(T) < width(S)
     C = C2 - bits(C1, T)
@@ -178,32 +129,10 @@ eq_extended_constant: Eq(ResizeU(x: S): T @single_use, C)
     check bits(Cnarrow, T) == C
     => Eq(x, Cnarrow)
 
-not_eq_zero_single_use: Xor(Eq(x, 0) @single_use, 1)
-    => LtU(0, x)
-
 eq_select_impossible: Eq(Select(c, x, y), C)
     check (known_ones(x) & ~C) | (known_zeros(x) & C) != 0
     check (known_ones(y) & ~C) | (known_zeros(y) & C) != 0
     => 0: Bool
-
-lt_u_select_known_range: LtU(Select(c, x, C1), C2)
-    check ~known_zeros(x) < C2 and C1 >= C2
-    => c
-
-xor_or_operand_single_use: Xor(Or(x, y) @single_use, x)
-    => And(y, Xor(x, -1))
-
-and_xor_operand_single_use: And(Xor(x, y) @single_use, y)
-    => And(y, Xor(x, -1))
-
-xor_nonzero_single_use: Xor(LtU(0, x) @single_use, 1)
-    => Eq(x, 0)
-
-resize_u_or_known_zero: ResizeU(Or(x: S, y)): T
-    where width(T) < width(S)
-    Cmask = bits(bits(-1, T), S)
-    check known_zeros(y) & Cmask == Cmask
-    => ResizeU(x): T
 
 eq_lossless_truncate: Eq(ResizeU(x: S): T, C)
     where width(T) < width(S)
@@ -229,17 +158,92 @@ eq_masked_remove_known_bits: Eq(And(x, Cmask) @single_use, Cvalue)
     check Cnew != Cmask
     => Eq(And(x, Cnew), Cexpect)
 
-and_or_keep_fitting_operand: And(Or(x, y) @single_use, C)
-    check known_zeros(x) | known_ones(x) != -1
-    check known_zeros(x) | C == -1
-    => Or(x, And(y, C))
+eq_shl_constant: Eq(Shl(x: T, C) @single_use, Cvalue)
+    check C < width(T)
+    check Cvalue & ~(-1 << C) == 0
+    Cmask = -1 >> C
+    Cexpected = Cvalue >> C
+    => Eq(And(x, Cmask), Cexpected)
 
-masked_shift_resize_x_field: And(Shl(ResizeX(x: S): T, Cshift) @single_use, Cmask)
-    where width(S) < width(T)
-    check Cshift < width(T)
-    Cdefined = bits(bits(-1, S), T) << Cshift
-    check Cmask & (-1 << Cshift) == Cdefined
-    => Shl(ResizeU(x): T, Cshift)
+shr_u_shl_known_no_loss: ShrU(Shl(x: T, C), C)
+    check C < width(T)
+    Cmask = -1 >> C
+    check known_zeros(x) | Cmask == -1
+    => x
+
+shr_u_shl_known_no_loss_right: ShrU(Shl(x: T, C1), C2)
+    check C1 < C2 and C2 < width(T)
+    Cmask = -1 >> C1
+    check known_zeros(x) | Cmask == -1
+    Cshift = C2 - C1
+    => ShrU(x, Cshift)
+
+shr_u_or_known_zero: ShrU(Or(x: T, y), C)
+    check C < width(T)
+    Cmask = -1 << C
+    check known_zeros(x) & Cmask == Cmask
+    => ShrU(y, C)
+
+shr_s_shl_known_no_loss: ShrS(Shl(x: T, C), C)
+    check C < width(T)
+    Ctop = -1 << (width(T) - 1 - C)
+    check known_zeros(x) & Ctop == Ctop or known_ones(x) & Ctop == Ctop
+    => x
+
+shr_s_nonnegative: ShrS(x: T, y)
+    Csign = 1 << (width(T) - 1)
+    check known_zeros(x) & Csign != 0
+    => ShrU(x, y)
+
+select_known_true: Select(c, x, y)
+    check known_ones(c) == 1
+    => x
+
+select_known_false: Select(c, x, y)
+    check known_zeros(c) == 1
+    => y
+
+select_add_same_condition: Select(c, Add(Select(c, x, C1), C2) @single_use, C3)
+    => Select(c, Add(x, C2), C3)
+
+select_add_same_condition_unshared: Select(c, Add(Select(c, x, y) @single_use, z) @single_use, w)
+    => Select(c, Add(x, z), w)
+
+select_factor_complementary_conditions: Select(And(a, b), x, Select(And(Xor(a, 1), b), y, z) @single_use)
+    => Select(b, Select(a, x, y), z)
+
+select_factor_false_bit: Select(And(c, ResizeU(Select(c, v: S, C)): Bool), x, Select(ResizeU(Select(c, v: S, C)): Bool, z, y) @single_use)
+    check C & 1 == 1
+    => Select(c, Select(ResizeU(Select(c, v, C)): Bool, x, y), z)
+
+select_factor_false_shifted_bit: Select(And(c, ResizeU(ShrU(Select(c, v: S, C1), C2)): Bool), x, Select(ResizeU(ShrU(Select(c, v: S, C1), C2)): Bool, z, y) @single_use)
+    check C2 < width(S)
+    check (C1 >> C2) & 1 == 1
+    => Select(c, Select(ResizeU(ShrU(Select(c, v, C1), C2)): Bool, x, y), z)
+
+resize_u_resize_x_known_zero_roundtrip: ResizeU(ResizeX(x: T): U): T
+    where width(T) > width(U)
+    Cmask = bits(bits(-1, U), T)
+    check known_zeros(x) | Cmask == -1
+    => x
+
+resize_u_resize_u_known_zero_roundtrip: ResizeU(ResizeU(x: T): U): T
+    where width(T) > width(U)
+    Cmask = bits(bits(-1, U), T)
+    check known_zeros(x) | Cmask == -1
+    => x
+
+resize_u_resize_s_known_zero_roundtrip: ResizeU(ResizeS(x: T): U): T
+    where width(T) > width(U)
+    Cmask = bits(bits(-1, U), T)
+    check known_zeros(x) | Cmask == -1
+    => x
+
+resize_u_or_known_zero: ResizeU(Or(x: S, y)): T
+    where width(T) < width(S)
+    Cmask = bits(bits(-1, T), S)
+    check known_zeros(y) & Cmask == Cmask
+    => ResizeU(x): T
 
 resize_shift_or_known_zero: ResizeU(ShrU(Or(x: S, y), Cshift) @single_use): T
     where width(T) < width(S)
@@ -248,15 +252,11 @@ resize_shift_or_known_zero: ResizeU(ShrU(Or(x: S, y), Cshift) @single_use): T
     check known_zeros(y) & Cmask == Cmask
     => ResizeU(ShrU(x, Cshift)): T
 
-mask_shift_or_known_zero: And(ShrU(Or(x: T, y), Cshift) @single_use, Cmask)
-    check Cshift < width(T)
-    Cobserved = Cmask << Cshift
-    check known_zeros(y) & Cobserved == Cobserved
-    => And(ShrU(x, Cshift), Cmask)
+shl_or_constant_single_use: Shl(Or(x: T, C1) @single_use, C2)
+    check C2 < width(T)
+    C = C1 << C2
+    => Or(Shl(x, C2), C)
 
-eq_shl_constant: Eq(Shl(x: T, C) @single_use, Cvalue)
-    check C < width(T)
-    check Cvalue & ~(-1 << C) == 0
-    Cmask = -1 >> C
-    Cexpected = Cvalue >> C
-    => Eq(And(x, Cmask), Cexpected)
+lt_u_select_known_range: LtU(Select(c, x, C1), C2)
+    check ~known_zeros(x) < C2 and C1 >= C2
+    => c

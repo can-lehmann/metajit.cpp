@@ -25,6 +25,21 @@ or_used_redundant: Or(x, C) @used_bits(Cused)
     check Cused & C == 0
     => x
 
+or_used_mask: Or(x, C) @used_bits(Cused)
+    Cnew = C & Cused
+    check Cnew != C
+    => Or(x, Cnew)
+
+or_used_shl: Or(x, Shl(y: T, C)) @used_bits(Cused)
+    check C < width(T)
+    check Cused >> C == 0
+    => x
+
+or_used_shr_u: Or(x, ShrU(y: T, C)) @used_bits(Cused)
+    check C < width(T)
+    check Cused << C == 0
+    => x
+
 resize_u_unused_upper: ResizeU(x: T): U @used_bits(Cused)
     where width(T) < width(U)
     Cmask = bits(bits(-1, T), U)
@@ -41,20 +56,15 @@ xor_unused_constant: Xor(x, C) @used_bits(Cused)
     check Cused & C == 0
     => x
 
-or_used_mask: Or(x, C) @used_bits(Cused)
+xor_used_mask: Xor(x, C) @used_bits(Cused)
     Cnew = C & Cused
     check Cnew != C
-    => Or(x, Cnew)
+    => Xor(x, Cnew)
 
 add_unused_constant: Add(x, C) @used_bits(Cused)
     Clow = C & -C
     check Cused < Clow
     => x
-
-xor_used_mask: Xor(x, C) @used_bits(Cused)
-    Cnew = C & Cused
-    check Cnew != C
-    => Xor(x, Cnew)
 
 select_used_constants: Select(c, C1, C2) @used_bits(Cused)
     Ctrue = C1 & Cused
@@ -71,13 +81,3 @@ shr_u_used_zero: ShrU(x: T, C) @used_bits(Cused)
     check C < width(T)
     check Cused << C == 0
     => 0
-
-or_used_shl: Or(x, Shl(y: T, C)) @used_bits(Cused)
-    check C < width(T)
-    check Cused >> C == 0
-    => x
-
-or_used_shr_u: Or(x, ShrU(y: T, C)) @used_bits(Cused)
-    check C < width(T)
-    check Cused << C == 0
-    => x
