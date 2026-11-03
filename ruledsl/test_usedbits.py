@@ -91,7 +91,22 @@ class UsedBitsTests(unittest.TestCase):
 
     def test_rules_prove(self):
         rules = prove(RULES, used_bits=True)
-        self.assertEqual([len(rule.instantiations) for rule in rules], [5, 5, 5, 10, 10, 5, 5, 4, 5, 5, 4, 4, 4, 4])
+        self.assertEqual({rule.rule.name: len(rule.instantiations) for rule in rules}, {
+            "and_used_redundant": 5,
+            "and_used_mask": 5,
+            "or_used_redundant": 5,
+            "or_used_mask": 5,
+            "or_used_shl": 4,
+            "or_used_shr_u": 4,
+            "resize_u_unused_upper": 10,
+            "resize_s_unused_upper": 10,
+            "xor_unused_constant": 5,
+            "xor_used_mask": 5,
+            "add_unused_constant": 4,
+            "select_used_constants": 5,
+            "shl_used_zero": 4,
+            "shr_u_used_zero": 4,
+        })
         for checked in rules:
             for assignment in checked.instantiations:
                 prover = Prover(checked, assignment, RULES, "usedbits.rules", 10000)
