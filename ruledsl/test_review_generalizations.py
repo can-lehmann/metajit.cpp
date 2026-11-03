@@ -148,7 +148,6 @@ int main() {
     def test_shifted_constant_comparisons(self):
         configurations = [
             ({"eq_masked_shr_u_constant"}, "shr_u", True, True),
-            ({"eq_shr_u_constant"}, "shr_u", False, True),
             ({"eq_shl_constant"}, "shl", False, False),
         ]
         for names, opcode, masked, right in configurations:
@@ -169,6 +168,7 @@ int main() {
           Inst* matched = MASKED ? builder.build_and(shifted, &mask) : shifted;
           Inst* root = builder.build_eq(matched, &wanted);
           assert(!builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{matched, 2}));
+          if (MASKED) assert(!builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{matched, 1, shifted, 2}));
           Value* replacement = builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{matched, 1, shifted, 1});
           bool valid = amount < width;
           uint64_t reachable = valid ? ((RIGHT ? all >> amount : all << amount) & all) : 0;

@@ -99,19 +99,22 @@ eq_boolean_one: Eq(x, 1)
     check known_zeros(x) | 1 == -1
     => ResizeX(x): Bool
 
-eq_masked_shr_u_constant: Eq(And(ShrU(x: T, C), Cmask) @single_use, Cvalue)
+eq_masked_shr_u_zero: Eq(And(ShrU(x: T, C), Cmask) @single_use, 0)
+    check C < width(T)
+    Cnew = Cmask << C
+    => Eq(And(x, Cnew), 0)
+
+eq_masked_shr_u_constant: Eq(And(ShrU(x: T, C) @single_use, Cmask) @single_use, Cvalue)
     check C < width(T)
     check Cvalue & ~(Cmask & (-1 >> C)) == 0
     Cnew = Cmask << C
     Cexpected = Cvalue << C
     => Eq(And(x, Cnew), Cexpected)
 
-eq_shr_u_constant: Eq(ShrU(x: T, C) @single_use, Cvalue)
+eq_shr_u_zero: Eq(ShrU(x: T, C) @single_use, 0)
     check C < width(T)
-    check Cvalue & ~(-1 >> C) == 0
     Cmask = -1 << C
-    Cexpected = Cvalue << C
-    => Eq(And(x, Cmask), Cexpected)
+    => Eq(And(x, Cmask), 0)
 
 eq_masked_shl_zero: Eq(And(Shl(x: T, C), Cmask) @single_use, 0)
     check C < width(T)
