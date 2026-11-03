@@ -223,3 +223,12 @@ eq_nested_select_false_constants: Eq(Select(c, C1, Select(d, C2, C3)) @single_us
     Ctrue = C2 == C4
     Cfalse = C3 == C4
     => Select(c, Couter, Select(d, Ctrue, Cfalse))
+
+eq_masked_remove_known_bits: Eq(And(x, Cmask) @single_use, Cvalue)
+    check Cvalue & ~Cmask == 0
+    check Cvalue & known_zeros(x) == 0
+    check (Cmask & known_ones(x)) & ~Cvalue == 0
+    Cnew = Cmask & ~(known_zeros(x) | known_ones(x))
+    Cexpect = Cvalue & Cnew
+    check Cnew != Cmask
+    => Eq(And(x, Cnew), Cexpect)
