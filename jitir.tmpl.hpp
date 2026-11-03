@@ -5631,9 +5631,31 @@ private:
 
     BlockMap<std::optional<BranchRegion>> _regions;
     BlockMap<bool> _in_loop;
+    BlockMap<size_t> _dom_start;
+    BlockMap<size_t> _dom_end;
     NameMap<Block*> _parents;
     Uses _uses;
     bool _requires_reorder = false;
+
+    void find_dominator_ranges() {
+      size_t next = 1;
+      DominatorTree::Children children = _dom.children();
+      for (auto [event, block] : children) {
+        if (event == DominatorTree::Children::Event::Open) {
+          _dom_start[block] = next++;
+        } else {
+          _dom_end[block] = next;
+        }
+      }
+    }
+
+    bool dominates(Block* dominator, Block* dominated) {
+      if (dominator->name() == dominated->name() || _dom_start[dominated] == 0) {
+        return dominator == dominated;
+      }
+      return _dom_start[dominator] <= _dom_start[dominated] &&
+             _dom_start[dominated] < _dom_end[dominator];
+    }
 
     static bool can_sink(Inst* inst) {
       return !inst->has_side_effect() && !inst->is_terminator() &&
@@ -5723,7 +5745,7 @@ private:
         }
       }
       for (Block* block : *_section) {
-        if (_dom.dominates(exit, block) && !_dom.dominates(target, block)) {
+        if (dominates(exit, block) && !dominates(target, block)) {
           for (Inst* inst : *block) {
             if (inst->has_side_effect()) {
               return;
@@ -5764,11 +5786,14 @@ private:
         _postdom(_incoming),
         _regions(section),
         _in_loop(section),
+        _dom_start(section),
+        _dom_end(section),
         _parents(section),
         _uses(section) {
       
       assert(section->ordering() >= BlockOrdering::Dominator);
       
+      find_dominator_ranges();
       find_parents();
       find_loops();
       for (Block* block : *section) {

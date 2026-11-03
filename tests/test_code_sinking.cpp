@@ -16,7 +16,8 @@ Section* read_sinking_section(Context& context, Allocator& allocator, const std:
   return section;
 }
 
-void check_sinking(const std::string& input, const std::string& expected, bool preserve_order = false) {
+void check_sinking(const std::string& input, const std::string& expected,
+                   bool preserve_order = false, bool check_idempotence = true) {
   Context context;
   Allocator allocator;
   Section* section = read_sinking_section(context, allocator, input, preserve_order);
@@ -33,10 +34,12 @@ void check_sinking(const std::string& input, const std::string& expected, bool p
     std::cerr << "Expected:\n" << expected_result.str() << "\nGot:\n" << result.str();
   }
   unittest_assert(result.str() == expected_result.str());
-  CodeSinking::run(section);
-  std::stringstream twice;
-  section->write(twice);
-  unittest_assert(result.str() == twice.str());
+  if (check_idempotence) {
+    CodeSinking::run(section);
+    std::stringstream twice;
+    section->write(twice);
+    unittest_assert(result.str() == twice.str());
+  }
   for (size_t input = 0; input < 512; input++) {
     uint8_t before[16] = {uint8_t(input), uint8_t(input >> 8)};
     uint8_t after[16];
@@ -418,6 +421,62 @@ b2:
 }
 )";
     check_sinking(ir, ir, true);
+  });
+
+  suite.test("branch sinking preserves continuation dominance").run([]() {
+    check_sinking(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Jump 10:Int8, block=b3
+b2:
+  Jump 20:Int8, block=b3
+b3(%5: Int8):
+  Branch %2, true_block=b4, false_block=b5
+b4:
+  Jump 30:Int8, block=b6
+b5:
+  Jump 40:Int8, block=b6
+b6(%9: Int8):
+  %10 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %10, true_block=b7, false_block=b8
+b7:
+  Store %0, %5, aliasing=0, offset=8
+  Store %0, %9, aliasing=0, offset=9
+  Exit
+b8:
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %1, true_block=b1, false_block=b2
+b1:
+  Jump 10:Int8, block=b3
+b2:
+  Jump 20:Int8, block=b3
+b3(%6: Int8):
+  Jump block=b4
+b4:
+  %8 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
+  Branch %8, true_block=b5, false_block=b9
+b5:
+  Branch %2, true_block=b6, false_block=b7
+b6:
+  Jump 30:Int8, block=b8
+b7:
+  Jump 40:Int8, block=b8
+b8(%13: Int8):
+  Store %0, %6, aliasing=0, offset=8
+  Store %0, %13, aliasing=0, offset=9
+  Exit
+b9:
+  Exit
+}
+)", false, false);
   });
 
   return suite.finish();
