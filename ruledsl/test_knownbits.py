@@ -62,6 +62,7 @@ class KnownBitsTests(unittest.TestCase):
             "eq_shr_u_zero": (4, False, True),
             "eq_masked_shl_zero": (4, False, True),
             "select_add_same_condition": (4, False, True),
+            "select_add_same_condition_unshared": (4, False, True),
             "select_factor_complementary_conditions": (5, False, True),
             "select_factor_false_bit": (25, False, True),
             "select_factor_false_shifted_bit": (20, False, True),

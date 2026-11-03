@@ -104,7 +104,7 @@ int main() {
     Const first(source, type_mask(source));
     Inst* selected = builder.build_select(&c, &x, &first);
     for (Type target : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
-      Const zero(target, 0), second(target, first.value()), wrong(target, 0);
+      Const zero(target, 0), second(target, first.value()), subset_mask(target, 0);
       Inst* resized = builder.build_resize_u(selected, target);
       Inst* mask = builder.build_select(&c, &zero, &second);
       for (bool swapped : {false, true}) {
@@ -114,9 +114,9 @@ int main() {
         assert(builder.fold_or(root->arg(0), root->arg(1)) == resized);
         assert(builder.allocated.size() == before);
       }
-      Inst* miss = builder.build_or(resized, builder.build_select(&c, &zero, &wrong));
+      Inst* subset = builder.build_or(resized, builder.build_select(&c, &zero, &subset_mask));
       size_t before = builder.allocated.size();
-      assert(!builder.try_simplify(miss));
+      assert(builder.try_simplify(subset) == resized);
       assert(builder.allocated.size() == before);
     }
   }
@@ -346,7 +346,7 @@ int main() {
         source = (Path(__file__).resolve().parent.parent / "fold.rules").read_text()
         rules = [rule for rule in parse(source)
                  if (rule.name.startswith(("bit_reverse_", "mul_high_u_", "eq_masked_xor"))
-                     or rule.name == "select_same")
+                     or rule.name in {"select_same", "eq_masked_impossible"})
                  and rule.name != "mul_high_u_power_of_two"]
         source = "\n".join(source[rule.span.start:rule.span.end] for rule in rules)
         code = generate(source, simplify_source=source,

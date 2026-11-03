@@ -243,7 +243,7 @@ or_select_redundant_mask: Or(Select(c, x, C1), Select(c, 0, C2))
     => Select(c, x, C1)
 
 or_resized_select_redundant_mask: Or(ResizeU(Select(c, x: S, C1)): T, Select(c, 0, C2))
-    check bits(C1, T) == C2
+    check bits(C1, T) | C2 == bits(C1, T)
     => ResizeU(Select(c, x, C1)): T
 
 or_reassoc_constants: Or(Or(x, C1), C2)
@@ -365,7 +365,7 @@ eq_xor_constant: Eq(Xor(x, C1), C2)
 eq_sub_zero: Eq(Sub(x, y), 0)
     => Eq(x, y)
 
-eq_masked_xor_impossible: Eq(And(Xor(x, C1), Cmask), C2)
+eq_masked_impossible: Eq(And(x, Cmask), C2)
     check C2 & ~Cmask != 0
     => 0: Bool
 
@@ -460,10 +460,10 @@ select_nested_false: Select(c, x, Select(c, y, z))
 resize_u_identity: ResizeU(x: T): T
     => x
 
-resize_u_add_even_bool: ResizeU(Add(x, C)): Bool
-    # TODO: generalize via usedbits
-    check C & 1 == 0
-    => ResizeU(x): Bool
+resize_u_add_discarded_constant: ResizeU(Add(x: S, C)): T
+    where width(T) < width(S)
+    check bits(C, T) == 0
+    => ResizeU(x): T
 
 resize_u_add_shift_above_width: ResizeU(Add(Shl(x: S, C), y)): T
     where width(T) < width(S)
