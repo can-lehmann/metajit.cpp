@@ -463,6 +463,52 @@ b6:
 )");
   });
 
+  suite.test("moved branch condition chain sinks in one pass").run([]() {
+    check_sinking(R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = Add %1, 1:Int8
+  %3 = And %2, 7:Int8
+  %4 = Eq %3, 3:Int8
+  Branch %4, true_block=b1, false_block=b2
+b1:
+  Jump 10:Int8, block=b3
+b2:
+  Jump 20:Int8, block=b3
+b3(%8: Int8):
+  %9 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %9, true_block=b4, false_block=b5
+b4:
+  Store %0, %8, aliasing=0, offset=8
+  Exit
+b5:
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  Jump block=b1
+b1:
+  %3 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
+  Branch %3, true_block=b2, false_block=b6
+b2:
+  %5 = Add %1, 1:Int8
+  %6 = And %5, 7:Int8
+  %7 = Eq %6, 3:Int8
+  Branch %7, true_block=b3, false_block=b4
+b3:
+  Jump 10:Int8, block=b5
+b4:
+  Jump 20:Int8, block=b5
+b5(%11: Int8):
+  Store %0, %11, aliasing=0, offset=8
+  Exit
+b6:
+  Exit
+}
+)");
+  });
+
   suite.test("branch region load does not cross a write").run([]() {
     const std::string ir = R"(section {
 b0(%0: Ptr):

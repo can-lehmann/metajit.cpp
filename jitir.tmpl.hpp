@@ -5772,6 +5772,7 @@ private:
       BranchInst* branch = region->branch();
       entry->remove(branch);
       target->add(branch);
+      _parents[branch] = target;
       builder.move_to_end(entry);
       builder.build_jump(exit);
       _requires_reorder = true;
