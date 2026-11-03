@@ -244,3 +244,16 @@ masked_shift_resize_x_field: And(Shl(ResizeX(x: S): T, Cshift) @single_use, Cmas
     Cdefined = bits(bits(-1, S), T) << Cshift
     check Cmask & (-1 << Cshift) == Cdefined
     => Shl(ResizeU(x): T, Cshift)
+
+resize_shift_or_known_zero: ResizeU(ShrU(Or(x: S, y), Cshift) @single_use): T
+    where width(T) < width(S)
+    check Cshift < width(S)
+    Cmask = bits(bits(-1, T), S) << Cshift
+    check known_zeros(y) & Cmask == Cmask
+    => ResizeU(ShrU(x, Cshift)): T
+
+mask_shift_or_known_zero: And(ShrU(Or(x: T, y), Cshift) @single_use, Cmask)
+    check Cshift < width(T)
+    Cobserved = Cmask << Cshift
+    check known_zeros(y) & Cobserved == Cobserved
+    => And(ShrU(x, Cshift), Cmask)
