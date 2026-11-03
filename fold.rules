@@ -326,9 +326,6 @@ xor_cancel: Xor(Xor(x, y), y)
 xor_common_operand: Xor(Xor(x, y), Xor(x, z))
     => Xor(y, z)
 
-xor_double_complement: Xor(Xor(x, -1), -1)
-    => x
-
 eq_self: Eq(x, x)
     => 1
 

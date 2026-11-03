@@ -12,13 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-and_self: And(x, x)
-    => x
-
-and_reassoc_constants: And(And(x, C1), C2)
-    C = C1 & C2
-    => And(x, C)
-
 and_redundant_operand: And(x, y)
     check known_zeros(x) | known_ones(y) == -1
     => x
@@ -137,15 +130,19 @@ xor_collect_constants: Xor(Xor(Xor(x, C1), y) @single_use, C2)
     C = C1 ^ C2
     => Xor(Xor(x, y), C)
 
-eq_masked_shr_u_zero: Eq(And(ShrU(x: T, C), Cmask) @single_use, 0)
+eq_masked_shr_u_constant: Eq(And(ShrU(x: T, C), Cmask) @single_use, Cvalue)
     check C < width(T)
+    check Cvalue & ~(Cmask & (-1 >> C)) == 0
     Cnew = Cmask << C
-    => Eq(And(x, Cnew), 0)
+    Cexpected = Cvalue << C
+    => Eq(And(x, Cnew), Cexpected)
 
-eq_shr_u_zero: Eq(ShrU(x: T, C) @single_use, 0)
+eq_shr_u_constant: Eq(ShrU(x: T, C) @single_use, Cvalue)
     check C < width(T)
+    check Cvalue & ~(-1 >> C) == 0
     Cmask = -1 << C
-    => Eq(And(x, Cmask), 0)
+    Cexpected = Cvalue << C
+    => Eq(And(x, Cmask), Cexpected)
 
 eq_masked_shl_zero: Eq(And(Shl(x: T, C), Cmask) @single_use, 0)
     check C < width(T)
@@ -215,17 +212,13 @@ eq_lossless_truncate: Eq(ResizeU(x: S): T, C)
     Cwide = bits(C, S)
     => Eq(x, Cwide)
 
-eq_nested_select_true_constants: Eq(Select(c, Select(d, C1, C2), C3) @single_use, C4)
-    Ctrue = C1 == C4
-    Cfalse = C2 == C4
-    Couter = C3 == C4
-    => Select(c, Select(d, Ctrue, Cfalse), Couter)
+eq_select_false_constant: Eq(Select(c, x, C1) @single_use, C2)
+    Cfalse = C1 == C2
+    => Select(c, Eq(x, C2), Cfalse)
 
-eq_nested_select_false_constants: Eq(Select(c, C1, Select(d, C2, C3)) @single_use, C4)
-    Couter = C1 == C4
-    Ctrue = C2 == C4
-    Cfalse = C3 == C4
-    => Select(c, Couter, Select(d, Ctrue, Cfalse))
+eq_select_true_constant: Eq(Select(c, C1, x) @single_use, C2)
+    Ctrue = C1 == C2
+    => Select(c, Ctrue, Eq(x, C2))
 
 eq_masked_remove_known_bits: Eq(And(x, Cmask) @single_use, Cvalue)
     check Cvalue & ~Cmask == 0
@@ -260,3 +253,10 @@ mask_shift_or_known_zero: And(ShrU(Or(x: T, y), Cshift) @single_use, Cmask)
     Cobserved = Cmask << Cshift
     check known_zeros(y) & Cobserved == Cobserved
     => And(ShrU(x, Cshift), Cmask)
+
+eq_shl_constant: Eq(Shl(x: T, C) @single_use, Cvalue)
+    check C < width(T)
+    check Cvalue & ~(-1 << C) == 0
+    Cmask = -1 >> C
+    Cexpected = Cvalue >> C
+    => Eq(And(x, Cmask), Cexpected)

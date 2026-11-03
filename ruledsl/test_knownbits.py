@@ -31,8 +31,7 @@ class KnownBitsTests(unittest.TestCase):
         path = Path(__file__).resolve().parent.parent / "simplify.rules"
         rules = prove(path.read_text(), str(path))
         expected = {
-            "and_self": (5, False, False),
-            "and_reassoc_constants": (5, False, False),
+            "eq_shl_constant": (4, False, True),
             "and_redundant_operand": (5, True, False),
             "and_shifted_known_mask": (20, True, False),
             "or_redundant_operand": (5, True, False),
@@ -58,8 +57,8 @@ class KnownBitsTests(unittest.TestCase):
             "or_collect_constants": (5, False, True),
             "and_collect_constants": (5, False, True),
             "xor_collect_constants": (5, False, True),
-            "eq_masked_shr_u_zero": (4, False, True),
-            "eq_shr_u_zero": (4, False, True),
+            "eq_masked_shr_u_constant": (4, False, True),
+            "eq_shr_u_constant": (4, False, True),
             "eq_masked_shl_zero": (4, False, True),
             "select_add_same_condition": (4, False, True),
             "select_add_same_condition_unshared": (4, False, True),
@@ -76,8 +75,8 @@ class KnownBitsTests(unittest.TestCase):
             "xor_nonzero_single_use": (4, False, True),
             "resize_u_or_known_zero": (10, True, False),
             "eq_lossless_truncate": (10, True, False),
-            "eq_nested_select_true_constants": (5, False, True),
-            "eq_nested_select_false_constants": (5, False, True),
+            "eq_select_false_constant": (5, False, True),
+            "eq_select_true_constant": (5, False, True),
             "eq_masked_remove_known_bits": (5, True, True),
             "and_or_keep_fitting_operand": (5, True, True),
             "masked_shift_resize_x_field": (10, False, True),

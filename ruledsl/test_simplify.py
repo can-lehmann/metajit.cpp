@@ -170,8 +170,8 @@ int main() {
         source = (Path(__file__).resolve().parent.parent / "simplify.rules").read_text()
         rules = {rule.name: source[rule.span.start:rule.span.end] for rule in parse(source)}
         for name, opcode, masked, operator in (
-                ("eq_masked_shr_u_zero", "shr_u", True, "<<"),
-                ("eq_shr_u_zero", "shr_u", False, "<<"),
+                ("eq_masked_shr_u_constant", "shr_u", True, "<<"),
+                ("eq_shr_u_constant", "shr_u", False, "<<"),
                 ("eq_masked_shl_zero", "shl", True, ">>")):
             with self.subTest(rule=name):
                 code = generate("", simplify_source=rules[name], include_simplify=True)
