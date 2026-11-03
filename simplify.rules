@@ -237,3 +237,10 @@ and_or_keep_fitting_operand: And(Or(x, y) @single_use, C)
     check known_zeros(x) | known_ones(x) != -1
     check known_zeros(x) | C == -1
     => Or(x, And(y, C))
+
+masked_shift_resize_x_field: And(Shl(ResizeX(x: S): T, Cshift) @single_use, Cmask)
+    where width(S) < width(T)
+    check Cshift < width(T)
+    Cdefined = bits(bits(-1, S), T) << Cshift
+    check Cmask & (-1 << Cshift) == Cdefined
+    => Shl(ResizeU(x): T, Cshift)
