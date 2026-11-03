@@ -777,3 +777,15 @@ eq_nested_select_encoding_low_bit: Eq(Select(c, C1: S, Select(d, C2, C3)), Cvalu
     check (C2 == Cvalue) == ((C2 & 1) == 1)
     check (C3 == Cvalue) == ((C3 & 1) == 1)
     => ResizeU(Select(c, C1, Select(d, C2, C3))): Bool
+
+borrow_bit_extended_complement_resizex: ResizeU(ShrU(Add(Add(Or(ResizeX(Xor(y: S, -1)): T, Ctag), ResizeU(x: S): T), 1), Cshift)): Bool
+    where width(S) < width(T)
+    check Cshift == width(S)
+    check Ctag == 1 << Cshift
+    => LtU(x, y)
+
+borrow_bit_extended_complement_resizeu: ResizeU(ShrU(Add(Add(Or(ResizeU(Xor(y: S, -1)): T, Ctag), ResizeU(x: S): T), 1), Cshift)): Bool
+    where width(S) < width(T)
+    check Cshift == width(S)
+    check Ctag == 1 << Cshift
+    => LtU(x, y)
