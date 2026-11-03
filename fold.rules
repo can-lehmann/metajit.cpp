@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
+# Add
+
 add_zero: Add(x, 0)
     => x
 
@@ -35,6 +38,9 @@ add_reassoc_constants: Add(Add(x, C1), C2)
 
 add_not_plus_one: Add(Add(x, Xor(y, -1)), 1)
     => Sub(x, y)
+
+
+# Sub
 
 sub_self: Sub(x, x)
     => 0
@@ -65,6 +71,9 @@ sub_constant_select: Sub(C1, Select(c, C2, C3))
     Cfalse = C1 - C3
     => Select(c, Ctrue, Cfalse)
 
+
+# Mul
+
 mul_zero: Mul(x, 0)
     => 0
 
@@ -93,6 +102,9 @@ mul_power_of_two: Mul(x, C)
 mul_shift_one: Mul(x, Shl(1, y))
     => Shl(x, y)
 
+
+# MulHighU
+
 mul_high_u_zero: MulHighU(x, 0)
     => 0
 
@@ -118,6 +130,9 @@ mul_high_u_power_of_two: MulHighU(x: T, C)
     Cshift = width(T) - ctz(C)
     => ShrU(x, Cshift)
 
+
+# BitReverse
+
 bit_reverse_constant: BitReverse(C)
     Creversed = bit_reverse(C)
     => Creversed
@@ -136,11 +151,17 @@ bit_reverse_shl_reverse: BitReverse(Shl(BitReverse(x), y))
 bit_reverse_shr_u_reverse: BitReverse(ShrU(BitReverse(x), y))
     => Shl(x, y)
 
+
+# ModU
+
 mod_u_power_of_two: ModU(x, C)
     SORRY_Z3_SMALL_WIDTHS
     check C != 0 and C & (C - 1) == 0
     Cmask = C - 1
     => And(x, Cmask)
+
+
+# And
 
 and_self: And(x, x)
     => x
@@ -238,6 +259,9 @@ and_select_zero_absorb: And(c, Select(c, x, 0: Bool))
 
 and_not_select_zero_absorb: And(Xor(c, 1), Select(c, 0: Bool, x))
     => Select(c, 0: Bool, x)
+
+
+# Or
 
 or_self: Or(x, x)
     => x
@@ -339,6 +363,9 @@ or_select_one_absorb: Or(c, Select(c, 1: Bool, x))
 or_not_select_one_absorb: Or(Xor(c, 1), Select(c, x, 1: Bool))
     => Select(c, x, 1: Bool)
 
+
+# Xor
+
 xor_self: Xor(x, x)
     => 0
 
@@ -368,6 +395,9 @@ xor_cancel: Xor(Xor(x, y), y)
 
 xor_common_operand: Xor(Xor(x, y), Xor(x, z))
     => Xor(y, z)
+
+
+# Eq
 
 eq_self: Eq(x, x)
     => 1
@@ -444,6 +474,9 @@ eq_nested_select_encoding_low_bit: Eq(Select(c, C1: S, Select(d, C2, C3)), Cvalu
     check (C3 == Cvalue) == ((C3 & 1) == 1)
     => ResizeU(Select(c, C1, Select(d, C2, C3))): Bool
 
+
+# LtU
+
 lt_u_self: LtU(x, x)
     => 0
 
@@ -477,6 +510,9 @@ lt_u_independent_selects_and: LtU(Select(c, C1, C2), Select(d, C3, C4))
     check C1 < C3 and C1 >= C4 and C2 >= C3 and C2 >= C4
     => And(c, d)
 
+
+# LtS
+
 lt_s_self: LtS(x, x)
     => 0
 
@@ -484,6 +520,9 @@ lt_s_nested_select_sign: LtS(Select(And(c, d), C1: T, Select(c, C2, C3)), 0)
     Csign = 1 << (width(T) - 1)
     check C1 & Csign != 0 and C2 & Csign != 0 and C3 & Csign == 0
     => c
+
+
+# Select
 
 select_true: Select(1, x, y)
     => x
@@ -530,6 +569,9 @@ select_nested_true: Select(c, Select(c, x, y), z)
 
 select_nested_false: Select(c, x, Select(c, y, z))
     => Select(c, x, z)
+
+
+# ResizeU
 
 resize_u_identity: ResizeU(x: T): T
     => x
@@ -614,12 +656,18 @@ borrow_bit_extended_complement_resizeu: ResizeU(ShrU(Add(Add(Or(ResizeU(Xor(y: S
     check Ctag == 1 << Cshift
     => LtU(x, y)
 
+
+# ResizeS
+
 resize_s_identity: ResizeS(x: T): T
     => x
 
 resize_s_narrow: ResizeS(x: S): T
     where width(T) < width(S)
     => ResizeU(x): T
+
+
+# ResizeX
 
 resize_x_identity: ResizeX(x: T): T
     => x
@@ -658,6 +706,9 @@ resize_x_constant_truncate: ResizeX(C: S): T
     where width(T) <= width(S)
     Cresult = bits(C, T)
     => Cresult
+
+
+# Shl
 
 shl_zero: Shl(x, 0)
     => x
@@ -747,6 +798,9 @@ shl_masked_shl_in_range: Shl(And(Shl(x: T, C1), Cmask), C2)
     Cresult_mask = Cmask << C2
     => And(Shl(x, Cshift), Cresult_mask)
 
+
+# ShrU
+
 shr_u_zero: ShrU(x, 0)
     => x
 
@@ -780,6 +834,9 @@ shr_u_constant_select: ShrU(C1: T, Select(c, C2, C3))
     Ctrue = C1 >> C2
     Cfalse = C1 >> C3
     => Select(c, Ctrue, Cfalse)
+
+
+# ShrS
 
 shr_s_zero: ShrS(x, 0)
     => x

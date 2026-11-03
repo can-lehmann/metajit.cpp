@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
+# And
+
 and_redundant_operand: And(x, y)
     check known_zeros(x) | known_ones(y) == -1
     => x
@@ -53,6 +56,9 @@ mask_shift_or_known_zero: And(ShrU(Or(x: T, y), Cshift) @single_use, Cmask)
     check known_zeros(y) & Cobserved == Cobserved
     => And(ShrU(x, Cshift), Cmask)
 
+
+# Or
+
 or_redundant_operand: Or(x, y)
     check known_ones(x) | known_zeros(y) == -1
     => x
@@ -61,9 +67,15 @@ or_collect_constants: Or(Or(Or(x, C1), y) @single_use, C2)
     C = C1 | C2
     => Or(Or(x, y), C)
 
+
+# Add
+
 add_disjoint: Add(x, y)
     check known_zeros(x) | known_zeros(y) == -1
     => Or(x, y)
+
+
+# Sub
 
 sub_or_disjoint: Sub(Or(x, y), y)
     check known_zeros(x) | known_zeros(y) == -1
@@ -72,6 +84,9 @@ sub_or_disjoint: Sub(Or(x, y), y)
 sub_xor_disjoint: Sub(Xor(x, y), y)
     check known_zeros(x) | known_zeros(y) == -1
     => x
+
+
+# Xor
 
 xor_clear_known_ones: Xor(x, C)
     check known_ones(x) & C == C
@@ -90,6 +105,9 @@ xor_or_operand_single_use: Xor(Or(x, y) @single_use, x)
 
 xor_nonzero_single_use: Xor(LtU(0, x) @single_use, 1)
     => Eq(x, 0)
+
+
+# Eq
 
 eq_or_disjoint_zero: Eq(Or(x, y), 0)
     check known_zeros(x) | known_zeros(y) == -1
@@ -168,6 +186,9 @@ eq_shl_constant: Eq(Shl(x: T, C) @single_use, Cvalue)
     Cexpected = Cvalue >> C
     => Eq(And(x, Cmask), Cexpected)
 
+
+# ShrU
+
 shr_u_shl_known_no_loss: ShrU(Shl(x: T, C), C)
     check C < width(T)
     Cmask = -1 >> C
@@ -187,6 +208,9 @@ shr_u_or_known_zero: ShrU(Or(x: T, y), C)
     check known_zeros(x) & Cmask == Cmask
     => ShrU(y, C)
 
+
+# ShrS
+
 shr_s_shl_known_no_loss: ShrS(Shl(x: T, C), C)
     check C < width(T)
     Ctop = -1 << (width(T) - 1 - C)
@@ -197,6 +221,9 @@ shr_s_nonnegative: ShrS(x: T, y)
     Csign = 1 << (width(T) - 1)
     check known_zeros(x) & Csign != 0
     => ShrU(x, y)
+
+
+# Select
 
 select_known_true: Select(c, x, y)
     check known_ones(c) == 1
@@ -223,6 +250,9 @@ select_factor_false_shifted_bit: Select(And(c, ResizeU(ShrU(Select(c, v: S, C1),
     check C2 < width(S)
     check (C1 >> C2) & 1 == 1
     => Select(c, Select(ResizeU(ShrU(Select(c, v, C1), C2)): Bool, x, y), z)
+
+
+# ResizeU
 
 resize_u_resize_x_known_zero_roundtrip: ResizeU(ResizeX(x: T): U): T
     where width(T) > width(U)
@@ -255,10 +285,16 @@ resize_shift_or_known_zero: ResizeU(ShrU(Or(x: S, y), Cshift) @single_use): T
     check known_zeros(y) & Cmask == Cmask
     => ResizeU(ShrU(x, Cshift)): T
 
+
+# Shl
+
 shl_or_constant_single_use: Shl(Or(x: T, C1) @single_use, C2)
     check C2 < width(T)
     C = C1 << C2
     => Or(Shl(x, C2), C)
+
+
+# LtU
 
 lt_u_select_known_range: LtU(Select(c, x, C1), C2)
     check ~known_zeros(x) < C2 and C1 >= C2
