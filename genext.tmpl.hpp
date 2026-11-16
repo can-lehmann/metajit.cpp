@@ -50,10 +50,6 @@ namespace metajit {
 
     void find_max_write_size() {
       assert(_section->ordering() >= BlockOrdering::Natural);
-      if (_section->ordering() < BlockOrdering::Topological) {
-        _max_write_size = SIZE_MAX;
-        return;
-      }
 
       _max_write_size = 0;
       size_t max_load_size = 0;
@@ -74,6 +70,10 @@ namespace metajit {
         }
 
         for (Block* succ : block->successors()) {
+          if (succ->name() <= block->name() && size > max_entry_sizes[succ]) {
+            _max_write_size = SIZE_MAX;
+            return;
+          }
           max_entry_sizes[succ] = std::max(max_entry_sizes[succ], size);
         }
 
