@@ -2795,15 +2795,18 @@ namespace metajit {
         return value;
       }
 
+      static Bits unsigned_range(Type type, uint64_t minimum, uint64_t maximum) {
+        assert(minimum <= maximum);
+        assert((maximum & ~type_mask(type)) == 0);
+        return Bits(type, ~mask_through_highest_bit(minimum ^ maximum), minimum);
+      }
+
       static Bits unsigned_upper_bound(Type type, uint64_t bound) {
-        assert((bound & ~type_mask(type)) == 0);
-        return Bits(type, ~mask_through_highest_bit(bound), 0);
+        return unsigned_range(type, 0, bound);
       }
 
       static Bits unsigned_lower_bound(Type type, uint64_t bound) {
-        assert((bound & ~type_mask(type)) == 0);
-        uint64_t mask = ~mask_through_highest_bit(~bound & type_mask(type));
-        return Bits(type, mask, mask);
+        return unsigned_range(type, bound, type_mask(type));
       }
 
       uint64_t umin() const {
@@ -3251,6 +3254,10 @@ namespace metajit {
         return {};
       }
 
+      Bits clz() const {
+        return unsigned_range(type, metajit::clz(type, umax()), metajit::clz(type, umin()));
+      }
+
       Bits bit_reverse() const {
         return Bits(type, metajit::bit_reverse(type, mask), metajit::bit_reverse(type, value));
       }
@@ -3276,6 +3283,8 @@ namespace metajit {
           Bits a = at(values, select->arg(1));
           Bits b = at(values, select->arg(2));
           return cond.select(a, b);
+        } else if (dynmatch(ClzInst, clz, inst)) {
+          return at(values, clz->arg(0)).clz();
         } else if (dynmatch(BitReverseInst, bit_reverse, inst)) {
           return at(values, bit_reverse->arg(0)).bit_reverse();
         } else if (dynmatch(ResizeUInst, resize_u, inst)) {
