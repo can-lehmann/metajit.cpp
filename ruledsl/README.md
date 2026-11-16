@@ -109,6 +109,9 @@ short-circuit evaluation.
 `ctz(C)` counts trailing zero bits of an unsigned constant, returning the input
 bit width for zero. Its result has an independently inferred numeric type.
 
+`clz(C)` counts leading zero bits, returning the input bit width for zero.
+Its result preserves the input type. It also works in type conditions.
+
 `bit_reverse(C)` reverses the bits at the inferred width of `C` and preserves
 its type. `mul_high_u(C1, C2)` returns the upper half of the full unsigned
 product, with both arguments and the result sharing a type. Unlike ordinary

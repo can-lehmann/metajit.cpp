@@ -67,6 +67,10 @@ UNARY_OPERATORS = {"+": operator.pos, "-": operator.neg, "~": operator.invert,
                    "not": operator.not_}
 
 
+def clz(value, width):
+    return width - value.bit_length()
+
+
 def bit_reverse(value, width):
     result = 0
     for index in range(width):
@@ -78,7 +82,7 @@ def mul_high_u(left, right, width):
     return (left * right) >> width
 
 
-CALCULATION_FUNCTIONS = {"bit_reverse": bit_reverse, "mul_high_u": mul_high_u}
+CALCULATION_FUNCTIONS = {"clz": clz, "bit_reverse": bit_reverse, "mul_high_u": mul_high_u}
 
 
 class Checker:
@@ -213,7 +217,7 @@ class Checker:
 
     def call(self, node):
         arities = {"width": 1, "bits": 2, "min": 2, "max": 2, "ctz": 1,
-                   "bit_reverse": 1, "mul_high_u": 2,
+                   "bit_reverse": 1, "clz": 1, "mul_high_u": 2,
                    "known_zeros": 1, "known_ones": 1}
         if node.name not in arities:
             self.error(node, f"unknown calculation function {node.name!r}")
@@ -233,7 +237,7 @@ class Checker:
         self.require(args[0], "constant", node.args[0])
         if node.name == "ctz":
             return ExprInfo("constant", self.constraints.fresh(), args[0].dependencies)
-        if node.name == "bit_reverse":
+        if node.name in {"bit_reverse", "clz"}:
             return ExprInfo("constant", args[0].type, args[0].dependencies)
         if node.name == "bits":
             self.require(args[1], "type", node.args[1])

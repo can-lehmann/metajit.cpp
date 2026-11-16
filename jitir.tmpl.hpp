@@ -1597,13 +1597,6 @@ namespace metajit {
       return build_promote(a);
     }
 
-    Value* fold_clz(Value* a) {
-      if (dynmatch(Const, constant, a)) {
-        return build_const(a->type(), metajit::clz(a->type(), constant->value()));
-      }
-      return build_clz(a);
-    }
-
     Value* fold_popcount(Value* a) {
       return build_popcount(a);
     }
@@ -2789,10 +2782,7 @@ namespace metajit {
       }
 
       static uint64_t mask_through_highest_bit(uint64_t value) {
-        for (size_t shift = 1; shift < 64; shift *= 2) {
-          value |= value >> shift;
-        }
-        return value;
+        return value ? ~uint64_t(0) >> __builtin_clzll(value) : 0;
       }
 
       static Bits unsigned_range(Type type, uint64_t minimum, uint64_t maximum) {

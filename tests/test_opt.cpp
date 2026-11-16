@@ -2903,6 +2903,8 @@ void test_cse_pure_loads_across_guards() {
   unittest_assert(!section.verify(std::cout));
 }
 
+void test_fold_clz_constant_select();
+
 int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
@@ -4217,5 +4219,42 @@ b1:
     }
   });
 
+  suite.test("fold clz constant select").run(test_fold_clz_constant_select);
+
   return suite.finish();
+}
+
+void test_fold_clz_constant_select() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({Type::Bool, type});
+    builder.move_to_end(block);
+    Value* cond = block->arg(0);
+    size_t width = type_width(type);
+    uint64_t high = uint64_t(1) << (width - 1);
+    for (bool reverse : {false, true}) {
+      Value* zero = builder.build_const(type, 0);
+      Value* one = builder.build_const(type, 1);
+      Value* selected = builder.build_select(cond, reverse ? one : zero, reverse ? zero : one);
+      check_fold_constant_select(builder.fold_clz(selected), cond, type,
+                                 reverse ? width - 1 : width, reverse ? width : width - 1);
+      Value* partial = builder.build_select(cond, reverse ? block->arg(1) : zero,
+                                           reverse ? zero : block->arg(1));
+      unittest_assert(dynamic_cast<ClzInst*>(builder.fold_clz(partial)));
+    }
+    for (size_t bit = 1; bit < width; bit++) {
+      uint64_t power = uint64_t(1) << bit;
+      Value* selected = builder.build_select(cond, builder.build_const(type, power),
+                                             builder.build_const(type, power - 1));
+      check_fold_constant_select(builder.fold_clz(selected), cond, type,
+                                 width - bit - 1, width - bit);
+    }
+    Value* same_count = builder.build_select(cond, builder.build_const(type, high),
+                                             builder.build_const(type, type_mask(type)));
+    check_const(builder.fold_clz(same_count), type, 0);
+    check_const(builder.fold_clz(builder.build_const(type, 0)), type, width);
+  }
 }
