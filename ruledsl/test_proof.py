@@ -402,5 +402,26 @@ class ProofTests(unittest.TestCase):
             prove("id: Add(x, 0)\n    => x", timeout_ms=0)
 
 
+class ClzTests(unittest.TestCase):
+    def test_semantics(self):
+        for type_ in INT_TYPES:
+            width = type_.width
+            cases = [(0, width), (1, width - 1), ((1 << width) - 1, 0)]
+            cases += [(1 << bit, width - bit - 1) for bit in range(width)]
+            for value, expected in cases:
+                result = emit("Clz", [Value.constant(value, type_)], type_)
+                self.assertEqual(z3.simplify(result.bits).as_long(), expected)
+                self.assertTrue(z3.is_false(z3.simplify(result.poison)))
+            poison = Value(z3.BitVecVal(0, width), z3.BoolVal(True), type_)
+            self.assertTrue(z3.is_true(z3.simplify(emit("Clz", [poison], type_).poison)))
+
+    def test_constant_rules(self):
+        source = (Path(__file__).resolve().parent.parent / "fold.rules").read_text()
+        rules = [rule for rule in parse(source) if rule.name in {"clz_constant", "clz_select"}]
+        self.assertEqual(len(rules), 2)
+        for rule in rules:
+            prove(source[rule.span.start:rule.span.end])
+
+
 if __name__ == "__main__":
     unittest.main()

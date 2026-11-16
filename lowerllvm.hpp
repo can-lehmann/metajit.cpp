@@ -236,6 +236,8 @@ namespace metajit {
       } else if (llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(inst)) {
         if (call->getIntrinsicID() == llvm::Intrinsic::bitreverse) {
           return _builder.fold_bit_reverse(lower_operand(call->getArgOperand(0)));
+        } else if (call->getIntrinsicID() == llvm::Intrinsic::ctlz) {
+          return _builder.fold_clz(lower_operand(call->getArgOperand(0)));
         } else if (call->getIntrinsicID() == llvm::Intrinsic::ctpop) {
           return _builder.fold_popcount(lower_operand(call->getArgOperand(0)));
         } else if (call->getCalledFunction() && call->getCalledFunction()->getName().starts_with("__metajit")) {

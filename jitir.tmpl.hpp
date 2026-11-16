@@ -193,6 +193,11 @@ namespace metajit {
     }
   }
 
+  inline uint64_t clz(Type type, uint64_t value) {
+    value &= type_mask(type);
+    return value ? __builtin_clzll(value) - (64 - type_width(type)) : type_width(type);
+  }
+
   inline uint64_t bit_reverse(Type type, uint64_t value) {
     value = __builtin_bswap64(value);
     value = ((value >> 4) & 0x0f0f0f0f0f0f0f0full) | ((value & 0x0f0f0f0f0f0f0f0full) << 4);
@@ -2777,21 +2782,21 @@ namespace metajit {
       }
 
       static uint64_t mask_through_highest_bit(uint64_t value) {
-        for (size_t shift = 1; shift < 64; shift *= 2) {
-          value |= value >> shift;
-        }
-        return value;
+        return value ? ~uint64_t(0) >> __builtin_clzll(value) : 0;
+      }
+
+      static Bits unsigned_range(Type type, uint64_t minimum, uint64_t maximum) {
+        assert(minimum <= maximum);
+        assert((maximum & ~type_mask(type)) == 0);
+        return Bits(type, ~mask_through_highest_bit(minimum ^ maximum), minimum);
       }
 
       static Bits unsigned_upper_bound(Type type, uint64_t bound) {
-        assert((bound & ~type_mask(type)) == 0);
-        return Bits(type, ~mask_through_highest_bit(bound), 0);
+        return unsigned_range(type, 0, bound);
       }
 
       static Bits unsigned_lower_bound(Type type, uint64_t bound) {
-        assert((bound & ~type_mask(type)) == 0);
-        uint64_t mask = ~mask_through_highest_bit(~bound & type_mask(type));
-        return Bits(type, mask, mask);
+        return unsigned_range(type, bound, type_mask(type));
       }
 
       uint64_t umin() const {
@@ -3239,6 +3244,10 @@ namespace metajit {
         return {};
       }
 
+      Bits clz() const {
+        return unsigned_range(type, metajit::clz(type, umax()), metajit::clz(type, umin()));
+      }
+
       Bits bit_reverse() const {
         return Bits(type, metajit::bit_reverse(type, mask), metajit::bit_reverse(type, value));
       }
@@ -3264,6 +3273,8 @@ namespace metajit {
           Bits a = at(values, select->arg(1));
           Bits b = at(values, select->arg(2));
           return cond.select(a, b);
+        } else if (dynmatch(ClzInst, clz, inst)) {
+          return at(values, clz->arg(0)).clz();
         } else if (dynmatch(BitReverseInst, bit_reverse, inst)) {
           return at(values, bit_reverse->arg(0)).bit_reverse();
         } else if (dynmatch(ResizeUInst, resize_u, inst)) {
@@ -3650,6 +3661,13 @@ namespace metajit {
         return Bits::constant(type, metajit::bit_reverse(type, value));
       }
 
+      Bits clz() const {
+        if (is_poison) {
+          return Bits::poison(type);
+        }
+        return Bits::constant(type, metajit::clz(type, value));
+      }
+
       Bits popcount() const {
         if (is_poison) {
           return Bits::poison(type);
@@ -3865,6 +3883,8 @@ namespace metajit {
         _values[_inst] = a.ptr_to_int(ptr_to_int->type());
       } else if (dynmatch(BitReverseInst, bit_reverse, _inst)) {
         _values[_inst] = at(bit_reverse->arg(0)).bit_reverse();
+      } else if (dynmatch(ClzInst, clz, _inst)) {
+        _values[_inst] = at(clz->arg(0)).clz();
       } else if (dynmatch(PopcountInst, popcount, _inst)) {
         Bits a = at(popcount->arg(0));
         _values[_inst] = a.popcount();

@@ -451,6 +451,12 @@ jitir = IR(
             ],
             doc = "Convert a floating-point value to a different floating-point width."
         ),
+        Inst("Clz",
+            args = [Arg("a")],
+            type = "a->type()",
+            type_checks = ["is_int(a->type())"],
+            doc = "Count leading zero bits. Zero returns the operand bit width; poison propagates."
+        ),
         Inst("Popcount",
             args = [Arg("a")],
             type = "a->type()",

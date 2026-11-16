@@ -118,6 +118,15 @@ mul_high_u_power_of_two: MulHighU(x: T, C)
     Cshift = width(T) - ctz(C)
     => ShrU(x, Cshift)
 
+clz_constant: Clz(C)
+    Ccount = clz(C)
+    => Ccount
+
+clz_select: Clz(Select(c, C1, C2))
+    ClzC1 = clz(C1)
+    ClzC2 = clz(C2)
+    => Select(c, ClzC1, ClzC2)
+
 bit_reverse_constant: BitReverse(C)
     Creversed = bit_reverse(C)
     => Creversed

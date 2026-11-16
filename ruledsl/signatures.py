@@ -46,6 +46,6 @@ SIGNATURES["Select"] = Signature(("B", "T", "T"), "T", (("B", (BOOL,)), ("T", BI
 for name in ("ResizeU", "ResizeS", "ResizeX"):
     SIGNATURES[name] = Signature(("S",), "T", (("S", BIT_TYPES), ("T", BIT_TYPES)))
 
-for name in ("Popcount", "BitReverse"):
+for name in ("Popcount", "BitReverse", "Clz"):
     SIGNATURES[name] = Signature(("T",), "T", (("T", INT_TYPES),))
 SIGNATURES["Freeze"] = Signature(("T",), "T", (("T", BIT_TYPES),), unrestricted_types=("T",))

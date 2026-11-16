@@ -49,6 +49,14 @@ def boolean_bits(condition):
     return z3.If(condition, z3.BitVecVal(1, 1), z3.BitVecVal(0, 1))
 
 
+def clz(bits):
+    result = z3.BitVecVal(bits.size(), bits.size())
+    for index in range(bits.size()):
+        result = z3.If(z3.Extract(index, index, bits) == 1,
+                       z3.BitVecVal(bits.size() - index - 1, bits.size()), result)
+    return result
+
+
 def bit_reverse(bits):
     if bits.size() == 1:
         return bits
@@ -82,6 +90,8 @@ def emit(kind, args, type_):
         bits = z3.BitVecVal(0, type_.width)
         for index in range(a.size()):
             bits += z3.ZeroExt(type_.width - 1, z3.Extract(index, index, a))
+    elif kind == "Clz":
+        bits = clz(a)
     elif kind == "BitReverse":
         bits = bit_reverse(a)
     else:
