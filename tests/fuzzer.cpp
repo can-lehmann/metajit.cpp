@@ -85,7 +85,7 @@ namespace metajit {
       }
 
       Value* gen_int(RandomRange random_range) {
-        switch (rand() % 17) {
+        switch (rand() % 18) {
           #define binop(name) \
             return _builder->build_##name( \
               gen(RandomRange(random_range.type())), \
@@ -147,6 +147,8 @@ namespace metajit {
           case 15: binop(mul_high_u)
           case 16:
             return _builder->build_bit_reverse(gen(RandomRange(random_range.type())));
+          case 17:
+            return _builder->build_clz(gen(RandomRange(random_range.type())));
           default:
             assert(false && "Unreachable");
 

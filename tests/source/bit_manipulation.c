@@ -13,6 +13,10 @@ typedef struct {
   uint16_t pop16;
   uint32_t pop32;
   uint64_t pop64;
+  uint8_t clz8;
+  uint16_t clz16;
+  uint32_t clz32;
+  uint64_t clz64;
 } test_data_t;
 
 void run(test_data_t* data) {
@@ -24,4 +28,8 @@ void run(test_data_t* data) {
   data->pop16 = __builtin_popcountg(data->in16);
   data->pop32 = __builtin_popcountg(data->in32);
   data->pop64 = __builtin_popcountg(data->in64);
+  data->clz8 = __builtin_clzg(data->in8, 8);
+  data->clz16 = __builtin_clzg(data->in16, 16);
+  data->clz32 = __builtin_clzg(data->in32, 32);
+  data->clz64 = __builtin_clzg(data->in64, 64);
 }

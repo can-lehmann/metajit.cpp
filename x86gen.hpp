@@ -1545,6 +1545,23 @@ namespace metajit {
             _builder.or64(result, other);
           }
         }
+      } else if (dynmatch(ClzInst, clz, inst)) {
+        Reg input = vreg(clz->arg(0));
+        if (type_size(clz->type()) < 8) {
+          input = vreg();
+          switch (type_size(clz->type())) {
+            case 1: _builder.movzx8to64(input, vreg(clz->arg(0))); break;
+            case 2: _builder.movzx16to64(input, vreg(clz->arg(0))); break;
+            case 4: _builder.mov32(input, vreg(clz->arg(0))); break;
+          }
+        }
+        Reg index = vreg();
+        Reg zero_index = vreg();
+        _builder.mov64_imm(zero_index, uint64_t(-1));
+        _builder.bsr64(index, input);
+        _builder.cmove64(index, zero_index);
+        _builder.mov64_imm(vreg(inst), type_width(clz->type()) - 1);
+        _builder.sub64(vreg(inst), index);
       } else if (dynmatch(PopcountInst, popcount, inst)) {
         switch (type_size(popcount->type())) {
           case 1: {

@@ -193,6 +193,11 @@ namespace metajit {
     }
   }
 
+  inline uint64_t clz(Type type, uint64_t value) {
+    value &= type_mask(type);
+    return value ? __builtin_clzll(value) - (64 - type_width(type)) : type_width(type);
+  }
+
   inline uint64_t bit_reverse(Type type, uint64_t value) {
     value = __builtin_bswap64(value);
     value = ((value >> 4) & 0x0f0f0f0f0f0f0f0full) | ((value & 0x0f0f0f0f0f0f0f0full) << 4);
@@ -1590,6 +1595,13 @@ namespace metajit {
       }
 
       return build_promote(a);
+    }
+
+    Value* fold_clz(Value* a) {
+      if (dynmatch(Const, constant, a)) {
+        return build_const(a->type(), metajit::clz(a->type(), constant->value()));
+      }
+      return build_clz(a);
     }
 
     Value* fold_popcount(Value* a) {
@@ -3650,6 +3662,13 @@ namespace metajit {
         return Bits::constant(type, metajit::bit_reverse(type, value));
       }
 
+      Bits clz() const {
+        if (is_poison) {
+          return Bits::poison(type);
+        }
+        return Bits::constant(type, metajit::clz(type, value));
+      }
+
       Bits popcount() const {
         if (is_poison) {
           return Bits::poison(type);
@@ -3865,6 +3884,8 @@ namespace metajit {
         _values[_inst] = a.ptr_to_int(ptr_to_int->type());
       } else if (dynmatch(BitReverseInst, bit_reverse, _inst)) {
         _values[_inst] = at(bit_reverse->arg(0)).bit_reverse();
+      } else if (dynmatch(ClzInst, clz, _inst)) {
+        _values[_inst] = at(clz->arg(0)).clz();
       } else if (dynmatch(PopcountInst, popcount, _inst)) {
         Bits a = at(popcount->arg(0));
         _values[_inst] = a.popcount();

@@ -266,6 +266,12 @@ namespace metajit {
         }
         llvm_alloca->setAlignment(llvm::Align(alloca->align()));
         return llvm_alloca;
+      } else if (dynmatch(ClzInst, clz, inst)) {
+        return _builder.CreateIntrinsic(
+          llvm::Intrinsic::ctlz,
+          {emit_type(clz->type())},
+          {emit_arg(clz->arg(0)), _builder.getFalse()}
+        );
       } else if (dynmatch(PopcountInst, popcount, inst)) {
         return _builder.CreateIntrinsic(
           llvm::Intrinsic::ctpop,

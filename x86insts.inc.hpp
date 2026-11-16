@@ -181,6 +181,8 @@ unop_x86_inst(SetL8, setl8, { def(rm); }, false, { rex(); byte(0x0f); byte(0x9c)
 unop_x86_inst(SetB8, setb8, { def(rm); }, false, { rex(); byte(0x0f); byte(0x92); modrm(); })
 unop_x86_inst(SetA8, seta8, { def(rm); }, false, { rex(); byte(0x0f); byte(0x97); modrm(); })
 
+binop_x86_inst(Bsr64, bsr64, { use(rm); def(reg); }, true, { rex_w(); byte(0x0f); byte(0xbd); modrm(); })
+
 binop_x86_inst(Popcnt16, popcnt16, { use(rm); def(reg); }, true, { byte(0x66); byte(0xf3); rex_opt(); byte(0x0f); byte(0xb8); modrm(); })
 binop_x86_inst(Popcnt32, popcnt32, { use(rm); def(reg); }, true, { byte(0xf3); rex_opt(); byte(0x0f); byte(0xb8); modrm(); })
 binop_x86_inst(Popcnt64, popcnt64, { use(rm); def(reg); }, true, { byte(0xf3); rex_w(); byte(0x0f); byte(0xb8); modrm(); })

@@ -153,6 +153,20 @@ Type Checks:
 - `is_float(a->type())`
 - `is_float(type)`
 
+### Clz
+
+Count leading zero bits. Zero returns the operand bit width; poison propagates.
+
+Arguments
+
+- **a**: `Value*`
+
+Return Type: `a->type()`
+
+Type Checks:
+
+- `is_int(a->type())`
+
 ### Popcount
 
 Arguments

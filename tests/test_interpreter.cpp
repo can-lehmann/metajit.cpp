@@ -19,9 +19,38 @@
 using namespace metajit;
 using namespace metajit::test;
 
+void test_clz_values() {
+  using Bits = Interpreter::Bits;
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    size_t width = type_width(type);
+    unittest_assert(Bits::constant(type, 0).clz().value == width);
+    unittest_assert(Bits::constant(type, type_mask(type)).clz().value == 0);
+    unittest_assert(Bits::poison(type).clz().is_poison);
+    unittest_assert(Bits::poison(type).clz().type == type);
+    for (size_t bit = 0; bit < width; bit++) {
+      uint64_t value = uint64_t(1) << bit;
+      unittest_assert(Bits::constant(type, value).clz().value == width - bit - 1);
+      unittest_assert(Bits::constant(type, value - 1).clz().value == width - bit);
+      Value* folded = builder.fold_clz(builder.build_const(type, value));
+      unittest_assert(dynamic_cast<Const*>(folded));
+      unittest_assert(static_cast<Const*>(folded)->value() == width - bit - 1);
+      unittest_assert(folded->type() == type);
+    }
+    Value* zero = builder.fold_clz(builder.build_const(type, 0));
+    unittest_assert(dynamic_cast<Const*>(zero));
+    unittest_assert(static_cast<Const*>(zero)->value() == width);
+  }
+}
+
 int main(int argc, char** argv) {
   InterpreterTestSuite suite("tests/output/test_interpreter", argc, argv);
   
+  suite.test("clz_values_and_folding").run(test_clz_values);
+
   using Bits = Interpreter::Bits;
   using TestCase = InterpreterTest::TestCase;
 
