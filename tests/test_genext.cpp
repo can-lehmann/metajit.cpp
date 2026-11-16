@@ -129,40 +129,6 @@ int main(int argc, char** argv) {
 
   GenExtTestSuite suite("tests/output/test_genext", argc, argv);
 
-  suite.test("tape size ignores loops without recorded loads").run([]() {
-    Context context;
-    Allocator allocator;
-    Section section(context, allocator);
-    Builder builder(&section);
-    builder.move_to_end(builder.build_block({Type::Ptr, Type::Bool}));
-
-    Value* pointer = builder.entry_arg(0);
-    Value* condition = builder.entry_arg(1);
-    builder.build_load(pointer, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
-
-    Block* loop = builder.build_block();
-    Block* end = builder.build_block();
-    builder.build_jump(loop);
-
-    builder.move_to_end(loop);
-    builder.build_load(pointer, Type::Int64, LoadFlags::None, AliasingGroup(1), 0);
-    builder.build_branch(condition, loop, end);
-
-    builder.move_to_end(end);
-    builder.build_load(pointer, Type::Int64, LoadFlags::None, AliasingGroup(0), 0);
-    builder.build_exit();
-
-    OrderBlocks::run(&section, BlockOrdering::Natural);
-    AddRecord::Config config;
-    config.groups.insert(AliasingGroup(0));
-    config.min_align = 4;
-
-    size_t size = 0;
-    AddRecord::run(&section, &size, config);
-    unittest_assert(size == 24);
-    unittest_assert(!section.verify(std::cerr));
-  });
-
   for (bool record_replay : {false, true}) {
     suite.set_record_replay(record_replay);
 
@@ -342,6 +308,40 @@ int main(int argc, char** argv) {
     });
     
   }
+
+  suite.test("tape size ignores loops without recorded loads").run([]() {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    builder.move_to_end(builder.build_block({Type::Ptr, Type::Bool}));
+
+    Value* pointer = builder.entry_arg(0);
+    Value* condition = builder.entry_arg(1);
+    builder.build_load(pointer, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+
+    Block* loop = builder.build_block();
+    Block* end = builder.build_block();
+    builder.build_jump(loop);
+
+    builder.move_to_end(loop);
+    builder.build_load(pointer, Type::Int64, LoadFlags::None, AliasingGroup(1), 0);
+    builder.build_branch(condition, loop, end);
+
+    builder.move_to_end(end);
+    builder.build_load(pointer, Type::Int64, LoadFlags::None, AliasingGroup(0), 0);
+    builder.build_exit();
+
+    OrderBlocks::run(&section, BlockOrdering::Natural);
+    AddRecord::Config config;
+    config.groups.insert(AliasingGroup(0));
+    config.min_align = 4;
+
+    size_t size = 0;
+    AddRecord::run(&section, &size, config);
+    unittest_assert(size == 24);
+    unittest_assert(!section.verify(std::cerr));
+  });
 
   return suite.finish();
 }
