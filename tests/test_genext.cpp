@@ -309,7 +309,7 @@ int main(int argc, char** argv) {
     
   }
 
-  suite.test("tape size ignores loops without recorded loads").run([]() {
+  suite.test("tape_size_unrecorded_loop").run([]() {
     Context context;
     Allocator allocator;
     Section section(context, allocator);
