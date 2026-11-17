@@ -2905,6 +2905,45 @@ void test_cse_pure_loads_across_guards() {
 
 void test_fold_clz_constant_select();
 
+void test_simplifycfg_transitive_block_arguments() {
+  Context context;
+  Allocator allocator;
+  std::istringstream input(R"(section {
+b0(%0: Ptr, %1: Bool):
+  Branch %1, true_block=b1, false_block=b3
+b1:
+  Branch 0:Bool, true_block=b7, false_block=b2
+b2:
+  Jump 0:Int64, block=b4
+b3:
+  Jump 0:Int64, block=b4
+b4(%2: Int64):
+  Jump %2, block=b5
+b5(%3: Int64):
+  Branch %1, true_block=b6, false_block=b7
+b6:
+  Store %0, %3, aliasing=0, offset=0
+  Jump block=b7
+b7:
+  Exit
+})");
+  Section* section = SectionReader<>::read_section(context, allocator, input);
+  OrderBlocks::run(section, BlockOrdering::Natural);
+  unittest_assert(!section->verify(std::cerr));
+  SimplifyCFG::run(section);
+  unittest_assert(!section->verify(std::cerr));
+  for (uint64_t condition : {0, 1}) {
+    uint64_t output = 42;
+    Interpreter interpreter(section, {
+      Interpreter::Bits::constant(Type::Ptr, (uint64_t) &output),
+      Interpreter::Bits::constant(Type::Bool, condition)
+    });
+    interpreter.run_until(Interpreter::Event::Exit);
+    unittest_assert(output == (condition ? 0 : 42));
+  }
+  delete section;
+}
+
 int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
@@ -4220,6 +4259,7 @@ b1:
   });
 
   suite.test("fold clz constant select").run(test_fold_clz_constant_select);
+  suite.test("simplifycfg transitive block arguments").run(test_simplifycfg_transitive_block_arguments);
 
   return suite.finish();
 }
