@@ -920,11 +920,135 @@ b0(%0: Ptr, %1: Int8):
   delete section;
 }
 
-void test_unsigned_range_exhaustive();
-void test_unsigned_range_boundaries();
-void test_clz_bounds();
-void test_clz_exhaustive();
-void test_clz_eval();
+void test_unsigned_range_exhaustive() {
+  for (uint64_t minimum = 0; minimum < 256; minimum++) {
+    uint64_t ones = 255;
+    uint64_t any = 0;
+    for (uint64_t maximum = minimum; maximum < 256; maximum++) {
+      ones &= maximum;
+      any |= maximum;
+      unittest_assert(Bits::unsigned_range(Type::Int8, minimum, maximum) ==
+                      Bits(Type::Int8, ones | ~any, ones));
+    }
+  }
+}
+
+void test_unsigned_range_boundaries() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t maximum = type_mask(type);
+    unittest_assert(Bits::unsigned_range(type, 0, maximum) == Bits(type, 0, 0));
+    unittest_assert(Bits::unsigned_range(type, 0, 0) == Bits::constant(type, 0));
+    unittest_assert(Bits::unsigned_range(type, maximum, maximum) == Bits::constant(type, maximum));
+    for (size_t bit = 0; bit < type_width(type); bit++) {
+      uint64_t power = uint64_t(1) << bit;
+      unittest_assert(Bits::unsigned_range(type, power, power) == Bits::constant(type, power));
+      unittest_assert(Bits::unsigned_range(type, power, power | (power - 1)) ==
+                      Bits(type, ~(power - 1), power));
+      unittest_assert(Bits::unsigned_range(type, power - 1, power) ==
+                      Bits(type, ~(power | (power - 1)), 0));
+    }
+  }
+}
+
+void test_clz_bounds() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    size_t width = type_width(type);
+    uint64_t unknown = 2 * width - 1;
+    unittest_assert(Bits(type, 0, 0).clz() == Bits(type, ~unknown, 0));
+    unittest_assert(Bits::constant(type, 0).clz() == Bits::constant(type, width));
+    unittest_assert(Bits(type, uint64_t(13) << (width - 4), uint64_t(1) << (width - 4)).clz() ==
+                    Bits(type, ~uint64_t(1), 2));
+    for (size_t bit = 0; bit < width; bit++) {
+      uint64_t one = uint64_t(1) << bit;
+      size_t maximum = width - bit - 1;
+      uint64_t output_unknown = 0;
+      for (size_t remaining = maximum; remaining; remaining >>= 1) {
+        output_unknown = (output_unknown << 1) | 1;
+      }
+      Bits expected(type, ~output_unknown, 0);
+      unittest_assert(Bits(type, one, one).clz() == expected);
+      unittest_assert(Bits::constant(type, one).clz() == Bits::constant(type, maximum));
+      unittest_assert(Bits(type, ~(one - 1), one).clz() == Bits::constant(type, maximum));
+      unittest_assert(Bits(type, type_mask(type), one | (one - 1)).clz() == Bits::constant(type, maximum));
+    }
+  }
+}
+
+void test_clz_exhaustive() {
+  for (uint64_t mask = 0; mask < 256; mask++) {
+    for (uint64_t ones = 0; ones < 256; ones++) {
+      if (ones & ~mask) {
+        continue;
+      }
+      Bits input(Type::Int8, mask, ones);
+      Bits result = input.clz();
+      for (uint64_t concrete = 0; concrete < 256; concrete++) {
+        if (input.matches_const(concrete)) {
+          size_t count = 0;
+          for (uint64_t bit = 128; bit && !(concrete & bit); bit >>= 1) {
+            count++;
+          }
+          unittest_assert(result.matches_const(count));
+        }
+      }
+    }
+  }
+}
+
+void test_clz_eval() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  builder.move_to_end(builder.build_block());
+  NameMap<Bits> values(&section);
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (uint64_t value : {uint64_t(0), uint64_t(1), uint64_t(1) << (type_width(type) - 1)}) {
+      Inst* inst = builder.build_clz(builder.build_const(type, value));
+      unittest_assert(Bits::eval(inst, values) == Bits::constant(type, value).clz());
+    }
+  }
+}
+
+void test_popcount_bounds() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t width = type_width(type);
+    unittest_assert(Bits(type, 0, 0).popcount() == Bits(type, ~Bits::mask_through_highest_bit(width), 0));
+    unittest_assert(Bits::constant(type, 0).popcount() == Bits::constant(type, 0));
+    unittest_assert(Bits::constant(type, type_mask(type)).popcount() == Bits::constant(type, width));
+    Bits input(type, type_mask(type) ^ 1, 0x0f);
+    unittest_assert(input.popcount() == Bits(type, ~uint64_t(7), 0));
+    Bits narrow(type, type_mask(type) ^ 1, 0x1e);
+    unittest_assert(narrow.popcount() == Bits(type, ~uint64_t(1), 4));
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block(std::vector<Type>{type});
+    builder.move_to_end(block);
+    Inst* inst = builder.build_popcount(block->arg(0));
+    section.autoname();
+    NameMap<Bits> values(&section);
+    values[block->arg(0)] = narrow;
+    unittest_assert(Bits::eval(inst, values) == narrow.popcount());
+  }
+}
+
+void test_popcount_exhaustive() {
+  for (uint64_t mask = 0; mask < 256; mask++) {
+    for (uint64_t value = 0; value < 256; value++) {
+      if (value & ~mask) continue;
+      Bits input(Type::Int8, mask, value);
+      Bits expected = Bits::constant(Type::Int8, __builtin_popcountll(value));
+      for (uint64_t concrete = 0; concrete < 256; concrete++) {
+        if (input.matches_const(concrete)) {
+          expected = expected.join(Bits::constant(Type::Int8, __builtin_popcountll(concrete)));
+        }
+      }
+      unittest_assert(input.popcount() == expected);
+    }
+  }
+}
 
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
@@ -1215,96 +1339,8 @@ int main(int argc, char** argv) {
   suite.test("clz bounds").run(test_clz_bounds);
   suite.test("clz exhaustive").run(test_clz_exhaustive);
   suite.test("clz eval").run(test_clz_eval);
+  suite.test("popcount bounds").run(test_popcount_bounds);
+  suite.test("popcount exhaustive").run(test_popcount_exhaustive);
 
   return suite.finish();
-}
-
-void test_unsigned_range_exhaustive() {
-  for (uint64_t minimum = 0; minimum < 256; minimum++) {
-    uint64_t ones = 255;
-    uint64_t any = 0;
-    for (uint64_t maximum = minimum; maximum < 256; maximum++) {
-      ones &= maximum;
-      any |= maximum;
-      unittest_assert(Bits::unsigned_range(Type::Int8, minimum, maximum) ==
-                      Bits(Type::Int8, ones | ~any, ones));
-    }
-  }
-}
-
-void test_unsigned_range_boundaries() {
-  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
-    uint64_t maximum = type_mask(type);
-    unittest_assert(Bits::unsigned_range(type, 0, maximum) == Bits(type, 0, 0));
-    unittest_assert(Bits::unsigned_range(type, 0, 0) == Bits::constant(type, 0));
-    unittest_assert(Bits::unsigned_range(type, maximum, maximum) == Bits::constant(type, maximum));
-    for (size_t bit = 0; bit < type_width(type); bit++) {
-      uint64_t power = uint64_t(1) << bit;
-      unittest_assert(Bits::unsigned_range(type, power, power) == Bits::constant(type, power));
-      unittest_assert(Bits::unsigned_range(type, power, power | (power - 1)) ==
-                      Bits(type, ~(power - 1), power));
-      unittest_assert(Bits::unsigned_range(type, power - 1, power) ==
-                      Bits(type, ~(power | (power - 1)), 0));
-    }
-  }
-}
-
-void test_clz_bounds() {
-  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
-    size_t width = type_width(type);
-    uint64_t unknown = 2 * width - 1;
-    unittest_assert(Bits(type, 0, 0).clz() == Bits(type, ~unknown, 0));
-    unittest_assert(Bits::constant(type, 0).clz() == Bits::constant(type, width));
-    unittest_assert(Bits(type, uint64_t(13) << (width - 4), uint64_t(1) << (width - 4)).clz() ==
-                    Bits(type, ~uint64_t(1), 2));
-    for (size_t bit = 0; bit < width; bit++) {
-      uint64_t one = uint64_t(1) << bit;
-      size_t maximum = width - bit - 1;
-      uint64_t output_unknown = 0;
-      for (size_t remaining = maximum; remaining; remaining >>= 1) {
-        output_unknown = (output_unknown << 1) | 1;
-      }
-      Bits expected(type, ~output_unknown, 0);
-      unittest_assert(Bits(type, one, one).clz() == expected);
-      unittest_assert(Bits::constant(type, one).clz() == Bits::constant(type, maximum));
-      unittest_assert(Bits(type, ~(one - 1), one).clz() == Bits::constant(type, maximum));
-      unittest_assert(Bits(type, type_mask(type), one | (one - 1)).clz() == Bits::constant(type, maximum));
-    }
-  }
-}
-
-void test_clz_exhaustive() {
-  for (uint64_t mask = 0; mask < 256; mask++) {
-    for (uint64_t ones = 0; ones < 256; ones++) {
-      if (ones & ~mask) {
-        continue;
-      }
-      Bits input(Type::Int8, mask, ones);
-      Bits result = input.clz();
-      for (uint64_t concrete = 0; concrete < 256; concrete++) {
-        if (input.matches_const(concrete)) {
-          size_t count = 0;
-          for (uint64_t bit = 128; bit && !(concrete & bit); bit >>= 1) {
-            count++;
-          }
-          unittest_assert(result.matches_const(count));
-        }
-      }
-    }
-  }
-}
-
-void test_clz_eval() {
-  Context context;
-  Allocator allocator;
-  Section section(context, allocator);
-  Builder builder(&section);
-  builder.move_to_end(builder.build_block());
-  NameMap<Bits> values(&section);
-  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
-    for (uint64_t value : {uint64_t(0), uint64_t(1), uint64_t(1) << (type_width(type) - 1)}) {
-      Inst* inst = builder.build_clz(builder.build_const(type, value));
-      unittest_assert(Bits::eval(inst, values) == Bits::constant(type, value).clz());
-    }
-  }
 }

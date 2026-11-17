@@ -2803,6 +2803,10 @@ namespace metajit {
         return value;
       }
 
+      Bits popcount() const {
+        return unsigned_range(type, __builtin_popcountll(umin()), __builtin_popcountll(umax()));
+      }
+
       uint64_t umax() const {
         return value | (~mask & type_mask(type));
       }
@@ -3277,6 +3281,8 @@ namespace metajit {
           return at(values, clz->arg(0)).clz();
         } else if (dynmatch(BitReverseInst, bit_reverse, inst)) {
           return at(values, bit_reverse->arg(0)).bit_reverse();
+        } else if (dynmatch(PopcountInst, popcount, inst)) {
+          return at(values, popcount->arg(0)).popcount();
         } else if (dynmatch(ResizeUInst, resize_u, inst)) {
           Bits a = at(values, resize_u->arg(0));
           return a.resize_u(resize_u->type());
