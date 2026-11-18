@@ -227,6 +227,7 @@ Arguments
 
 - **ptr**: `Value*`
 - **value**: `Value*`
+- **flags**: `StoreFlags`
 - **aliasing**: `AliasingGroup`
 - **offset**: `uint64_t`
 

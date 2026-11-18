@@ -192,11 +192,19 @@ namespace metajit {
       } else if (llvm::LoadInst* load = llvm::dyn_cast<llvm::LoadInst>(inst)) {
         Value* ptr = lower_operand(load->getPointerOperand());
         Type type = lower_type(load->getType());
-        return _builder.fold_load(ptr, type, LoadFlags::None, AliasingGroup(0), 0);
+        LoadFlags flags = LoadFlags::None;
+        if (load->getAlign().value() < type_size(type)) {
+          flags = LoadFlags::Unaligned;
+        }
+        return _builder.fold_load(ptr, type, flags, AliasingGroup(0), 0);
       } else if (llvm::StoreInst* store = llvm::dyn_cast<llvm::StoreInst>(inst)) {
         Value* ptr = lower_operand(store->getPointerOperand());
         Value* value = lower_operand(store->getValueOperand());
-        return _builder.fold_store(ptr, value, AliasingGroup(0), 0);
+        StoreFlags flags = StoreFlags::None;
+        if (store->getAlign().value() < type_size(value->type())) {
+          flags = StoreFlags::Unaligned;
+        }
+        return _builder.fold_store(ptr, value, flags, AliasingGroup(0), 0);
       } else if (llvm::GetElementPtrInst* gep = llvm::dyn_cast<llvm::GetElementPtrInst>(inst)) {
         Value* ptr = lower_operand(gep->getPointerOperand());
         assert(ptr->type() == Type::Ptr);

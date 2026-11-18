@@ -888,6 +888,7 @@ namespace metajit {
           _builder.build_const(Type::Int32, (uint64_t) Type::Int32),
           _builder.build_const(Type::Int64, closure.id),
         }),
+        _builder.build_const(Type::Int32, StoreFlags::None),
         _builder.build_const(Type::Int32, 0),
         _builder.build_const(Type::Int64, 0)
       });
@@ -897,6 +898,7 @@ namespace metajit {
           _jitir_builder,
           closure_arg,
           emit_built_arg(capture.value),
+          _builder.build_const(Type::Int32, StoreFlags::None),
           _builder.build_const(Type::Int32, 0),
           _builder.build_const(Type::Int64, capture.offset)
         });

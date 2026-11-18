@@ -263,6 +263,9 @@ namespace metajit {
           emit_type(load->type()),
           emit_add_offset(emit_arg(load->arg(0)), load->offset())
         );
+        if (load->flags().has(LoadFlags::Unaligned)) {
+          result->setAlignment(llvm::Align(1));
+        }
         result->setMetadata(llvm::LLVMContext::MD_tbaa, tbaa_tag(load->aliasing()));
         if (load->flags().has(LoadFlags::Pure)) {
           result->setMetadata(llvm::LLVMContext::MD_invariant_load, llvm::MDNode::get(_context, {}));
@@ -270,9 +273,12 @@ namespace metajit {
         return result;
       } else if (dynmatch(StoreInst, store, inst)) {
         llvm::StoreInst* result = _builder.CreateStore(
-          emit_arg(store->arg(1)),
-          emit_add_offset(emit_arg(store->arg(0)), store->offset())
+          emit_arg(store->value()),
+          emit_add_offset(emit_arg(store->ptr()), store->offset())
         );
+        if (store->flags().has(StoreFlags::Unaligned)) {
+          result->setAlignment(llvm::Align(1));
+        }
         result->setMetadata(llvm::LLVMContext::MD_tbaa, tbaa_tag(store->aliasing()));
         return result;
       } else if (dynmatch(AllocaInst, alloca, inst)) {
