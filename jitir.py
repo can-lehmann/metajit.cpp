@@ -216,17 +216,6 @@ class InstReadPlugin:
                     build_args.append(f"{arg.name}.size()")
                     continue
                 build_args.append(arg.name)
-                if arg.type == Type("StoreFlags"):
-                    code += """    StoreFlags flags = StoreFlags::None;
-    if (_stream.peek() == 'f') {
-      expect_word("flags");
-      expect_char('=');
-      flags = read_flags<StoreFlags>();
-      expect_char(',');
-    }
-"""
-                    need_comma = False
-                    continue
                 code += f'    expect_word("{arg.name}");\n'
                 code += f"    expect_char('=');\n"
                 if arg.type == Type("Block*"):
@@ -235,10 +224,9 @@ class InstReadPlugin:
                     code += f"    Type {arg.name} = read_type();\n"
                 elif arg.type == Type("CallConv"):
                     code += f"    CallConv {arg.name} = read_call_conv();\n"
-                elif arg.type == Type("LoadFlags"):
-                    code += f"    LoadFlags {arg.name} = read_load_flags();\n"
-                elif arg.type == Type("CallFlags"):
-                    code += f"    CallFlags {arg.name} = read_call_flags();\n"
+                elif arg.type in (Type("LoadFlags"), Type("StoreFlags"), Type("CallFlags")):
+                    flag_type = arg.type.format(ir)
+                    code += f"    {flag_type} {arg.name} = read_flags<{flag_type}>();\n"
                 elif arg.type == Type("AliasingGroup"):
                     code += f"    AliasingGroup {arg.name} = read_int32();\n"
                 elif arg.type == Type("uint64_t") or \
@@ -274,26 +262,6 @@ class PrettyInstWritePlugin(InstWritePlugin):
             stream_type="metajit::PrettyStream&"
         )
     
-    def run(self, inst, ir):
-        if inst.name != "Store":
-            return super().run(inst, ir)
-
-        code = f"""  void write({self.stream_type} stream) const override {{
-    {self.write_name(inst, "stream")}
-    stream << ' ';
-    bool is_first = true;
-    write_args(stream, is_first);
-"""
-        for arg in inst.args:
-            if arg.type.is_value():
-                continue
-            field = f'stream << ", "; {self.write_arg(arg, "_" + arg.name, "stream")}'
-            if arg.type == Type("StoreFlags"):
-                code += f"    if ((uint32_t) _flags != StoreFlags::None) {{\n      {field}\n    }}\n"
-            else:
-                code += f"    {field}\n"
-        return code + "  }\n"
-
     def write_name(self, inst, stream):
         return f"{stream} << Highlight::Keyword << \"{inst.name}\" << Highlight::None;"
 

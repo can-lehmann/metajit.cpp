@@ -2470,16 +2470,6 @@ namespace metajit {
       return FlagsType(flags_bits);
     }
 
-    LoadFlags read_load_flags() {
-      // use the templated method to read flags
-      return read_flags<LoadFlags>();
-    }
-
-    CallFlags read_call_flags() {
-      return read_flags<CallFlags>();
-    }
-
-
 /* ${read_opcode} */
 
   public:

@@ -690,8 +690,8 @@ b0(%0: Ptr, %1: Int64):
   %3 = LtU %2, 4:Int64
   %4 = And %1, 18446744073709551584:Int64
   %5 = ModU %4, 32:Int64
-  Store %0, %3, aliasing=0, offset=0
-  Store %0, %5, aliasing=0, offset=8
+  Store %0, %3, flags={}, aliasing=0, offset=0
+  Store %0, %5, flags={}, aliasing=0, offset=8
   Exit
 }
 )");
@@ -861,9 +861,9 @@ b0(%0: Ptr, %1: Int32):
   %4 = LtU %3, 16777216:Int64
   %5 = LtU 16777216:Int64, %3
   %6 = LtU %3, 16777215:Int64
-  Store %0, %4, aliasing=0, offset=0
-  Store %0, %5, aliasing=0, offset=8
-  Store %0, %6, aliasing=0, offset=16
+  Store %0, %4, flags={}, aliasing=0, offset=0
+  Store %0, %5, flags={}, aliasing=0, offset=8
+  Store %0, %6, flags={}, aliasing=0, offset=16
   Exit
 }
 )");
@@ -896,9 +896,9 @@ b0(%0: Ptr, %1: Int8):
   %4 = LtS %3, 32:Int64
   %5 = LtS 32:Int64, %3
   %6 = LtS %3, 3:Int64
-  Store %0, %4, aliasing=0, offset=0
-  Store %0, %5, aliasing=0, offset=8
-  Store %0, %6, aliasing=0, offset=16
+  Store %0, %4, flags={}, aliasing=0, offset=0
+  Store %0, %5, flags={}, aliasing=0, offset=8
+  Store %0, %6, flags={}, aliasing=0, offset=16
   Exit
 }
 )");
@@ -1082,7 +1082,7 @@ int main(int argc, char** argv) {
         "  %3 = Load %0, type=Bool, flags={}, aliasing=0, offset=0\n"
         "  %4 = Select %3, %1, %2\n"
         "  %5 = And %4, " + std::to_string(demanded) + ":Int8\n"
-        "  Store %0, %5, aliasing=0, offset=1\n"
+        "  Store %0, %5, flags={}, aliasing=0, offset=1\n"
         "  Exit\n"
         "}\n");
       std::unique_ptr<Section> section(SectionReader<>::read_section(context, allocator, stream));
@@ -1144,7 +1144,7 @@ int main(int argc, char** argv) {
             "  %2 = Load %0, type=" + type_name + ", flags={}, aliasing=0, offset=8\n"
             "  %3 = " + operation.name + " %1, %2\n"
             "  %4 = And %3, " + std::to_string(demanded) + ":" + type_name + "\n"
-            "  Store %0, %4, aliasing=0, offset=16\n"
+            "  Store %0, %4, flags={}, aliasing=0, offset=16\n"
             "  Exit\n"
             "}\n");
           std::unique_ptr<Section> section(SectionReader<>::read_section(context, allocator, stream));
