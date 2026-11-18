@@ -843,6 +843,7 @@ namespace metajit {
       InBounds = 1 << 1,
       // The value of this load is known at section entry
       EntryPromoted = 1 << 2,
+      Unaligned = 1 << 3,
     };
 
     using BaseFlags<LoadFlags>::BaseFlags;
@@ -851,9 +852,23 @@ namespace metajit {
       "Pure",
       "InBounds",
       "EntryPromoted",
+      "Unaligned",
     };
 
-    constexpr static size_t COUNT = 3;
+    constexpr static size_t COUNT = 4;
+  };
+
+  class StoreFlags final: public BaseFlags<StoreFlags> {
+  public:
+    enum : uint32_t {
+      None = 0,
+      Unaligned = 1 << 0,
+    };
+
+    using BaseFlags<StoreFlags>::BaseFlags;
+
+    constexpr static const char* NAMES[] = {"Unaligned"};
+    constexpr static size_t COUNT = 1;
   };
 
   class CallFlags final: public BaseFlags<CallFlags> {
@@ -917,6 +932,7 @@ namespace metajit {
   }
 
 define_flags_overloads(metajit::LoadFlags)
+define_flags_overloads(metajit::StoreFlags)
 define_flags_overloads(metajit::CallFlags)
 
 #undef define_flags_overloads
@@ -1280,6 +1296,10 @@ namespace metajit {
 
     /* ${builder} */
 
+    StoreInst* build_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
+      return build_store(ptr, value, StoreFlags::None, aliasing, offset);
+    }
+
     #include "generated.inc.hpp"
 
     ShlInst* build_shl(Value* a, size_t shift) {
@@ -1579,6 +1599,10 @@ namespace metajit {
     }
 
     Value* fold_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
+      return fold_store(ptr, value, StoreFlags::None, aliasing, offset);
+    }
+
+    Value* fold_store(Value* ptr, Value* value, StoreFlags flags, AliasingGroup aliasing, uint64_t offset) {
       if (dynmatch(AddPtrInst, add_ptr, ptr)) {
         if (dynmatch(Const, const_offset, add_ptr->offset())) {
           ptr = add_ptr->ptr();
@@ -1586,7 +1610,7 @@ namespace metajit {
         }
       }
 
-      return build_store(ptr, value, aliasing, offset);
+      return build_store(ptr, value, flags, aliasing, offset);
     }
 
     Value* fold_promote(Value* a) {
@@ -1903,8 +1927,12 @@ namespace metajit {
     }
 
     Value* build_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
+      return build_store(ptr, value, StoreFlags::None, aliasing, offset);
+    }
+
+    Value* build_store(Value* ptr, Value* value, StoreFlags flags, AliasingGroup aliasing, uint64_t offset) {
       if (_guard_success) {
-        return Builder::build_store(ptr, value, aliasing, offset);
+        return Builder::build_store(ptr, value, flags, aliasing, offset);
       }
 
       if (dynmatch(AddPtrInst, add_ptr, ptr)) {
@@ -1920,7 +1948,7 @@ namespace metajit {
         }
         _exact_memory[-aliasing] = value;
         _exact_loads[-aliasing] = nullptr;
-        return Builder::build_store(ptr, value, aliasing, offset);
+        return Builder::build_store(ptr, value, flags, aliasing, offset);
       } else {
         _memory[aliasing].store(ptr, offset, value);
 
@@ -1943,7 +1971,7 @@ namespace metajit {
           return nullptr;
         }
 
-        return Builder::build_store(ptr, value, aliasing, offset);
+        return Builder::build_store(ptr, value, flags, aliasing, offset);
       }
     }
 
@@ -2441,16 +2469,6 @@ namespace metajit {
       }
       return FlagsType(flags_bits);
     }
-
-    LoadFlags read_load_flags() {
-      // use the templated method to read flags
-      return read_flags<LoadFlags>();
-    }
-
-    CallFlags read_call_flags() {
-      return read_flags<CallFlags>();
-    }
-
 
 /* ${read_opcode} */
 
@@ -3683,25 +3701,22 @@ namespace metajit {
 
       void store(uint8_t* ptr) {
         assert(!is_poison);
-        switch (type_size(type)) {
-          case 1: *ptr = (uint8_t) value; break;
-          case 2: *(uint16_t*) ptr = (uint16_t) value; break;
-          case 4: *(uint32_t*) ptr = (uint32_t) value; break;
-          case 8: *(uint64_t*) ptr = (uint64_t) value; break;
-          default:
-            assert(false); // Unreachable
+        size_t size = type_size(type);
+        assert(size > 0);
+        uint64_t bits = value;
+        if constexpr (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__) {
+          bits <<= (sizeof(bits) - size) * 8;
         }
+        std::memcpy(ptr, &bits, size);
       }
 
       static Bits load(uint8_t* ptr, Type type) {
         uint64_t value = 0;
-        switch (type_size(type)) {
-          case 1: value = *ptr; break;
-          case 2: value = *(uint16_t*) ptr; break;
-          case 4: value = *(uint32_t*) ptr; break;
-          case 8: value = *(uint64_t*) ptr; break;
-          default:
-            assert(false); // Unreachable
+        size_t size = type_size(type);
+        assert(size > 0);
+        std::memcpy(&value, ptr, size);
+        if constexpr (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__) {
+          value >>= (sizeof(value) - size) * 8;
         }
         return Bits::constant(type, value);
       }

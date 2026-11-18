@@ -55,13 +55,13 @@ b0(%0: Ptr, %1: Int32):
   %5 = ShrS %4, 39:Int64
   %6 = ResizeU %5, type=Int32
   %7 = BitReverse %6
-  Store %0, %7, aliasing=0, offset=0
+  Store %0, %7, flags={}, aliasing=0, offset=0
   Exit
 }
 )", R"(section {
 b0(%0: Ptr, %1: Int32):
   %2 = Shl %1, 8:Int32
-  Store %0, %2, aliasing=0, offset=0
+  Store %0, %2, flags={}, aliasing=0, offset=0
   Exit
 }
 )");
@@ -76,12 +76,12 @@ b0(%0: Ptr, %1: Int32):
   %5 = ShrU %4, 24:Int32
   %6 = And %1, 4294967040:Int32
   %7 = Or %5, %6
-  Store %0, %7, aliasing=0, offset=0
+  Store %0, %7, flags={}, aliasing=0, offset=0
   Exit
 }
 )", R"(section {
 b0(%0: Ptr, %1: Int32):
-  Store %0, %1, aliasing=0, offset=0
+  Store %0, %1, flags={}, aliasing=0, offset=0
   Exit
 }
 )");
@@ -97,13 +97,13 @@ b0(%0: Ptr, %1: Int32):
   %6 = Or %3, %5
   %7 = Select %2, 18446744065119617024:Int64, 0:Int64
   %8 = Or %6, %7
-  Store %0, %8, aliasing=0, offset=0
+  Store %0, %8, flags={}, aliasing=0, offset=0
   Exit
 }
 )", R"(section {
 b0(%0: Ptr, %1: Int32):
   %2 = ResizeS %1, type=Int64
-  Store %0, %2, aliasing=0, offset=0
+  Store %0, %2, flags={}, aliasing=0, offset=0
   Exit
 }
 )");
@@ -115,11 +115,11 @@ b0(%0: Ptr, %1: Int32, %2: Bool):
   Branch %2, true_block=b1, false_block=b2
 b1:
   %3 = ShrU %1, 8:Int32
-  Store %0, %3, aliasing=0, offset=0
+  Store %0, %3, flags={}, aliasing=0, offset=0
   Exit
 b2:
   %4 = ShrU %1, 8:Int32
-  Store %0, %4, aliasing=0, offset=0
+  Store %0, %4, flags={}, aliasing=0, offset=0
   Exit
 }
 )";
@@ -134,7 +134,7 @@ b0(%0: Ptr, %1: Int32):
 b1:
   %3 = BitReverse %2
   %4 = BitReverse %3
-  Store %0, %4, aliasing=0, offset=0
+  Store %0, %4, flags={}, aliasing=0, offset=0
   Exit
 }
 )", R"(section {
@@ -142,7 +142,7 @@ b0(%0: Ptr, %1: Int32):
   %2 = And %1, 255:Int32
   Jump block=b1
 b1:
-  Store %0, %2, aliasing=0, offset=0
+  Store %0, %2, flags={}, aliasing=0, offset=0
   Exit
 }
 )", {1});
@@ -153,13 +153,13 @@ void test_combined_shift() {
 b0(%0: Ptr, %1: Int32):
   %2 = Shl %1, 8:Int32
   %3 = Shl %2, 4:Int32
-  Store %0, %3, aliasing=0, offset=0
+  Store %0, %3, flags={}, aliasing=0, offset=0
   Exit
 }
 )", R"(section {
 b0(%0: Ptr, %1: Int32):
   %2 = Shl %1, 12:Int32
-  Store %0, %2, aliasing=0, offset=0
+  Store %0, %2, flags={}, aliasing=0, offset=0
   Exit
 }
 )");
@@ -173,12 +173,12 @@ b0(%0: Ptr, %1: Int32, %2: Bool):
   Branch %2, true_block=b1, false_block=b2
 b1:
   %4 = BitReverse %3
-  Store %0, %4, aliasing=0, offset=0
+  Store %0, %4, flags={}, aliasing=0, offset=0
   Exit
 b2:
   %5 = BitReverse %3
-  Store %0, %5, aliasing=0, offset=0
-  Store %0, %6, aliasing=0, offset=4
+  Store %0, %5, flags={}, aliasing=0, offset=0
+  Store %0, %6, flags={}, aliasing=0, offset=4
   Exit
 }
 )", R"(section {
@@ -186,12 +186,12 @@ b0(%0: Ptr, %1: Int32, %2: Bool):
   %3 = BitReverse %1
   Branch %2, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=0
+  Store %0, %1, flags={}, aliasing=0, offset=0
   Exit
 b2:
   %5 = BitReverse %3
-  Store %0, %5, aliasing=0, offset=0
-  Store %0, %1, aliasing=0, offset=4
+  Store %0, %5, flags={}, aliasing=0, offset=0
+  Store %0, %1, flags={}, aliasing=0, offset=4
   Exit
 }
 )", {0, 1});
@@ -204,16 +204,16 @@ b0(%0: Ptr, %1: Int32):
   %2 = And %1, 255:Int32
   %3 = Or %2, 256:Int32
   %4 = And %3, 255:Int32
-  Store %0, %2, aliasing=0, offset=0
-  Store %0, %4, aliasing=0, offset=8
+  Store %0, %2, flags={}, aliasing=0, offset=0
+  Store %0, %4, flags={}, aliasing=0, offset=8
   Exit
 }
 )";
   check_provenance(input, R"(section {
 b0(%0: Ptr, %1: Int32):
   %2 = And %1, 255:Int32
-  Store %0, %2, aliasing=0, offset=0
-  Store %0, %2, aliasing=0, offset=8
+  Store %0, %2, flags={}, aliasing=0, offset=0
+  Store %0, %2, flags={}, aliasing=0, offset=8
   Exit
 }
 )");
@@ -230,7 +230,7 @@ b0(%0: Ptr, %1: Int64):
   %7 = ShrS %6, 39:Int64
   %8 = ResizeU %7, type=Int32
   %9 = BitReverse %8
-  Store %0, %9, aliasing=0, offset=0
+  Store %0, %9, flags={}, aliasing=0, offset=0
   Exit
 }
 )", R"(section {
@@ -238,7 +238,7 @@ b0(%0: Ptr, %1: Int64):
   %2 = ShrU %1, 32:Int64
   %3 = ResizeU %2, type=Int32
   %4 = Shl %3, 8:Int32
-  Store %0, %4, aliasing=0, offset=0
+  Store %0, %4, flags={}, aliasing=0, offset=0
   Exit
 }
 )");
@@ -273,7 +273,7 @@ void test_shift_boundaries() {
       for (size_t amount : {size_t(0), width - 1, width, width + 1}) {
         std::string prefix = "section {\nb0(%0: Ptr, %1: " + type + "):\n";
         std::string shift = "  %2 = " + op + " %1, " + std::to_string(amount) + ":" + type + "\n";
-        std::string suffix = ", aliasing=0, offset=0\n  Exit\n}\n";
+        std::string suffix = ", flags={}, aliasing=0, offset=0\n  Exit\n}\n";
         check_provenance(prefix + shift + "  Store %0, %2" + suffix,
                          prefix + (amount == 0 ? "  Store %0, %1" : shift + "  Store %0, %2") + suffix);
       }
@@ -285,7 +285,7 @@ void test_resize_roundtrips() {
   for (const std::string type : {"Bool", "Int8", "Int16", "Int32", "Int64"}) {
     for (const std::string op : {"ResizeU", "ResizeS", "ResizeX"}) {
       std::string prefix = "section {\nb0(%0: Ptr, %1: " + type + "):\n";
-      std::string suffix = ", aliasing=0, offset=0\n  Exit\n}\n";
+      std::string suffix = ", flags={}, aliasing=0, offset=0\n  Exit\n}\n";
       check_provenance(prefix + "  %2 = " + op + " %1, type=Int64\n  %3 = ResizeU %2, type=" + type +
                        "\n  Store %0, %3" + suffix, prefix + "  Store %0, %1" + suffix);
     }
@@ -296,7 +296,7 @@ void test_resize_extraction() {
   for (size_t width : {8, 16, 32}) {
     std::string type = "Int" + std::to_string(width);
     std::string prefix = "section {\nb0(%0: Ptr, %1: " + type + "):\n";
-    std::string suffix = ", aliasing=0, offset=0\n  Exit\n}\n";
+    std::string suffix = ", flags={}, aliasing=0, offset=0\n  Exit\n}\n";
     std::string amount = std::to_string(64 - width) + ":Int64\n";
     check_provenance(prefix + "  %2 = ResizeU %1, type=Int64\n  %3 = Shl %2, " + amount +
                      "  %4 = ShrS %3, " + amount + "  Store %0, %4" + suffix,
@@ -310,7 +310,7 @@ void test_resize_extraction() {
 void test_mixed_sources() {
   for (const std::string op : {"And", "Or", "Xor"}) {
     std::string prefix = "section {\nb0(%0: Ptr, %1: Int32, %2: Int32):\n  %3 = " + op + " %1, %2\n";
-    std::string suffix = ", aliasing=0, offset=0\n  Exit\n}\n";
+    std::string suffix = ", flags={}, aliasing=0, offset=0\n  Exit\n}\n";
     check_provenance(prefix + "  %4 = BitReverse %3\n  %5 = BitReverse %4\n  Store %0, %5" + suffix,
                      prefix + "  Store %0, %3" + suffix);
   }
@@ -320,12 +320,12 @@ b0(%0: Ptr, %1: Int32, %2: Int32):
   %4 = And %2, 65280:Int32
   %5 = Or %3, %4
   %6 = And %5, 65536:Int32
-  Store %0, %6, aliasing=0, offset=0
+  Store %0, %6, flags={}, aliasing=0, offset=0
   Exit
 }
 )", R"(section {
 b0(%0: Ptr, %1: Int32, %2: Int32):
-  Store %0, 0:Int32, aliasing=0, offset=0
+  Store %0, 0:Int32, flags={}, aliasing=0, offset=0
   Exit
 }
 )");
@@ -334,7 +334,7 @@ b0(%0: Ptr, %1: Int32, %2: Int32):
 void test_signed_comparison_fallback() {
   for (const std::string right : {"1:Int32", "%2"}) {
     std::string input = "section {\nb0(%0: Ptr, %1: Int32, %2: Int32):\n  %3 = LtS %1, " + right +
-                        "\n  Store %0, %3, aliasing=0, offset=0\n  Exit\n}\n";
+                        "\n  Store %0, %3, flags={}, aliasing=0, offset=0\n  Exit\n}\n";
     check_provenance(input, input);
   }
 }
@@ -342,7 +342,7 @@ void test_signed_comparison_fallback() {
 void test_variable_shifts() {
   for (const std::string op : {"Shl", "ShrU", "ShrS"}) {
     std::string prefix = "section {\nb0(%0: Ptr, %1: Int32, %2: Int32):\n  %3 = " + op + " %1, %2\n";
-    std::string suffix = ", aliasing=0, offset=0\n  Exit\n}\n";
+    std::string suffix = ", flags={}, aliasing=0, offset=0\n  Exit\n}\n";
     check_provenance(prefix + "  %4 = BitReverse %3\n  %5 = BitReverse %4\n  Store %0, %5" + suffix,
                      prefix + "  Store %0, %3" + suffix);
   }
@@ -351,7 +351,7 @@ void test_variable_shifts() {
 void test_opaque_transfers() {
   for (const std::string operation : {"Popcount %1", "Freeze %1", "PtrToInt %0, type=Int32"}) {
     std::string prefix = "section {\nb0(%0: Ptr, %1: Int32):\n  %2 = " + operation + "\n";
-    std::string suffix = ", aliasing=0, offset=0\n  Exit\n}\n";
+    std::string suffix = ", flags={}, aliasing=0, offset=0\n  Exit\n}\n";
     check_provenance(prefix + "  %3 = BitReverse %2\n  %4 = BitReverse %3\n  Store %0, %4" + suffix,
                      prefix + "  Store %0, %2" + suffix);
   }
@@ -363,21 +363,21 @@ b0(%0: Ptr, %1: Ptr, %2: Int32):
   %3 = Load %0, type=Int32, flags={}, aliasing=0, offset=0
   %4 = BitReverse %3
   %5 = BitReverse %4
-  Store %0, %2, aliasing=0, offset=0
+  Store %0, %2, flags={}, aliasing=0, offset=0
   %6 = Load %0, type=Int32, flags={}, aliasing=0, offset=0
   %7 = BitReverse %6
   %8 = BitReverse %7
-  Store %1, %5, aliasing=0, offset=0
-  Store %1, %8, aliasing=0, offset=4
+  Store %1, %5, flags={}, aliasing=0, offset=0
+  Store %1, %8, flags={}, aliasing=0, offset=4
   Exit
 }
 )", R"(section {
 b0(%0: Ptr, %1: Ptr, %2: Int32):
   %3 = Load %0, type=Int32, flags={}, aliasing=0, offset=0
-  Store %0, %2, aliasing=0, offset=0
+  Store %0, %2, flags={}, aliasing=0, offset=0
   %4 = Load %0, type=Int32, flags={}, aliasing=0, offset=0
-  Store %1, %3, aliasing=0, offset=0
-  Store %1, %4, aliasing=0, offset=4
+  Store %1, %3, flags={}, aliasing=0, offset=0
+  Store %1, %4, flags={}, aliasing=0, offset=4
   Exit
 }
 )");
