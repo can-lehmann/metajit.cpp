@@ -216,6 +216,17 @@ class InstReadPlugin:
                     build_args.append(f"{arg.name}.size()")
                     continue
                 build_args.append(arg.name)
+                if arg.type == Type("StoreFlags"):
+                    code += """    StoreFlags flags = StoreFlags::None;
+    if (_stream.peek() == 'f') {
+      expect_word("flags");
+      expect_char('=');
+      flags = read_flags<StoreFlags>();
+      expect_char(',');
+    }
+"""
+                    need_comma = False
+                    continue
                 code += f'    expect_word("{arg.name}");\n'
                 code += f"    expect_char('=');\n"
                 if arg.type == Type("Block*"):
@@ -263,6 +274,26 @@ class PrettyInstWritePlugin(InstWritePlugin):
             stream_type="metajit::PrettyStream&"
         )
     
+    def run(self, inst, ir):
+        if inst.name != "Store":
+            return super().run(inst, ir)
+
+        code = f"""  void write({self.stream_type} stream) const override {{
+    {self.write_name(inst, "stream")}
+    stream << ' ';
+    bool is_first = true;
+    write_args(stream, is_first);
+"""
+        for arg in inst.args:
+            if arg.type.is_value():
+                continue
+            field = f'stream << ", "; {self.write_arg(arg, "_" + arg.name, "stream")}'
+            if arg.type == Type("StoreFlags"):
+                code += f"    if ((uint32_t) _flags != StoreFlags::None) {{\n      {field}\n    }}\n"
+            else:
+                code += f"    {field}\n"
+        return code + "  }\n"
+
     def write_name(self, inst, stream):
         return f"{stream} << Highlight::Keyword << \"{inst.name}\" << Highlight::None;"
 
@@ -272,7 +303,7 @@ class PrettyInstWritePlugin(InstWritePlugin):
             code += f"{value}->write_arg({stream});"
         elif arg.type == Type("Type") or arg.type == Type("CallConv"):
             code += f"{stream} << Highlight::Type << {value} << Highlight::None;"
-        elif arg.type == Type("LoadFlags") or arg.type == Type("CallFlags"):
+        elif arg.type in (Type("LoadFlags"), Type("StoreFlags"), Type("CallFlags")):
             code += f"{stream} << {value};"
         elif arg.type == Type("AliasingGroup") or \
              arg.type == Type("uint64_t") or \
@@ -298,7 +329,7 @@ class JitirInstWriteJsonPlugin(InstWriteJsonPlugin):
             return f"{stream} << {value}->name()"
         elif arg.type == Type("Type") or arg.type == Type("CallConv"):
             return f"{stream} << \"\\\"\" << {value} << \"\\\"\""
-        elif arg.type == Type("LoadFlags") or arg.type == Type("CallFlags"):
+        elif arg.type in (Type("LoadFlags"), Type("StoreFlags"), Type("CallFlags")):
             return f"{value}.write_json({stream})"
         elif arg.type == Type("AliasingGroup") or \
              arg.type == Type("uint64_t") or \
@@ -494,6 +525,7 @@ jitir = IR(
             args = [
                 Arg("ptr", getter=Getter.Always),
                 Arg("value", getter=Getter.Always),
+                Arg("flags", Type("StoreFlags"), setter=True),
                 Arg("aliasing", Type("AliasingGroup"), setter=True),
                 Arg("offset", Type("uint64_t"), setter=True)
             ],
@@ -620,6 +652,7 @@ lwir(
                 Type("Type"): "uint32_t",
                 Type("CallConv"): "uint32_t",
                 Type("LoadFlags"): "uint32_t",
+                Type("StoreFlags"): "uint32_t",
                 Type("CallFlags"): "uint32_t",
                 Type("Block*"): "void*",
                 Type("AliasingGroup"): "uint32_t", # Needs to be passed by LLVM IR
@@ -640,6 +673,7 @@ llvm_type_substitutions = {
     Type("Type"): "llvm::Type::getInt32Ty(context)",
     Type("CallConv"): "llvm::Type::getInt32Ty(context)",
     Type("LoadFlags"): "llvm::Type::getInt32Ty(context)",
+    Type("StoreFlags"): "llvm::Type::getInt32Ty(context)",
     Type("CallFlags"): "llvm::Type::getInt32Ty(context)",
     Type("Block*"): "llvm::PointerType::get(context, 0)",
     Type("AliasingGroup"): "llvm::Type::getInt32Ty(context)",

@@ -248,15 +248,22 @@ namespace metajit {
           emit_type(load->type()),
           emit_add_offset(emit_arg(load->arg(0)), load->offset())
         );
+        if (load->flags().has(LoadFlags::Unaligned)) {
+          result->setAlignment(llvm::Align(1));
+        }
         if (load->flags().has(LoadFlags::Pure)) {
           result->setMetadata(llvm::LLVMContext::MD_invariant_load, llvm::MDNode::get(_context, {}));
         }
         return result;
       } else if (dynmatch(StoreInst, store, inst)) {
-        return _builder.CreateStore(
-          emit_arg(store->arg(1)),
-          emit_add_offset(emit_arg(store->arg(0)), store->offset())
+        llvm::StoreInst* result = _builder.CreateStore(
+          emit_arg(store->value()),
+          emit_add_offset(emit_arg(store->ptr()), store->offset())
         );
+        if (store->flags().has(StoreFlags::Unaligned)) {
+          result->setAlignment(llvm::Align(1));
+        }
+        return result;
       } else if (dynmatch(AllocaInst, alloca, inst)) {
         llvm::AllocaInst* llvm_alloca;
         if (_alloca_types.find(alloca) != _alloca_types.end() && _alloca_types.at(alloca) != Type::Void) {
