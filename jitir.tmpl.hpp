@@ -965,13 +965,7 @@ namespace metajit {
   /* ${insts} */
 
   bool Inst::is_commutative() const {
-    return dynamic_cast<const AndInst*>(this) ||
-           dynamic_cast<const OrInst*>(this) ||
-           dynamic_cast<const XorInst*>(this) ||
-           dynamic_cast<const AddInst*>(this) ||
-           dynamic_cast<const MulInst*>(this) ||
-           dynamic_cast<const MulHighUInst*>(this) ||
-           dynamic_cast<const EqInst*>(this);
+    return /* ${commutative_checks} */;
   }
 
   bool Inst::has_side_effect() const {
