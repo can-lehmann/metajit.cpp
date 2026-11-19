@@ -2922,7 +2922,7 @@ b4(%2: Int64):
 b5(%3: Int64):
   Branch %1, true_block=b6, false_block=b7
 b6:
-  Store %0, %3, aliasing=0, offset=0
+  Store %0, %3, flags={}, aliasing=0, offset=0
   Jump block=b7
 b7:
   Exit
