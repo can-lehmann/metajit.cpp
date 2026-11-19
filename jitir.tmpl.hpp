@@ -2678,6 +2678,7 @@ namespace metajit {
     std::vector<LoadInst*> _loads;
     std::vector<StoreInst*> _stores;
     std::unordered_map<Key, AliasingGroup, KeyHash> _exact_groups;
+    Value* _only_base;
 
     void access(AliasingGroup aliasing, Value* ptr, uint64_t offset, Type type) {
       assert(aliasing >= 0);
@@ -2687,7 +2688,8 @@ namespace metajit {
           group.base = ptr;
           group.type = type;
         }
-        if (group.base != ptr || group.type != type || offset % type_size(type) != 0) {
+        if ((_only_base && ptr != _only_base) ||
+            group.base != ptr || group.type != type || offset % type_size(type) != 0) {
           group.is_invalid = true;
         }
       }
@@ -2707,7 +2709,8 @@ namespace metajit {
       return _exact_groups[key];
     }
   public:
-    RefineAliasing(Section* section): Pass(section) {
+    RefineAliasing(Section* section, Value* only_base = nullptr): Pass(section), _only_base(only_base) {
+      assert(!_only_base || _only_base->type() == Type::Ptr);
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(LoadInst, load, inst)) {
