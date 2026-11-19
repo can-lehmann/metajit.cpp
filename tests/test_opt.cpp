@@ -2304,6 +2304,9 @@ void check_cse_operand_order(const std::string& opcode, Type type,
   Value* left = first->arg(0);
   Value* right = first->arg(1);
   unittest_assert(!first->equals(second));
+  if (!constant) {
+    unittest_assert((first->hash() == second->hash()) == commutative);
+  }
   unittest_assert(!section->verify(std::cout));
   CommonSubexprElim::run(section);
   unittest_assert(!section->verify(std::cout));
@@ -2314,7 +2317,7 @@ void check_cse_operand_order(const std::string& opcode, Type type,
 }
 
 void test_cse_commutative_operands() {
-  for (const std::string& opcode : {"Add", "Mul", "And", "Or", "Xor", "Eq"}) {
+  for (const std::string& opcode : {"Add", "Mul", "MulHighU", "And", "Or", "Xor", "Eq"}) {
     for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
       check_cse_operand_order(opcode, type, true);
       check_cse_operand_order(opcode, type, true, true);
@@ -2966,6 +2969,28 @@ int main(int argc, char** argv) {
   suite.test("cse commutative operands").run(test_cse_commutative_operands);
   suite.test("cse ordered operands").run(test_cse_ordered_operands);
   suite.test("cse commutative after substitution").run(test_cse_commutative_after_substitution);
+  suite.test("cse constant hash mixes type and value separately").run([]() {
+    Const first(Type::Int8, 3);
+    Const same(Type::Int8, 3);
+    Const second(Type::Int16, 2);
+    unittest_assert(first.equals(&same));
+    unittest_assert(first.hash() == same.hash());
+    unittest_assert(!first.equals(&second));
+    unittest_assert(first.hash() != second.hash());
+  });
+  suite.test("cse load hash mixes aliasing and offset separately").run([]() {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({Type::Ptr});
+    builder.move_to_end(block);
+    Value* ptr = block->arg(0);
+    LoadInst* first = builder.build_load(ptr, Type::Bool, LoadFlags::InBounds, -356, 1314);
+    LoadInst* second = builder.build_load(ptr, Type::Bool, LoadFlags::InBounds, -370, 1328);
+    unittest_assert(!first->equals(second));
+    unittest_assert(first->hash() != second->hash());
+  });
   suite.test("cse store load forwarding").run([]() {
     Context context;
     Allocator allocator;

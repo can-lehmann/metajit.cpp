@@ -340,7 +340,7 @@ namespace metajit {
     }
 
     size_t hash() const override {
-      return std::hash<uint64_t>()(_value) ^ std::hash<Type>()(type()) ^ std::hash<size_t>()(1);
+      return lwir::hash_16_bytes(static_cast<uint64_t>(type()), _value);
     }
   };
 
@@ -949,13 +949,7 @@ namespace metajit {
   /* ${insts} */
 
   bool Inst::is_commutative() const {
-    return dynamic_cast<const AndInst*>(this) ||
-           dynamic_cast<const OrInst*>(this) ||
-           dynamic_cast<const XorInst*>(this) ||
-           dynamic_cast<const AddInst*>(this) ||
-           dynamic_cast<const MulInst*>(this) ||
-           dynamic_cast<const MulHighUInst*>(this) ||
-           dynamic_cast<const EqInst*>(this);
+    return /* ${commutative_checks} */;
   }
 
   bool Inst::has_side_effect() const {
@@ -2671,7 +2665,7 @@ namespace metajit {
 
     struct KeyHash {
       size_t operator()(const Key& key) const {
-        return std::hash<AliasingGroup>()(key.group) ^ std::hash<uint64_t>()(key.offset);
+        return lwir::hash_16_bytes(static_cast<uint64_t>(key.group), key.offset);
       }
     };
 
@@ -5906,15 +5900,12 @@ private:
     Canon _canon;
     std::vector<CanonUndo> _undo;
 
-    void canon_insert(const Lookup& lookup) {
-      _undo.push_back({lookup, true});
-      _canon.insert(lookup);
-    }
-
     void canon_erase(const Lookup& lookup) {
-      if (_canon.find(lookup) != _canon.end()) {
-        _undo.push_back({*_canon.find(lookup), false});
-        _canon.erase(lookup);
+      Canon::iterator entry = _canon.find(lookup);
+      assert(entry != _canon.end());
+      if (entry != _canon.end()) {
+        _undo.push_back({*entry, false});
+        _canon.erase(entry);
       }
     }
   public:
@@ -5922,7 +5913,9 @@ private:
       DominatorTree domtree(section);
       DominatorTree::Children children = domtree.children();
 
-      std::unordered_map<Value*, Value*> substs;
+      using Substitutions = std::unordered_map<Value*, Value*>;
+      using LastStores = std::unordered_map<AliasingGroup, StoreInst*>;
+      Substitutions substs;
       std::unordered_map<Lookup, Const*, LookupHash> consts;
 
       std::vector<size_t> marks;
@@ -5945,38 +5938,37 @@ private:
 
         marks.push_back(_undo.size());
         ValidLoads valid_loads;
-        std::unordered_map<AliasingGroup, StoreInst*> last_stores;
+        LastStores last_stores;
 
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
 
           for (size_t it = 0; it < inst->arg_count(); it++) {
             Value* arg = inst->arg(it);
-            if (substs.find(arg) != substs.end()) {
-              inst->set_arg(it, substs.at(arg));
+            if (Substitutions::const_iterator replacement = substs.find(arg);
+                replacement != substs.end()) {
+              inst->set_arg(it, replacement->second);
             } else if (dynmatch(Const, constant, arg)) {
-              Lookup lookup(constant);
-              if (consts.find(lookup) != consts.end()) {
-                inst->set_arg(it, consts.at(lookup));
-                substs[constant] = consts.at(lookup);
-              } else {
-                consts[lookup] = constant;
+              auto [entry, inserted] = consts.try_emplace(Lookup(constant), constant);
+              if (!inserted) {
+                inst->set_arg(it, entry->second);
+                substs[constant] = entry->second;
               }
             }
           }
 
           if (dynmatch(StoreInst, store, inst)) {
             last_stores[store->aliasing()] = store;
+            std::vector<LoadInst*>& loads = valid_loads[store->aliasing()];
             std::vector<LoadInst*> remaining_loads;
-            for (LoadInst* load : valid_loads[store->aliasing()]) {
+            for (LoadInst* load : loads) {
               if (could_alias(load, store)) {
-                assert(_canon.find(Lookup(load)) != _canon.end());
                 canon_erase(Lookup(load));
               } else {
                 remaining_loads.push_back(load);
               }
             }
-            valid_loads[store->aliasing()] = remaining_loads;
+            loads = std::move(remaining_loads);
           } else if (dynamic_cast<CallInst*>(inst)) {
             // Calls can invalidate any cached memory-derived value.
             for (auto& [group, loads] : valid_loads) {
@@ -5987,8 +5979,9 @@ private:
             valid_loads.clear();
             last_stores.clear();
           } else if (dynmatch(LoadInst, load, inst)) {
-            if (last_stores.find(load->aliasing()) != last_stores.end()) {
-              StoreInst* store = last_stores.at(load->aliasing());
+            if (LastStores::const_iterator last_store = last_stores.find(load->aliasing());
+                last_store != last_stores.end()) {
+              StoreInst* store = last_store->second;
               if (load->type() == store->value()->type() &&
                   (load->aliasing() < 0 ||
                    (load->ptr() == store->ptr() && load->offset() == store->offset()))) {
@@ -6007,9 +6000,9 @@ private:
             continue;
           }
 
-          Lookup lookup(inst);
-          if (_canon.find(lookup) == _canon.end()) {
-            canon_insert(lookup);
+          auto [entry, inserted] = _canon.insert(Lookup(inst));
+          if (inserted) {
+            _undo.push_back({*entry, true});
             if (dynmatch(LoadInst, load, inst)) {
               if (!load->flags().has(LoadFlags::Pure)) {
                 valid_loads[load->aliasing()].push_back(load);
@@ -6017,7 +6010,7 @@ private:
             }
             inst_it++;
           } else {
-            substs[inst] = _canon.find(lookup)->value;
+            substs[inst] = entry->value;
             inst_it = inst_it.erase();
           }
         }
