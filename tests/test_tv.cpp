@@ -569,7 +569,7 @@ b0(%0: Ptr, %1: Int8):
   %6 = And %5, 2:Int8
   %7 = Mul %6, 3:Int8
   %8 = And %7, 1:Int8
-  Store %0, %8, aliasing=0, offset=0
+  Store %0, %8, flags={}, aliasing=0, offset=0
   Exit
 }
 )");
