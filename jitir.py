@@ -345,12 +345,13 @@ class ClonePlugin:
         code += f"return nullptr;\n"
         return {"clone": code}
 
-def binop(name, type_checks = None):
+def binop(name, type_checks = None, commutative = False):
     if type_checks is None:
         type_checks = ["is_int(a->type())"]
     return Inst(name,
         args = [Arg("a"), Arg("b")],
         type = "a->type()",
+        commutative = commutative,
         type_checks = [
             "a->type() == b->type()",
             *type_checks
@@ -360,10 +361,11 @@ def binop(name, type_checks = None):
 def binop_f(name):
     return binop(name, type_checks = ["is_float(a->type())"])
 
-def cmp(name, type_checks):
+def cmp(name, type_checks, commutative = False):
     return Inst(name,
         args = [Arg("a"), Arg("b")],
         type = "Type::Bool",
+        commutative = commutative,
         type_checks = [
             "a->type() == b->type()",
             *type_checks
@@ -523,17 +525,17 @@ jitir = IR(
                 "offset->type() == Type::Int64"
             ]
         ),
-        binop("Add"),
+        binop("Add", commutative = True),
         binop("Sub"),
-        binop("Mul"),
-        binop("MulHighU"),
+        binop("Mul", commutative = True),
+        binop("MulHighU", commutative = True),
         binop("DivS"),
         binop("DivU"),
         binop("ModS"),
         binop("ModU"),
-        binop("And", type_checks = ["is_int_or_bool(a->type())"]),
-        binop("Or", type_checks = ["is_int_or_bool(a->type())"]),
-        binop("Xor", type_checks = ["is_int_or_bool(a->type())"]),
+        binop("And", type_checks = ["is_int_or_bool(a->type())"], commutative = True),
+        binop("Or", type_checks = ["is_int_or_bool(a->type())"], commutative = True),
+        binop("Xor", type_checks = ["is_int_or_bool(a->type())"], commutative = True),
         binop("ShrU"),
         binop("ShrS"),
         binop("Shl"),
@@ -541,7 +543,7 @@ jitir = IR(
         binop_f("SubF"),
         binop_f("MulF"),
         binop_f("DivF"),
-        cmp("Eq", type_checks = []),
+        cmp("Eq", type_checks = [], commutative = True),
         cmp("LtU", type_checks = ["is_int(a->type())"]),
         cmp("LtS", type_checks = ["is_int(a->type())"]),
         cmp("LtFO", type_checks = ["is_float(a->type())"]),
@@ -608,6 +610,7 @@ lwir(
             InstEqualsPlugin(),
             InstHashPlugin()
         ]),
+        InstCommutativityPlugin(),
         AllocatorBuilderPlugin(),
         ClonePlugin(),
         CAPIPlugin(

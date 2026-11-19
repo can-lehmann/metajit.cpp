@@ -561,6 +561,7 @@ namespace metajit {
 
     void substitute_args(NameMap<Value*>& substs);
     void substitute_args_iterated(NameMap<Value*>& substs);
+    void substitute_args_iterated(std::map<Value*, Value*>& substs);
 
     void substitute_blocks(BlockMap<Block*>& substs);
     void substitute_blocks(const std::map<Block*, Block*>& substs);
@@ -964,13 +965,7 @@ namespace metajit {
   /* ${insts} */
 
   bool Inst::is_commutative() const {
-    return dynamic_cast<const AndInst*>(this) ||
-           dynamic_cast<const OrInst*>(this) ||
-           dynamic_cast<const XorInst*>(this) ||
-           dynamic_cast<const AddInst*>(this) ||
-           dynamic_cast<const MulInst*>(this) ||
-           dynamic_cast<const MulHighUInst*>(this) ||
-           dynamic_cast<const EqInst*>(this);
+    return /* ${commutative_checks} */;
   }
 
   bool Inst::has_side_effect() const {
@@ -2180,6 +2175,25 @@ namespace metajit {
   }
 
   void Inst::substitute_args_iterated(NameMap<Value*>& substs) {
+    for (size_t index = 0; index < arg_count(); index++) {
+      set_arg(index, resolve_substitution(arg(index), substs));
+    }
+  }
+
+  Value* resolve_substitution(Value* value, std::map<Value*, Value*>& substs) {
+    Value* replacement = value;
+    while (substs.find(replacement) != substs.end()) {
+      replacement = substs.at(replacement);
+    }
+    while (value != replacement) {
+      Value* next = substs.at(value);
+      substs.at(value) = replacement;
+      value = next;
+    }
+    return replacement;
+  }
+
+  void Inst::substitute_args_iterated(std::map<Value*, Value*>& substs) {
     for (size_t index = 0; index < arg_count(); index++) {
       set_arg(index, resolve_substitution(arg(index), substs));
     }
@@ -5123,14 +5137,10 @@ private:
                 externally_used_args.insert(block);
               }
               for (size_t i = 0; i < target->args().size(); i++) {
-                Value* arg = jump->arg(i);
-                if (substs.find(arg) != substs.end()) {
-                  arg = substs.at(arg);
-                }
-                substs[target->args().at(i)] = arg;
+                substs[target->args().at(i)] = resolve_substitution(jump->arg(i), substs);
               }
               for (Inst* inst : *target) {
-                inst->substitute_args(substs);
+                inst->substitute_args_iterated(substs);
               }
 
               auto target_successors = target->successors();
@@ -5199,7 +5209,7 @@ private:
         if (substs.size()) {
           for (Block* block : *_section) {
             for (Inst* inst : *block) {
-              inst->substitute_args(substs);
+              inst->substitute_args_iterated(substs);
             }
           }
         }
