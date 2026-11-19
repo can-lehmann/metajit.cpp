@@ -536,7 +536,7 @@ b0(%0: Ptr):
   Branch %1, true_block=b1, false_block=b2
 b1:
   %3 = Eq %0, @other:Ptr
-  Store %0, %3, aliasing=0, offset=0
+  Store %0, %3, flags={}, aliasing=0, offset=0
   Exit
 b2:
   Exit
@@ -579,7 +579,7 @@ b0(%0: Ptr):
   %8 = Freeze %3
   %9 = Freeze %4
   %10 = Freeze %5
-  Store %0, 0:Int64, aliasing=0, offset=0
+  Store %0, 0:Int64, flags={}, aliasing=0, offset=0
   Exit
 }
 )";
@@ -596,7 +596,7 @@ b0(%0: Ptr):
   %9 = Freeze %3
   %10 = Freeze %4
   %11 = Freeze %5
-  Store %0, 0:Int64, aliasing=0, offset=0
+  Store %0, 0:Int64, flags={}, aliasing=0, offset=0
   Exit
 }
 )", false);
@@ -623,7 +623,7 @@ b0(%0: Ptr):
     unittest_assert(result.str() == R"(section {
 b0(%0: Ptr):
   %1 = Freeze poison:Bool
-  Store %0, 0:Bool, aliasing=0, offset=0
+  Store %0, 0:Bool, flags={}, aliasing=0, offset=0
   Exit
 }
 )");
@@ -640,7 +640,7 @@ b0(%0: Ptr):
   Branch %1, true_block=b1, false_block=b2
 b1:
   %4 = Select %1, %2, 0:Int64
-  Store %0, %4, aliasing=0, offset=16
+  Store %0, %4, flags={}, aliasing=0, offset=16
   Jump block=b2
 b2:
   Exit
@@ -652,7 +652,7 @@ b0(%0: Ptr):
   Branch %1, true_block=b1, false_block=b2
 b1:
   %4 = Select 1:Bool, %2, 0:Int64
-  Store %0, %2, aliasing=0, offset=16
+  Store %0, %2, flags={}, aliasing=0, offset=16
   Jump block=b2
 b2:
   Exit
@@ -668,7 +668,7 @@ b0(%0: Ptr):
   Branch %2, true_block=b1, false_block=b2
 b1:
   %4 = Add %1, 17:Int8
-  Store %0, %4, aliasing=0, offset=1
+  Store %0, %4, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -680,7 +680,7 @@ b0(%0: Ptr):
   Branch %2, true_block=b1, false_block=b2
 b1:
   %4 = Add 42:Int8, 17:Int8
-  Store %0, 59:Int8, aliasing=0, offset=1
+  Store %0, 59:Int8, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -696,7 +696,7 @@ b0(%0: Ptr):
   Branch %2, true_block=b1, false_block=b2
 b1:
   %4 = And %1, 1:Int8
-  Store %0, %4, aliasing=0, offset=1
+  Store %0, %4, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -708,7 +708,7 @@ b0(%0: Ptr):
   Branch %2, true_block=b1, false_block=b2
 b1:
   %4 = And %1, 1:Int8
-  Store %0, 1:Int8, aliasing=0, offset=1
+  Store %0, 1:Int8, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -725,7 +725,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %2, 7:Int8
-  Store %0, %5, aliasing=0, offset=1
+  Store %0, %5, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -738,7 +738,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %2, 7:Int8
-  Store %0, 7:Int8, aliasing=0, offset=1
+  Store %0, 7:Int8, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -755,7 +755,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %1, 6:Int8
-  Store %0, %5, aliasing=0, offset=1
+  Store %0, %5, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -768,7 +768,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %1, 6:Int8
-  Store %0, 6:Int8, aliasing=0, offset=1
+  Store %0, 6:Int8, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -784,7 +784,7 @@ b0(%0: Ptr):
   %3 = Eq %2, 4:Int8
   Branch %3, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -796,7 +796,7 @@ b0(%0: Ptr):
   %3 = Eq %2, 4:Int8
   Branch %1, true_block=b1, false_block=b2
 b1:
-  Store %0, 1:Bool, aliasing=0, offset=1
+  Store %0, 1:Bool, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -812,7 +812,7 @@ b0(%0: Ptr):
   %3 = Eq %2, 4:Int8
   Branch %3, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -824,7 +824,7 @@ b0(%0: Ptr):
   %3 = Eq %2, 4:Int8
   Branch %3, true_block=b1, false_block=b2
 b1:
-  Store %0, 3:Int8, aliasing=0, offset=1
+  Store %0, 3:Int8, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -841,7 +841,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %1, 15:Int8
-  Store %0, %5, aliasing=0, offset=1
+  Store %0, %5, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -854,7 +854,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %1, 15:Int8
-  Store %0, 1:Int8, aliasing=0, offset=1
+  Store %0, 1:Int8, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -870,7 +870,7 @@ b0(%0: Ptr):
   %3 = Eq %2, 4:Int64
   Branch %3, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -882,7 +882,7 @@ b0(%0: Ptr):
   %3 = Eq %2, 4:Int64
   Branch %3, true_block=b1, false_block=b2
 b1:
-  Store %0, 4:Int8, aliasing=0, offset=1
+  Store %0, 4:Int8, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -898,7 +898,7 @@ b0(%0: Ptr):
   %3 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
   Branch %2, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=16
+  Store %0, %1, flags={}, aliasing=0, offset=16
   Jump block=b2
 b2:
   Exit
@@ -910,7 +910,7 @@ b0(%0: Ptr):
   %3 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
   Branch %2, true_block=b1, false_block=b2
 b1:
-  Store %0, 0:Bool, aliasing=0, offset=16
+  Store %0, 0:Bool, flags={}, aliasing=0, offset=16
   Jump block=b2
 b2:
   Exit
@@ -926,7 +926,7 @@ b0(%0: Ptr):
   %3 = Eq %2, 1:Int64
   Branch %3, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -938,7 +938,7 @@ b0(%0: Ptr):
   %3 = Eq %2, 1:Int64
   Branch %1, true_block=b1, false_block=b2
 b1:
-  Store %0, 1:Bool, aliasing=0, offset=1
+  Store %0, 1:Bool, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
   Exit
@@ -952,7 +952,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   Branch %1, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -962,7 +962,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   Branch %1, true_block=b1, false_block=b2
 b1:
-  Store %0, 1:Bool, aliasing=0, offset=1
+  Store %0, 1:Bool, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -978,7 +978,7 @@ b0(%0: Ptr):
 b1:
   Exit
 b2:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 }
 )", {0, 2}, R"(section {
@@ -988,7 +988,7 @@ b0(%0: Ptr):
 b1:
   Exit
 b2:
-  Store %0, 0:Bool, aliasing=0, offset=1
+  Store %0, 0:Bool, flags={}, aliasing=0, offset=1
   Exit
 }
 )");
@@ -1000,7 +1000,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   Branch %1, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -1014,14 +1014,14 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = And %1, 0:Bool
-  Store %0, %2, aliasing=0, offset=1
+  Store %0, %2, flags={}, aliasing=0, offset=1
   Exit
 }
 )", {0}, R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = And %1, 0:Bool
-  Store %0, 0:Bool, aliasing=0, offset=1
+  Store %0, 0:Bool, flags={}, aliasing=0, offset=1
   Exit
 }
 )");
@@ -1038,8 +1038,8 @@ b1:
 b2:
   Exit
 b3:
-  Store %0, %1, aliasing=0, offset=2
-  Store %0, %2, aliasing=0, offset=3
+  Store %0, %1, flags={}, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=3
   Jump block=b4
 b4:
   Exit
@@ -1059,8 +1059,8 @@ b1:
 b2:
   Exit
 b3:
-  Store %0, %1, aliasing=0, offset=2
-  Store %0, %2, aliasing=0, offset=3
+  Store %0, %1, flags={}, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=3
   Jump block=b4
 b4:
   Exit
@@ -1075,8 +1075,8 @@ b1:
 b2:
   Exit
 b3:
-  Store %0, 1:Bool, aliasing=0, offset=2
-  Store %0, 1:Bool, aliasing=0, offset=3
+  Store %0, 1:Bool, flags={}, aliasing=0, offset=2
+  Store %0, 1:Bool, flags={}, aliasing=0, offset=3
   Jump block=b4
 b4:
   Exit
@@ -1095,8 +1095,8 @@ b1:
 b2:
   Exit
 b3:
-  Store %0, %1, aliasing=0, offset=2
-  Store %0, %2, aliasing=0, offset=3
+  Store %0, %1, flags={}, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=3
   Jump block=b4
 b4:
   Exit
@@ -1111,8 +1111,8 @@ b1:
 b2:
   Exit
 b3:
-  Store %0, 1:Bool, aliasing=0, offset=2
-  Store %0, %2, aliasing=0, offset=3
+  Store %0, 1:Bool, flags={}, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=3
   Jump block=b4
 b4:
   Exit
@@ -1126,7 +1126,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   Branch %1, true_block=b1, false_block=b1
 b1:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 }
 )";
@@ -1141,7 +1141,7 @@ b0(%0: Ptr):
 b1:
   Jump block=b2
 b2:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 }
 )";
@@ -1159,7 +1159,7 @@ b2:
   Exit
 b3:
   %5 = And %1, 0:Bool
-  Store %0, %5, aliasing=0, offset=1
+  Store %0, %5, flags={}, aliasing=0, offset=1
   Exit
 }
 )", {0, 1, 3}, R"(section {
@@ -1172,7 +1172,7 @@ b2:
   Exit
 b3:
   %5 = And 1:Bool, 0:Bool
-  Store %0, 0:Bool, aliasing=0, offset=1
+  Store %0, 0:Bool, flags={}, aliasing=0, offset=1
   Exit
 }
 )");
@@ -1187,7 +1187,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %1, 7:Int8
-  Store %0, %5, aliasing=0, offset=1
+  Store %0, %5, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -1200,7 +1200,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %1, 7:Int8
-  Store %0, 5:Int8, aliasing=0, offset=1
+  Store %0, 5:Int8, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -1217,7 +1217,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %1, 7:Int8
-  Store %0, %5, aliasing=0, offset=1
+  Store %0, %5, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -1230,7 +1230,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %1, 7:Int8
-  Store %0, 5:Int8, aliasing=0, offset=1
+  Store %0, 5:Int8, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -1246,7 +1246,7 @@ b0(%0: Ptr):
   %3 = Eq %2, 255:Int8
   Branch %3, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -1259,7 +1259,7 @@ b0(%0: Ptr):
   %4 = Eq %2, 255:Int8
   Branch %4, true_block=b1, false_block=b2
 b1:
-  Store %0, 0:Int8, aliasing=0, offset=1
+  Store %0, 0:Int8, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -1275,7 +1275,7 @@ b0(%0: Ptr):
   %3 = Eq %2, 255:Int8
   Branch %3, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -1287,7 +1287,7 @@ b0(%0: Ptr):
   %3 = Eq %2, 255:Int8
   Branch %3, true_block=b1, false_block=b2
 b1:
-  Store %0, 2:Int8, aliasing=0, offset=1
+  Store %0, 2:Int8, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -1305,8 +1305,8 @@ b0(%0: Ptr):
 b1:
   Exit
 b2:
-  Store %0, %1, aliasing=0, offset=2
-  Store %0, %2, aliasing=0, offset=3
+  Store %0, %1, flags={}, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=3
   Exit
 }
 )", {0, 2}, R"(section {
@@ -1318,8 +1318,8 @@ b0(%0: Ptr):
 b1:
   Exit
 b2:
-  Store %0, 0:Bool, aliasing=0, offset=2
-  Store %0, 0:Bool, aliasing=0, offset=3
+  Store %0, 0:Bool, flags={}, aliasing=0, offset=2
+  Store %0, 0:Bool, flags={}, aliasing=0, offset=3
   Exit
 }
 )");
@@ -1336,7 +1336,7 @@ b0(%0: Ptr):
   Branch %5, true_block=b1, false_block=b2
 b1:
   %7 = And %1, 1:Int8
-  Store %0, %7, aliasing=0, offset=2
+  Store %0, %7, flags={}, aliasing=0, offset=2
   Exit
 b2:
   Exit
@@ -1351,7 +1351,7 @@ b0(%0: Ptr):
   Branch %5, true_block=b1, false_block=b2
 b1:
   %7 = And %1, 1:Int8
-  Store %0, 1:Int8, aliasing=0, offset=2
+  Store %0, 1:Int8, flags={}, aliasing=0, offset=2
   Exit
 b2:
   Exit
@@ -1370,7 +1370,7 @@ b0(%0: Ptr):
   Branch %5, true_block=b1, false_block=b2
 b1:
   %7 = And %1, 1:Int8
-  Store %0, %7, aliasing=0, offset=2
+  Store %0, %7, flags={}, aliasing=0, offset=2
   Exit
 b2:
   Exit
@@ -1385,7 +1385,7 @@ b0(%0: Ptr):
   Branch %5, true_block=b1, false_block=b2
 b1:
   %7 = And %1, 1:Int8
-  Store %0, 1:Int8, aliasing=0, offset=2
+  Store %0, 1:Int8, flags={}, aliasing=0, offset=2
   Exit
 b2:
   Exit
@@ -1400,7 +1400,7 @@ b0(%0: Ptr):
   %2 = Eq 42:Int8, %1
   Branch %2, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -1411,7 +1411,7 @@ b0(%0: Ptr):
   %2 = Eq 42:Int8, %1
   Branch %2, true_block=b1, false_block=b2
 b1:
-  Store %0, 42:Int8, aliasing=0, offset=1
+  Store %0, 42:Int8, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -1431,8 +1431,8 @@ b0(%0: Ptr):
 b1:
   %7 = And %1, 2:Int8
   %8 = And %2, 1:Int8
-  Store %0, %7, aliasing=0, offset=2
-  Store %0, %8, aliasing=0, offset=3
+  Store %0, %7, flags={}, aliasing=0, offset=2
+  Store %0, %8, flags={}, aliasing=0, offset=3
   Exit
 b2:
   Exit
@@ -1448,8 +1448,8 @@ b0(%0: Ptr):
 b1:
   %7 = And %1, 2:Int8
   %8 = And %2, 1:Int8
-  Store %0, 2:Int8, aliasing=0, offset=2
-  Store %0, 0:Int8, aliasing=0, offset=3
+  Store %0, 2:Int8, flags={}, aliasing=0, offset=2
+  Store %0, 0:Int8, flags={}, aliasing=0, offset=3
   Exit
 b2:
   Exit
@@ -1471,8 +1471,8 @@ b1:
 b2:
   %8 = And %1, 2:Int8
   %9 = And %2, 1:Int8
-  Store %0, %8, aliasing=0, offset=2
-  Store %0, %9, aliasing=0, offset=3
+  Store %0, %8, flags={}, aliasing=0, offset=2
+  Store %0, %9, flags={}, aliasing=0, offset=3
   Exit
 }
 )";
@@ -1489,8 +1489,8 @@ b0(%0: Ptr):
   %5 = Eq %3, %4
   Branch %5, true_block=b1, false_block=b2
 b1:
-  Store %0, %3, aliasing=0, offset=2
-  Store %0, %4, aliasing=0, offset=3
+  Store %0, %3, flags={}, aliasing=0, offset=2
+  Store %0, %4, flags={}, aliasing=0, offset=3
   Exit
 b2:
   Exit
@@ -1504,8 +1504,8 @@ b0(%0: Ptr):
   %5 = Eq %3, %4
   Branch %5, true_block=b1, false_block=b2
 b1:
-  Store %0, 0:Int8, aliasing=0, offset=2
-  Store %0, 0:Int8, aliasing=0, offset=3
+  Store %0, 0:Int8, flags={}, aliasing=0, offset=2
+  Store %0, 0:Int8, flags={}, aliasing=0, offset=3
   Exit
 b2:
   Exit
@@ -1523,8 +1523,8 @@ b0(%0: Ptr):
 b1:
   %5 = And %1, 248:Int8
   %6 = And %1, 7:Int8
-  Store %0, %5, aliasing=0, offset=1
-  Store %0, %6, aliasing=0, offset=2
+  Store %0, %5, flags={}, aliasing=0, offset=1
+  Store %0, %6, flags={}, aliasing=0, offset=2
   Exit
 b2:
   Exit
@@ -1538,8 +1538,8 @@ b0(%0: Ptr):
 b1:
   %5 = And %1, 248:Int8
   %6 = And %1, 7:Int8
-  Store %0, 176:Int8, aliasing=0, offset=1
-  Store %0, %6, aliasing=0, offset=2
+  Store %0, 176:Int8, flags={}, aliasing=0, offset=1
+  Store %0, %6, flags={}, aliasing=0, offset=2
   Exit
 b2:
   Exit
@@ -1556,7 +1556,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %1, 8:Int8
-  Store %0, %5, aliasing=0, offset=1
+  Store %0, %5, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -1569,7 +1569,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %1, 8:Int8
-  Store %0, 8:Int8, aliasing=0, offset=1
+  Store %0, 8:Int8, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -1586,7 +1586,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = And %1, 9223372036854775808:Int64
-  Store %0, %5, aliasing=0, offset=8
+  Store %0, %5, flags={}, aliasing=0, offset=8
   Exit
 b2:
   Exit
@@ -1600,7 +1600,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %6 = And %1, 9223372036854775808:Int64
-  Store %0, 9223372036854775808:Int64, aliasing=0, offset=8
+  Store %0, 9223372036854775808:Int64, flags={}, aliasing=0, offset=8
   Exit
 b2:
   Exit
@@ -1616,7 +1616,7 @@ b0(%0: Ptr):
   %3 = Eq %2, 42:Int8
   Branch %3, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -1628,7 +1628,7 @@ b0(%0: Ptr):
   %3 = Eq %1, 42:Int8
   Branch %3, true_block=b1, false_block=b2
 b1:
-  Store %0, 42:Int8, aliasing=0, offset=1
+  Store %0, 42:Int8, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -1646,7 +1646,7 @@ b0(%0: Ptr):
   %5 = Eq %4, 1:Int8
   Branch %5, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=2
+  Store %0, %1, flags={}, aliasing=0, offset=2
   Exit
 b2:
   Exit
@@ -1664,7 +1664,7 @@ b1(%3: Int8, %4: Int8):
   %5 = Eq %3, 42:Int8
   Branch %5, true_block=b2, false_block=b3
 b2:
-  Store %0, %3, aliasing=0, offset=1
+  Store %0, %3, flags={}, aliasing=0, offset=1
   Jump 0:Int8, %3, block=b1
 b3:
   Exit
@@ -1677,7 +1677,7 @@ b1(%3: Int8, %4: Int8):
   %5 = Eq %3, 42:Int8
   Branch %5, true_block=b2, false_block=b3
 b2:
-  Store %0, 42:Int8, aliasing=0, offset=1
+  Store %0, 42:Int8, flags={}, aliasing=0, offset=1
   Jump 0:Int8, 42:Int8, block=b1
 b3:
   Exit
@@ -1694,8 +1694,8 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = Add %2, 1:Int8
-  Store %0, %5, aliasing=0, offset=1
-  Store %0, %2, aliasing=0, offset=2
+  Store %0, %5, flags={}, aliasing=0, offset=1
+  Store %0, %2, flags={}, aliasing=0, offset=2
   Exit
 b2:
   Exit
@@ -1708,8 +1708,8 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = Add 42:Int8, 1:Int8
-  Store %0, 43:Int8, aliasing=0, offset=1
-  Store %0, 42:Int8, aliasing=0, offset=2
+  Store %0, 43:Int8, flags={}, aliasing=0, offset=1
+  Store %0, 42:Int8, flags={}, aliasing=0, offset=2
   Exit
 b2:
   Exit
@@ -1731,8 +1731,8 @@ b1:
 b2:
   Exit
 b3:
-  Store %0, %2, aliasing=0, offset=3
-  Store %0, %3, aliasing=0, offset=4
+  Store %0, %2, flags={}, aliasing=0, offset=3
+  Store %0, %3, flags={}, aliasing=0, offset=4
   Exit
 }
 )", {0, 1, 3}, R"(section {
@@ -1748,8 +1748,8 @@ b1:
 b2:
   Exit
 b3:
-  Store %0, 42:Int8, aliasing=0, offset=3
-  Store %0, %3, aliasing=0, offset=4
+  Store %0, 42:Int8, flags={}, aliasing=0, offset=3
+  Store %0, %3, flags={}, aliasing=0, offset=4
   Exit
 }
 )");
@@ -1771,8 +1771,8 @@ b2:
 b3:
   %9 = And %2, 1:Int8
   %10 = And %3, 1:Int8
-  Store %0, %9, aliasing=0, offset=3
-  Store %0, %10, aliasing=0, offset=4
+  Store %0, %9, flags={}, aliasing=0, offset=3
+  Store %0, %10, flags={}, aliasing=0, offset=4
   Exit
 }
 )", {0, 1, 3}, R"(section {
@@ -1790,8 +1790,8 @@ b2:
 b3:
   %9 = And %2, 1:Int8
   %10 = And %3, 1:Int8
-  Store %0, 1:Int8, aliasing=0, offset=3
-  Store %0, %10, aliasing=0, offset=4
+  Store %0, 1:Int8, flags={}, aliasing=0, offset=3
+  Store %0, %10, flags={}, aliasing=0, offset=4
   Exit
 }
 )");
@@ -1811,8 +1811,8 @@ b1:
 b2:
   Branch %5, true_block=b3, false_block=b4
 b3:
-  Store %0, %2, aliasing=0, offset=3
-  Store %0, %3, aliasing=0, offset=4
+  Store %0, %2, flags={}, aliasing=0, offset=3
+  Store %0, %3, flags={}, aliasing=0, offset=4
   Exit
 b4:
   Exit
@@ -1830,8 +1830,8 @@ b1:
 b2:
   Branch %5, true_block=b3, false_block=b4
 b3:
-  Store %0, %2, aliasing=0, offset=3
-  Store %0, 42:Int8, aliasing=0, offset=4
+  Store %0, %2, flags={}, aliasing=0, offset=3
+  Store %0, 42:Int8, flags={}, aliasing=0, offset=4
   Exit
 b4:
   Exit
@@ -1855,8 +1855,8 @@ b2:
 b3:
   %9 = And %2, 1:Int8
   %10 = And %3, 1:Int8
-  Store %0, %9, aliasing=0, offset=3
-  Store %0, %10, aliasing=0, offset=4
+  Store %0, %9, flags={}, aliasing=0, offset=3
+  Store %0, %10, flags={}, aliasing=0, offset=4
   Exit
 b4:
   Exit
@@ -1876,8 +1876,8 @@ b2:
 b3:
   %9 = And %2, 1:Int8
   %10 = And %3, 1:Int8
-  Store %0, %9, aliasing=0, offset=3
-  Store %0, 1:Int8, aliasing=0, offset=4
+  Store %0, %9, flags={}, aliasing=0, offset=3
+  Store %0, 1:Int8, flags={}, aliasing=0, offset=4
   Exit
 b4:
   Exit
@@ -1894,7 +1894,7 @@ b0(%0: Ptr):
 b1:
   Exit
 b2:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 }
 )", {0, 2}, R"(section {
@@ -1906,7 +1906,7 @@ b0(%0: Ptr):
 b1:
   Exit
 b2:
-  Store %0, 1:Bool, aliasing=0, offset=1
+  Store %0, 1:Bool, flags={}, aliasing=0, offset=1
   Exit
 }
 )");
@@ -1921,7 +1921,7 @@ b0(%0: Ptr):
 b1:
   Exit
 b2:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 }
 )", {0, 2}, R"(section {
@@ -1933,7 +1933,7 @@ b0(%0: Ptr):
 b1:
   Exit
 b2:
-  Store %0, 1:Bool, aliasing=0, offset=1
+  Store %0, 1:Bool, flags={}, aliasing=0, offset=1
   Exit
 }
 )");
@@ -1948,7 +1948,7 @@ b0(%0: Ptr):
 b1:
   Exit
 b2:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 }
 )", {0, 2}, R"(section {
@@ -1959,7 +1959,7 @@ b0(%0: Ptr):
 b1:
   Exit
 b2:
-  Store %0, 0:Bool, aliasing=0, offset=1
+  Store %0, 0:Bool, flags={}, aliasing=0, offset=1
   Exit
 }
 )");
@@ -1974,7 +1974,7 @@ b0(%0: Ptr):
 b1:
   Exit
 b2:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 }
 )", {0, 2}, R"(section {
@@ -1985,7 +1985,7 @@ b0(%0: Ptr):
 b1:
   Exit
 b2:
-  Store %0, 0:Bool, aliasing=0, offset=1
+  Store %0, 0:Bool, flags={}, aliasing=0, offset=1
   Exit
 }
 )");
@@ -2003,8 +2003,8 @@ b1:
 b2:
   Exit
 b3:
-  Store %0, %1, aliasing=0, offset=2
-  Store %0, %2, aliasing=0, offset=3
+  Store %0, %1, flags={}, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=3
   Exit
 }
 )", {0, 1, 3}, R"(section {
@@ -2018,8 +2018,8 @@ b1:
 b2:
   Exit
 b3:
-  Store %0, 1:Bool, aliasing=0, offset=2
-  Store %0, 0:Bool, aliasing=0, offset=3
+  Store %0, 1:Bool, flags={}, aliasing=0, offset=2
+  Store %0, 0:Bool, flags={}, aliasing=0, offset=3
   Exit
 }
 )");
@@ -2035,8 +2035,8 @@ b0(%0: Ptr):
 b1:
   Exit
 b2:
-  Store %0, %1, aliasing=0, offset=2
-  Store %0, %2, aliasing=0, offset=3
+  Store %0, %1, flags={}, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=3
   Exit
 }
 )";
@@ -2052,7 +2052,7 @@ b0(%0: Ptr):
 b1:
   Exit
 b2:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 }
 )";
@@ -2065,8 +2065,8 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And %1, 15:Int8
   %3 = And %2, 6:Int8
-  Store %0, %2, aliasing=0, offset=1
-  Store %0, %3, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=1
+  Store %0, %3, flags={}, aliasing=0, offset=2
   Exit
 }
 )", {0}, R"(section {
@@ -2075,8 +2075,8 @@ b0(%0: Ptr):
   %2 = And %1, 15:Int8
   %3 = And %1, 6:Int8
   %4 = And %2, 6:Int8
-  Store %0, %2, aliasing=0, offset=1
-  Store %0, %3, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=1
+  Store %0, %3, flags={}, aliasing=0, offset=2
   Exit
 }
 )");
@@ -2088,8 +2088,8 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And %1, 15:Int8
   %3 = And 6:Int8, %2
-  Store %0, %2, aliasing=0, offset=1
-  Store %0, %3, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=1
+  Store %0, %3, flags={}, aliasing=0, offset=2
   Exit
 }
 )", {0}, R"(section {
@@ -2098,8 +2098,8 @@ b0(%0: Ptr):
   %2 = And %1, 15:Int8
   %3 = And %1, 6:Int8
   %4 = And 6:Int8, %2
-  Store %0, %2, aliasing=0, offset=1
-  Store %0, %3, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=1
+  Store %0, %3, flags={}, aliasing=0, offset=2
   Exit
 }
 )");
@@ -2111,8 +2111,8 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And 15:Int8, %1
   %3 = And %2, 6:Int8
-  Store %0, %2, aliasing=0, offset=1
-  Store %0, %3, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=1
+  Store %0, %3, flags={}, aliasing=0, offset=2
   Exit
 }
 )", {0}, R"(section {
@@ -2121,8 +2121,8 @@ b0(%0: Ptr):
   %2 = And 15:Int8, %1
   %3 = And %1, 6:Int8
   %4 = And %2, 6:Int8
-  Store %0, %2, aliasing=0, offset=1
-  Store %0, %3, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=1
+  Store %0, %3, flags={}, aliasing=0, offset=2
   Exit
 }
 )");
@@ -2134,8 +2134,8 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And 15:Int8, %1
   %3 = And 6:Int8, %2
-  Store %0, %2, aliasing=0, offset=1
-  Store %0, %3, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=1
+  Store %0, %3, flags={}, aliasing=0, offset=2
   Exit
 }
 )", {0}, R"(section {
@@ -2144,8 +2144,8 @@ b0(%0: Ptr):
   %2 = And 15:Int8, %1
   %3 = And %1, 6:Int8
   %4 = And 6:Int8, %2
-  Store %0, %2, aliasing=0, offset=1
-  Store %0, %3, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=1
+  Store %0, %3, flags={}, aliasing=0, offset=2
   Exit
 }
 )");
@@ -2158,7 +2158,7 @@ b0(%0: Ptr):
   %2 = And %1, 63:Int8
   %3 = And %2, 30:Int8
   %4 = And %3, 21:Int8
-  Store %0, %4, aliasing=0, offset=1
+  Store %0, %4, flags={}, aliasing=0, offset=1
   Exit
 }
 )", {0}, R"(section {
@@ -2169,7 +2169,7 @@ b0(%0: Ptr):
   %4 = And %2, 30:Int8
   %5 = And %1, 20:Int8
   %6 = And %3, 21:Int8
-  Store %0, %5, aliasing=0, offset=1
+  Store %0, %5, flags={}, aliasing=0, offset=1
   Exit
 }
 )");
@@ -2181,7 +2181,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And %1, 15:Int8
   %3 = And %2, 240:Int8
-  Store %0, %3, aliasing=0, offset=1
+  Store %0, %3, flags={}, aliasing=0, offset=1
   Exit
 }
 )", {0}, R"(section {
@@ -2189,7 +2189,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = And %1, 15:Int8
   %3 = And %2, 240:Int8
-  Store %0, 0:Int8, aliasing=0, offset=1
+  Store %0, 0:Int8, flags={}, aliasing=0, offset=1
   Exit
 }
 )");
@@ -2201,7 +2201,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
   %2 = And %1, 9223372036854775823:Int64
   %3 = And %2, 9223372036854775814:Int64
-  Store %0, %3, aliasing=0, offset=8
+  Store %0, %3, flags={}, aliasing=0, offset=8
   Exit
 }
 )", {0}, R"(section {
@@ -2210,7 +2210,7 @@ b0(%0: Ptr):
   %2 = And %1, 9223372036854775823:Int64
   %3 = And %1, 9223372036854775814:Int64
   %4 = And %2, 9223372036854775814:Int64
-  Store %0, %3, aliasing=0, offset=8
+  Store %0, %3, flags={}, aliasing=0, offset=8
   Exit
 }
 )");
@@ -2223,7 +2223,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = And %1, %2
   %4 = And %3, 6:Int8
-  Store %0, %4, aliasing=0, offset=2
+  Store %0, %4, flags={}, aliasing=0, offset=2
   Exit
 }
 )";
@@ -2243,7 +2243,7 @@ b2:
   Exit
 b3:
   %7 = ShrU 1:Int64, %1
-  Store %0, %7, aliasing=0, offset=8
+  Store %0, %7, flags={}, aliasing=0, offset=8
   Exit
 }
 )", {0, 1, 3}, R"(section {
@@ -2258,7 +2258,7 @@ b2:
   Exit
 b3:
   %7 = ShrU 1:Int64, %1
-  Store %0, %7, aliasing=0, offset=8
+  Store %0, %7, flags={}, aliasing=0, offset=8
   Exit
 }
 )");
@@ -2277,7 +2277,7 @@ b2:
   Exit
 b3:
   %7 = DivU 1:Int64, %1
-  Store %0, %7, aliasing=0, offset=8
+  Store %0, %7, flags={}, aliasing=0, offset=8
   Exit
 }
 )", {0, 1, 3}, R"(section {
@@ -2292,7 +2292,7 @@ b2:
   Exit
 b3:
   %7 = DivU 1:Int64, %1
-  Store %0, %7, aliasing=0, offset=8
+  Store %0, %7, flags={}, aliasing=0, offset=8
   Exit
 }
 )");
@@ -2307,7 +2307,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = Or %1, 0:Bool
-  Store %0, %5, aliasing=0, offset=1
+  Store %0, %5, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -2321,7 +2321,7 @@ b0(%0: Ptr):
   Branch 0:Bool, true_block=b1, false_block=b2
 b1:
   %5 = Or %1, 0:Bool
-  Store %0, %5, aliasing=0, offset=1
+  Store %0, %5, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -2338,7 +2338,7 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = Or %1, 0:Bool
-  Store %0, %5, aliasing=0, offset=1
+  Store %0, %5, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -2352,7 +2352,7 @@ b0(%0: Ptr):
   Branch 0:Bool, true_block=b1, false_block=b2
 b1:
   %5 = Or %1, 0:Bool
-  Store %0, %5, aliasing=0, offset=1
+  Store %0, %5, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -2400,7 +2400,7 @@ b1:
   Exit
 b2:
   %6 = Select %1, %2, %3
-  Store %0, %6, aliasing=0, offset=3
+  Store %0, %6, flags={}, aliasing=0, offset=3
   Exit
 }
 )", {0, 2}, R"(section {
@@ -2413,7 +2413,7 @@ b1:
   Exit
 b2:
   %6 = Select 0:Bool, %2, %3
-  Store %0, %3, aliasing=0, offset=3
+  Store %0, %3, flags={}, aliasing=0, offset=3
   Exit
 }
 )");
@@ -2428,8 +2428,8 @@ b0(%0: Ptr):
   %4 = Eq %3, 7:Int8
   Branch %4, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=2
-  Store %0, %2, aliasing=0, offset=3
+  Store %0, %1, flags={}, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=3
   Exit
 b2:
   Exit
@@ -2442,8 +2442,8 @@ b0(%0: Ptr):
   %4 = Eq %3, 7:Int8
   Branch %4, true_block=b1, false_block=b2
 b1:
-  Store %0, 0:Bool, aliasing=0, offset=2
-  Store %0, 7:Int8, aliasing=0, offset=3
+  Store %0, 0:Bool, flags={}, aliasing=0, offset=2
+  Store %0, 7:Int8, flags={}, aliasing=0, offset=3
   Exit
 b2:
   Exit
@@ -2461,9 +2461,9 @@ b0(%0: Ptr):
   %5 = And %3, %4
   %6 = Or %3, %4
   %7 = Or %4, %3
-  Store %0, %5, aliasing=0, offset=2
-  Store %0, %6, aliasing=0, offset=3
-  Store %0, %7, aliasing=0, offset=4
+  Store %0, %5, flags={}, aliasing=0, offset=2
+  Store %0, %6, flags={}, aliasing=0, offset=3
+  Store %0, %7, flags={}, aliasing=0, offset=4
   Exit
 }
 )", {0}, R"(section {
@@ -2475,9 +2475,9 @@ b0(%0: Ptr):
   %5 = And %3, %4
   %6 = Or %3, %4
   %7 = Or %4, %3
-  Store %0, %3, aliasing=0, offset=2
-  Store %0, %4, aliasing=0, offset=3
-  Store %0, %4, aliasing=0, offset=4
+  Store %0, %3, flags={}, aliasing=0, offset=2
+  Store %0, %4, flags={}, aliasing=0, offset=3
+  Store %0, %4, flags={}, aliasing=0, offset=4
   Exit
 }
 )");
@@ -2490,7 +2490,7 @@ b0(%0: Ptr):
   %2 = And %1, %1
   Branch %2, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -2501,7 +2501,7 @@ b0(%0: Ptr):
   %2 = And %1, %1
   Branch %1, true_block=b1, false_block=b2
 b1:
-  Store %0, 1:Bool, aliasing=0, offset=1
+  Store %0, 1:Bool, flags={}, aliasing=0, offset=1
   Exit
 b2:
   Exit
@@ -2528,7 +2528,7 @@ b4:
   Exit
 b5:
   %11 = And %1, 0:Int8
-  Store %0, %11, aliasing=0, offset=2
+  Store %0, %11, flags={}, aliasing=0, offset=2
   Exit
 b6:
   Exit
@@ -2547,9 +2547,9 @@ b0(%0: Ptr):
   %5 = And %3, %4
   %6 = Or %3, %4
   %7 = Or %4, %3
-  Store %0, %5, aliasing=0, offset=2
-  Store %0, %6, aliasing=0, offset=3
-  Store %0, %7, aliasing=0, offset=4
+  Store %0, %5, flags={}, aliasing=0, offset=2
+  Store %0, %6, flags={}, aliasing=0, offset=3
+  Store %0, %7, flags={}, aliasing=0, offset=4
   Exit
 }
 )";

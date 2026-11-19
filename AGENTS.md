@@ -16,7 +16,7 @@ b0(%0: Ptr, %1: Ptr, %2: Ptr):
   %3 = Load %0, type=Int32, flags={}, aliasing=0, offset=0
   %4 = Load %1, type=Int32, flags={}, aliasing=0, offset=0
   %5 = Add %3, %4
-  Store %2, %5, aliasing=0, offset=0
+  Store %2, %5, flags={}, aliasing=0, offset=0
   Exit
 }
 ```
