@@ -14,8 +14,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
 #include <new>
 #include <map>
+#include <unordered_map>
 #include <vector>
 #include <stdexcept>
 
@@ -145,10 +147,13 @@ namespace metajit {
 
   class PointerLayouts {
   public:
+    using BoundedOffsets = std::unordered_map<Value*, uint64_t>;
     // bottom < layout + offset < layout + unknown offset = top
     struct Pointer {
       Layout* layout = nullptr;
       std::optional<uint64_t> offset = std::nullopt;
+
+      uint64_t extent = 0;
 
       Pointer() = default;
       Pointer(Layout* layout, std::optional<uint64_t> offset = std::nullopt):
@@ -178,9 +183,10 @@ namespace metajit {
         }
         if (other.is_top()) {
           offset = std::nullopt;
+          extent = 0;
           return true;
         }
-        if (layout != other.layout || *offset != *other.offset) {
+        if (layout != other.layout || *offset != *other.offset || extent != other.extent) {
           throw std::runtime_error("Layout2Aliasing: conflicting pointer meet");
         }
         return false;
@@ -190,7 +196,9 @@ namespace metajit {
         if (is_bottom() || is_top()) {
           return *this;
         }
-        return Pointer(layout, *offset + _offset);
+        Pointer result = *this;
+        *result.offset += _offset;
+        return result;
       }
 
       Pointer deref() const {
@@ -205,11 +213,12 @@ namespace metajit {
         return offset < other.offset;
       }
 
-      bool is_in_bounds() const {
+      bool is_in_bounds(size_t access_size) const {
         if (is_bottom() || is_top() || !layout->size().has_value()) {
           return false;
         }
-        return *offset < *layout->size();
+        size_t size = *layout->size();
+        return *offset <= size && extent <= size - *offset && access_size <= size - *offset - extent;
       }
     };
 
@@ -220,7 +229,8 @@ namespace metajit {
     NameMap<Pointer> _pointers;
   public:
     PointerLayouts(Section* section,
-                   const std::vector<Layout*>& args):
+                   const std::vector<Layout*>& args,
+                   const BoundedOffsets& bounded_offsets = {}):
         _section(section) {
       _section->autoname();
       _pointers.init(section);
@@ -240,11 +250,14 @@ namespace metajit {
               if (ptr.offset.has_value()) {
                 if (dynmatch(Const, constant, add_ptr->offset())) {
                   *ptr.offset += constant->value();
+                } else if (bounded_offsets.find(add_ptr) != bounded_offsets.end()) {
+                  ptr.extent += bounded_offsets.at(add_ptr);
                 } else {
                   if (dynamic_cast<RecordLayout*>(ptr.layout)) {
                     throw std::runtime_error("Layout2Aliasing: Record layout requires a constant offset");
                   }
                   ptr.offset = std::nullopt;
+                  ptr.extent = 0;
                 }
               }
               changed |= _pointers[add_ptr].meet(ptr);
@@ -303,8 +316,65 @@ namespace metajit {
     std::map<Pointer, AliasingGroup> _group_ids;
     AliasingGroup _next_group = 1;
     AliasingGroup _next_exact_group = -1;
+    std::unordered_map<Inst*, AliasingGroup> _overlapping_groups;
 
-    AliasingGroup group_for(Pointer ptr) {
+    struct Access {
+      Inst* inst;
+      uint64_t begin;
+      uint64_t end;
+      bool bounded;
+    };
+
+    void collect_access(std::map<Layout*, std::vector<Access>>& accesses,
+                        Inst* inst, Pointer ptr, Type type) {
+      if (ptr.offset && dynamic_cast<RecordLayout*>(ptr.layout)) {
+        accesses[ptr.layout].push_back(
+          {inst, *ptr.offset, *ptr.offset + ptr.extent + type_size(type), ptr.extent != 0});
+      }
+    }
+
+    static bool access_order(const Access& a, const Access& b) {
+      return a.begin < b.begin;
+    }
+
+    void group_overlapping_accesses(Section* section) {
+      std::map<Layout*, std::vector<Access>> accesses;
+      for (Block* block : *section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(LoadInst, load, inst)) {
+            collect_access(accesses, inst, _pointers.at(load->ptr()).add_offset(load->offset()), load->type());
+          } else if (dynmatch(StoreInst, store, inst)) {
+            collect_access(accesses, inst, _pointers.at(store->ptr()).add_offset(store->offset()), store->value()->type());
+          }
+        }
+      }
+      for (auto& [layout, ranges] : accesses) {
+        std::stable_sort(ranges.begin(), ranges.end(), access_order);
+        for (size_t first = 0; first < ranges.size();) {
+          uint64_t end = ranges[first].end;
+          bool overlapping = ranges[first].bounded;
+          size_t next = first + 1;
+          while (next < ranges.size() && ranges[next].begin < end) {
+            overlapping |= ranges[next].bounded || ranges[next].begin != ranges[first].begin ||
+                           ranges[next].end != ranges[first].end;
+            end = std::max(end, ranges[next].end);
+            ++next;
+          }
+          if (overlapping) {
+            AliasingGroup group = _next_group++;
+            for (size_t i = first; i < next; ++i) {
+              _overlapping_groups[ranges[i].inst] = group;
+            }
+          }
+          first = next;
+        }
+      }
+    }
+
+    AliasingGroup group_for(Inst* inst, Pointer ptr) {
+      if (_overlapping_groups.find(inst) != _overlapping_groups.end()) {
+        return _overlapping_groups.at(inst);
+      }
       if (dynamic_cast<HeapLayout*>(ptr.layout)) {
         return 0;
       }
@@ -320,16 +390,17 @@ namespace metajit {
     }
 
     void apply(Section* section) {
+      group_overlapping_accesses(section);
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(LoadInst, load, inst)) {
             Pointer ptr = _pointers.at(load->ptr()).add_offset(load->offset());
             if (!ptr.is_bottom()) {
-              load->set_aliasing(group_for(ptr));
+              load->set_aliasing(group_for(inst, ptr));
               if (load->type() == Type::Ptr && ptr.deref().layout && ptr.deref().layout->singleton()) {
                 load->set_flags(load->flags() | LoadFlags::Pure);
               }
-              if (ptr.is_in_bounds()) {
+              if (ptr.is_in_bounds(type_size(load->type()))) {
                 load->set_flags(load->flags() | LoadFlags::InBounds);
               }
               if (ptr.layout->pure()) {
@@ -339,7 +410,7 @@ namespace metajit {
           } else if (dynmatch(StoreInst, store, inst)) {
             Pointer ptr = _pointers.at(store->ptr()).add_offset(store->offset());
             if (!ptr.is_bottom()) {
-              store->set_aliasing(group_for(ptr));
+              store->set_aliasing(group_for(inst, ptr));
             }
           }
         }
