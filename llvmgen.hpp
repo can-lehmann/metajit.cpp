@@ -55,6 +55,21 @@ namespace metajit {
 
     NameMap<llvm::Value*> _values;
     std::unordered_map<AllocaInst*, Type> _alloca_types;
+    llvm::MDNode* _tbaa_root = nullptr;
+    std::unordered_map<AliasingGroup, llvm::MDNode*> _tbaa_tags;
+
+    llvm::MDNode* tbaa_tag(AliasingGroup group) {
+      llvm::MDNode*& tag = _tbaa_tags[group];
+      if (!tag) {
+        llvm::MDBuilder metadata(_context);
+        if (!_tbaa_root) {
+          _tbaa_root = metadata.createAnonymousTBAARoot();
+        }
+        llvm::MDNode* type = metadata.createTBAAScalarTypeNode(std::to_string(group), _tbaa_root);
+        tag = metadata.createTBAAStructTagNode(type, type, 0);
+      }
+      return tag;
+    }
 
     void find_alloca_types() {
       for (Block* block : *_section) {
@@ -251,6 +266,7 @@ namespace metajit {
         if (load->flags().has(LoadFlags::Unaligned)) {
           result->setAlignment(llvm::Align(1));
         }
+        result->setMetadata(llvm::LLVMContext::MD_tbaa, tbaa_tag(load->aliasing()));
         if (load->flags().has(LoadFlags::Pure)) {
           result->setMetadata(llvm::LLVMContext::MD_invariant_load, llvm::MDNode::get(_context, {}));
         }
@@ -263,6 +279,7 @@ namespace metajit {
         if (store->flags().has(StoreFlags::Unaligned)) {
           result->setAlignment(llvm::Align(1));
         }
+        result->setMetadata(llvm::LLVMContext::MD_tbaa, tbaa_tag(store->aliasing()));
         return result;
       } else if (dynmatch(AllocaInst, alloca, inst)) {
         llvm::AllocaInst* llvm_alloca;
