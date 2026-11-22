@@ -2656,12 +2656,15 @@ namespace metajit {
   };
 
   inline bool could_alias(LoadInst* load, StoreInst* store) {
-    if (load->aliasing() != store->aliasing() &&
-        load->aliasing() != 0 && store->aliasing() != 0) {
+    if (load->aliasing() == 0 || store->aliasing() == 0) {
+      return true;
+    }
+
+    if (load->aliasing() != store->aliasing()) {
       return false;
     }
 
-    if (load->aliasing() == store->aliasing() && load->aliasing() < 0) {
+    if (load->aliasing() < 0) {
       return true; // Exact aliasing
     }
 
