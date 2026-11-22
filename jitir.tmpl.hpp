@@ -2778,6 +2778,10 @@ namespace metajit {
             escape(add_ptr->arg(1));
           } else {
             if (dynmatch(CallInst, call, inst)) {
+              if (call->callee() == Intrinsic::memset) {
+                access(call, call->arg(1), call->aliasing());
+                continue;
+              }
               _max_group = std::max(_max_group, call->aliasing());
             }
             for (Value* arg : inst->args()) {
@@ -2799,6 +2803,8 @@ namespace metajit {
               store->set_aliasing(group);
             } else if (dynmatch(LoadInst, load, access)) {
               load->set_aliasing(group);
+            } else if (dynmatch(CallInst, call, access)) {
+              call->set_aliasing(group);
             }
           }
         }
