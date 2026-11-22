@@ -2770,32 +2770,33 @@ namespace metajit {
   };
 
   class DeadStoreElim: public Pass<DeadStoreElim> {
-  public:
-    DeadStoreElim(Section* section): Pass(section) {
-      NameMap<bool> unused(section);
-      ExpandingVector<StoreInst*> last_store;
-      auto mark_stores_live = [&]() {
-        for (StoreInst*& store : last_store) {
-          if (store) {
-            unused[store] = false;
-            store = nullptr;
-          }
-        }
-      };
+  private:
+    NameMap<bool> _unused;
+    ExpandingVector<StoreInst*> _last_store;
 
+    void mark_stores_live() {
+      for (StoreInst*& store : _last_store) {
+        if (store) {
+          _unused[store] = false;
+          store = nullptr;
+        }
+      }
+    }
+  public:
+    DeadStoreElim(Section* section): Pass(section), _unused(section) {
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst)) {
             Pointer pointer(store->ptr(), store->offset());
             if (store->aliasing() < 0) {
-              last_store[-store->aliasing()] = store;
-              unused[store] = true;
+              _last_store[-store->aliasing()] = store;
+              _unused[store] = true;
             }
           } else if (dynmatch(LoadInst, load, inst)) {
             if (load->aliasing() < 0) {
-              StoreInst* store = last_store[-load->aliasing()];
+              StoreInst* store = _last_store[-load->aliasing()];
               if (store) {
-                unused[store] = false;
+                _unused[store] = false;
               }
             } else if (load->aliasing() == 0) {
               mark_stores_live();
@@ -2808,7 +2809,7 @@ namespace metajit {
         mark_stores_live();
 
         block->filter_inplace([&](Inst* inst) {
-          return !unused[inst];
+          return !_unused[inst];
         });
       }
     }
@@ -4710,8 +4711,8 @@ private:
 
       for (Block* block : *loop->chain()) {
         for (Inst* inst : *block) {
-          StoreInst* store = dynamic_cast<StoreInst*>(inst);
-          if (dynamic_cast<CallInst*>(inst) || (store && store->aliasing() == 0)) {
+          if (dynmatch(StoreInst, store, inst);
+              dynamic_cast<CallInst*>(inst) || (store && store->aliasing() == 0)) {
             return;
           }
         }
@@ -5996,8 +5997,8 @@ private:
             }
           }
 
-          StoreInst* store = dynamic_cast<StoreInst*>(inst);
-          if ((store && store->aliasing() == 0) || dynamic_cast<CallInst*>(inst)) {
+          if (dynmatch(StoreInst, store, inst);
+              (store && store->aliasing() == 0) || dynamic_cast<CallInst*>(inst)) {
             // Calls can invalidate any cached memory-derived value.
             for (auto& [group, loads] : valid_loads) {
               for (LoadInst* load : loads) {
