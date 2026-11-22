@@ -96,7 +96,7 @@ void test_simplify_used_bits_effects() {
   const std::string input = R"(section {
 b0(%0: Ptr, %1: Ptr, %2: Bool, %3: Int32):
   %4 = Load %0, type=Int32, flags={}, aliasing=0, offset=0
-  %5 = Call %1, %3, type=Int32, call_conv=Default, flags={}
+  %5 = Call %1, %3, type=Int32, call_conv=Default, flags={}, aliasing=0
   Store %0, %3, flags={}, aliasing=0, offset=4
   Branch %2, true_block=b1, false_block=b2
 b1:
@@ -4208,7 +4208,7 @@ b0(%0: Bool, %1: Ptr):
   Store %2, 1:Int64, flags={}, aliasing=0, offset=0
   Branch %0, true_block=b1, false_block=b2
 b1:
-  Call @cse_call_invalidation_target:Ptr, type=Void, call_conv=Default, flags={}
+  Call @cse_call_invalidation_target:Ptr, type=Void, call_conv=Default, flags={}, aliasing=0
   %6 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
   Store %1, %6, flags={}, aliasing=0, offset=0
   Jump block=b3

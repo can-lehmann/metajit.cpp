@@ -14,6 +14,15 @@
 
 from lwir import *
 
+class DefaultArg(Arg):
+    def __init__(self, name, type, default, **kwargs):
+        super().__init__(name, type, **kwargs)
+        self.default = default
+
+    def format_formal_arg(self, ir):
+        return f"{super().format_formal_arg(ir)} = {self.default}"
+
+
 class CountVarargsValueType(BaseType):
     def __init__(self):
         super().__init__()
@@ -554,7 +563,8 @@ jitir = IR(
                 Arg("args", type=CountVarargsValueType()),
                 Arg("type", Type("Type")),
                 Arg("call_conv", Type("CallConv"), setter=True),
-                Arg("flags", Type("CallFlags"), setter=True)
+                Arg("flags", Type("CallFlags"), setter=True),
+                DefaultArg("aliasing", Type("AliasingGroup"), 0, setter=True)
             ],
             type = "type",
             type_checks = [

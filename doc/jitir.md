@@ -599,6 +599,7 @@ Arguments
 - **type**: `Type`
 - **call_conv**: `CallConv`
 - **flags**: `CallFlags`
+- **aliasing**: `AliasingGroup`
 
 Return Type: `type`
 

@@ -1326,8 +1326,9 @@ namespace metajit {
                          Type type,
                          const lwir::Span<Value*>& args,
                          CallConv call_conv = CallConv::Default,
-                         CallFlags call_flags = CallFlags::None) {
-      CallInst* call = build_call(callee, args.size(), type, call_conv, call_flags);
+                         CallFlags call_flags = CallFlags::None,
+                         AliasingGroup aliasing = 0) {
+      CallInst* call = build_call(callee, args.size(), type, call_conv, call_flags, aliasing);
       for (size_t it = 0; it < args.size(); it++) {
         call->set_arg(it + 1, args[it]);
       }
@@ -1338,8 +1339,9 @@ namespace metajit {
                          Type type,
                          const std::vector<Value*>& args,
                          CallConv call_conv = CallConv::Default,
-                         CallFlags call_flags = CallFlags::None) {
-      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv, call_flags);
+                         CallFlags call_flags = CallFlags::None,
+                         AliasingGroup aliasing = 0) {
+      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv, call_flags, aliasing);
     }
 
     AllocaInst* build_alloca(Type type) {
@@ -1986,21 +1988,23 @@ namespace metajit {
                         size_t args,
                         Type type,
                         CallConv call_conv = CallConv::Default,
-                        CallFlags call_flags = CallFlags::None) {
+                        CallFlags call_flags = CallFlags::None,
+                        AliasingGroup aliasing = 0) {
       if (!_guard_success) {
         // Calls may read/write memory reachable through pointers, so invalidate
         // forwarding and exact aliasing state conservatively.
         invalidate_memory_state();
       }
-      return Builder::build_call(callee, args, type, call_conv, call_flags);
+      return Builder::build_call(callee, args, type, call_conv, call_flags, aliasing);
     }
 
     Value* build_call(Value* callee,
                       Type type,
                       const lwir::Span<Value*>& args,
                       CallConv call_conv = CallConv::Default,
-                      CallFlags call_flags = CallFlags::None) {
-      CallInst* call = build_call(callee, args.size(), type, call_conv, call_flags);
+                      CallFlags call_flags = CallFlags::None,
+                      AliasingGroup aliasing = 0) {
+      CallInst* call = build_call(callee, args.size(), type, call_conv, call_flags, aliasing);
       for (size_t it = 0; it < args.size(); it++) {
         call->set_arg(it + 1, args[it]);
       }
@@ -2011,8 +2015,9 @@ namespace metajit {
                       Type type,
                       const std::vector<Value*>& args,
                       CallConv call_conv = CallConv::Default,
-                      CallFlags call_flags = CallFlags::None) {
-      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv, call_flags);
+                      CallFlags call_flags = CallFlags::None,
+                      AliasingGroup aliasing = 0) {
+      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv, call_flags, aliasing);
     }
 
     template <class... Args>
