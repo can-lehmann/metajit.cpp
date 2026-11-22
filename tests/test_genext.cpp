@@ -343,5 +343,47 @@ int main(int argc, char** argv) {
     unittest_assert(!section.verify(std::cerr));
   });
 
+  suite.test("tape_size_bounded_recorded_loop").run([]() {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    builder.move_to_end(builder.build_block({Type::Ptr}));
+
+    Block* loop = builder.build_block({Type::Int8});
+    Block* body = builder.build_block();
+    Block* end = builder.build_block();
+    Value* start = builder.build_const(Type::Int8, -1);
+    JumpInst* entry_jump = builder.build_jump(loop, {start});
+
+    builder.move_to_end(loop);
+    Value* counter = loop->arg(0);
+    Value* one = builder.build_const(Type::Int8, 1);
+    builder.build_branch(builder.build_lt_s(counter, one), body, end);
+
+    builder.move_to_end(body);
+    builder.build_load(builder.entry_arg(0), Type::Int8, LoadFlags::None, AliasingGroup(0), 0);
+    builder.build_jump(loop, {builder.build_add(counter, one)});
+
+    builder.move_to_end(end);
+    builder.build_exit();
+
+    OrderBlocks::run(&section, BlockOrdering::Natural);
+    DominatorTree domtree(&section);
+    Incoming incoming(&section);
+    auto loops = Loop::find_loops(domtree, incoming);
+    unittest_assert(loops.at(loop)->find_simple_bound() == 2);
+    entry_jump->set_arg(0, builder.build_const(Type::Int8, 2));
+    unittest_assert(loops.at(loop)->find_simple_bound() == 0);
+    entry_jump->set_arg(0, start);
+
+    AddRecord::Config config;
+    config.groups.insert(AliasingGroup(0));
+
+    size_t size = 0;
+    AddRecord::run(&section, &size, config);
+    unittest_assert(size == SIZE_MAX);
+  });
+
   return suite.finish();
 }
