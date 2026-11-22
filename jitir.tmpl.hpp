@@ -881,6 +881,8 @@ namespace metajit {
       Idempotent = 1 << 1,
       // Require a tail call with no additional stack frame.
       MustTail = 1 << 2,
+      // Pointer arguments do not escape through the call.
+      NoEscape = 1 << 3,
     };
 
     using BaseFlags<CallFlags>::BaseFlags;
@@ -888,10 +890,11 @@ namespace metajit {
     constexpr static const char* NAMES[] = {
       "Pure",
       "Idempotent",
-      "MustTail"
+      "MustTail",
+      "NoEscape",
     };
 
-    constexpr static size_t COUNT = 3;
+    constexpr static size_t COUNT = 4;
   };
 
   enum class CallConv {
@@ -2783,8 +2786,12 @@ namespace metajit {
               escape(call->arg(3));
             } else {
               _max_group = std::max(_max_group, call->aliasing());
-              for (Value* arg : call->args()) {
-                escape(arg);
+              if (call->aliasing() == 0 && call->flags().has(CallFlags::NoEscape)) {
+                escape(call->callee());
+              } else {
+                for (Value* arg : call->args()) {
+                  escape(arg);
+                }
               }
             }
           } else {
