@@ -4820,6 +4820,8 @@ private:
     Block* _preheader = nullptr;
 
     std::optional<std::set<Block*>> _backedges;
+    std::optional<std::set<Block*>> _body;
+    std::optional<std::vector<std::pair<Block*, Block*>>> _exits;
 
     // Loop has only a single backedge and no internal branches.
     // The extent block terminates with a jump to the header.
@@ -4842,6 +4844,12 @@ private:
     std::optional<std::set<Block*>> backedges() { return _backedges; }
     void set_backedges(const std::set<Block*>& backedges) { _backedges = backedges; }
 
+    std::optional<std::set<Block*>> body() { return _body; }
+    void set_body(const std::set<Block*>& body) { _body = body; }
+
+    std::optional<std::vector<std::pair<Block*, Block*>>> exits() { return _exits; }
+    void set_exits(const std::vector<std::pair<Block*, Block*>>& exits) { _exits = exits; }
+
     Chain* chain() const { return _chain; }
     void set_chain(Chain* chain) {
       assert(chain->front() == _header);
@@ -4860,6 +4868,39 @@ private:
 
     size_t first_name() const {
       return (*_header->begin())->name();
+    }
+
+    void analyze_body(Incoming& incoming) const {
+      assert(_backedges.has_value());
+
+      std::set<Block*> body = _backedges.value();
+      body.insert(_header);
+      std::deque<Block*> open;
+      open.insert(open.end(), _backedges->begin(), _backedges->end());
+      while (!open.empty()) {
+        Block* block = open.front();
+        open.pop_front();
+        for (Block* pred : incoming.predecessors(block)) {
+          if (body.find(pred) == body.end()) {
+            body.insert(pred);
+            open.push_back(pred);
+          }
+        }
+      }
+      _body = body;
+    }
+
+    void analyze_exits() const {
+      assert(_body.has_value());
+      std::vector<std::pair<Block*, Block*>> exits;
+      for (Block* block : _body.value()) {
+        for (Block* succ : block->successors()) {
+          if (_body.value().find(succ) == _body.value().end()) {
+            exits.emplace_back(block, succ);
+          }
+        }
+      }
+      _exits = exits;
     }
 
     std::optional<size_t> find_simple_bound() const {
@@ -4921,6 +4962,79 @@ private:
       }
       return count;
     }
+  };
+
+  class LoopCFG {
+  public:
+    class Node {
+    private:
+      LoopCFG* _cfg = nullptr;
+      std::variant<Block*, Loop*> _value;
+      std::set<Block*> _exits;
+    public:
+      Node() {}
+      Node(LoopCFG* cfg, Block* block, const std::set<Block*>& exits): _cfg(cfg), _value(block), _exits(exits) {}
+      Node(LoopCFG* cfg, Loop* loop, const std::set<Block*>& exits): _cfg(cfg), _value(loop), _exits(exits) {}
+
+      bool is_block() const { return std::holds_alternative<Block*>(_value); }
+      bool is_loop() const { return std::holds_alternative<Loop*>(_value); }
+      Block* block() const { return std::get<Block*>(_value); }
+      Loop* loop() const { return std::get<Loop*>(_value); }
+
+      Node header() const {
+        assert(is_loop());
+        std::set<Block*> exits = _exits;
+        for (const auto& exit : loop()->exits().value()) {
+          exits.insert(exit.second);
+        }
+        return Node(_cfg, loop()->header(), exits);
+      }
+
+      std::vector<Node> successors() const {
+        std::vector<Node> succs;
+        if (is_block()) {
+          for (Block* succ : block()->successors()) {
+            if (_exits.find(succ) == _exits.end()) {
+              succs.push_back(_cfg->outer(succ, _exits));
+            }
+          }
+        } else {
+          for (const auto& exit : loop()->exits().value()) {
+            if (_exits.find(exit.second) == _exits.end()) {
+              succs.push_back(_cfg->outer(exit.second, _exits));
+            }
+          }
+        }
+        return succs;
+      }
+    };
+  private:
+    Section* _section;
+    Incoming _incoming;
+    DominatorTree _domtree;
+    std::map<Block*, std::unique_ptr<Loop>> _loops;
+  public:
+    LoopCFG(Section* section):
+        _section(section),
+        _incoming(section),
+        _domtree(section, _incoming),
+        _loops(Loop::find_loops(_domtree, _incoming)) {
+      
+      for (auto& [block, loop] : _loops) {
+        loop->analyze_body(_incoming);
+        loop->analyze_exits();
+      }
+    }
+
+    Node outer(Block* block, const std::set<Block*>& exits) const {
+      if (_loops.find(block) != _loops.end()) {
+        return Node(this, _loops.at(block).get(), exits);
+      } else {
+        return Node(this, block, exits);
+      }
+    }
+
+    Node entry() const { return outer(_section->entry(), {}); }
   };
 
   // Promotes memory accesses with exact aliasing inside the loop to registers.
