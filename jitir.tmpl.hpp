@@ -2678,6 +2678,115 @@ namespace metajit {
     return load_interval.intersects(store_interval);
   }
 
+  class AllocaAliasing: public Pass<AllocaAliasing> {
+  private:
+    struct AllocaInfo {
+      bool eligible = true;
+      std::optional<AliasingGroup> existing_group;
+      std::vector<Inst*> accesses;
+
+      void make_ineligible() {
+        if (eligible) {
+          eligible = false;
+          existing_group = std::nullopt;
+          accesses.clear();
+        }
+      }
+    };
+
+    std::unordered_map<AllocaInst*, AllocaInfo> _alloca_info;
+    std::unordered_map<AliasingGroup, std::optional<AllocaInst*>> _confined; // ensure idempotency of the pass
+    NameMap<AllocaInst*> _prov;
+    AliasingGroup _max_group = 0;
+
+    AllocaInst* prov_at(Value* ptr) {
+      if (ptr->is_named()) {
+        NamedValue* named_ptr = (NamedValue*) ptr;
+        if (_prov[named_ptr]) {
+          return _prov[named_ptr];
+        }
+      }
+      return nullptr;
+    }
+
+    void access(Inst* access, Value* ptr, AliasingGroup aliasing) {
+      if (aliasing > _max_group) {
+        _max_group = aliasing;
+      }
+      if (AllocaInst* prov = prov_at(ptr)) {
+        AllocaInfo& info = _alloca_info[prov];
+        if (info.eligible) {
+          info.accesses.push_back(access);
+          if (aliasing < 0) {
+            info.make_ineligible();
+          } else if (info.existing_group) {
+            if (aliasing != *info.existing_group) {
+              info.make_ineligible();
+            }
+          } else {
+            info.existing_group = aliasing;
+          }
+        }
+
+        if (_confined.find(aliasing) == _confined.end()) {
+          _confined[aliasing] = prov;
+        } else if (_confined[aliasing] != prov) {
+          _confined[aliasing] = std::nullopt;
+        }
+      } else {
+        _confined[aliasing] = std::nullopt;
+      }
+    }
+
+    void escape(Value* value) {
+      if (AllocaInst* prov = prov_at(value)) {
+        _alloca_info[prov].make_ineligible();
+      }
+    }
+  public:
+    AllocaAliasing(Section* section): Pass(section), _prov(section) {
+      assert(section->ordering() >= BlockOrdering::Dominator);
+      for (Block* block : *section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(AllocaInst, alloca, inst)) {
+            _alloca_info[alloca] = AllocaInfo();
+            _prov[alloca] = alloca;
+          } else if (dynmatch(StoreInst, store, inst)) {
+            access(store, store->ptr(), store->aliasing());
+            escape(store->value());
+          } else if (dynmatch(LoadInst, load, inst)) {
+            access(load, load->ptr(), load->aliasing());
+          } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
+            if (prov_at(add_ptr->arg(0))) {
+              _prov[add_ptr] = prov_at(add_ptr->arg(0));
+            }
+            escape(add_ptr->arg(1));
+          } else {
+            for (Value* arg : inst->args()) {
+              escape(arg);
+            }
+          }
+        }
+      }
+
+      for (auto& [alloca, info] : _alloca_info) {
+        if (info.eligible && info.existing_group && !_confined.at(*info.existing_group)) {
+          if (_max_group == INT32_MAX) {
+            break;
+          }
+          AliasingGroup group = ++_max_group;
+          for (Inst* access : info.accesses) {
+            if (dynmatch(StoreInst, store, access)) {
+              store->set_aliasing(group);
+            } else if (dynmatch(LoadInst, load, access)) {
+              load->set_aliasing(group);
+            }
+          }
+        }
+      }
+    }
+  };
+
   class RefineAliasing: public Pass<RefineAliasing> {
   private:
     struct GroupInfo {
