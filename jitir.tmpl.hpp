@@ -4863,48 +4863,63 @@ private:
     }
 
     std::optional<size_t> find_simple_bound() const {
-      assert(_backedges.has_value());
-      if (_backedges->size() != 1 || !_preheader) {
+      if (!_backedges || _backedges->size() != 1 || !_preheader ||
+          _section->ordering() < BlockOrdering::Natural) {
         return std::nullopt;
       }
       Block* backedge = *_backedges->begin();
       if (backedge != _extent) {
         return std::nullopt;
       }
-      dyn_match(JumpInst, preheader_jump, _preheader->terminator());
-      dyn_match(JumpInst, backedge_jump, backedge->terminator());
-      dyn_match(BranchInst, branch, _header->terminator());
-      if (!backedge_jump || !branch || !preheader_jump) {
+      dynmatch(JumpInst, preheader_jump, _preheader->terminator());
+      dynmatch(JumpInst, backedge_jump, backedge->terminator());
+      dynmatch(BranchInst, branch, _header->terminator());
+      if (!preheader_jump || preheader_jump->block() != _header ||
+          !backedge_jump || backedge_jump->block() != _header ||
+          !branch || branch->false_block()->name() <= _extent->name()) {
         return std::nullopt;
       }
-      assert(backedge_jump->block() == _header);
-      assert(preheader_jump->block() == _header);
 
-      dyn_match(LtUInst, lt_u, branch->cond());
-      dyn_match(LtSInst, lt_s, branch->cond());
-      if ((!lt_u && !lt_s) ||
-          branch->false_block()->name() <= _extent->name()) {
+      dynmatch(Inst, compare, branch->cond());
+      bool signed_compare = dynamic_cast<LtSInst*>(compare) != nullptr;
+      if (!signed_compare && !dynamic_cast<LtUInst*>(compare)) {
         return std::nullopt;
       }
-      dyn_match(Const, bound, lt_u ? lt_u->arg(1) : lt_s->arg(1));
-      dyn_match(Arg, iterator, lt_u ? lt_u->arg(0) : lt_s->arg(0));
+      dynmatch(Const, bound, compare->arg(1));
+      dynmatch(Arg, iterator, compare->arg(0));
       if (!bound ||
           !iterator ||
-          iterator->index() >= _header->arg_count() ||
+          iterator->index() >= _header->args().size() ||
           _header->arg(iterator->index()) != iterator ||
           !is_int(iterator->type())) {
         return std::nullopt;
       }
-      dyn_match(Const, init, preheader_jump->arg(iterator->index()));
-      dyn_match(AddInst, add, backedge_jump->arg(iterator->index()));
+      dynmatch(Const, init, preheader_jump->arg(iterator->index()));
+      dynmatch(AddInst, add, backedge_jump->arg(iterator->index()));
       if (!add || add->arg(0) != iterator || !init) {
         return std::nullopt;
       }
-      dyn_match(Const, incr, add->arg(1));
+      dynmatch(Const, incr, add->arg(1));
       if (!incr || incr->value() != 1) {
         return std::nullopt;
       }
-      return bound->value() - init->value();
+      uint64_t start = init->value();
+      uint64_t limit = bound->value();
+      bool enters_loop = start < limit;
+      if (signed_compare) {
+        using Bits = Interpreter::Bits;
+        start = Bits::constant(iterator->type(), start).resize_s(Type::Int64).value;
+        limit = Bits::constant(iterator->type(), limit).resize_s(Type::Int64).value;
+        enters_loop = static_cast<int64_t>(start) < static_cast<int64_t>(limit);
+      }
+      if (!enters_loop) {
+        return 0;
+      }
+      uint64_t count = limit - start;
+      if (count > SIZE_MAX) {
+        return std::nullopt;
+      }
+      return count;
     }
   };
 
@@ -5781,15 +5796,25 @@ private:
       }
 
       Block* extent = nullptr;
+      Block* preheader = domtree.idom(header);
+      std::set<Block*> backedges;
       for (Block* pred : incoming.at(header)) {
         if (domtree.dominates(header, pred)) {
+          backedges.insert(pred);
           if (!extent || pred->name() > extent->name()) {
             extent = pred;
           }
+        } else if (pred != preheader) {
+          preheader = nullptr;
         }
       }
       if (extent) {
-        loops.emplace(header, std::make_unique<Loop>(section, header, extent));
+        auto loop = std::make_unique<Loop>(section, header, extent);
+        loop->_backedges = std::move(backedges);
+        if (preheader && dynamic_cast<JumpInst*>(preheader->terminator())) {
+          loop->set_preheader(preheader);
+        }
+        loops.emplace(header, std::move(loop));
       }
     }
 
