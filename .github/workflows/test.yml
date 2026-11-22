@@ -45,10 +45,10 @@ jobs:
         working-directory: metajit.cpp
         run: |
           make clean
-          make test
+          make -j"$(nproc)" --output-sync=target test
       - name: Run known-bits, simplification, and interpreter tests with UBSan
         working-directory: metajit.cpp
-        run: make test-ubsan
+        run: make -j"$(nproc)" --output-sync=target test-ubsan
       - name: Run translation validation unit tests
         working-directory: metajit.cpp
         run: |
