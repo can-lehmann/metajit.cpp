@@ -1795,6 +1795,15 @@ namespace metajit {
         value = nullptr;
       }
     }
+
+    void invalidate_memory_for_store(AliasingGroup aliasing) {
+      if (aliasing == 0) {
+        invalidate_memory_state();
+      } else {
+        _valid_loads.erase(0);
+        _memory.erase(0);
+      }
+    }
   public:
     using Builder::Builder;
     using Builder::build_call;
@@ -1941,12 +1950,11 @@ namespace metajit {
         if (is_always_equal(_exact_memory[-aliasing], value)) {
           return nullptr;
         }
+        invalidate_memory_for_store(aliasing);
         _exact_memory[-aliasing] = value;
         _exact_loads[-aliasing] = nullptr;
         return Builder::build_store(ptr, value, flags, aliasing, offset);
       } else {
-        _memory[aliasing].store(ptr, offset, value);
-
         bool noop_store = false;
         for (auto it = _valid_loads[aliasing].begin(); it != _valid_loads[aliasing].end(); ) {
           LoadInst* load = *it;
@@ -1962,6 +1970,10 @@ namespace metajit {
           }
         }
 
+        if (!noop_store) {
+          invalidate_memory_for_store(aliasing);
+        }
+        _memory[aliasing].store(ptr, offset, value);
         if (noop_store) {
           return nullptr;
         }
@@ -2057,6 +2069,7 @@ namespace metajit {
     }
 
     void init_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
+      invalidate_memory_for_store(aliasing);
       if (aliasing < 0) {
         _exact_memory[-aliasing] = value;
       } else {
@@ -2643,11 +2656,12 @@ namespace metajit {
   };
 
   inline bool could_alias(LoadInst* load, StoreInst* store) {
-    if (load->aliasing() != store->aliasing()) {
+    if (load->aliasing() != store->aliasing() &&
+        load->aliasing() != 0 && store->aliasing() != 0) {
       return false;
     }
 
-    if (load->aliasing() < 0) {
+    if (load->aliasing() == store->aliasing() && load->aliasing() < 0) {
       return true; // Exact aliasing
     }
 
@@ -2695,7 +2709,7 @@ namespace metajit {
     Value* _only_base;
 
     void access(AliasingGroup aliasing, Value* ptr, uint64_t offset, Type type) {
-      assert(aliasing >= 0);
+      assert(aliasing > 0);
       GroupInfo& group = _groups[aliasing];
       if (!group.is_invalid) {
         if (group.base == nullptr) {
@@ -2710,7 +2724,7 @@ namespace metajit {
     }
 
     AliasingGroup apply(AliasingGroup aliasing, uint64_t offset) {
-      assert(aliasing >= 0);
+      assert(aliasing > 0);
       GroupInfo& group = _groups[aliasing];
       if (group.is_invalid) {
         return aliasing;
@@ -2728,14 +2742,14 @@ namespace metajit {
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(LoadInst, load, inst)) {
-            if (load->aliasing() >= 0) {
+            if (load->aliasing() > 0) {
               _loads.push_back(load);
               access(load->aliasing(), load->ptr(), load->offset(), inst->type());
             } else {
               _min_exact_group = std::min(_min_exact_group, load->aliasing());
             }
           } else if (dynmatch(StoreInst, store, inst)) {
-            if (store->aliasing() >= 0) {
+            if (store->aliasing() > 0) {
               _stores.push_back(store);
               access(store->aliasing(), store->ptr(), store->offset(), store->value()->type());
             } else {
@@ -2760,6 +2774,14 @@ namespace metajit {
     DeadStoreElim(Section* section): Pass(section) {
       NameMap<bool> unused(section);
       ExpandingVector<StoreInst*> last_store;
+      auto mark_stores_live = [&]() {
+        for (StoreInst*& store : last_store) {
+          if (store) {
+            unused[store] = false;
+            store = nullptr;
+          }
+        }
+      };
 
       for (Block* block : *section) {
         for (Inst* inst : *block) {
@@ -2775,24 +2797,15 @@ namespace metajit {
               if (store) {
                 unused[store] = false;
               }
+            } else if (load->aliasing() == 0) {
+              mark_stores_live();
             }
           } else if (dynamic_cast<CallInst*>(inst)) {
-            // Calls may observe memory from all exact groups.
-            for (StoreInst*& store : last_store) {
-              if (store) {
-                unused[store] = false;
-                store = nullptr;
-              }
-            }
+            mark_stores_live();
           }
         }
 
-        for (StoreInst*& store : last_store) {
-          if (store) {
-            unused[store] = false;
-            store = nullptr; // Clear for next block
-          }
-        }
+        mark_stores_live();
 
         block->filter_inplace([&](Inst* inst) {
           return !unused[inst];
@@ -4697,8 +4710,8 @@ private:
 
       for (Block* block : *loop->chain()) {
         for (Inst* inst : *block) {
-          if (dynamic_cast<CallInst*>(inst)) {
-            // Conservative: calls can touch memory backing promoted aliases.
+          StoreInst* store = dynamic_cast<StoreInst*>(inst);
+          if (dynamic_cast<CallInst*>(inst) || (store && store->aliasing() == 0)) {
             return;
           }
         }
@@ -4801,6 +4814,8 @@ private:
           if (dynmatch(StoreInst, store, inst)) {
             if (store->aliasing() < 0) {
               stores[-store->aliasing()] = 1;
+            } else if (store->aliasing() == 0) {
+              has_unknown_memory_write = true;
             }
           } else if (dynamic_cast<CallInst*>(inst)) {
             has_unknown_memory_write = true;
@@ -5981,8 +5996,28 @@ private:
             }
           }
 
-          if (dynmatch(StoreInst, store, inst)) {
+          StoreInst* store = dynamic_cast<StoreInst*>(inst);
+          if ((store && store->aliasing() == 0) || dynamic_cast<CallInst*>(inst)) {
+            // Calls can invalidate any cached memory-derived value.
+            for (auto& [group, loads] : valid_loads) {
+              for (LoadInst* load : loads) {
+                canon_erase(Lookup(load));
+              }
+            }
+            valid_loads.clear();
+            last_stores.clear();
+            if (store) {
+              last_stores[0] = store;
+            }
+          } else if (store) {
+            last_stores.erase(0);
             last_stores[store->aliasing()] = store;
+            if (auto group = valid_loads.find(0); group != valid_loads.end()) {
+              for (LoadInst* load : group->second) {
+                canon_erase(Lookup(load));
+              }
+              valid_loads.erase(group);
+            }
             std::vector<LoadInst*>& loads = valid_loads[store->aliasing()];
             std::vector<LoadInst*> remaining_loads;
             for (LoadInst* load : loads) {
@@ -5993,15 +6028,6 @@ private:
               }
             }
             loads = std::move(remaining_loads);
-          } else if (dynamic_cast<CallInst*>(inst)) {
-            // Calls can invalidate any cached memory-derived value.
-            for (auto& [group, loads] : valid_loads) {
-              for (LoadInst* load : loads) {
-                canon_erase(Lookup(load));
-              }
-            }
-            valid_loads.clear();
-            last_stores.clear();
           } else if (dynmatch(LoadInst, load, inst)) {
             if (LastStores::const_iterator last_store = last_stores.find(load->aliasing());
                 last_store != last_stores.end()) {

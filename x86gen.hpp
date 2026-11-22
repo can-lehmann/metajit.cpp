@@ -660,36 +660,42 @@ namespace metajit {
     void memory_deps() {
       for (Block* block : *_section) {
         std::unordered_map<AliasingGroup, void*> last_store;
-        void* last_call = block;
+        void* last_clobber = block;
+        void* last_write = block;
+        auto dependency = [&](AliasingGroup aliasing) -> void* {
+          if (aliasing == 0) {
+            return last_write;
+          }
+          if (auto store = last_store.find(aliasing); store != last_store.end()) {
+            return store->second;
+          }
+          return last_clobber;
+        };
         for (Inst* inst : *block) {
           for (Value* arg : inst->args()) {
             if (arg->is_named()) {
               _use_counts[(NamedValue*) arg]++;
             }
           }
-          #define find_dep(inst) \
-            void* dep = last_call; \
-            if (last_store.find(inst->aliasing()) != last_store.end()) { \
-              dep = (void*) last_store.at(inst->aliasing()); \
-            } \
-            _memory_deps[inst] = dep;
-          
           if (dynmatch(LoadInst, load, inst)) {
-            find_dep(load);
+            _memory_deps[load] = dependency(load->aliasing());
           } else if (dynmatch(StoreInst, store, inst)) {
-            find_dep(store);
-            last_store[store->aliasing()] = store;
-          } else if (dynamic_cast<CallInst*>(inst)) {
-            _memory_deps[inst] = (void*) block;
-            last_call = inst;
-            for (auto& [aliasing, dep] : last_store) {
-              dep = (void*) inst;
+            _memory_deps[store] = dependency(store->aliasing());
+            last_write = store;
+            if (store->aliasing() == 0) {
+              last_clobber = store;
+              last_store.clear();
+            } else {
+              last_store[store->aliasing()] = store;
             }
+          } else if (dynamic_cast<CallInst*>(inst)) {
+            _memory_deps[inst] = block;
+            last_clobber = inst;
+            last_write = inst;
+            last_store.clear();
           } else {
             _memory_deps[inst] = nullptr;
           }
-
-          #undef find_dep
         }
       }
     }
