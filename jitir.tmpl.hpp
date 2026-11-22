@@ -2832,11 +2832,10 @@ namespace metajit {
       }
     };
 
-    ExpandingVector<GroupInfo> _groups;
+    std::unordered_map<AliasingGroup, GroupInfo> _groups;
     AliasingGroup _min_exact_group = 0;
     std::vector<LoadInst*> _loads;
     std::vector<StoreInst*> _stores;
-    std::unordered_set<AliasingGroup> _call_groups;
     std::unordered_map<Key, AliasingGroup, KeyHash> _exact_groups;
     Value* _only_base;
 
@@ -2857,8 +2856,7 @@ namespace metajit {
 
     AliasingGroup apply(AliasingGroup aliasing, uint64_t offset) {
       assert(aliasing > 0);
-      GroupInfo& group = _groups[aliasing];
-      if (group.is_invalid || _call_groups.find(aliasing) != _call_groups.end()) {
+      if (_groups.at(aliasing).is_invalid) {
         return aliasing;
       }
 
@@ -2889,7 +2887,7 @@ namespace metajit {
             }
           } else if (dynmatch(CallInst, call, inst)) {
             if (call->aliasing() > 0) {
-              _call_groups.insert(call->aliasing());
+              _groups[call->aliasing()].is_invalid = true;
             } else {
               _min_exact_group = std::min(_min_exact_group, call->aliasing());
             }
