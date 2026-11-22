@@ -2832,7 +2832,7 @@ namespace metajit {
       }
     };
 
-    std::unordered_map<AliasingGroup, GroupInfo> _groups;
+    ExpandingVector<GroupInfo> _groups;
     AliasingGroup _min_exact_group = 0;
     std::vector<LoadInst*> _loads;
     std::vector<StoreInst*> _stores;
@@ -2856,7 +2856,7 @@ namespace metajit {
 
     AliasingGroup apply(AliasingGroup aliasing, uint64_t offset) {
       assert(aliasing > 0);
-      if (_groups.at(aliasing).is_invalid) {
+      if (_groups[aliasing].is_invalid) {
         return aliasing;
       }
 
@@ -2869,6 +2869,7 @@ namespace metajit {
   public:
     RefineAliasing(Section* section, Value* only_base = nullptr): Pass(section), _only_base(only_base) {
       assert(!_only_base || _only_base->type() == Type::Ptr);
+      bool has_positive_call_group = false;
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(LoadInst, load, inst)) {
@@ -2887,7 +2888,7 @@ namespace metajit {
             }
           } else if (dynmatch(CallInst, call, inst)) {
             if (call->aliasing() > 0) {
-              _groups[call->aliasing()].is_invalid = true;
+              has_positive_call_group = true;
             } else {
               _min_exact_group = std::min(_min_exact_group, call->aliasing());
             }
@@ -2898,6 +2899,17 @@ namespace metajit {
       if (static_cast<int64_t>(_min_exact_group) + INT32_MAX <
           static_cast<int64_t>(_loads.size() + _stores.size())) {
         return;
+      }
+
+      if (has_positive_call_group) {
+        for (Block* block : *section) {
+          for (Inst* inst : *block) {
+            if (dynmatch(CallInst, call, inst); call && call->aliasing() > 0 &&
+                static_cast<size_t>(call->aliasing()) < _groups.real_size()) {
+              _groups[call->aliasing()].is_invalid = true;
+            }
+          }
+        }
       }
 
       for (LoadInst* load : _loads) {
