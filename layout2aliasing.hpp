@@ -301,8 +301,8 @@ namespace metajit {
     
     PointerLayouts& _pointers;
     std::map<Pointer, AliasingGroup> _group_ids;
-    AliasingGroup _next_group = 1;
-    AliasingGroup _next_exact_group = -1;
+    AliasingGroup _last_group = 0;
+    AliasingGroup _last_exact_group = 0;
 
     AliasingGroup group_for(Pointer ptr) {
       if (dynamic_cast<HeapLayout*>(ptr.layout)) {
@@ -311,9 +311,15 @@ namespace metajit {
       ptr = ptr.canonical();
       if (_group_ids.find(ptr) == _group_ids.end()) {
         if (dynamic_cast<RecordLayout*>(ptr.layout) && ptr.layout->singleton()) {
-          _group_ids[ptr] = _next_exact_group--;
+          if (_last_exact_group == -INT32_MAX) {
+            throw std::overflow_error("Layout2Aliasing: exhausted exact aliasing groups");
+          }
+          _group_ids[ptr] = --_last_exact_group;
         } else {
-          _group_ids[ptr] = _next_group++;
+          if (_last_group == INT32_MAX) {
+            throw std::overflow_error("Layout2Aliasing: exhausted aliasing groups");
+          }
+          _group_ids[ptr] = ++_last_group;
         }
       }
       return _group_ids[ptr];

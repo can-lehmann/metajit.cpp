@@ -2762,6 +2762,11 @@ namespace metajit {
         }
       }
 
+      if (static_cast<int64_t>(_min_exact_group) + INT32_MAX <
+          static_cast<int64_t>(_loads.size() + _stores.size())) {
+        return;
+      }
+
       for (LoadInst* load : _loads) {
         load->set_aliasing(apply(load->aliasing(), load->offset()));
       }
