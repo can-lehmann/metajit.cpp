@@ -59,10 +59,10 @@ b1:
 ### Aliasing
 
 Aliasing information is encoded using aliasing groups.
-Memory operations can only alias if they are in the same aliasing group.
 Aliasing groups are represented as integers.
 Negative integers are used to represent exact aliasing (i.e., two operations with the same negative aliasing group always alias).
-Non-negative integers are used to represent potential aliasing (i.e., two operations with the same non-negative aliasing group may alias, but do not have to).
+Positive integers represent potential aliasing within the same group.
+Group 0 may alias every group, including exact groups. Distinct nonzero groups are disjoint.
 
 ## LLVM Frontend
 

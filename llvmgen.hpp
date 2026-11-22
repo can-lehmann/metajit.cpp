@@ -59,6 +59,9 @@ namespace metajit {
     std::unordered_map<AliasingGroup, llvm::MDNode*> _tbaa_tags;
 
     llvm::MDNode* tbaa_tag(AliasingGroup group) {
+      if (group == 0) {
+        return nullptr;
+      }
       llvm::MDNode*& tag = _tbaa_tags[group];
       if (!tag) {
         llvm::MDBuilder metadata(_context);
