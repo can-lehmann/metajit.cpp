@@ -2728,6 +2728,7 @@ namespace metajit {
     }
   public:
     AllocaAliasing(Section* section): Pass(section), _prov(section) {
+      assert(section->ordering() >= BlockOrdering::Dominator);
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(AllocaInst, alloca, inst)) {
@@ -2752,7 +2753,10 @@ namespace metajit {
       }
 
       for (auto& [alloca, info] : _alloca_info) {
-        if (info.eligible && (!info.existing_group || !_confined[*info.existing_group].has_value())) {
+        if (info.eligible && info.existing_group && !_confined.at(*info.existing_group)) {
+          if (_max_group == INT32_MAX) {
+            break;
+          }
           AliasingGroup group = ++_max_group;
           for (Inst* access : info.accesses) {
             if (dynmatch(StoreInst, store, access)) {
