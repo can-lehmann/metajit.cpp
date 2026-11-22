@@ -6074,7 +6074,6 @@ private:
     };
 
     using Canon = std::unordered_set<Lookup, LookupHash>;
-    using ValidLoads = std::unordered_map<AliasingGroup, std::vector<LoadInst*>>;
 
     struct CanonUndo {
       Lookup lookup;
@@ -6083,6 +6082,7 @@ private:
 
     Canon _canon;
     std::vector<CanonUndo> _undo;
+    std::unordered_map<AliasingGroup, std::vector<LoadInst*>> _valid_loads;
 
     void canon_erase(const Lookup& lookup) {
       Canon::iterator entry = _canon.find(lookup);
@@ -6091,6 +6091,24 @@ private:
         _undo.push_back({*entry, false});
         _canon.erase(entry);
       }
+    }
+
+    void invalidate_loads(AliasingGroup group) {
+      if (auto entry = _valid_loads.find(group); entry != _valid_loads.end()) {
+        for (LoadInst* load : entry->second) {
+          canon_erase(Lookup(load));
+        }
+        _valid_loads.erase(entry);
+      }
+    }
+
+    void invalidate_all_loads() {
+      for (auto& [group, loads] : _valid_loads) {
+        for (LoadInst* load : loads) {
+          canon_erase(Lookup(load));
+        }
+      }
+      _valid_loads.clear();
     }
   public:
     CommonSubexprElim(Section* section): Pass(section) {
@@ -6121,16 +6139,7 @@ private:
         }
 
         marks.push_back(_undo.size());
-        ValidLoads valid_loads;
         LastStores last_stores;
-        auto invalidate_loads = [&](AliasingGroup group) {
-          if (auto entry = valid_loads.find(group); entry != valid_loads.end()) {
-            for (LoadInst* load : entry->second) {
-              canon_erase(Lookup(load));
-            }
-            valid_loads.erase(entry);
-          }
-        };
 
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
@@ -6152,12 +6161,7 @@ private:
           dynmatch(StoreInst, store, inst);
           dynmatch(CallInst, call, inst);
           if ((store && store->aliasing() == 0) || (call && call->aliasing() == 0)) {
-            for (auto& [group, loads] : valid_loads) {
-              for (LoadInst* load : loads) {
-                canon_erase(Lookup(load));
-              }
-            }
-            valid_loads.clear();
+            invalidate_all_loads();
             last_stores.clear();
             if (store) {
               last_stores[0] = store;
@@ -6166,7 +6170,7 @@ private:
             last_stores.erase(0);
             last_stores[store->aliasing()] = store;
             invalidate_loads(0);
-            std::vector<LoadInst*>& loads = valid_loads[store->aliasing()];
+            std::vector<LoadInst*>& loads = _valid_loads[store->aliasing()];
             std::vector<LoadInst*> remaining_loads;
             for (LoadInst* load : loads) {
               if (could_alias(load, store)) {
@@ -6208,7 +6212,7 @@ private:
             _undo.push_back({*entry, true});
             if (dynmatch(LoadInst, load, inst)) {
               if (!load->flags().has(LoadFlags::Pure)) {
-                valid_loads[load->aliasing()].push_back(load);
+                _valid_loads[load->aliasing()].push_back(load);
               }
             }
             inst_it++;
@@ -6218,11 +6222,7 @@ private:
           }
         }
 
-        for (auto& [group, loads] : valid_loads) {
-          for (LoadInst* load : loads) {
-            canon_erase(Lookup(load));
-          }
-        }
+        invalidate_all_loads();
       }
     }
   };
