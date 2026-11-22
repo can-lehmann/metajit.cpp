@@ -662,25 +662,25 @@ namespace metajit {
         std::unordered_map<AliasingGroup, void*> last_store;
         void* last_clobber = block;
         void* last_write = block;
-        auto dependency = [&](AliasingGroup aliasing) -> void* {
-          if (aliasing == 0) {
-            return last_write;
-          }
-          if (auto store = last_store.find(aliasing); store != last_store.end()) {
-            return store->second;
-          }
-          return last_clobber;
-        };
         for (Inst* inst : *block) {
           for (Value* arg : inst->args()) {
             if (arg->is_named()) {
               _use_counts[(NamedValue*) arg]++;
             }
           }
+          #define find_dep(inst) \
+            void* dep = last_clobber; \
+            if (inst->aliasing() == 0) { \
+              dep = last_write; \
+            } else if (auto previous = last_store.find(inst->aliasing()); previous != last_store.end()) { \
+              dep = previous->second; \
+            } \
+            _memory_deps[inst] = dep;
+
           if (dynmatch(LoadInst, load, inst)) {
-            _memory_deps[load] = dependency(load->aliasing());
+            find_dep(load);
           } else if (dynmatch(StoreInst, store, inst)) {
-            _memory_deps[store] = dependency(store->aliasing());
+            find_dep(store);
             last_write = store;
             if (store->aliasing() == 0) {
               last_clobber = store;
@@ -689,13 +689,15 @@ namespace metajit {
               last_store[store->aliasing()] = store;
             }
           } else if (dynamic_cast<CallInst*>(inst)) {
-            _memory_deps[inst] = block;
+            _memory_deps[inst] = (void*) block;
             last_clobber = inst;
             last_write = inst;
             last_store.clear();
           } else {
             _memory_deps[inst] = nullptr;
           }
+
+          #undef find_dep
         }
       }
     }

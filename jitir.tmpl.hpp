@@ -4716,6 +4716,7 @@ private:
         for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst);
               dynamic_cast<CallInst*>(inst) || (store && store->aliasing() == 0)) {
+            // Conservative: calls can touch memory backing promoted aliases.
             return;
           }
         }
