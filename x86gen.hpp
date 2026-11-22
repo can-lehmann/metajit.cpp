@@ -688,11 +688,15 @@ namespace metajit {
             } else {
               last_store[store->aliasing()] = store;
             }
-          } else if (dynamic_cast<CallInst*>(inst)) {
+          } else if (dynmatch(CallInst, call, inst)) {
             _memory_deps[inst] = (void*) block;
-            last_clobber = inst;
-            last_write = inst;
-            last_store.clear();
+            last_write = call;
+            if (call->aliasing() == 0) {
+              last_clobber = call;
+              last_store.clear();
+            } else {
+              last_store[call->aliasing()] = call;
+            }
           } else {
             _memory_deps[inst] = nullptr;
           }

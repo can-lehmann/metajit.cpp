@@ -14,15 +14,6 @@
 
 from lwir import *
 
-class DefaultArg(Arg):
-    def __init__(self, name, type, default, **kwargs):
-        super().__init__(name, type, **kwargs)
-        self.default = default
-
-    def format_formal_arg(self, ir):
-        return f"{super().format_formal_arg(ir)} = {self.default}"
-
-
 class CountVarargsValueType(BaseType):
     def __init__(self):
         super().__init__()
@@ -564,13 +555,13 @@ jitir = IR(
                 Arg("type", Type("Type")),
                 Arg("call_conv", Type("CallConv"), setter=True),
                 Arg("flags", Type("CallFlags"), setter=True),
-                DefaultArg("aliasing", Type("AliasingGroup"), 0, setter=True)
+                Arg("aliasing", Type("AliasingGroup"), setter=True, default="0")
             ],
             type = "type",
             type_checks = [
                 "callee->type() == Type::Ptr"
             ],
-            doc = "Call a function pointer."
+            doc = "Call a function pointer. The call may read and write memory in its aliasing group. Group 0 may alias any group."
         ),
         Inst("Branch",
             args = [

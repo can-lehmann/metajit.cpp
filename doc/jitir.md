@@ -590,7 +590,7 @@ Type Checks:
 
 ### Call
 
-Call a function pointer.
+Call a function pointer. The call may read and write memory in its aliasing group. Group 0 may alias any group.
 
 Arguments
 
