@@ -24,6 +24,7 @@
 #include <unordered_set>
 #include <set>
 #include <map>
+#include <memory>
 #include <queue>
 #include <optional>
 #include <cstring>
@@ -509,6 +510,8 @@ namespace metajit {
   };
 
   class Block;
+  class DominatorTree;
+  class Incoming;
   
   template<class T>
   class NameMap;
@@ -4816,12 +4819,16 @@ private:
     Block* _extent = nullptr;
     Block* _preheader = nullptr;
 
+    std::optional<std::set<Block*>> _backedges;
+
     // Loop has only a single backedge and no internal branches.
     // The extent block terminates with a jump to the header.
     Chain* _chain = nullptr;
   public:
     Loop(Section* section, Block* header, Block* extent):
         _section(section), _header(header), _extent(extent) {}
+
+    static std::map<Block*, std::unique_ptr<Loop>> find_loops(DominatorTree& domtree, const Incoming& incoming);
 
     Section* section() const { return _section; }
 
@@ -4831,6 +4838,9 @@ private:
 
     Block* preheader() const { return _preheader; }
     void set_preheader(Block* preheader) { _preheader = preheader; }
+
+    std::optional<std::set<Block*>> backedges() { return _backedges; }
+    void set_backedges(const std::set<Block*>& backedges) { _backedges = backedges; }
 
     Chain* chain() const { return _chain; }
     void set_chain(Chain* chain) {
@@ -4850,6 +4860,51 @@ private:
 
     size_t first_name() const {
       return (*_header->begin())->name();
+    }
+
+    std::optional<size_t> find_simple_bound() const {
+      assert(_backedges.has_value());
+      if (_backedges->size() != 1 || !_preheader) {
+        return std::nullopt;
+      }
+      Block* backedge = *_backedges->begin();
+      if (backedge != _extent) {
+        return std::nullopt;
+      }
+      dyn_match(JumpInst, preheader_jump, _preheader->terminator());
+      dyn_match(JumpInst, backedge_jump, backedge->terminator());
+      dyn_match(BranchInst, branch, _header->terminator());
+      if (!backedge_jump || !branch || !preheader_jump) {
+        return std::nullopt;
+      }
+      assert(backedge_jump->block() == _header);
+      assert(preheader_jump->block() == _header);
+
+      dyn_match(LtUInst, lt_u, branch->cond());
+      dyn_match(LtSInst, lt_s, branch->cond());
+      if ((!lt_u && !lt_s) ||
+          branch->false_block()->name() <= _extent->name()) {
+        return std::nullopt;
+      }
+      dyn_match(Const, bound, lt_u ? lt_u->arg(1) : lt_s->arg(1));
+      dyn_match(Arg, iterator, lt_u ? lt_u->arg(0) : lt_s->arg(0));
+      if (!bound ||
+          !iterator ||
+          iterator->index() >= _header->arg_count() ||
+          _header->arg(iterator->index()) != iterator ||
+          !is_int(iterator->type())) {
+        return std::nullopt;
+      }
+      dyn_match(Const, init, preheader_jump->arg(iterator->index()));
+      dyn_match(AddInst, add, backedge_jump->arg(iterator->index()));
+      if (!add || add->arg(0) != iterator || !init) {
+        return std::nullopt;
+      }
+      dyn_match(Const, incr, add->arg(1));
+      if (!incr || incr->value() != 1) {
+        return std::nullopt;
+      }
+      return bound->value() - init->value();
     }
   };
 
@@ -5714,6 +5769,32 @@ private:
       return a;
     }
   };
+
+  inline std::map<Block*, std::unique_ptr<Loop>> Loop::find_loops(DominatorTree& domtree, const Incoming& incoming) {
+    Section* section = domtree.section();
+    assert(incoming.section() == section);
+
+    std::map<Block*, std::unique_ptr<Loop>> loops;
+    for (Block* header : *section) {
+      if (header != domtree.root() && !domtree.idom(header)) {
+        continue;
+      }
+
+      Block* extent = nullptr;
+      for (Block* pred : incoming.at(header)) {
+        if (domtree.dominates(header, pred)) {
+          if (!extent || pred->name() > extent->name()) {
+            extent = pred;
+          }
+        }
+      }
+      if (extent) {
+        loops.emplace(header, std::make_unique<Loop>(section, header, extent));
+      }
+    }
+
+    return loops;
+  }
 
   class PostDominatorTree: public DominatorTreeBase<PostDominatorTree> {
   public:
