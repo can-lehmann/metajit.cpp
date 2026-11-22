@@ -2776,14 +2776,18 @@ namespace metajit {
               _prov[add_ptr] = prov_at(add_ptr->arg(0));
             }
             escape(add_ptr->arg(1));
-          } else {
-            if (dynmatch(CallInst, call, inst)) {
-              if (call->callee() == Intrinsic::memset) {
-                access(call, call->arg(1), call->aliasing());
-                continue;
-              }
+          } else if (dynmatch(CallInst, call, inst)) {
+            if (call->callee() == Intrinsic::memset) {
+              access(call, call->arg(1), call->aliasing());
+              escape(call->arg(2));
+              escape(call->arg(3));
+            } else {
               _max_group = std::max(_max_group, call->aliasing());
+              for (Value* arg : call->args()) {
+                escape(arg);
+              }
             }
+          } else {
             for (Value* arg : inst->args()) {
               escape(arg);
             }
