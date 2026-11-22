@@ -554,13 +554,14 @@ jitir = IR(
                 Arg("args", type=CountVarargsValueType()),
                 Arg("type", Type("Type")),
                 Arg("call_conv", Type("CallConv"), setter=True),
-                Arg("flags", Type("CallFlags"), setter=True)
+                Arg("flags", Type("CallFlags"), setter=True),
+                Arg("aliasing", Type("AliasingGroup"), setter=True, default="0")
             ],
             type = "type",
             type_checks = [
                 "callee->type() == Type::Ptr"
             ],
-            doc = "Call a function pointer."
+            doc = "Call a function pointer. The call may read and write memory in its aliasing group. Group 0 may alias any group."
         ),
         Inst("Branch",
             args = [

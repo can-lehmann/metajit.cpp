@@ -916,7 +916,8 @@ namespace metajit {
           _builder.build_const(Type::Int64, 1),
           _builder.build_const(Type::Int32, (uint64_t) Type::Void),
           _builder.build_const(Type::Int32, (uint64_t) CallConv::PreserveNone),
-          _builder.build_const(Type::Int32, (uint64_t) CallFlags())
+          _builder.build_const(Type::Int32, (uint64_t) CallFlags()),
+          _builder.build_const(Type::Int32, 0)
         });
         _builder.build_call(_syms.set_arg, Type::Void, {
           call,

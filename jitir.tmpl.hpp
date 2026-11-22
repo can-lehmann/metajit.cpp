@@ -1326,8 +1326,9 @@ namespace metajit {
                          Type type,
                          const lwir::Span<Value*>& args,
                          CallConv call_conv = CallConv::Default,
-                         CallFlags call_flags = CallFlags::None) {
-      CallInst* call = build_call(callee, args.size(), type, call_conv, call_flags);
+                         CallFlags call_flags = CallFlags::None,
+                         AliasingGroup aliasing = 0) {
+      CallInst* call = build_call(callee, args.size(), type, call_conv, call_flags, aliasing);
       for (size_t it = 0; it < args.size(); it++) {
         call->set_arg(it + 1, args[it]);
       }
@@ -1338,8 +1339,9 @@ namespace metajit {
                          Type type,
                          const std::vector<Value*>& args,
                          CallConv call_conv = CallConv::Default,
-                         CallFlags call_flags = CallFlags::None) {
-      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv, call_flags);
+                         CallFlags call_flags = CallFlags::None,
+                         AliasingGroup aliasing = 0) {
+      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv, call_flags, aliasing);
     }
 
     AllocaInst* build_alloca(Type type) {
@@ -1796,7 +1798,7 @@ namespace metajit {
       }
     }
 
-    void invalidate_memory_for_store(AliasingGroup aliasing) {
+    void invalidate_memory_for_write(AliasingGroup aliasing) {
       if (aliasing == 0) {
         invalidate_memory_state();
       } else {
@@ -1950,7 +1952,7 @@ namespace metajit {
         if (is_always_equal(_exact_memory[-aliasing], value)) {
           return nullptr;
         }
-        invalidate_memory_for_store(aliasing);
+        invalidate_memory_for_write(aliasing);
         _exact_memory[-aliasing] = value;
         _exact_loads[-aliasing] = nullptr;
         return Builder::build_store(ptr, value, flags, aliasing, offset);
@@ -1971,7 +1973,7 @@ namespace metajit {
         }
 
         if (!noop_store) {
-          invalidate_memory_for_store(aliasing);
+          invalidate_memory_for_write(aliasing);
         }
         _memory[aliasing].store(ptr, offset, value);
         if (noop_store) {
@@ -1986,21 +1988,33 @@ namespace metajit {
                         size_t args,
                         Type type,
                         CallConv call_conv = CallConv::Default,
-                        CallFlags call_flags = CallFlags::None) {
+                        CallFlags call_flags = CallFlags::None,
+                        AliasingGroup aliasing = 0) {
       if (!_guard_success) {
-        // Calls may read/write memory reachable through pointers, so invalidate
-        // forwarding and exact aliasing state conservatively.
-        invalidate_memory_state();
+        invalidate_memory_for_write(aliasing);
+        if (aliasing > 0) {
+          _valid_loads.erase(aliasing);
+          _memory.erase(aliasing);
+        } else if (aliasing < 0) {
+          size_t index = -static_cast<int64_t>(aliasing);
+          if (index < _exact_loads.real_size()) {
+            _exact_loads[index] = nullptr;
+          }
+          if (index < _exact_memory.real_size()) {
+            _exact_memory[index] = nullptr;
+          }
+        }
       }
-      return Builder::build_call(callee, args, type, call_conv, call_flags);
+      return Builder::build_call(callee, args, type, call_conv, call_flags, aliasing);
     }
 
     Value* build_call(Value* callee,
                       Type type,
                       const lwir::Span<Value*>& args,
                       CallConv call_conv = CallConv::Default,
-                      CallFlags call_flags = CallFlags::None) {
-      CallInst* call = build_call(callee, args.size(), type, call_conv, call_flags);
+                      CallFlags call_flags = CallFlags::None,
+                      AliasingGroup aliasing = 0) {
+      CallInst* call = build_call(callee, args.size(), type, call_conv, call_flags, aliasing);
       for (size_t it = 0; it < args.size(); it++) {
         call->set_arg(it + 1, args[it]);
       }
@@ -2011,8 +2025,9 @@ namespace metajit {
                       Type type,
                       const std::vector<Value*>& args,
                       CallConv call_conv = CallConv::Default,
-                      CallFlags call_flags = CallFlags::None) {
-      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv, call_flags);
+                      CallFlags call_flags = CallFlags::None,
+                      AliasingGroup aliasing = 0) {
+      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv, call_flags, aliasing);
     }
 
     template <class... Args>
@@ -2069,7 +2084,7 @@ namespace metajit {
     }
 
     void init_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
-      invalidate_memory_for_store(aliasing);
+      invalidate_memory_for_write(aliasing);
       if (aliasing < 0) {
         _exact_memory[-aliasing] = value;
       } else {
@@ -2762,6 +2777,9 @@ namespace metajit {
             }
             escape(add_ptr->arg(1));
           } else {
+            if (dynmatch(CallInst, call, inst)) {
+              _max_group = std::max(_max_group, call->aliasing());
+            }
             for (Value* arg : inst->args()) {
               escape(arg);
             }
@@ -2838,8 +2856,7 @@ namespace metajit {
 
     AliasingGroup apply(AliasingGroup aliasing, uint64_t offset) {
       assert(aliasing > 0);
-      GroupInfo& group = _groups[aliasing];
-      if (group.is_invalid) {
+      if (_groups[aliasing].is_invalid) {
         return aliasing;
       }
 
@@ -2867,6 +2884,12 @@ namespace metajit {
               access(store->aliasing(), store->ptr(), store->offset(), store->value()->type());
             } else {
               _min_exact_group = std::min(_min_exact_group, store->aliasing());
+            }
+          } else if (dynmatch(CallInst, call, inst)) {
+            if (call->aliasing() > 0) {
+              _groups[call->aliasing()].is_invalid = true;
+            } else {
+              _min_exact_group = std::min(_min_exact_group, call->aliasing());
             }
           }
         }
@@ -6049,7 +6072,6 @@ private:
     };
 
     using Canon = std::unordered_set<Lookup, LookupHash>;
-    using ValidLoads = std::unordered_map<AliasingGroup, std::vector<LoadInst*>>;
 
     struct CanonUndo {
       Lookup lookup;
@@ -6058,6 +6080,7 @@ private:
 
     Canon _canon;
     std::vector<CanonUndo> _undo;
+    std::unordered_map<AliasingGroup, std::vector<LoadInst*>> _valid_loads;
 
     void canon_erase(const Lookup& lookup) {
       Canon::iterator entry = _canon.find(lookup);
@@ -6066,6 +6089,24 @@ private:
         _undo.push_back({*entry, false});
         _canon.erase(entry);
       }
+    }
+
+    void invalidate_loads(AliasingGroup group) {
+      if (auto entry = _valid_loads.find(group); entry != _valid_loads.end()) {
+        for (LoadInst* load : entry->second) {
+          canon_erase(Lookup(load));
+        }
+        _valid_loads.erase(entry);
+      }
+    }
+
+    void invalidate_all_loads() {
+      for (auto& [group, loads] : _valid_loads) {
+        for (LoadInst* load : loads) {
+          canon_erase(Lookup(load));
+        }
+      }
+      _valid_loads.clear();
     }
   public:
     CommonSubexprElim(Section* section): Pass(section) {
@@ -6096,7 +6137,6 @@ private:
         }
 
         marks.push_back(_undo.size());
-        ValidLoads valid_loads;
         LastStores last_stores;
 
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
@@ -6116,15 +6156,10 @@ private:
             }
           }
 
-          if (dynmatch(StoreInst, store, inst);
-              (store && store->aliasing() == 0) || dynamic_cast<CallInst*>(inst)) {
-            // Calls can invalidate any cached memory-derived value.
-            for (auto& [group, loads] : valid_loads) {
-              for (LoadInst* load : loads) {
-                canon_erase(Lookup(load));
-              }
-            }
-            valid_loads.clear();
+          dynmatch(StoreInst, store, inst);
+          dynmatch(CallInst, call, inst);
+          if ((store && store->aliasing() == 0) || (call && call->aliasing() == 0)) {
+            invalidate_all_loads();
             last_stores.clear();
             if (store) {
               last_stores[0] = store;
@@ -6132,13 +6167,8 @@ private:
           } else if (store) {
             last_stores.erase(0);
             last_stores[store->aliasing()] = store;
-            if (auto group = valid_loads.find(0); group != valid_loads.end()) {
-              for (LoadInst* load : group->second) {
-                canon_erase(Lookup(load));
-              }
-              valid_loads.erase(group);
-            }
-            std::vector<LoadInst*>& loads = valid_loads[store->aliasing()];
+            invalidate_loads(0);
+            std::vector<LoadInst*>& loads = _valid_loads[store->aliasing()];
             std::vector<LoadInst*> remaining_loads;
             for (LoadInst* load : loads) {
               if (could_alias(load, store)) {
@@ -6148,6 +6178,11 @@ private:
               }
             }
             loads = std::move(remaining_loads);
+          } else if (call) {
+            last_stores.erase(0);
+            last_stores.erase(call->aliasing());
+            invalidate_loads(0);
+            invalidate_loads(call->aliasing());
           } else if (dynmatch(LoadInst, load, inst)) {
             if (LastStores::const_iterator last_store = last_stores.find(load->aliasing());
                 last_store != last_stores.end()) {
@@ -6175,7 +6210,7 @@ private:
             _undo.push_back({*entry, true});
             if (dynmatch(LoadInst, load, inst)) {
               if (!load->flags().has(LoadFlags::Pure)) {
-                valid_loads[load->aliasing()].push_back(load);
+                _valid_loads[load->aliasing()].push_back(load);
               }
             }
             inst_it++;
@@ -6185,11 +6220,7 @@ private:
           }
         }
 
-        for (auto& [group, loads] : valid_loads) {
-          for (LoadInst* load : loads) {
-            canon_erase(Lookup(load));
-          }
-        }
+        invalidate_all_loads();
       }
     }
   };
