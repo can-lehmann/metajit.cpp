@@ -2770,7 +2770,8 @@ namespace metajit {
       }
 
       for (auto& [alloca, info] : _alloca_info) {
-        if (info.eligible && info.existing_group && !_confined.at(*info.existing_group)) {
+        if (info.eligible && info.existing_group &&
+            (*info.existing_group == 0 || !_confined.at(*info.existing_group))) {
           if (_max_group == INT32_MAX) {
             break;
           }
