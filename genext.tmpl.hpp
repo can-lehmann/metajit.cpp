@@ -1084,7 +1084,14 @@ namespace metajit {
     }
 
     Value* emit_build_dynamic_inst(Inst* inst, const std::vector<Value*>& args) {
-      if (dynmatch(SelectInst, select, inst)) {
+      if (dynmatch(AllocaInst, alloca, inst)) {
+        return _builder.build_call(_syms.build_shared_alloca, Type::Ptr, {
+          _jitir_builder,
+          _builder.build_const(Type::Ptr, (uint64_t)(void*)alloca),
+          args[0],
+          _builder.build_const(Type::Int32, alloca->align())
+        });
+      } else if (dynmatch(SelectInst, select, inst)) {
         return emit_branch(
           is_const(select->cond()),
           Type::Ptr,

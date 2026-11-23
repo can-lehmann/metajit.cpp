@@ -1821,6 +1821,8 @@ namespace metajit {
 
     std::unordered_map<AliasingGroup, GroupState> _memory;
     ExpandingVector<Value*> _exact_memory;
+
+    std::unordered_map<const AllocaInst*, AllocaInst*> _shared_allocas;
     
     Block* _guard_success = nullptr;
     Block* _reusable_guard_failure = nullptr;
@@ -1874,6 +1876,18 @@ namespace metajit {
 
     Chain* chain() { return _chain; }
     void set_chain(Chain* chain) { _chain = chain; }
+
+    AllocaInst* build_shared_alloca(const AllocaInst* key, Value* size, uint32_t align) {
+      AllocaInst*& shared = _shared_allocas[key];
+      if (!shared) {
+        Block* saved_block = block();
+        Inst* saved_before = before();
+        move_to_begin(section()->entry());
+        shared = build_alloca(size, align);
+        move_to(saved_block, saved_before);
+      }
+      return shared;
+    }
 
     // Use folding versions so that we get short-circuit behavior and simplifications
 
