@@ -27,6 +27,7 @@
 #include <memory>
 #include <queue>
 #include <optional>
+#include <variant>
 #include <cstring>
 #include <fstream>
 #include <algorithm>
@@ -4841,13 +4842,13 @@ private:
     Block* preheader() const { return _preheader; }
     void set_preheader(Block* preheader) { _preheader = preheader; }
 
-    std::optional<std::set<Block*>> backedges() { return _backedges; }
+    const std::optional<std::set<Block*>>& backedges() const { return _backedges; }
     void set_backedges(const std::set<Block*>& backedges) { _backedges = backedges; }
 
     std::optional<std::set<Block*>> body() { return _body; }
     void set_body(const std::set<Block*>& body) { _body = body; }
 
-    std::optional<std::vector<std::pair<Block*, Block*>>> exits() { return _exits; }
+    const std::optional<std::vector<std::pair<Block*, Block*>>>& exits() const { return _exits; }
     void set_exits(const std::vector<std::pair<Block*, Block*>>& exits) { _exits = exits; }
 
     Chain* chain() const { return _chain; }
@@ -4870,27 +4871,9 @@ private:
       return (*_header->begin())->name();
     }
 
-    void analyze_body(Incoming& incoming) const {
-      assert(_backedges.has_value());
+    void analyze_body(const Incoming& incoming, DominatorTree& domtree);
 
-      std::set<Block*> body = _backedges.value();
-      body.insert(_header);
-      std::deque<Block*> open;
-      open.insert(open.end(), _backedges->begin(), _backedges->end());
-      while (!open.empty()) {
-        Block* block = open.front();
-        open.pop_front();
-        for (Block* pred : incoming.predecessors(block)) {
-          if (body.find(pred) == body.end()) {
-            body.insert(pred);
-            open.push_back(pred);
-          }
-        }
-      }
-      _body = body;
-    }
-
-    void analyze_exits() const {
+    void analyze_exits() {
       assert(_body.has_value());
       std::vector<std::pair<Block*, Block*>> exits;
       for (Block* block : _body.value()) {
@@ -4968,13 +4951,13 @@ private:
   public:
     class Node {
     private:
-      LoopCFG* _cfg = nullptr;
+      const LoopCFG* _cfg = nullptr;
       std::variant<Block*, Loop*> _value;
       std::set<Block*> _exits;
     public:
       Node() {}
-      Node(LoopCFG* cfg, Block* block, const std::set<Block*>& exits): _cfg(cfg), _value(block), _exits(exits) {}
-      Node(LoopCFG* cfg, Loop* loop, const std::set<Block*>& exits): _cfg(cfg), _value(loop), _exits(exits) {}
+      Node(const LoopCFG* cfg, Block* block, const std::set<Block*>& exits): _cfg(cfg), _value(block), _exits(exits) {}
+      Node(const LoopCFG* cfg, Loop* loop, const std::set<Block*>& exits): _cfg(cfg), _value(loop), _exits(exits) {}
 
       bool is_block() const { return std::holds_alternative<Block*>(_value); }
       bool is_loop() const { return std::holds_alternative<Loop*>(_value); }
@@ -5010,21 +4993,9 @@ private:
     };
   private:
     Section* _section;
-    Incoming _incoming;
-    DominatorTree _domtree;
     std::map<Block*, std::unique_ptr<Loop>> _loops;
   public:
-    LoopCFG(Section* section):
-        _section(section),
-        _incoming(section),
-        _domtree(section, _incoming),
-        _loops(Loop::find_loops(_domtree, _incoming)) {
-      
-      for (auto& [block, loop] : _loops) {
-        loop->analyze_body(_incoming);
-        loop->analyze_exits();
-      }
-    }
+    LoopCFG(Section* section);
 
     Node outer(Block* block, const std::set<Block*>& exits) const {
       if (_loops.find(block) != _loops.end()) {
@@ -5035,6 +5006,75 @@ private:
     }
 
     Node entry() const { return outer(_section->entry(), {}); }
+
+  private:
+    static void write_dot_block(std::ostream& stream, Block* block) {
+      stream << "b" << block->name() << " [shape=box";
+      if (dynamic_cast<ExitInst*>(block->terminator())) {
+        stream << ", peripheries=2";
+      }
+      stream << "];\n";
+    }
+
+    static void write_dot_region(std::ostream& stream, Node start, BlockMap<bool>& written) {
+      std::deque<Node> pending;
+      pending.push_back(std::move(start));
+      while (!pending.empty()) {
+        Node node = std::move(pending.front());
+        pending.pop_front();
+        if (node.is_loop()) {
+          Block* header = node.loop()->header();
+          if (written[header]) {
+            continue;
+          }
+          stream << "subgraph cluster_b" << header->name() << " {\n"
+                 << "label=\"Loop b" << header->name() << "\";\n";
+          write_dot_region(stream, node.header(), written);
+          stream << "}\n";
+        } else {
+          Block* block = node.block();
+          if (written[block]) {
+            continue;
+          }
+          write_dot_block(stream, block);
+          written[block] = true;
+        }
+        for (Node& succ : node.successors()) {
+          pending.push_back(std::move(succ));
+        }
+      }
+    }
+
+  public:
+    void write_dot(std::ostream& stream) const {
+      BlockMap<bool> written(_section->block_count());
+      stream << "digraph {\nrankdir=TB;\n";
+      if (_section->entry()) {
+        write_dot_region(stream, entry(), written);
+      }
+      for (Block* block : *_section) {
+        if (!written[block]) {
+          continue;
+        }
+        for (Block* succ : block->successors()) {
+          stream << "b" << block->name() << " -> b" << succ->name();
+          auto loop = _loops.find(succ);
+          if (loop != _loops.end() && loop->second->backedges()->count(block)) {
+            stream << " [constraint=false]";
+          }
+          stream << ";\n";
+        }
+      }
+      stream << "}\n";
+    }
+
+    void save_dot(const std::string& path) const {
+      std::ofstream file(path);
+      if (!file) {
+        throw std::runtime_error("Failed to open file for writing: " + path);
+      }
+      write_dot(file);
+    }
   };
 
   // Promotes memory accesses with exact aliasing inside the loop to registers.
@@ -5933,6 +5973,39 @@ private:
     }
 
     return loops;
+  }
+
+  inline void Loop::analyze_body(const Incoming& incoming, DominatorTree& domtree) {
+    std::set<Block*> body = {_header};
+    std::deque<Block*> open;
+    for (Block* backedge : _backedges.value()) {
+      if (body.insert(backedge).second) {
+        open.push_back(backedge);
+      }
+    }
+    while (!open.empty()) {
+      Block* block = open.front();
+      open.pop_front();
+      for (Block* pred : incoming.at(block)) {
+        if ((pred == domtree.root() || domtree.idom(pred)) && body.insert(pred).second) {
+          open.push_back(pred);
+        }
+      }
+    }
+    _body = std::move(body);
+  }
+
+  inline LoopCFG::LoopCFG(Section* section): _section(section) {
+    if (!section->entry()) {
+      return;
+    }
+    Incoming incoming(section);
+    DominatorTree domtree(section);
+    _loops = Loop::find_loops(domtree, incoming);
+    for (auto& [header, loop] : _loops) {
+      loop->analyze_body(incoming, domtree);
+      loop->analyze_exits();
+    }
   }
 
   class PostDominatorTree: public DominatorTreeBase<PostDominatorTree> {
