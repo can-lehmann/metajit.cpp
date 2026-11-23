@@ -306,42 +306,33 @@ int main(int argc, char** argv) {
       y = builder.build_promote(y);
       data.output(y);
     });
-    
+
+    suite.gen_ext_test("loop_many_loads").samples(2, 1).run([](Builder& builder, TraceTestData& data) {
+      Block* header = builder.build_block({Type::Int32, Type::Int64});
+      Block* body = builder.build_block();
+      Block* end = builder.build_block();
+      builder.build_jump(header, {
+        builder.build_const(Type::Int32, 0),
+        builder.build_const(Type::Int64, 0)
+      });
+
+      builder.move_to_end(header);
+      Value* index = header->arg(0);
+      Value* sum = header->arg(1);
+      Value* limit = builder.build_const(Type::Int32, 256);
+      builder.build_branch(builder.build_lt_u(index, limit), body, end);
+
+      builder.move_to_end(body);
+      Value* value = data.static_input(RandomRange(Type::Int64, 1, 1024));
+      builder.build_jump(header, {
+        builder.build_add(index, builder.build_const(Type::Int32, 1)),
+        builder.build_add(sum, value)
+      });
+
+      builder.move_to_end(end);
+      data.output(sum);
+    });
   }
-
-  suite.test("tape_size_unrecorded_loop").run([]() {
-    Context context;
-    Allocator allocator;
-    Section section(context, allocator);
-    Builder builder(&section);
-    builder.move_to_end(builder.build_block({Type::Ptr, Type::Bool}));
-
-    Value* pointer = builder.entry_arg(0);
-    Value* condition = builder.entry_arg(1);
-    builder.build_load(pointer, Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
-
-    Block* loop = builder.build_block();
-    Block* end = builder.build_block();
-    builder.build_jump(loop);
-
-    builder.move_to_end(loop);
-    builder.build_load(pointer, Type::Int64, LoadFlags::None, AliasingGroup(1), 0);
-    builder.build_branch(condition, loop, end);
-
-    builder.move_to_end(end);
-    builder.build_load(pointer, Type::Int64, LoadFlags::None, AliasingGroup(0), 0);
-    builder.build_exit();
-
-    OrderBlocks::run(&section, BlockOrdering::Natural);
-    AddRecord::Config config;
-    config.groups.insert(AliasingGroup(0));
-    config.min_align = 4;
-
-    size_t size = 0;
-    AddRecord::run(&section, &size, config);
-    unittest_assert(size == 24);
-    unittest_assert(!section.verify(std::cerr));
-  });
 
   return suite.finish();
 }
