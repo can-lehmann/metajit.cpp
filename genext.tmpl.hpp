@@ -1100,7 +1100,7 @@ namespace metajit {
       return build_build_inst(_builder, inst, _jitir_builder, args, _blocks, _syms);
     }
 
-    Value* emit_build_inst(Inst* inst) {
+    Value* emit_build_inst(Inst* inst, bool can_share_allocas) {
       if (_config.comments &&
           !dynamic_cast<CommentInst*>(inst)) {
         std::ostringstream comment_stream;
@@ -1155,6 +1155,17 @@ namespace metajit {
             args.push_back(emit_built_arg(arg));
           }
 
+          if (dynmatch(AllocaInst, alloca, inst);
+              can_share_allocas && alloca && dynamic_cast<Const*>(alloca->size()) &&
+              _trace_capabilities.any(alloca)) {
+            return _builder.build_call(_syms.build_shared_alloca, Type::Ptr, {
+              _jitir_builder,
+              _builder.build_const(Type::Ptr, (uint64_t)(void*)alloca),
+              args[0],
+              _builder.build_const(Type::Int32, alloca->align())
+            });
+          }
+
           if (is_int_or_bool(inst->type())) {
             auto trace_const = [&]() -> Value* {
               if (_trace_capabilities.can_trace_const(inst)) {
@@ -1206,7 +1217,7 @@ namespace metajit {
       return built;
     }
 
-    void emit_generating_extension(Block* block) {
+    void emit_generating_extension(Block* block, bool can_share_allocas) {
       ActionQueue queue;
 
       std::unordered_map<Value*, ActionGroup*> emit_groups;
@@ -1270,8 +1281,8 @@ namespace metajit {
             build_deps.push_back(const_groups.at(inst->arg(0)));
           }
         }
-        build_group->add("build", PRIO_MAX, build_deps, {}, [inst, this](){
-          _built[inst] = emit_build_inst(inst);
+        build_group->add("build", PRIO_MAX, build_deps, {}, [inst, can_share_allocas, this](){
+          _built[inst] = emit_build_inst(inst, can_share_allocas);
         });
 
         emit_groups[inst] = emit_group;
@@ -1460,8 +1471,19 @@ namespace metajit {
       }
       _builder.build_jump(_blocks.at(section->entry()), entry_jump_args);
 
+      std::vector<size_t> loop_ends(section->block_count(), 0);
       for (Block* block : *section) {
-        emit_generating_extension(block);
+        for (Block* successor : block->successors()) {
+          if (successor->name() <= block->name()) {
+            loop_ends[successor->name()] = std::max(loop_ends[successor->name()], block->name() + 1);
+          }
+        }
+      }
+
+      size_t loop_end = 0;
+      for (Block* block : *section) {
+        loop_end = std::max(loop_end, loop_ends[block->name()]);
+        emit_generating_extension(block, block->name() >= loop_end);
       }
     }
   };
