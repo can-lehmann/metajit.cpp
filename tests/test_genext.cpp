@@ -306,7 +306,32 @@ int main(int argc, char** argv) {
       y = builder.build_promote(y);
       data.output(y);
     });
-    
+
+    suite.gen_ext_test("loop_many_loads").samples(2, 1).run([](Builder& builder, TraceTestData& data) {
+      Block* header = builder.build_block({Type::Int32, Type::Int64});
+      Block* body = builder.build_block();
+      Block* end = builder.build_block();
+      builder.build_jump(header, {
+        builder.build_const(Type::Int32, 0),
+        builder.build_const(Type::Int64, 0)
+      });
+
+      builder.move_to_end(header);
+      Value* index = header->arg(0);
+      Value* sum = header->arg(1);
+      Value* limit = builder.build_const(Type::Int32, 256);
+      builder.build_branch(builder.build_lt_u(index, limit), body, end);
+
+      builder.move_to_end(body);
+      Value* value = data.static_input(RandomRange(Type::Int64, 1, 1024));
+      builder.build_jump(header, {
+        builder.build_add(index, builder.build_const(Type::Int32, 1)),
+        builder.build_add(sum, value)
+      });
+
+      builder.move_to_end(end);
+      data.output(sum);
+    });
   }
 
   return suite.finish();
