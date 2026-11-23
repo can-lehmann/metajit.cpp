@@ -32,6 +32,8 @@ namespace metajit {
               }
             } else if (dynmatch(StoreInst, store, inst)) {
               groups.insert(store->aliasing());
+            } else if (dynmatch(CallInst, call, inst); call && call->callee() == Intrinsic::write_closure) {
+              groups.insert(call->aliasing());
             }
           }
         }
@@ -666,6 +668,9 @@ namespace metajit {
           if (_config.record->has(store->aliasing())) {
             return nullptr;
           }
+        } else if (dynmatch(CallInst, call, inst);
+                   call && call->callee() == Intrinsic::write_closure && _config.record->has(call->aliasing())) {
+          return nullptr;
         }
       }
       return Clone::clone(inst, _builder, _blocks, _values);
@@ -880,27 +885,33 @@ namespace metajit {
         _builder.build_const(Type::Int64, _section->entry()->args().size())
       });
 
-      _builder.build_call(_syms.build_store, Type::Ptr, {
+      Value* write = _builder.build_call(_syms.build_call, Type::Ptr, {
         _jitir_builder,
-        closure_arg,
-        _builder.build_call(_syms.build_const_fast, Type::Ptr, {
-          _jitir_builder,
-          _builder.build_const(Type::Int32, (uint64_t) Type::Int32),
-          _builder.build_const(Type::Int64, closure.id),
-        }),
-        _builder.build_const(Type::Int32, StoreFlags::None),
-        _builder.build_const(Type::Int32, 0),
-        _builder.build_const(Type::Int64, 0)
+        emit_built_arg(Intrinsic::write_closure),
+        _builder.build_const(Type::Int64, 2 + closure.captures.size()),
+        _builder.build_const(Type::Int32, (uint64_t) Type::Void),
+        _builder.build_const(Type::Int32, (uint64_t) CallConv::Default),
+        _builder.build_const(Type::Int32, (uint64_t) CallFlags::None),
+        _builder.build_const(Type::Int32, 0)
+      });
+      _builder.build_call(_syms.set_arg, Type::Void, {
+        write, _builder.build_const(Type::Int64, 1), closure_arg
+      });
+      Value* id = _builder.build_call(_syms.build_const_fast, Type::Ptr, {
+        _jitir_builder,
+        _builder.build_const(Type::Int32, (uint64_t) Type::Int32),
+        _builder.build_const(Type::Int64, closure.id)
+      });
+      _builder.build_call(_syms.set_arg, Type::Void, {
+        write, _builder.build_const(Type::Int64, 2), id
       });
 
-      for (ReentryClosures::Capture& capture : closure.captures) {
-        _builder.build_call(_syms.build_store, Type::Ptr, {
-          _jitir_builder,
-          closure_arg,
-          emit_built_arg(capture.value),
-          _builder.build_const(Type::Int32, StoreFlags::None),
-          _builder.build_const(Type::Int32, 0),
-          _builder.build_const(Type::Int64, capture.offset)
+      size_t index = 3;
+      for (const ReentryClosures::Capture& capture : closure.captures) {
+        _builder.build_call(_syms.set_arg, Type::Void, {
+          write,
+          _builder.build_const(Type::Int64, index++),
+          emit_built_arg(capture.value)
         });
       }
 

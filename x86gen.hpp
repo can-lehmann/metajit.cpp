@@ -1027,6 +1027,47 @@ namespace metajit {
       return {a, b};
     }
 
+    void build_store(X86Inst::Mem mem, Value* value) {
+      if (value->type() == Type::Bool && value->is_named() &&
+          _use_counts.at((NamedValue*) value) == 1) {
+        if (build_cmp_setcc(mem, value)) {
+          return;
+        }
+      }
+
+      switch (value->type()) {
+        case Type::Float32: _builder.movss_mem(mem, vreg(value)); return;
+        case Type::Float64: _builder.movsd_mem(mem, vreg(value)); return;
+        default:
+          break;
+      }
+
+      if (dynmatch(Const, constant_value, value)) {
+        switch (type_size(value->type())) {
+          case 1: _builder.mov8_imm(mem, constant_value->value()); return;
+          case 2: _builder.mov16_imm(mem, constant_value->value()); return;
+          case 4: _builder.mov32_imm(mem, constant_value->value()); return;
+          case 8:
+            if (is_sext_imm32(constant_value)) {
+              _builder.mov64_imm(mem, constant_value->value());
+              return;
+            }
+          break;
+          default:
+            assert(false && "Unsupported store type");
+        }
+      }
+
+      switch (type_size(value->type())) {
+        case 1: _builder.mov8_mem(mem, vreg(value)); break;
+        case 2: _builder.mov16_mem(mem, vreg(value)); break;
+        case 4: _builder.mov32_mem(mem, vreg(value)); break;
+        case 8: _builder.mov64_mem(mem, vreg(value)); break;
+        default:
+          assert(false && "Unsupported store type");
+      }
+    }
+
     void isel(Inst* inst, Block* block) {
       if (dynmatch(FreezeInst, freeze, inst)) {
         move(vreg(inst), vreg(freeze->arg(0)));
@@ -1138,35 +1179,7 @@ namespace metajit {
         }
       } else if (dynmatch(StoreInst, store, inst)) {
         X86Inst::Mem mem(vreg(store->arg(0)), store->offset());
-        if (store->arg(1)->type() == Type::Bool && store->arg(1)->is_named() &&
-            _use_counts.at((NamedValue*) store->arg(1)) == 1) {
-          if (build_cmp_setcc(mem, store->arg(1))) {
-            return;
-          }
-        }
-        
-        switch (store->arg(1)->type()) {
-          case Type::Float32: _builder.movss_mem(mem, vreg(store->arg(1))); return;
-          case Type::Float64: _builder.movsd_mem(mem, vreg(store->arg(1))); return;
-          default:
-            break;
-        }
-
-        if (dynmatch(Const, constant_value, store->arg(1))) {
-          switch (type_size(store->arg(1)->type())) {
-            case 1: _builder.mov8_imm(mem, constant_value->value()); return;
-            case 2: _builder.mov16_imm(mem, constant_value->value()); return;
-            case 4: _builder.mov32_imm(mem, constant_value->value()); return;
-            case 8:
-              if (is_sext_imm32(constant_value)) {
-                _builder.mov64_imm(mem, constant_value->value());
-                return;
-              }
-            break;
-            default:
-              assert(false && "Unsupported store type");
-          }
-        } else if (dynmatch(AddInst, add, store->arg(1))) {
+        if (dynmatch(AddInst, add, store->arg(1))) {
           LoadInst* load_arg = nullptr;
           Value* other_arg = nullptr;
 
@@ -1197,14 +1210,7 @@ namespace metajit {
           }
         }
 
-        switch (type_size(store->arg(1)->type())) {
-          case 1: _builder.mov8_mem(mem, vreg(store->arg(1))); break;
-          case 2: _builder.mov16_mem(mem, vreg(store->arg(1))); break;
-          case 4: _builder.mov32_mem(mem, vreg(store->arg(1))); break;
-          case 8: _builder.mov64_mem(mem, vreg(store->arg(1))); break;
-          default:
-            assert(false && "Unsupported store type");
-        }
+        build_store(mem, store->value());
       } else if (dynmatch(AllocaInst, alloca, inst)) {
         dynmatch(Const, size_const, alloca->size());
         assert(size_const && "x86 backend currently requires constant-size Alloca");
@@ -1655,6 +1661,19 @@ namespace metajit {
         }
         _builder.setb8(vreg(inst)); // cf=1 <=> unordered(a, b) | (a < b)
       } else if (dynmatch(CallInst, call, inst)) {
+        if (call->callee() == Intrinsic::write_closure) {
+          if (call->arg_count() > 2) {
+            Reg closure = vreg(call->arg(1));
+            size_t size = 0;
+            for (size_t it = 2; it < call->arg_count(); it++) {
+              Value* value = call->arg(it);
+              size_t offset = add_record_field(size, value->type());
+              build_store(X86Inst::Mem(closure, offset), value);
+            }
+          }
+          return;
+        }
+
         CallConvInfo info(call->call_conv());
 
         assert(call->arg_count() >= 1);

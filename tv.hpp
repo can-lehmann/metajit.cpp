@@ -371,6 +371,17 @@ namespace metajit {
         return result;
       }
 
+      void emit_store(Block* block, const ValueState& ptr_state, Value* value, uint64_t offset) {
+        ValueState val_state = emit(value);
+        _blocks.at(block).ub = _blocks.at(block).ub ||
+          (_blocks.at(block).active &&
+           (ptr_state.is_poison() || val_state.is_poison()));
+        if (ptr_state.has_provenance()) {
+          ValueState pointer = ptr_state.add_ptr(offset);
+          memory_state(block).store(pointer, val_state);
+        }
+      }
+
       ValueState emit_inst(Inst* inst, Block* block) {
         if (dynmatch(FreezeInst, freeze, inst)) {
           ValueState input = emit(freeze->arg(0));
@@ -433,14 +444,16 @@ namespace metajit {
           }
           return ValueState(load->type(), _context.bv_val(0, type_width(load->type())));
         } else if (dynmatch(StoreInst, store, inst)) {
-          ValueState ptr_state = emit(store->arg(0));
-          ValueState val_state = emit(store->arg(1));
-          _blocks.at(block).ub = _blocks.at(block).ub ||
-            (_blocks.at(block).active &&
-             (ptr_state.is_poison() || val_state.is_poison()));
-          if (ptr_state.has_provenance()) {
-            ValueState pointer = ptr_state.add_ptr(store->offset());
-            memory_state(block).store(pointer, val_state);
+          emit_store(block, emit(store->ptr()), store->value(), store->offset());
+        } else if (dynmatch(CallInst, call, inst); call && call->callee() == Intrinsic::write_closure) {
+          if (call->arg_count() > 2) {
+            ValueState ptr_state = emit(call->arg(1));
+            size_t size = 0;
+            for (size_t it = 2; it < call->arg_count(); it++) {
+              Value* value = call->arg(it);
+              size_t offset = add_record_field(size, value->type());
+              emit_store(block, ptr_state, value, offset);
+            }
           }
         } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
           ValueState pointer = emit(add_ptr->arg(0));

@@ -334,6 +334,17 @@ namespace metajit {
               llvm::MaybeAlign(),
               emit_arg(call->arg(3))
             );
+          } else if (intrinsic == Intrinsic::write_closure) {
+            if (call->arg_count() > 2) {
+              llvm::Value* closure = emit_arg(call->arg(1));
+              size_t size = 0;
+              for (size_t it = 2; it < call->arg_count(); it++) {
+                Value* value = call->arg(it);
+                size_t offset = add_record_field(size, value->type());
+                _builder.CreateStore(emit_arg(value), emit_add_offset(closure, offset));
+              }
+            }
+            return nullptr;
           } else {
             assert(false && "Unsupported intrinsic");
             return nullptr;

@@ -426,13 +426,16 @@ namespace metajit {
     CallConv _call_conv;
     std::vector<Type> _args;
     Type _ret;
+    bool _variadic;
 
-    Intrinsic(const char* name, CallConv call_conv, std::vector<Type> args, Type ret):
+    Intrinsic(const char* name, CallConv call_conv, std::vector<Type> args,
+              Type ret, bool variadic = false):
         Value(Type::Ptr),
         _name(name, std::strlen(name)),
         _call_conv(call_conv),
         _args(std::move(args)),
-        _ret(ret) {}
+        _ret(ret),
+        _variadic(variadic) {}
 
     Intrinsic(const Intrinsic&) = delete;
     Intrinsic& operator=(const Intrinsic&) = delete;
@@ -441,6 +444,7 @@ namespace metajit {
     CallConv call_conv() const { return _call_conv; }
     const std::vector<Type>& args() const { return _args; }
     Type ret() const { return _ret; }
+    bool variadic() const { return _variadic; }
 
     void write_arg(PrettyStream& stream) const override {
       stream << Highlight::Constant << "@intrinsic::" << _name << Highlight::None;
@@ -473,6 +477,7 @@ namespace metajit {
 
     static Intrinsic* const memset;
     static Intrinsic* const memcpy;
+    static Intrinsic* const write_closure;
   };
 
   class Context {
@@ -914,6 +919,13 @@ namespace metajit {
     {Type::Ptr, Type::Ptr, Type::Int64},
     Type::Void
   );
+  inline Intrinsic* const Intrinsic::write_closure = new Intrinsic(
+    "write_closure",
+    CallConv::Default,
+    {Type::Ptr},
+    Type::Void,
+    true
+  );
 }
 
 #define define_flags_overloads(Flags) \
@@ -966,6 +978,14 @@ namespace metajit {
   using AliasingGroup = int32_t;
 
   /* ${insts} */
+
+  inline size_t add_record_field(size_t& size, Type type) {
+    size_t field_size = type_size(type);
+    assert(field_size != 0);
+    size_t offset = (size + field_size - 1) & ~(field_size - 1);
+    size = offset + field_size;
+    return offset;
+  }
 
   bool Inst::is_commutative() const {
     return /* ${commutative_checks} */;
@@ -2437,6 +2457,8 @@ namespace metajit {
             return Intrinsic::memset;
           } else if (name == "memcpy") {
             return Intrinsic::memcpy;
+          } else if (name == "write_closure") {
+            return Intrinsic::write_closure;
           }
           error("Unknown intrinsic '" + name + "'");
         }
@@ -2449,11 +2471,11 @@ namespace metajit {
 
     std::vector<Value*> read_value_arg_list() {
       std::vector<Value*> args;
-      // read comma separated list of value args (starting with % or a constant)
+      // read comma separated list of value args
       while (true) {
         skip_whitespace();
         char c = _stream.peek();
-        if (c != '%' && !std::isdigit(c)) {
+        if (c != '%' && c != '@' && !std::isdigit(c)) {
           break;
         }
         args.push_back(read_value_arg());
@@ -4026,6 +4048,18 @@ namespace metajit {
                 (const void*) (uintptr_t) source.value,
                 size.value
               );
+            }
+          } else if (intrinsic == Intrinsic::write_closure) {
+            if (call->arg_count() > 2) {
+              Bits ptr = at(call->arg(1));
+              assert(!ptr.is_poison);
+              uint8_t* closure = (uint8_t*) ptr.value;
+              size_t size = 0;
+              for (size_t it = 2; it < call->arg_count(); it++) {
+                Value* value = call->arg(it);
+                size_t offset = add_record_field(size, value->type());
+                at(value).store(closure + offset);
+              }
             }
           } else {
             assert(false && "Unsupported intrinsic in interpreter");
@@ -6445,10 +6479,21 @@ namespace metajit {
                      << intrinsic->ret() << ", got " << call->type() << "\n";
               return true;
             }
-            if (call->arg_count() != intrinsic->args().size() + 1) {
-              errors << "Intrinsic " << intrinsic->name() << " expects "
-                     << intrinsic->args().size() << " arguments, got " << call->arg_count() - 1 << "\n";
+            size_t actual_args = call->arg_count() - 1;
+            size_t fixed_args = intrinsic->args().size();
+            if (actual_args < fixed_args || (!intrinsic->variadic() && actual_args > fixed_args)) {
+              errors << "Intrinsic " << intrinsic->name() << " expects ";
+              if (intrinsic->variadic()) {
+                errors << "at least ";
+              }
+              errors << fixed_args << " arguments, got " << actual_args << "\n";
               return true;
+            }
+            for (size_t it = fixed_args; it < actual_args; it++) {
+              if (call->arg(it + 1)->type() == Type::Void) {
+                errors << "Intrinsic " << intrinsic->name() << " has void argument " << it << "\n";
+                return true;
+              }
             }
             for (size_t it = 0; it < intrinsic->args().size(); it++) {
               if (call->arg(it + 1)->type() != intrinsic->args()[it]) {
@@ -6698,11 +6743,7 @@ namespace metajit {
       size_t size = sizeof(uint32_t);
 
       void add(NamedValue* value) {
-        if (size % type_size(value->type())) {
-          size += type_size(value->type()) - size % type_size(value->type());
-        }
-        captures.emplace_back(value, size);
-        size += type_size(value->type());
+        captures.emplace_back(value, add_record_field(size, value->type()));
       }
 
       Closure to_cloned(const Clone& clone) const {
