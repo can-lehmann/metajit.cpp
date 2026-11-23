@@ -171,6 +171,13 @@ int main(int argc, char** argv) {
       data.output(builder.build_load(dest, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
     });
 
+    suite.gen_ext_test("record_tape_alloca").samples(1, 2).run([](Builder& builder, TraceTestData& data) {
+      Value* value = data.input(RandomRange(Type::Int32, 1, 2));
+      Value* ptr = builder.build_alloca(Type::Int32);
+      builder.build_store(ptr, value, AliasingGroup(1), 0);
+      data.output(builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(1), 0));
+    });
+
     suite.gen_ext_test("static_select_omitted_arm").samples(2, 4).run(static_select_omitted_arm);
     suite.gen_ext_test("mul_high_u_promoted").samples(4, 16).run(mul_high_u_promoted);
 
