@@ -287,8 +287,9 @@ namespace metajit {
           Pointer ptr;
           if (dynmatch(StoreInst, store, inst)) {
             ptr = at(store->ptr()).add_offset(store->offset());
-          } else if (dynmatch(WriteClosureInst, write, inst) && write->arg_count() > 1) {
-            ptr = at(write->closure());
+          } else if (dynmatch(CallInst, call, inst); call && call->callee() == Intrinsic::write_closure &&
+                     call->arg_count() > 2) {
+            ptr = at(call->arg(1));
           }
           if (!ptr.is_bottom()) {
             ptr.layout->set_pure(false);

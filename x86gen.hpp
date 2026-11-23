@@ -688,11 +688,6 @@ namespace metajit {
             } else {
               last_store[store->aliasing()] = store;
             }
-          } else if (dynamic_cast<WriteClosureInst*>(inst)) {
-            _memory_deps[inst] = last_write;
-            last_write = inst;
-            last_clobber = inst;
-            last_store.clear();
           } else if (dynmatch(CallInst, call, inst)) {
             _memory_deps[inst] = (void*) block;
             last_write = call;
@@ -1216,13 +1211,6 @@ namespace metajit {
         }
 
         build_store(mem, store->value());
-      } else if (dynmatch(WriteClosureInst, write, inst)) {
-        if (write->arg_count() > 1) {
-          Reg closure = vreg(write->closure());
-          for_each_closure_field(write, [&](Value* value, size_t offset) {
-            build_store(X86Inst::Mem(closure, offset), value);
-          });
-        }
       } else if (dynmatch(AllocaInst, alloca, inst)) {
         dynmatch(Const, size_const, alloca->size());
         assert(size_const && "x86 backend currently requires constant-size Alloca");
@@ -1673,6 +1661,16 @@ namespace metajit {
         }
         _builder.setb8(vreg(inst)); // cf=1 <=> unordered(a, b) | (a < b)
       } else if (dynmatch(CallInst, call, inst)) {
+        if (call->callee() == Intrinsic::write_closure) {
+          if (call->arg_count() > 2) {
+            Reg closure = vreg(call->arg(1));
+            for_each_closure_field(call, [&](Value* value, size_t offset) {
+              build_store(X86Inst::Mem(closure, offset), value);
+            });
+          }
+          return;
+        }
+
         CallConvInfo info(call->call_conv());
 
         assert(call->arg_count() >= 1);

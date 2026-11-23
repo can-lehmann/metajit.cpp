@@ -237,21 +237,6 @@ Type Checks:
 
 - `ptr->type() == Type::Ptr`
 
-### WriteClosure
-
-Store the fields in order starting at offset zero. Align each field to its type size and leave padding untouched.
-
-Arguments
-
-- **closure**: `Value*`
-- **data**: Variable number of arguments
-
-Return Type: `Type::Void`
-
-Type Checks:
-
-- `closure->type() == Type::Ptr`
-
 ### Alloca
 
 Allocate memory on the stack.
@@ -672,3 +657,10 @@ Return Type: `Type::Void`
 
 
 
+
+## Intrinsics
+
+`@intrinsic::write_closure` takes a closure pointer followed by any number of
+values. It stores the values in order starting at offset zero, aligning each
+field to its type size and leaving padding untouched. Guard-failure traces pass
+the 32-bit reentry ID as the first value, followed by the captures.

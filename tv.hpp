@@ -445,10 +445,10 @@ namespace metajit {
           return ValueState(load->type(), _context.bv_val(0, type_width(load->type())));
         } else if (dynmatch(StoreInst, store, inst)) {
           emit_store(block, emit(store->ptr()), store->value(), store->offset());
-        } else if (dynmatch(WriteClosureInst, write, inst)) {
-          if (write->arg_count() > 1) {
-            ValueState ptr_state = emit(write->closure());
-            for_each_closure_field(write, [&](Value* value, size_t offset) {
+        } else if (dynmatch(CallInst, call, inst); call && call->callee() == Intrinsic::write_closure) {
+          if (call->arg_count() > 2) {
+            ValueState ptr_state = emit(call->arg(1));
+            for_each_closure_field(call, [&](Value* value, size_t offset) {
               emit_store(block, ptr_state, value, offset);
             });
           }
