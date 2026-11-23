@@ -35,6 +35,8 @@ void test_saturating_use_counts() {
   Inst* result = builder.build_xor(shared, next->arg(0));
   StoreInst* store = builder.build_store(entry->arg(2), result, 0, 0);
   CommentInst* comment = builder.build_comment("retained");
+  MetadataInst* marker = builder.build_metadata(1, MetadataKind::LifetimeEnd);
+  marker->set_arg(0, entry->arg(2));
   Inst* exit = builder.build_exit();
   section.autoname();
 
@@ -47,6 +49,8 @@ void test_saturating_use_counts() {
   unittest_assert(!counts.is_dead(shared));
   unittest_assert(counts.at(store) == 0 && !counts.is_dead(store));
   unittest_assert(counts.at(comment) == 0 && !counts.is_dead(comment));
+  unittest_assert(!counts.is_dead(marker));
+  unittest_assert(counts.at(entry->arg(2)) == 2);
   unittest_assert(counts.at(exit) == 0 && !counts.is_dead(exit));
   counts.invalidate(unused);
   unittest_assert(!counts.is_dead(unused));
@@ -256,7 +260,7 @@ b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
   %7 = Or %6, %3
   %8 = And %7, 255:Int16
   %9 = Or %8, %4
-  Store %0, %9, aliasing=0, offset=0
+  Store %0, %9, flags={}, aliasing=0, offset=0
   Exit
 }
 )", R"(section {
@@ -266,7 +270,7 @@ b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
   %7 = Or %6, %3
   %8 = And %3, 255:Int16
   %9 = Or %8, %4
-  Store %0, %9, aliasing=0, offset=0
+  Store %0, %9, flags={}, aliasing=0, offset=0
   Exit
 }
 )");
@@ -420,24 +424,24 @@ void test_simplify_used_bits_other_use() {
   const std::string input = R"(section {
 b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
   %5 = Or %1, %2
-  Store %0, %5, aliasing=0, offset=2
+  Store %0, %5, flags={}, aliasing=0, offset=2
   %7 = And %5, 65280:Int16
   %8 = Or %7, %3
   %9 = And %8, 255:Int16
   %10 = Or %9, %4
-  Store %0, %10, aliasing=0, offset=0
+  Store %0, %10, flags={}, aliasing=0, offset=0
   Exit
 }
 )";
   check_simplify_text(input, R"(section {
 b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
   %5 = Or %1, %2
-  Store %0, %5, aliasing=0, offset=2
+  Store %0, %5, flags={}, aliasing=0, offset=2
   %7 = And %5, 65280:Int16
   %8 = Or %7, %3
   %9 = And %3, 255:Int16
   %10 = Or %9, %4
-  Store %0, %10, aliasing=0, offset=0
+  Store %0, %10, flags={}, aliasing=0, offset=0
   Exit
 }
 )");
@@ -447,8 +451,8 @@ void test_simplify_used_bits_effects() {
   const std::string input = R"(section {
 b0(%0: Ptr, %1: Ptr, %2: Bool, %3: Int32):
   %4 = Load %0, type=Int32, flags={}, aliasing=0, offset=0
-  %5 = Call %1, %3, type=Int32, call_conv=Default, flags={}
-  Store %0, %3, aliasing=0, offset=4
+  %5 = Call %1, %3, type=Int32, call_conv=Default, flags={}, aliasing=0
+  Store %0, %3, flags={}, aliasing=0, offset=4
   Branch %2, true_block=b1, false_block=b2
 b1:
   Exit
@@ -464,13 +468,13 @@ void test_simplify_used_bits_shl_mask() {
 b0(%0: Ptr, %1: Int32):
   %2 = And %1, 255:Int32
   %3 = Shl %2, 24:Int32
-  Store %0, %3, aliasing=0, offset=0
+  Store %0, %3, flags={}, aliasing=0, offset=0
   Exit
 }
 )", R"(section {
 b0(%0: Ptr, %1: Int32):
   %2 = Shl %1, 24:Int32
-  Store %0, %2, aliasing=0, offset=0
+  Store %0, %2, flags={}, aliasing=0, offset=0
   Exit
 }
 )");
@@ -636,7 +640,7 @@ void test_and_or_idempotence_simplify(Builder& builder, TestData& data) {
   Value* value = data.input(Type::Int32);
   Value* other = data.input(Type::Int32);
   Value* masked = builder.fold_and(input, builder.build_const(Type::Int32, 1));
-  Value* condition = builder.fold_eq(masked, builder.build_const(Type::Int32, 2));
+  Value* condition = builder.build_eq(masked, builder.build_const(Type::Int32, 2));
   Value* selected = builder.fold_select(condition, other, value);
   Value* and_result = builder.fold_and(value, selected);
   Value* or_result = builder.fold_or(value, selected);
@@ -1055,136 +1059,136 @@ void test_fold_unmasked_shift_pairs() {
 b0(%0: Ptr, %1: Int8, %2: Int8, %3: Int8, %4: Int8, %5: Int8, %6: Int8, %7: Int8, %8: Int8, %9: Int8, %10: Int8, %11: Int8, %12: Int8, %13: Int8, %14: Int8, %15: Int8, %16: Int8, %17: Int8, %18: Int8, %19: Int8, %20: Int8, %21: Int8, %22: Int8, %23: Int8, %24: Int8, %25: Int8, %26: Int8):
   %27 = ShrU %1, 1:Int8
   %28 = Shl %27, 1:Int8
-  Store %0, %28, aliasing=0, offset=0
+  Store %0, %28, flags={}, aliasing=0, offset=0
   %29 = ShrU %2, 1:Int8
   %30 = Shl %29, 1:Int8
   %31 = Or %2, %30
-  Store %0, %31, aliasing=0, offset=8
+  Store %0, %31, flags={}, aliasing=0, offset=8
   %32 = ShrU %3, 1:Int8
   %33 = Shl %32, 1:Int8
   %34 = Or %33, %3
-  Store %0, %34, aliasing=0, offset=16
+  Store %0, %34, flags={}, aliasing=0, offset=16
   %35 = Shl %4, 1:Int8
   %36 = Shl %35, 1:Int8
-  Store %0, %36, aliasing=0, offset=24
+  Store %0, %36, flags={}, aliasing=0, offset=24
   %37 = ShrU %5, 1:Int8
   %38 = Shl %37, 4:Int8
-  Store %0, %38, aliasing=0, offset=32
+  Store %0, %38, flags={}, aliasing=0, offset=32
   %39 = Shl %6, 1:Int8
   %40 = Shl %39, 4:Int8
-  Store %0, %40, aliasing=0, offset=40
+  Store %0, %40, flags={}, aliasing=0, offset=40
   %41 = ShrU %7, 1:Int8
   %42 = Shl %41, 7:Int8
-  Store %0, %42, aliasing=0, offset=48
+  Store %0, %42, flags={}, aliasing=0, offset=48
   %43 = Shl %8, 1:Int8
   %44 = Shl %43, 7:Int8
-  Store %0, %44, aliasing=0, offset=56
+  Store %0, %44, flags={}, aliasing=0, offset=56
   %45 = ShrU %9, 4:Int8
   %46 = Shl %45, 1:Int8
-  Store %0, %46, aliasing=0, offset=64
+  Store %0, %46, flags={}, aliasing=0, offset=64
   %47 = Shl %10, 4:Int8
   %48 = Shl %47, 1:Int8
-  Store %0, %48, aliasing=0, offset=72
+  Store %0, %48, flags={}, aliasing=0, offset=72
   %49 = ShrU %11, 4:Int8
   %50 = Shl %49, 4:Int8
-  Store %0, %50, aliasing=0, offset=80
+  Store %0, %50, flags={}, aliasing=0, offset=80
   %51 = ShrU %12, 4:Int8
   %52 = Shl %51, 4:Int8
   %53 = Or %12, %52
-  Store %0, %53, aliasing=0, offset=88
+  Store %0, %53, flags={}, aliasing=0, offset=88
   %54 = ShrU %13, 4:Int8
   %55 = Shl %54, 4:Int8
   %56 = Or %55, %13
-  Store %0, %56, aliasing=0, offset=96
+  Store %0, %56, flags={}, aliasing=0, offset=96
   %57 = Shl %14, 4:Int8
   %58 = Shl %57, 4:Int8
-  Store %0, %58, aliasing=0, offset=104
+  Store %0, %58, flags={}, aliasing=0, offset=104
   %59 = ShrU %15, 4:Int8
   %60 = Shl %59, 7:Int8
-  Store %0, %60, aliasing=0, offset=112
+  Store %0, %60, flags={}, aliasing=0, offset=112
   %61 = Shl %16, 4:Int8
   %62 = Shl %61, 7:Int8
-  Store %0, %62, aliasing=0, offset=120
+  Store %0, %62, flags={}, aliasing=0, offset=120
   %63 = ShrU %17, 7:Int8
   %64 = Shl %63, 1:Int8
-  Store %0, %64, aliasing=0, offset=128
+  Store %0, %64, flags={}, aliasing=0, offset=128
   %65 = Shl %18, 7:Int8
   %66 = Shl %65, 1:Int8
-  Store %0, %66, aliasing=0, offset=136
+  Store %0, %66, flags={}, aliasing=0, offset=136
   %67 = ShrU %19, 7:Int8
   %68 = Shl %67, 4:Int8
-  Store %0, %68, aliasing=0, offset=144
+  Store %0, %68, flags={}, aliasing=0, offset=144
   %69 = Shl %20, 7:Int8
   %70 = Shl %69, 4:Int8
-  Store %0, %70, aliasing=0, offset=152
+  Store %0, %70, flags={}, aliasing=0, offset=152
   %71 = ShrU %21, 7:Int8
   %72 = Shl %71, 7:Int8
-  Store %0, %72, aliasing=0, offset=160
+  Store %0, %72, flags={}, aliasing=0, offset=160
   %73 = ShrU %22, 7:Int8
   %74 = Shl %73, 7:Int8
   %75 = Or %22, %74
-  Store %0, %75, aliasing=0, offset=168
+  Store %0, %75, flags={}, aliasing=0, offset=168
   %76 = ShrU %23, 7:Int8
   %77 = Shl %76, 7:Int8
   %78 = Or %77, %23
-  Store %0, %78, aliasing=0, offset=176
+  Store %0, %78, flags={}, aliasing=0, offset=176
   %79 = Shl %24, 7:Int8
   %80 = Shl %79, 7:Int8
-  Store %0, %80, aliasing=0, offset=184
+  Store %0, %80, flags={}, aliasing=0, offset=184
   %81 = ShrU %25, 1:Int8
   %82 = And %81, %26
   %83 = Shl %82, 1:Int8
-  Store %0, %83, aliasing=0, offset=192
+  Store %0, %83, flags={}, aliasing=0, offset=192
   Exit
 }
 )", R"(section {
 b0(%0: Ptr, %1: Int8, %2: Int8, %3: Int8, %4: Int8, %5: Int8, %6: Int8, %7: Int8, %8: Int8, %9: Int8, %10: Int8, %11: Int8, %12: Int8, %13: Int8, %14: Int8, %15: Int8, %16: Int8, %17: Int8, %18: Int8, %19: Int8, %20: Int8, %21: Int8, %22: Int8, %23: Int8, %24: Int8, %25: Int8, %26: Int8):
   %27 = And %1, 254:Int8
-  Store %0, %27, aliasing=0, offset=0
-  Store %0, %2, aliasing=0, offset=8
-  Store %0, %3, aliasing=0, offset=16
+  Store %0, %27, flags={}, aliasing=0, offset=0
+  Store %0, %2, flags={}, aliasing=0, offset=8
+  Store %0, %3, flags={}, aliasing=0, offset=16
   %28 = Shl %4, 2:Int8
-  Store %0, %28, aliasing=0, offset=24
+  Store %0, %28, flags={}, aliasing=0, offset=24
   %29 = Shl %5, 3:Int8
   %30 = And %29, 240:Int8
-  Store %0, %30, aliasing=0, offset=32
+  Store %0, %30, flags={}, aliasing=0, offset=32
   %31 = Shl %6, 5:Int8
-  Store %0, %31, aliasing=0, offset=40
+  Store %0, %31, flags={}, aliasing=0, offset=40
   %32 = Shl %7, 6:Int8
   %33 = And %32, 128:Int8
-  Store %0, %33, aliasing=0, offset=48
-  Store %0, 0:Int8, aliasing=0, offset=56
+  Store %0, %33, flags={}, aliasing=0, offset=48
+  Store %0, 0:Int8, flags={}, aliasing=0, offset=56
   %34 = ShrU %9, 3:Int8
   %35 = And %34, 254:Int8
-  Store %0, %35, aliasing=0, offset=64
+  Store %0, %35, flags={}, aliasing=0, offset=64
   %36 = Shl %10, 5:Int8
-  Store %0, %36, aliasing=0, offset=72
+  Store %0, %36, flags={}, aliasing=0, offset=72
   %37 = And %11, 240:Int8
-  Store %0, %37, aliasing=0, offset=80
-  Store %0, %12, aliasing=0, offset=88
-  Store %0, %13, aliasing=0, offset=96
-  Store %0, 0:Int8, aliasing=0, offset=104
+  Store %0, %37, flags={}, aliasing=0, offset=80
+  Store %0, %12, flags={}, aliasing=0, offset=88
+  Store %0, %13, flags={}, aliasing=0, offset=96
+  Store %0, 0:Int8, flags={}, aliasing=0, offset=104
   %38 = Shl %15, 3:Int8
   %39 = And %38, 128:Int8
-  Store %0, %39, aliasing=0, offset=112
-  Store %0, 0:Int8, aliasing=0, offset=120
+  Store %0, %39, flags={}, aliasing=0, offset=112
+  Store %0, 0:Int8, flags={}, aliasing=0, offset=120
   %40 = ShrU %17, 6:Int8
   %41 = And %40, 254:Int8
-  Store %0, %41, aliasing=0, offset=128
-  Store %0, 0:Int8, aliasing=0, offset=136
+  Store %0, %41, flags={}, aliasing=0, offset=128
+  Store %0, 0:Int8, flags={}, aliasing=0, offset=136
   %42 = ShrU %19, 3:Int8
   %43 = And %42, 240:Int8
-  Store %0, %43, aliasing=0, offset=144
-  Store %0, 0:Int8, aliasing=0, offset=152
+  Store %0, %43, flags={}, aliasing=0, offset=144
+  Store %0, 0:Int8, flags={}, aliasing=0, offset=152
   %44 = And %21, 128:Int8
-  Store %0, %44, aliasing=0, offset=160
-  Store %0, %22, aliasing=0, offset=168
-  Store %0, %23, aliasing=0, offset=176
-  Store %0, 0:Int8, aliasing=0, offset=184
+  Store %0, %44, flags={}, aliasing=0, offset=160
+  Store %0, %22, flags={}, aliasing=0, offset=168
+  Store %0, %23, flags={}, aliasing=0, offset=176
+  Store %0, 0:Int8, flags={}, aliasing=0, offset=184
   %45 = ShrU %25, 1:Int8
   %46 = And %45, %26
   %47 = Shl %46, 1:Int8
-  Store %0, %47, aliasing=0, offset=192
+  Store %0, %47, flags={}, aliasing=0, offset=192
   Exit
 }
 )");
@@ -1195,38 +1199,38 @@ void test_fold_shift_pairs_int64_boundaries() {
 b0(%0: Ptr, %1: Int64):
   %2 = ShrU %1, 63:Int64
   %3 = Shl %2, 63:Int64
-  Store %0, %3, aliasing=0, offset=0
+  Store %0, %3, flags={}, aliasing=0, offset=0
   %4 = ShrU %1, 63:Int64
   %5 = Shl %4, 1:Int64
-  Store %0, %5, aliasing=0, offset=8
+  Store %0, %5, flags={}, aliasing=0, offset=8
   %6 = ShrU %1, 1:Int64
   %7 = Shl %6, 63:Int64
-  Store %0, %7, aliasing=0, offset=16
+  Store %0, %7, flags={}, aliasing=0, offset=16
   %8 = Shl %1, 62:Int64
   %9 = Shl %8, 1:Int64
-  Store %0, %9, aliasing=0, offset=24
+  Store %0, %9, flags={}, aliasing=0, offset=24
   %10 = Shl %1, 1:Int64
   %11 = Shl %10, 63:Int64
-  Store %0, %11, aliasing=0, offset=32
+  Store %0, %11, flags={}, aliasing=0, offset=32
   %12 = Shl %1, 63:Int64
   %13 = Shl %12, 63:Int64
-  Store %0, %13, aliasing=0, offset=40
+  Store %0, %13, flags={}, aliasing=0, offset=40
   Exit
 }
 )", R"(section {
 b0(%0: Ptr, %1: Int64):
   %2 = And %1, 9223372036854775808:Int64
-  Store %0, %2, aliasing=0, offset=0
+  Store %0, %2, flags={}, aliasing=0, offset=0
   %3 = ShrU %1, 62:Int64
   %4 = And %3, 18446744073709551614:Int64
-  Store %0, %4, aliasing=0, offset=8
+  Store %0, %4, flags={}, aliasing=0, offset=8
   %5 = Shl %1, 62:Int64
   %6 = And %5, 9223372036854775808:Int64
-  Store %0, %6, aliasing=0, offset=16
+  Store %0, %6, flags={}, aliasing=0, offset=16
   %7 = Shl %1, 63:Int64
-  Store %0, %7, aliasing=0, offset=24
-  Store %0, 0:Int64, aliasing=0, offset=32
-  Store %0, 0:Int64, aliasing=0, offset=40
+  Store %0, %7, flags={}, aliasing=0, offset=24
+  Store %0, 0:Int64, flags={}, aliasing=0, offset=32
+  Store %0, 0:Int64, flags={}, aliasing=0, offset=40
   Exit
 }
 )");
@@ -1638,77 +1642,77 @@ b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7
   %30 = And %1, %2
   %31 = And %1, %3
   %32 = Or %30, %31
-  Store %0, %32, aliasing=0, offset=0
+  Store %0, %32, flags={}, aliasing=0, offset=0
   %33 = And %4, %6
   %34 = And %4, %5
   %35 = Or %33, %34
-  Store %0, %35, aliasing=0, offset=8
+  Store %0, %35, flags={}, aliasing=0, offset=8
   %36 = And %7, %8
   %37 = And %9, %7
   %38 = Or %36, %37
-  Store %0, %38, aliasing=0, offset=16
+  Store %0, %38, flags={}, aliasing=0, offset=16
   %39 = And %12, %10
   %40 = And %10, %11
   %41 = Or %39, %40
-  Store %0, %41, aliasing=0, offset=24
+  Store %0, %41, flags={}, aliasing=0, offset=24
   %42 = And %14, %13
   %43 = And %13, %15
   %44 = Or %42, %43
-  Store %0, %44, aliasing=0, offset=32
+  Store %0, %44, flags={}, aliasing=0, offset=32
   %45 = And %16, %18
   %46 = And %17, %16
   %47 = Or %45, %46
-  Store %0, %47, aliasing=0, offset=40
+  Store %0, %47, flags={}, aliasing=0, offset=40
   %48 = And %20, %19
   %49 = And %21, %19
   %50 = Or %48, %49
-  Store %0, %50, aliasing=0, offset=48
+  Store %0, %50, flags={}, aliasing=0, offset=48
   %51 = And %24, %22
   %52 = And %23, %22
   %53 = Or %51, %52
-  Store %0, %53, aliasing=0, offset=56
+  Store %0, %53, flags={}, aliasing=0, offset=56
   %54 = And %25, 15:Int32
   %55 = And %25, 240:Int32
   %56 = Or %54, %55
-  Store %0, %56, aliasing=0, offset=64
+  Store %0, %56, flags={}, aliasing=0, offset=64
   %57 = And %26, %27
   %58 = And %28, %29
   %59 = Or %57, %58
-  Store %0, %59, aliasing=0, offset=72
+  Store %0, %59, flags={}, aliasing=0, offset=72
   Exit
 }
 )", R"(section {
 b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7: Int32, %8: Int32, %9: Int32, %10: Int32, %11: Int32, %12: Int32, %13: Int32, %14: Int32, %15: Int32, %16: Int32, %17: Int32, %18: Int32, %19: Int32, %20: Int32, %21: Int32, %22: Int32, %23: Int32, %24: Int32, %25: Int32, %26: Int32, %27: Int32, %28: Int32, %29: Int32):
   %30 = Or %2, %3
   %31 = And %1, %30
-  Store %0, %31, aliasing=0, offset=0
+  Store %0, %31, flags={}, aliasing=0, offset=0
   %32 = Or %6, %5
   %33 = And %4, %32
-  Store %0, %33, aliasing=0, offset=8
+  Store %0, %33, flags={}, aliasing=0, offset=8
   %34 = Or %8, %9
   %35 = And %7, %34
-  Store %0, %35, aliasing=0, offset=16
+  Store %0, %35, flags={}, aliasing=0, offset=16
   %36 = Or %11, %12
   %37 = And %10, %36
-  Store %0, %37, aliasing=0, offset=24
+  Store %0, %37, flags={}, aliasing=0, offset=24
   %38 = Or %15, %14
   %39 = And %13, %38
-  Store %0, %39, aliasing=0, offset=32
+  Store %0, %39, flags={}, aliasing=0, offset=32
   %40 = Or %18, %17
   %41 = And %16, %40
-  Store %0, %41, aliasing=0, offset=40
+  Store %0, %41, flags={}, aliasing=0, offset=40
   %42 = Or %20, %21
   %43 = And %19, %42
-  Store %0, %43, aliasing=0, offset=48
+  Store %0, %43, flags={}, aliasing=0, offset=48
   %44 = Or %24, %23
   %45 = And %22, %44
-  Store %0, %45, aliasing=0, offset=56
+  Store %0, %45, flags={}, aliasing=0, offset=56
   %46 = And %25, 255:Int32
-  Store %0, %46, aliasing=0, offset=64
+  Store %0, %46, flags={}, aliasing=0, offset=64
   %47 = And %26, %27
   %48 = And %28, %29
   %49 = Or %47, %48
-  Store %0, %49, aliasing=0, offset=72
+  Store %0, %49, flags={}, aliasing=0, offset=72
   Exit
 }
 )");
@@ -1720,76 +1724,76 @@ b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7
   %30 = Or %1, %2
   %31 = Or %1, %3
   %32 = And %30, %31
-  Store %0, %32, aliasing=0, offset=0
+  Store %0, %32, flags={}, aliasing=0, offset=0
   %33 = Or %4, %6
   %34 = Or %4, %5
   %35 = And %33, %34
-  Store %0, %35, aliasing=0, offset=8
+  Store %0, %35, flags={}, aliasing=0, offset=8
   %36 = Or %7, %8
   %37 = Or %9, %7
   %38 = And %36, %37
-  Store %0, %38, aliasing=0, offset=16
+  Store %0, %38, flags={}, aliasing=0, offset=16
   %39 = Or %12, %10
   %40 = Or %10, %11
   %41 = And %39, %40
-  Store %0, %41, aliasing=0, offset=24
+  Store %0, %41, flags={}, aliasing=0, offset=24
   %42 = Or %14, %13
   %43 = Or %13, %15
   %44 = And %42, %43
-  Store %0, %44, aliasing=0, offset=32
+  Store %0, %44, flags={}, aliasing=0, offset=32
   %45 = Or %16, %18
   %46 = Or %17, %16
   %47 = And %45, %46
-  Store %0, %47, aliasing=0, offset=40
+  Store %0, %47, flags={}, aliasing=0, offset=40
   %48 = Or %20, %19
   %49 = Or %21, %19
   %50 = And %48, %49
-  Store %0, %50, aliasing=0, offset=48
+  Store %0, %50, flags={}, aliasing=0, offset=48
   %51 = Or %24, %22
   %52 = Or %23, %22
   %53 = And %51, %52
-  Store %0, %53, aliasing=0, offset=56
+  Store %0, %53, flags={}, aliasing=0, offset=56
   %54 = Or %25, 15:Int32
   %55 = Or %25, 240:Int32
   %56 = And %54, %55
-  Store %0, %56, aliasing=0, offset=64
+  Store %0, %56, flags={}, aliasing=0, offset=64
   %57 = Or %26, %27
   %58 = Or %28, %29
   %59 = And %57, %58
-  Store %0, %59, aliasing=0, offset=72
+  Store %0, %59, flags={}, aliasing=0, offset=72
   Exit
 }
 )", R"(section {
 b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7: Int32, %8: Int32, %9: Int32, %10: Int32, %11: Int32, %12: Int32, %13: Int32, %14: Int32, %15: Int32, %16: Int32, %17: Int32, %18: Int32, %19: Int32, %20: Int32, %21: Int32, %22: Int32, %23: Int32, %24: Int32, %25: Int32, %26: Int32, %27: Int32, %28: Int32, %29: Int32):
   %30 = And %2, %3
   %31 = Or %1, %30
-  Store %0, %31, aliasing=0, offset=0
+  Store %0, %31, flags={}, aliasing=0, offset=0
   %32 = And %6, %5
   %33 = Or %4, %32
-  Store %0, %33, aliasing=0, offset=8
+  Store %0, %33, flags={}, aliasing=0, offset=8
   %34 = And %8, %9
   %35 = Or %7, %34
-  Store %0, %35, aliasing=0, offset=16
+  Store %0, %35, flags={}, aliasing=0, offset=16
   %36 = And %11, %12
   %37 = Or %10, %36
-  Store %0, %37, aliasing=0, offset=24
+  Store %0, %37, flags={}, aliasing=0, offset=24
   %38 = And %15, %14
   %39 = Or %13, %38
-  Store %0, %39, aliasing=0, offset=32
+  Store %0, %39, flags={}, aliasing=0, offset=32
   %40 = And %18, %17
   %41 = Or %16, %40
-  Store %0, %41, aliasing=0, offset=40
+  Store %0, %41, flags={}, aliasing=0, offset=40
   %42 = And %20, %21
   %43 = Or %19, %42
-  Store %0, %43, aliasing=0, offset=48
+  Store %0, %43, flags={}, aliasing=0, offset=48
   %44 = And %24, %23
   %45 = Or %22, %44
-  Store %0, %45, aliasing=0, offset=56
-  Store %0, %25, aliasing=0, offset=64
+  Store %0, %45, flags={}, aliasing=0, offset=56
+  Store %0, %25, flags={}, aliasing=0, offset=64
   %46 = Or %26, %27
   %47 = Or %28, %29
   %48 = And %46, %47
-  Store %0, %48, aliasing=0, offset=72
+  Store %0, %48, flags={}, aliasing=0, offset=72
   Exit
 }
 )");
@@ -1961,95 +1965,95 @@ b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7
   %27 = Or %1, %2
   %28 = Xor %1, 4294967295:Int32
   %29 = And %27, %28
-  Store %0, %29, aliasing=0, offset=0
+  Store %0, %29, flags={}, aliasing=0, offset=0
   %30 = Xor %3, 4294967295:Int32
   %31 = Or %3, %4
   %32 = And %30, %31
-  Store %0, %32, aliasing=0, offset=8
+  Store %0, %32, flags={}, aliasing=0, offset=8
   %33 = Or %5, %6
   %34 = Xor %6, 4294967295:Int32
   %35 = And %33, %34
-  Store %0, %35, aliasing=0, offset=16
+  Store %0, %35, flags={}, aliasing=0, offset=16
   %36 = Xor %8, 4294967295:Int32
   %37 = Or %7, %8
   %38 = And %36, %37
-  Store %0, %38, aliasing=0, offset=24
+  Store %0, %38, flags={}, aliasing=0, offset=24
   %39 = Or %10, %9
   %40 = Xor %9, 4294967295:Int32
   %41 = And %39, %40
-  Store %0, %41, aliasing=0, offset=32
+  Store %0, %41, flags={}, aliasing=0, offset=32
   %42 = Xor %11, 4294967295:Int32
   %43 = Or %12, %11
   %44 = And %42, %43
-  Store %0, %44, aliasing=0, offset=40
+  Store %0, %44, flags={}, aliasing=0, offset=40
   %45 = Or %14, %13
   %46 = Xor %14, 4294967295:Int32
   %47 = And %45, %46
-  Store %0, %47, aliasing=0, offset=48
+  Store %0, %47, flags={}, aliasing=0, offset=48
   %48 = Xor %16, 4294967295:Int32
   %49 = Or %16, %15
   %50 = And %48, %49
-  Store %0, %50, aliasing=0, offset=56
+  Store %0, %50, flags={}, aliasing=0, offset=56
   %51 = Or %17, %18
   %52 = Xor %19, 4294967295:Int32
   %53 = And %51, %52
-  Store %0, %53, aliasing=0, offset=64
+  Store %0, %53, flags={}, aliasing=0, offset=64
   %54 = Or %20, %21
   %55 = Xor %21, 1:Int32
   %56 = And %54, %55
-  Store %0, %56, aliasing=0, offset=72
+  Store %0, %56, flags={}, aliasing=0, offset=72
   %57 = Or %23, %22
   %58 = Xor %24, 4294967295:Int32
   %59 = And %57, %58
-  Store %0, %59, aliasing=0, offset=80
+  Store %0, %59, flags={}, aliasing=0, offset=80
   %60 = Or %26, %25
   %61 = Xor %26, 1:Int32
   %62 = And %60, %61
-  Store %0, %62, aliasing=0, offset=88
+  Store %0, %62, flags={}, aliasing=0, offset=88
   Exit
 }
 )", R"(section {
 b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7: Int32, %8: Int32, %9: Int32, %10: Int32, %11: Int32, %12: Int32, %13: Int32, %14: Int32, %15: Int32, %16: Int32, %17: Int32, %18: Int32, %19: Int32, %20: Int32, %21: Int32, %22: Int32, %23: Int32, %24: Int32, %25: Int32, %26: Int32):
   %27 = Xor %1, 4294967295:Int32
   %28 = And %27, %2
-  Store %0, %28, aliasing=0, offset=0
+  Store %0, %28, flags={}, aliasing=0, offset=0
   %29 = Xor %3, 4294967295:Int32
   %30 = And %29, %4
-  Store %0, %30, aliasing=0, offset=8
+  Store %0, %30, flags={}, aliasing=0, offset=8
   %31 = Xor %6, 4294967295:Int32
   %32 = And %31, %5
-  Store %0, %32, aliasing=0, offset=16
+  Store %0, %32, flags={}, aliasing=0, offset=16
   %33 = Xor %8, 4294967295:Int32
   %34 = And %33, %7
-  Store %0, %34, aliasing=0, offset=24
+  Store %0, %34, flags={}, aliasing=0, offset=24
   %35 = Xor %9, 4294967295:Int32
   %36 = And %35, %10
-  Store %0, %36, aliasing=0, offset=32
+  Store %0, %36, flags={}, aliasing=0, offset=32
   %37 = Xor %11, 4294967295:Int32
   %38 = And %37, %12
-  Store %0, %38, aliasing=0, offset=40
+  Store %0, %38, flags={}, aliasing=0, offset=40
   %39 = Xor %14, 4294967295:Int32
   %40 = And %39, %13
-  Store %0, %40, aliasing=0, offset=48
+  Store %0, %40, flags={}, aliasing=0, offset=48
   %41 = Xor %16, 4294967295:Int32
   %42 = And %41, %15
-  Store %0, %42, aliasing=0, offset=56
+  Store %0, %42, flags={}, aliasing=0, offset=56
   %43 = Or %17, %18
   %44 = Xor %19, 4294967295:Int32
   %45 = And %43, %44
-  Store %0, %45, aliasing=0, offset=64
+  Store %0, %45, flags={}, aliasing=0, offset=64
   %46 = Or %20, %21
   %47 = Xor %21, 1:Int32
   %48 = And %46, %47
-  Store %0, %48, aliasing=0, offset=72
+  Store %0, %48, flags={}, aliasing=0, offset=72
   %49 = Or %23, %22
   %50 = Xor %24, 4294967295:Int32
   %51 = And %49, %50
-  Store %0, %51, aliasing=0, offset=80
+  Store %0, %51, flags={}, aliasing=0, offset=80
   %52 = Or %26, %25
   %53 = Xor %26, 1:Int32
   %54 = And %52, %53
-  Store %0, %54, aliasing=0, offset=88
+  Store %0, %54, flags={}, aliasing=0, offset=88
   Exit
 }
 )");
@@ -2061,95 +2065,95 @@ b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7
   %27 = And %1, %2
   %28 = Xor %1, 4294967295:Int32
   %29 = Or %27, %28
-  Store %0, %29, aliasing=0, offset=0
+  Store %0, %29, flags={}, aliasing=0, offset=0
   %30 = Xor %3, 4294967295:Int32
   %31 = And %3, %4
   %32 = Or %30, %31
-  Store %0, %32, aliasing=0, offset=8
+  Store %0, %32, flags={}, aliasing=0, offset=8
   %33 = And %5, %6
   %34 = Xor %6, 4294967295:Int32
   %35 = Or %33, %34
-  Store %0, %35, aliasing=0, offset=16
+  Store %0, %35, flags={}, aliasing=0, offset=16
   %36 = Xor %8, 4294967295:Int32
   %37 = And %7, %8
   %38 = Or %36, %37
-  Store %0, %38, aliasing=0, offset=24
+  Store %0, %38, flags={}, aliasing=0, offset=24
   %39 = And %10, %9
   %40 = Xor %9, 4294967295:Int32
   %41 = Or %39, %40
-  Store %0, %41, aliasing=0, offset=32
+  Store %0, %41, flags={}, aliasing=0, offset=32
   %42 = Xor %11, 4294967295:Int32
   %43 = And %12, %11
   %44 = Or %42, %43
-  Store %0, %44, aliasing=0, offset=40
+  Store %0, %44, flags={}, aliasing=0, offset=40
   %45 = And %14, %13
   %46 = Xor %14, 4294967295:Int32
   %47 = Or %45, %46
-  Store %0, %47, aliasing=0, offset=48
+  Store %0, %47, flags={}, aliasing=0, offset=48
   %48 = Xor %16, 4294967295:Int32
   %49 = And %16, %15
   %50 = Or %48, %49
-  Store %0, %50, aliasing=0, offset=56
+  Store %0, %50, flags={}, aliasing=0, offset=56
   %51 = And %17, %18
   %52 = Xor %19, 4294967295:Int32
   %53 = Or %51, %52
-  Store %0, %53, aliasing=0, offset=64
+  Store %0, %53, flags={}, aliasing=0, offset=64
   %54 = And %20, %21
   %55 = Xor %21, 1:Int32
   %56 = Or %54, %55
-  Store %0, %56, aliasing=0, offset=72
+  Store %0, %56, flags={}, aliasing=0, offset=72
   %57 = And %23, %22
   %58 = Xor %24, 4294967295:Int32
   %59 = Or %57, %58
-  Store %0, %59, aliasing=0, offset=80
+  Store %0, %59, flags={}, aliasing=0, offset=80
   %60 = And %26, %25
   %61 = Xor %26, 1:Int32
   %62 = Or %60, %61
-  Store %0, %62, aliasing=0, offset=88
+  Store %0, %62, flags={}, aliasing=0, offset=88
   Exit
 }
 )", R"(section {
 b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7: Int32, %8: Int32, %9: Int32, %10: Int32, %11: Int32, %12: Int32, %13: Int32, %14: Int32, %15: Int32, %16: Int32, %17: Int32, %18: Int32, %19: Int32, %20: Int32, %21: Int32, %22: Int32, %23: Int32, %24: Int32, %25: Int32, %26: Int32):
   %27 = Xor %1, 4294967295:Int32
   %28 = Or %2, %27
-  Store %0, %28, aliasing=0, offset=0
+  Store %0, %28, flags={}, aliasing=0, offset=0
   %29 = Xor %3, 4294967295:Int32
   %30 = Or %4, %29
-  Store %0, %30, aliasing=0, offset=8
+  Store %0, %30, flags={}, aliasing=0, offset=8
   %31 = Xor %6, 4294967295:Int32
   %32 = Or %5, %31
-  Store %0, %32, aliasing=0, offset=16
+  Store %0, %32, flags={}, aliasing=0, offset=16
   %33 = Xor %8, 4294967295:Int32
   %34 = Or %7, %33
-  Store %0, %34, aliasing=0, offset=24
+  Store %0, %34, flags={}, aliasing=0, offset=24
   %35 = Xor %9, 4294967295:Int32
   %36 = Or %10, %35
-  Store %0, %36, aliasing=0, offset=32
+  Store %0, %36, flags={}, aliasing=0, offset=32
   %37 = Xor %11, 4294967295:Int32
   %38 = Or %12, %37
-  Store %0, %38, aliasing=0, offset=40
+  Store %0, %38, flags={}, aliasing=0, offset=40
   %39 = Xor %14, 4294967295:Int32
   %40 = Or %13, %39
-  Store %0, %40, aliasing=0, offset=48
+  Store %0, %40, flags={}, aliasing=0, offset=48
   %41 = Xor %16, 4294967295:Int32
   %42 = Or %15, %41
-  Store %0, %42, aliasing=0, offset=56
+  Store %0, %42, flags={}, aliasing=0, offset=56
   %43 = And %17, %18
   %44 = Xor %19, 4294967295:Int32
   %45 = Or %43, %44
-  Store %0, %45, aliasing=0, offset=64
+  Store %0, %45, flags={}, aliasing=0, offset=64
   %46 = And %20, %21
   %47 = Xor %21, 1:Int32
   %48 = Or %46, %47
-  Store %0, %48, aliasing=0, offset=72
+  Store %0, %48, flags={}, aliasing=0, offset=72
   %49 = And %23, %22
   %50 = Xor %24, 4294967295:Int32
   %51 = Or %49, %50
-  Store %0, %51, aliasing=0, offset=80
+  Store %0, %51, flags={}, aliasing=0, offset=80
   %52 = And %26, %25
   %53 = Xor %26, 1:Int32
   %54 = Or %52, %53
-  Store %0, %54, aliasing=0, offset=88
+  Store %0, %54, flags={}, aliasing=0, offset=88
   Exit
 }
 )");
@@ -2180,100 +2184,100 @@ b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7
   %28 = Or %1, %2
   %29 = Xor %28, 4294967295:Int32
   %30 = Or %1, %29
-  Store %0, %30, aliasing=0, offset=0
+  Store %0, %30, flags={}, aliasing=0, offset=0
   %31 = Or %3, %4
   %32 = Xor %31, 4294967295:Int32
   %33 = Or %32, %3
-  Store %0, %33, aliasing=0, offset=8
+  Store %0, %33, flags={}, aliasing=0, offset=8
   %34 = Or %5, %6
   %35 = Xor %34, 4294967295:Int32
   %36 = Or %6, %35
-  Store %0, %36, aliasing=0, offset=16
+  Store %0, %36, flags={}, aliasing=0, offset=16
   %37 = Or %7, %8
   %38 = Xor %37, 4294967295:Int32
   %39 = Or %38, %8
-  Store %0, %39, aliasing=0, offset=24
+  Store %0, %39, flags={}, aliasing=0, offset=24
   %40 = Or %10, %9
   %41 = Xor %40, 4294967295:Int32
   %42 = Or %9, %41
-  Store %0, %42, aliasing=0, offset=32
+  Store %0, %42, flags={}, aliasing=0, offset=32
   %43 = Or %12, %11
   %44 = Xor %43, 4294967295:Int32
   %45 = Or %44, %11
-  Store %0, %45, aliasing=0, offset=40
+  Store %0, %45, flags={}, aliasing=0, offset=40
   %46 = Or %14, %13
   %47 = Xor %46, 4294967295:Int32
   %48 = Or %14, %47
-  Store %0, %48, aliasing=0, offset=48
+  Store %0, %48, flags={}, aliasing=0, offset=48
   %49 = Or %16, %15
   %50 = Xor %49, 4294967295:Int32
   %51 = Or %50, %16
-  Store %0, %51, aliasing=0, offset=56
+  Store %0, %51, flags={}, aliasing=0, offset=56
   %52 = Or %17, %18
   %53 = Xor %52, 4294967295:Int32
   %54 = Or %53, %19
-  Store %0, %54, aliasing=0, offset=64
+  Store %0, %54, flags={}, aliasing=0, offset=64
   %55 = Or %20, %21
   %56 = Xor %55, 1:Int32
   %57 = Or %20, %56
-  Store %0, %57, aliasing=0, offset=72
+  Store %0, %57, flags={}, aliasing=0, offset=72
   %58 = Or %23, %22
   %59 = Xor %58, 4294967295:Int32
   %60 = Or %59, %24
-  Store %0, %60, aliasing=0, offset=80
+  Store %0, %60, flags={}, aliasing=0, offset=80
   %61 = Or %26, %25
   %62 = Xor %61, 1:Int32
   %63 = Or %25, %62
-  Store %0, %63, aliasing=0, offset=88
+  Store %0, %63, flags={}, aliasing=0, offset=88
   %64 = Or %27, %27
   %65 = Xor %64, 4294967295:Int32
   %66 = Or %27, %65
-  Store %0, %66, aliasing=0, offset=96
+  Store %0, %66, flags={}, aliasing=0, offset=96
   Exit
 }
 )", R"(section {
 b0(%0: Ptr, %1: Int32, %2: Int32, %3: Int32, %4: Int32, %5: Int32, %6: Int32, %7: Int32, %8: Int32, %9: Int32, %10: Int32, %11: Int32, %12: Int32, %13: Int32, %14: Int32, %15: Int32, %16: Int32, %17: Int32, %18: Int32, %19: Int32, %20: Int32, %21: Int32, %22: Int32, %23: Int32, %24: Int32, %25: Int32, %26: Int32, %27: Int32):
   %28 = Xor %2, 4294967295:Int32
   %29 = Or %1, %28
-  Store %0, %29, aliasing=0, offset=0
+  Store %0, %29, flags={}, aliasing=0, offset=0
   %30 = Xor %4, 4294967295:Int32
   %31 = Or %3, %30
-  Store %0, %31, aliasing=0, offset=8
+  Store %0, %31, flags={}, aliasing=0, offset=8
   %32 = Xor %5, 4294967295:Int32
   %33 = Or %6, %32
-  Store %0, %33, aliasing=0, offset=16
+  Store %0, %33, flags={}, aliasing=0, offset=16
   %34 = Xor %7, 4294967295:Int32
   %35 = Or %8, %34
-  Store %0, %35, aliasing=0, offset=24
+  Store %0, %35, flags={}, aliasing=0, offset=24
   %36 = Xor %10, 4294967295:Int32
   %37 = Or %9, %36
-  Store %0, %37, aliasing=0, offset=32
+  Store %0, %37, flags={}, aliasing=0, offset=32
   %38 = Xor %12, 4294967295:Int32
   %39 = Or %11, %38
-  Store %0, %39, aliasing=0, offset=40
+  Store %0, %39, flags={}, aliasing=0, offset=40
   %40 = Xor %13, 4294967295:Int32
   %41 = Or %14, %40
-  Store %0, %41, aliasing=0, offset=48
+  Store %0, %41, flags={}, aliasing=0, offset=48
   %42 = Xor %15, 4294967295:Int32
   %43 = Or %16, %42
-  Store %0, %43, aliasing=0, offset=56
+  Store %0, %43, flags={}, aliasing=0, offset=56
   %44 = Or %17, %18
   %45 = Xor %44, 4294967295:Int32
   %46 = Or %45, %19
-  Store %0, %46, aliasing=0, offset=64
+  Store %0, %46, flags={}, aliasing=0, offset=64
   %47 = Or %20, %21
   %48 = Xor %47, 1:Int32
   %49 = Or %20, %48
-  Store %0, %49, aliasing=0, offset=72
+  Store %0, %49, flags={}, aliasing=0, offset=72
   %50 = Or %23, %22
   %51 = Xor %50, 4294967295:Int32
   %52 = Or %51, %24
-  Store %0, %52, aliasing=0, offset=80
+  Store %0, %52, flags={}, aliasing=0, offset=80
   %53 = Or %26, %25
   %54 = Xor %53, 1:Int32
   %55 = Or %25, %54
-  Store %0, %55, aliasing=0, offset=88
-  Store %0, 4294967295:Int32, aliasing=0, offset=96
+  Store %0, %55, flags={}, aliasing=0, offset=88
+  Store %0, 4294967295:Int32, flags={}, aliasing=0, offset=96
   Exit
 }
 )");
@@ -2638,8 +2642,8 @@ void check_cse_operand_order(const std::string& opcode, Type type,
   std::string rhs = constant ? "1:" + std::string(to_string(type)) : "%2";
   text << "  %3 = " << opcode << " %1, " << rhs << "\n";
   text << "  %4 = " << opcode << " " << rhs << ", %1\n";
-  text << "  Store %0, %3, aliasing=0, offset=0\n";
-  text << "  Store %0, %4, aliasing=0, offset=8\n  Exit\n}\n";
+  text << "  Store %0, %3, flags={}, aliasing=0, offset=0\n";
+  text << "  Store %0, %4, flags={}, aliasing=0, offset=8\n  Exit\n}\n";
   std::istringstream stream(text.str());
   Section* section = SectionReader<Builder>::read_section(context, allocator, stream);
   std::vector<StoreInst*> outputs;
@@ -2655,6 +2659,9 @@ void check_cse_operand_order(const std::string& opcode, Type type,
   Value* left = first->arg(0);
   Value* right = first->arg(1);
   unittest_assert(!first->equals(second));
+  if (!constant) {
+    unittest_assert((first->hash() == second->hash()) == commutative);
+  }
   unittest_assert(!section->verify(std::cout));
   CommonSubexprElim::run(section);
   unittest_assert(!section->verify(std::cout));
@@ -2665,7 +2672,7 @@ void check_cse_operand_order(const std::string& opcode, Type type,
 }
 
 void test_cse_commutative_operands() {
-  for (const std::string& opcode : {"Add", "Mul", "And", "Or", "Xor", "Eq"}) {
+  for (const std::string& opcode : {"Add", "Mul", "MulHighU", "And", "Or", "Xor", "Eq"}) {
     for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
       check_cse_operand_order(opcode, type, true);
       check_cse_operand_order(opcode, type, true, true);
@@ -3325,7 +3332,7 @@ b0(%0: Ptr, %5787: Int8):
   %5791 = ResizeX %5789, type=Int32
   %5794 = ShrU 4294967295:Int32, %5791
   %5795 = ResizeX %5794, type=Bool
-  Store %0, %5795, aliasing=0, offset=0
+  Store %0, %5795, flags={}, aliasing=0, offset=0
   Exit
 }
 )", R"(section {
@@ -3334,7 +3341,7 @@ b0(%0: Ptr, %1: Int8):
   %3 = ResizeU %2, type=Int64
   %4 = ResizeU %3, type=Int32
   %5 = ShrU 4294967295:Int32, %4
-  Store %0, 1:Bool, aliasing=0, offset=0
+  Store %0, 1:Bool, flags={}, aliasing=0, offset=0
   Exit
 }
 )");
@@ -3363,6 +3370,47 @@ void test_cse_pure_loads_across_guards() {
   CommonSubexprElim::run(&section);
   unittest_assert(output->value() == first);
   unittest_assert(!section.verify(std::cout));
+}
+
+void test_fold_clz_constant_select();
+
+void test_simplifycfg_transitive_block_arguments() {
+  Context context;
+  Allocator allocator;
+  std::istringstream input(R"(section {
+b0(%0: Ptr, %1: Bool):
+  Branch %1, true_block=b1, false_block=b3
+b1:
+  Branch 0:Bool, true_block=b7, false_block=b2
+b2:
+  Jump 0:Int64, block=b4
+b3:
+  Jump 0:Int64, block=b4
+b4(%2: Int64):
+  Jump %2, block=b5
+b5(%3: Int64):
+  Branch %1, true_block=b6, false_block=b7
+b6:
+  Store %0, %3, flags={}, aliasing=0, offset=0
+  Jump block=b7
+b7:
+  Exit
+})");
+  Section* section = SectionReader<>::read_section(context, allocator, input);
+  OrderBlocks::run(section, BlockOrdering::Natural);
+  unittest_assert(!section->verify(std::cerr));
+  SimplifyCFG::run(section);
+  unittest_assert(!section->verify(std::cerr));
+  for (uint64_t condition : {0, 1}) {
+    uint64_t output = 42;
+    Interpreter interpreter(section, {
+      Interpreter::Bits::constant(Type::Ptr, (uint64_t) &output),
+      Interpreter::Bits::constant(Type::Bool, condition)
+    });
+    interpreter.run_until(Interpreter::Event::Exit);
+    unittest_assert(output == (condition ? 0 : 42));
+  }
+  delete section;
 }
 
 int main(int argc, char** argv) {
@@ -3394,6 +3442,28 @@ int main(int argc, char** argv) {
   suite.test("cse commutative operands").run(test_cse_commutative_operands);
   suite.test("cse ordered operands").run(test_cse_ordered_operands);
   suite.test("cse commutative after substitution").run(test_cse_commutative_after_substitution);
+  suite.test("cse constant hash mixes type and value separately").run([]() {
+    Const first(Type::Int8, 3);
+    Const same(Type::Int8, 3);
+    Const second(Type::Int16, 2);
+    unittest_assert(first.equals(&same));
+    unittest_assert(first.hash() == same.hash());
+    unittest_assert(!first.equals(&second));
+    unittest_assert(first.hash() != second.hash());
+  });
+  suite.test("cse load hash mixes aliasing and offset separately").run([]() {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({Type::Ptr});
+    builder.move_to_end(block);
+    Value* ptr = block->arg(0);
+    LoadInst* first = builder.build_load(ptr, Type::Bool, LoadFlags::InBounds, -356, 1314);
+    LoadInst* second = builder.build_load(ptr, Type::Bool, LoadFlags::InBounds, -370, 1328);
+    unittest_assert(!first->equals(second));
+    unittest_assert(first->hash() != second->hash());
+  });
   suite.test("cse store load forwarding").run([]() {
     Context context;
     Allocator allocator;
@@ -3509,7 +3579,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
   %2 = ResizeU %1, type=Int8
   %3 = And %1, 255:Int64
-  Store %0, %3, aliasing=0, offset=8
+  Store %0, %3, flags={}, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3529,7 +3599,7 @@ b0(%0: Ptr):
   %2 = ShrU %1, 1:Int64
   %3 = And %2, 3:Int64
   %4 = And %1, 6:Int64
-  Store %0, %4, aliasing=0, offset=8
+  Store %0, %4, flags={}, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3550,7 +3620,7 @@ b0(%0: Ptr):
   %3 = And %2, 1:Int64
   %4 = ShrU %1, 9:Int64
   %5 = And %4, 2:Int64
-  Store %0, %5, aliasing=0, offset=8
+  Store %0, %5, flags={}, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3570,7 +3640,7 @@ b0(%0: Ptr):
   %3 = And %2, 1:Int64
   %4 = Shl %1, 2:Int64
   %5 = And %4, 8:Int64
-  Store %0, %5, aliasing=0, offset=8
+  Store %0, %5, flags={}, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3591,7 +3661,7 @@ b0(%0: Ptr):
   %3 = And %2, 255:Int64
   %4 = Shl %1, 4:Int64
   %5 = And %4, 2040:Int64
-  Store %0, %5, aliasing=0, offset=8
+  Store %0, %5, flags={}, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3609,7 +3679,7 @@ b0(%0: Ptr):
   %2 = And %1, 3:Int64
   %3 = And %1, 12:Int64
   %4 = And %1, 15:Int64
-  Store %0, %4, aliasing=0, offset=8
+  Store %0, %4, flags={}, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3629,7 +3699,7 @@ b0(%0: Ptr):
   %3 = And %1, 65280:Int64
   %4 = Or %2, %3
   %5 = And %2, 4294902015:Int64
-  Store %0, %5, aliasing=0, offset=16
+  Store %0, %5, flags={}, aliasing=0, offset=16
 }
 )", builder.section());
   });
@@ -3677,7 +3747,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
   %3 = ResizeU %1, type=Int64
-  Store %0, %2, aliasing=0, offset=16
+  Store %0, %2, flags={}, aliasing=0, offset=16
 }
 )", builder.section());
   });
@@ -3695,7 +3765,7 @@ b0(%0: Ptr):
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = And %1, 240:Int8
   %4 = Or %2, 240:Int8
-  Store %0, %3, aliasing=0, offset=2
+  Store %0, %3, flags={}, aliasing=0, offset=2
 }
 )", builder.section());
   });
@@ -3733,7 +3803,7 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Int16, flags={}, aliasing=0, offset=0
   %2 = Or %1, 3:Int16
-  Store %0, %2, aliasing=0, offset=2
+  Store %0, %2, flags={}, aliasing=0, offset=2
 }
 )", builder.section());
   });
@@ -3757,7 +3827,7 @@ b0(%0: Ptr):
   %6 = Or %4, %1
   %7 = Or %6, %5
   %8 = And %1, 4095:Int16
-  Store %0, %8, aliasing=0, offset=6
+  Store %0, %8, flags={}, aliasing=0, offset=6
 }
 )", builder.section());
   });
@@ -3772,7 +3842,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int16, flags={}, aliasing=0, offset=0
   %2 = ResizeX %1, type=Int32
   %3 = Or %2, 4294901760:Int32
-  Store %0, %3, aliasing=0, offset=4
+  Store %0, %3, flags={}, aliasing=0, offset=4
 }
 )", builder.section());
   });
@@ -3795,7 +3865,7 @@ b3(%2: Int64):
 b4:
     Branch 0:Bool, true_block=b4, false_block=b5
 b5:
-    Store %0, %2, aliasing=0, offset=0
+    Store %0, %2, flags={}, aliasing=0, offset=0
     Exit
 })");
     Section* section = SectionReader<>::read_section(context, allocator, input);
@@ -3829,7 +3899,7 @@ b5:
 
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
-  Store %0, 42:Int64, aliasing=0, offset=0
+  Store %0, 42:Int64, flags={}, aliasing=0, offset=0
   Exit
 }
 )", builder.section());
@@ -3851,7 +3921,7 @@ b0(%0: Ptr):
 
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
-  Store %0, 42:Int64, aliasing=0, offset=0
+  Store %0, 42:Int64, flags={}, aliasing=0, offset=0
   Exit
 }
 )", builder.section());
@@ -3869,7 +3939,7 @@ b0(%0: Ptr):
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
-  Store %0, 42:Int64, aliasing=0, offset=8
+  Store %0, 42:Int64, flags={}, aliasing=0, offset=8
   Exit
 }
 )", builder.section());
@@ -3926,7 +3996,7 @@ b3:
 b4:
   Jump 3:Int64, block=b5
 b5(%8: Int64):
-  Store %0, %8, aliasing=0, offset=8
+  Store %0, %8, flags={}, aliasing=0, offset=8
   Exit
 }
 )", builder.section());
@@ -3950,7 +4020,7 @@ b5(%8: Int64):
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  Store %0, %1, aliasing=0, offset=8
+  Store %0, %1, flags={}, aliasing=0, offset=8
   Exit
 }
 )", builder.section());
@@ -3985,7 +4055,7 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
-  Store %0, 42:Int64, aliasing=0, offset=16
+  Store %0, 42:Int64, flags={}, aliasing=0, offset=16
   Exit
 }
 )", builder.section());
@@ -4034,14 +4104,14 @@ b0(%0: Ptr):
   Branch %3, true_block=b1, false_block=b2
 b1:
   %5 = Load %0, type=Bool, flags={}, aliasing=0, offset=17
-  Store %0, %5, aliasing=0, offset=18
-  Store %0, 1:Bool, aliasing=0, offset=19
+  Store %0, %5, flags={}, aliasing=0, offset=18
+  Store %0, 1:Bool, flags={}, aliasing=0, offset=19
   Jump block=b3
 b2:
-  Store %0, 0:Bool, aliasing=0, offset=20
+  Store %0, 0:Bool, flags={}, aliasing=0, offset=20
   Jump block=b3
 b3:
-  Store %0, 42:Int64, aliasing=0, offset=24
+  Store %0, 42:Int64, flags={}, aliasing=0, offset=24
   Exit
 }
 )", builder.section());
@@ -4072,17 +4142,17 @@ b3:
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  Store %0, %1, aliasing=0, offset=8
+  Store %0, %1, flags={}, aliasing=0, offset=8
   %3 = Load %0, type=Bool, flags={}, aliasing=0, offset=16
   Branch %3, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=24
+  Store %0, %1, flags={}, aliasing=0, offset=24
   Jump block=b3
 b2:
-  Store %0, %1, aliasing=0, offset=32
+  Store %0, %1, flags={}, aliasing=0, offset=32
   Jump block=b3
 b3:
-  Store %0, %1, aliasing=0, offset=40
+  Store %0, %1, flags={}, aliasing=0, offset=40
   Exit
 }
 )", builder.section());
@@ -4117,10 +4187,10 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   Branch %1, true_block=b1, false_block=b2
 b1:
-  Store %0, 1:Int64, aliasing=0, offset=8
+  Store %0, 1:Int64, flags={}, aliasing=0, offset=8
   Jump block=b2
 b2:
-  Store %0, 42:Int64, aliasing=0, offset=24
+  Store %0, 42:Int64, flags={}, aliasing=0, offset=24
   Exit
 }
 )", builder.section());
@@ -4169,27 +4239,27 @@ b2:
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  Store %0, %1, aliasing=0, offset=8
+  Store %0, %1, flags={}, aliasing=0, offset=8
   %3 = Load %0, type=Bool, flags={}, aliasing=0, offset=16
   Branch %3, true_block=b1, false_block=b2
 b1:
-  Store %0, %1, aliasing=0, offset=24
+  Store %0, %1, flags={}, aliasing=0, offset=24
   Jump block=b3
 b2:
-  Store %0, %1, aliasing=0, offset=32
+  Store %0, %1, flags={}, aliasing=0, offset=32
   Jump block=b3
 b3:
-  Store %0, %1, aliasing=0, offset=40
+  Store %0, %1, flags={}, aliasing=0, offset=40
   %10 = Load %0, type=Bool, flags={}, aliasing=0, offset=48
   Branch %10, true_block=b4, false_block=b5
 b4:
-  Store %0, %1, aliasing=0, offset=56
+  Store %0, %1, flags={}, aliasing=0, offset=56
   Jump block=b6
 b5:
-  Store %0, %1, aliasing=0, offset=64
+  Store %0, %1, flags={}, aliasing=0, offset=64
   Jump block=b6
 b6:
-  Store %0, %1, aliasing=0, offset=72
+  Store %0, %1, flags={}, aliasing=0, offset=72
   Exit
 }
 )", builder.section());
@@ -4214,7 +4284,7 @@ b6:
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
-  Store %0, %1, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=1
   Exit
 }
 )", builder.section());
@@ -4240,7 +4310,7 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
-  Store %0, %2, aliasing=0, offset=16
+  Store %0, %2, flags={}, aliasing=0, offset=16
   Exit
 }
 )", builder.section());
@@ -4264,7 +4334,7 @@ b0(%0: Ptr):
     check_simplifycfg(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
-  Store %0, 1:Int64, aliasing=0, offset=8
+  Store %0, 1:Int64, flags={}, aliasing=0, offset=8
   Exit
 }
 )", builder.section());
@@ -4298,7 +4368,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
   %3 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
-  Store %0, %3, aliasing=0, offset=16
+  Store %0, %3, flags={}, aliasing=0, offset=16
   Exit
 }
 )", builder.section());
@@ -4329,7 +4399,7 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
-  Store %0, %2, aliasing=0, offset=16
+  Store %0, %2, flags={}, aliasing=0, offset=16
   Exit
 }
 )", builder.section());
@@ -4380,7 +4450,7 @@ b2:
   %7 = Add %3, 1:Int32
   Jump %6, %7, block=b1
 b3:
-  Store %0, %3, aliasing=0, offset=0
+  Store %0, %3, flags={}, aliasing=0, offset=0
   Exit
 }
 )", section);
@@ -4419,7 +4489,7 @@ b1:
 b2:
   Jump block=b3
 b3:
-  Store %0, 42:Int64, aliasing=0, offset=8
+  Store %0, 42:Int64, flags={}, aliasing=0, offset=8
   Exit
 }
 )", builder.section());
@@ -4446,11 +4516,11 @@ b3:
 b0(%0: Ptr):
   %1 = Alloca 8:Int64, align=8
   %2 = Alloca 8:Int64, align=8
-  Store %1, 1:Int64, aliasing=0, offset=0
-  Store %2, 2:Int64, aliasing=0, offset=0
+  Store %1, 1:Int64, flags={}, aliasing=0, offset=0
+  Store %2, 2:Int64, flags={}, aliasing=0, offset=0
   %5 = Load %1, type=Int64, flags={}, aliasing=0, offset=0
   %6 = Add %5, 2:Int64
-  Store %0, %6, aliasing=0, offset=0
+  Store %0, %6, flags={}, aliasing=0, offset=0
   Exit
 }
 )", section);
@@ -4485,7 +4555,7 @@ b0(%0: Int64, %1: Int64, %2: Ptr):
 b1:
   Jump block=b2
 b2:
-  Store %2, %3, aliasing=0, offset=0
+  Store %2, %3, flags={}, aliasing=0, offset=0
   Exit
 }
 )", section);
@@ -4526,11 +4596,11 @@ b0(%0: Int64, %1: Int64, %2: Bool, %3: Ptr):
   Branch %2, true_block=b1, false_block=b2
 b1:
   %5 = Add %0, %1
-  Store %3, %5, aliasing=0, offset=0
+  Store %3, %5, flags={}, aliasing=0, offset=0
   Jump block=b3
 b2:
   %8 = Add %1, %0
-  Store %3, %8, aliasing=0, offset=8
+  Store %3, %8, flags={}, aliasing=0, offset=8
   Jump block=b3
 b3:
   Exit
@@ -4576,15 +4646,15 @@ b3:
     check_cse(R"(section {
 b0(%0: Bool, %1: Ptr):
   %2 = Alloca 8:Int64, align=8
-  Store %2, 1:Int64, aliasing=0, offset=0
+  Store %2, 1:Int64, flags={}, aliasing=0, offset=0
   Branch %0, true_block=b1, false_block=b2
 b1:
-  Store %2, 2:Int64, aliasing=0, offset=0
-  Store %1, 2:Int64, aliasing=0, offset=0
+  Store %2, 2:Int64, flags={}, aliasing=0, offset=0
+  Store %1, 2:Int64, flags={}, aliasing=0, offset=0
   Jump block=b3
 b2:
   %8 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
-  Store %1, %8, aliasing=0, offset=0
+  Store %1, %8, flags={}, aliasing=0, offset=0
   Jump block=b3
 b3:
   Exit
@@ -4631,16 +4701,16 @@ b3:
     check_cse(R"(section {
 b0(%0: Bool, %1: Ptr):
   %2 = Alloca 8:Int64, align=8
-  Store %2, 1:Int64, aliasing=0, offset=0
+  Store %2, 1:Int64, flags={}, aliasing=0, offset=0
   Branch %0, true_block=b1, false_block=b2
 b1:
-  Call @cse_call_invalidation_target:Ptr, type=Void, call_conv=Default, flags={}
+  Call @cse_call_invalidation_target:Ptr, type=Void, call_conv=Default, flags={}, aliasing=0
   %6 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
-  Store %1, %6, aliasing=0, offset=0
+  Store %1, %6, flags={}, aliasing=0, offset=0
   Jump block=b3
 b2:
   %9 = Load %2, type=Int64, flags={}, aliasing=0, offset=0
-  Store %1, %9, aliasing=0, offset=0
+  Store %1, %9, flags={}, aliasing=0, offset=0
   Jump block=b3
 b3:
   Exit
@@ -4674,7 +4744,7 @@ b0(%0: Ptr):
   Jump block=b1
 b1:
   %3 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  Store %0, %3, aliasing=0, offset=8
+  Store %0, %3, flags={}, aliasing=0, offset=8
   Exit
 }
 )", section);
@@ -4709,5 +4779,43 @@ b1:
     }
   });
 
+  suite.test("fold clz constant select").run(test_fold_clz_constant_select);
+  suite.test("simplifycfg transitive block arguments").run(test_simplifycfg_transitive_block_arguments);
+
   return suite.finish();
+}
+
+void test_fold_clz_constant_select() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({Type::Bool, type});
+    builder.move_to_end(block);
+    Value* cond = block->arg(0);
+    size_t width = type_width(type);
+    uint64_t high = uint64_t(1) << (width - 1);
+    for (bool reverse : {false, true}) {
+      Value* zero = builder.build_const(type, 0);
+      Value* one = builder.build_const(type, 1);
+      Value* selected = builder.build_select(cond, reverse ? one : zero, reverse ? zero : one);
+      check_fold_constant_select(builder.fold_clz(selected), cond, type,
+                                 reverse ? width - 1 : width, reverse ? width : width - 1);
+      Value* partial = builder.build_select(cond, reverse ? block->arg(1) : zero,
+                                           reverse ? zero : block->arg(1));
+      unittest_assert(dynamic_cast<ClzInst*>(builder.fold_clz(partial)));
+    }
+    for (size_t bit = 1; bit < width; bit++) {
+      uint64_t power = uint64_t(1) << bit;
+      Value* selected = builder.build_select(cond, builder.build_const(type, power),
+                                             builder.build_const(type, power - 1));
+      check_fold_constant_select(builder.fold_clz(selected), cond, type,
+                                 width - bit - 1, width - bit);
+    }
+    Value* same_count = builder.build_select(cond, builder.build_const(type, high),
+                                             builder.build_const(type, type_mask(type)));
+    check_const(builder.fold_clz(same_count), type, 0);
+    check_const(builder.fold_clz(builder.build_const(type, 0)), type, width);
+  }
 }

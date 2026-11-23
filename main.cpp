@@ -78,7 +78,8 @@ int main() {
     cg.save("asm.bin");
 
     using Fn = void(* [[clang::preserve_none]])(uint32_t*, uint32_t*, uint32_t*);
-    Fn fn = (Fn) cg.deploy();
+    CodeHeap heap;
+    Fn fn = (Fn) cg.deploy(heap);
 
     uint32_t a = 2;
     uint32_t b = 3;

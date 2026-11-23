@@ -193,6 +193,11 @@ namespace metajit {
     }
   }
 
+  inline uint64_t clz(Type type, uint64_t value) {
+    value &= type_mask(type);
+    return value ? __builtin_clzll(value) - (64 - type_width(type)) : type_width(type);
+  }
+
   inline uint64_t bit_reverse(Type type, uint64_t value) {
     value = __builtin_bswap64(value);
     value = ((value >> 4) & 0x0f0f0f0f0f0f0f0full) | ((value & 0x0f0f0f0f0f0f0f0full) << 4);
@@ -335,7 +340,7 @@ namespace metajit {
     }
 
     size_t hash() const override {
-      return std::hash<uint64_t>()(_value) ^ std::hash<Type>()(type()) ^ std::hash<size_t>()(1);
+      return lwir::hash_16_bytes(static_cast<uint64_t>(type()), _value);
     }
   };
 
@@ -421,13 +426,16 @@ namespace metajit {
     CallConv _call_conv;
     std::vector<Type> _args;
     Type _ret;
+    bool _variadic;
 
-    Intrinsic(const char* name, CallConv call_conv, std::vector<Type> args, Type ret):
+    Intrinsic(const char* name, CallConv call_conv, std::vector<Type> args,
+              Type ret, bool variadic = false):
         Value(Type::Ptr),
         _name(name, std::strlen(name)),
         _call_conv(call_conv),
         _args(std::move(args)),
-        _ret(ret) {}
+        _ret(ret),
+        _variadic(variadic) {}
 
     Intrinsic(const Intrinsic&) = delete;
     Intrinsic& operator=(const Intrinsic&) = delete;
@@ -436,6 +444,7 @@ namespace metajit {
     CallConv call_conv() const { return _call_conv; }
     const std::vector<Type>& args() const { return _args; }
     Type ret() const { return _ret; }
+    bool variadic() const { return _variadic; }
 
     void write_arg(PrettyStream& stream) const override {
       stream << Highlight::Constant << "@intrinsic::" << _name << Highlight::None;
@@ -468,6 +477,7 @@ namespace metajit {
 
     static Intrinsic* const memset;
     static Intrinsic* const memcpy;
+    static Intrinsic* const write_closure;
   };
 
   class Context {
@@ -556,6 +566,7 @@ namespace metajit {
 
     void substitute_args(NameMap<Value*>& substs);
     void substitute_args_iterated(NameMap<Value*>& substs);
+    void substitute_args_iterated(std::map<Value*, Value*>& substs);
 
     void substitute_blocks(BlockMap<Block*>& substs);
     void substitute_blocks(const std::map<Block*, Block*>& substs);
@@ -838,6 +849,7 @@ namespace metajit {
       InBounds = 1 << 1,
       // The value of this load is known at section entry
       EntryPromoted = 1 << 2,
+      Unaligned = 1 << 3,
     };
 
     using BaseFlags<LoadFlags>::BaseFlags;
@@ -846,9 +858,23 @@ namespace metajit {
       "Pure",
       "InBounds",
       "EntryPromoted",
+      "Unaligned",
     };
 
-    constexpr static size_t COUNT = 3;
+    constexpr static size_t COUNT = 4;
+  };
+
+  class StoreFlags final: public BaseFlags<StoreFlags> {
+  public:
+    enum : uint32_t {
+      None = 0,
+      Unaligned = 1 << 0,
+    };
+
+    using BaseFlags<StoreFlags>::BaseFlags;
+
+    constexpr static const char* NAMES[] = {"Unaligned"};
+    constexpr static size_t COUNT = 1;
   };
 
   class CallFlags final: public BaseFlags<CallFlags> {
@@ -860,6 +886,10 @@ namespace metajit {
       Idempotent = 1 << 1,
       // Require a tail call with no additional stack frame.
       MustTail = 1 << 2,
+      // Pointer arguments do not escape through the call.
+      NoEscape = 1 << 3,
+      // Memory accessed through pointer arguments is read-only. Globals may still be read or written.
+      ArgsReadOnly = 1 << 4,
     };
 
     using BaseFlags<CallFlags>::BaseFlags;
@@ -867,10 +897,18 @@ namespace metajit {
     constexpr static const char* NAMES[] = {
       "Pure",
       "Idempotent",
-      "MustTail"
+      "MustTail",
+      "NoEscape",
+      "ArgsReadOnly",
     };
 
-    constexpr static size_t COUNT = 3;
+    constexpr static size_t COUNT = 5;
+  };
+
+  enum class MetadataKind : uint32_t {
+    LifetimeStart,
+    LifetimeEnd,
+    LoopBound
   };
 
   enum class CallConv {
@@ -889,6 +927,13 @@ namespace metajit {
     CallConv::Default,
     {Type::Ptr, Type::Ptr, Type::Int64},
     Type::Void
+  );
+  inline Intrinsic* const Intrinsic::write_closure = new Intrinsic(
+    "write_closure",
+    CallConv::Default,
+    {Type::Ptr},
+    Type::Void,
+    true
   );
 }
 
@@ -912,6 +957,7 @@ namespace metajit {
   }
 
 define_flags_overloads(metajit::LoadFlags)
+define_flags_overloads(metajit::StoreFlags)
 define_flags_overloads(metajit::CallFlags)
 
 #undef define_flags_overloads
@@ -937,19 +983,43 @@ metajit::PrettyStream& operator<<(metajit::PrettyStream& stream, const metajit::
   return stream;
 }
 
+std::ostream& operator<<(std::ostream& stream, metajit::MetadataKind kind) {
+  switch (kind) {
+    case metajit::MetadataKind::LifetimeStart: return stream << "LifetimeStart";
+    case metajit::MetadataKind::LifetimeEnd: return stream << "LifetimeEnd";
+    case metajit::MetadataKind::LoopBound: return stream << "LoopBound";
+  }
+  return stream << static_cast<uint32_t>(kind);
+}
+
+metajit::PrettyStream& operator<<(metajit::PrettyStream& stream, metajit::MetadataKind kind) {
+  stream.ostream() << kind;
+  return stream;
+}
+
 namespace metajit {
   using AliasingGroup = int32_t;
 
   /* ${insts} */
 
+  inline bool is_lifetime_marker(Inst* inst) {
+    if (dynmatch(MetadataInst, metadata, inst)) {
+      return metadata->kind() == MetadataKind::LifetimeStart ||
+             metadata->kind() == MetadataKind::LifetimeEnd;
+    }
+    return false;
+  }
+
+  inline size_t add_record_field(size_t& size, Type type) {
+    size_t field_size = type_size(type);
+    assert(field_size != 0);
+    size_t offset = (size + field_size - 1) & ~(field_size - 1);
+    size = offset + field_size;
+    return offset;
+  }
+
   bool Inst::is_commutative() const {
-    return dynamic_cast<const AndInst*>(this) ||
-           dynamic_cast<const OrInst*>(this) ||
-           dynamic_cast<const XorInst*>(this) ||
-           dynamic_cast<const AddInst*>(this) ||
-           dynamic_cast<const MulInst*>(this) ||
-           dynamic_cast<const MulHighUInst*>(this) ||
-           dynamic_cast<const EqInst*>(this);
+    return /* ${commutative_checks} */;
   }
 
   bool Inst::has_side_effect() const {
@@ -1275,6 +1345,10 @@ namespace metajit {
 
     /* ${builder} */
 
+    StoreInst* build_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
+      return build_store(ptr, value, StoreFlags::None, aliasing, offset);
+    }
+
     #include "generated.inc.hpp"
 
     ShlInst* build_shl(Value* a, size_t shift) {
@@ -1284,6 +1358,14 @@ namespace metajit {
 
     CommentInst* build_comment(const std::string& text) {
       return build_comment(_section->context().alloc_string(text));
+    }
+
+    MetadataInst* build_metadata(const lwir::Span<Value*>& args, MetadataKind kind) {
+      MetadataInst* metadata = build_metadata(args.size(), kind);
+      for (size_t i = 0; i < args.size(); i++) {
+        metadata->set_arg(i, args[i]);
+      }
+      return metadata;
     }
 
     JumpInst* build_jump(Block* block, const lwir::Span<Value*>& args) {
@@ -1306,8 +1388,9 @@ namespace metajit {
                          Type type,
                          const lwir::Span<Value*>& args,
                          CallConv call_conv = CallConv::Default,
-                         CallFlags call_flags = CallFlags::None) {
-      CallInst* call = build_call(callee, args.size(), type, call_conv, call_flags);
+                         CallFlags call_flags = CallFlags::None,
+                         AliasingGroup aliasing = 0) {
+      CallInst* call = build_call(callee, args.size(), type, call_conv, call_flags, aliasing);
       for (size_t it = 0; it < args.size(); it++) {
         call->set_arg(it + 1, args[it]);
       }
@@ -1318,8 +1401,9 @@ namespace metajit {
                          Type type,
                          const std::vector<Value*>& args,
                          CallConv call_conv = CallConv::Default,
-                         CallFlags call_flags = CallFlags::None) {
-      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv, call_flags);
+                         CallFlags call_flags = CallFlags::None,
+                         AliasingGroup aliasing = 0) {
+      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv, call_flags, aliasing);
     }
 
     AllocaInst* build_alloca(Type type) {
@@ -1574,6 +1658,10 @@ namespace metajit {
     }
 
     Value* fold_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
+      return fold_store(ptr, value, StoreFlags::None, aliasing, offset);
+    }
+
+    Value* fold_store(Value* ptr, Value* value, StoreFlags flags, AliasingGroup aliasing, uint64_t offset) {
       if (dynmatch(AddPtrInst, add_ptr, ptr)) {
         if (dynmatch(Const, const_offset, add_ptr->offset())) {
           ptr = add_ptr->ptr();
@@ -1581,7 +1669,7 @@ namespace metajit {
         }
       }
 
-      return build_store(ptr, value, aliasing, offset);
+      return build_store(ptr, value, flags, aliasing, offset);
     }
 
     Value* fold_promote(Value* a) {
@@ -1771,6 +1859,15 @@ namespace metajit {
         value = nullptr;
       }
     }
+
+    void invalidate_memory_for_write(AliasingGroup aliasing) {
+      if (aliasing == 0) {
+        invalidate_memory_state();
+      } else {
+        _valid_loads.erase(0);
+        _memory.erase(0);
+      }
+    }
   public:
     using Builder::Builder;
     using Builder::build_call;
@@ -1898,8 +1995,12 @@ namespace metajit {
     }
 
     Value* build_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
+      return build_store(ptr, value, StoreFlags::None, aliasing, offset);
+    }
+
+    Value* build_store(Value* ptr, Value* value, StoreFlags flags, AliasingGroup aliasing, uint64_t offset) {
       if (_guard_success) {
-        return Builder::build_store(ptr, value, aliasing, offset);
+        return Builder::build_store(ptr, value, flags, aliasing, offset);
       }
 
       if (dynmatch(AddPtrInst, add_ptr, ptr)) {
@@ -1913,12 +2014,11 @@ namespace metajit {
         if (is_always_equal(_exact_memory[-aliasing], value)) {
           return nullptr;
         }
+        invalidate_memory_for_write(aliasing);
         _exact_memory[-aliasing] = value;
         _exact_loads[-aliasing] = nullptr;
-        return Builder::build_store(ptr, value, aliasing, offset);
+        return Builder::build_store(ptr, value, flags, aliasing, offset);
       } else {
-        _memory[aliasing].store(ptr, offset, value);
-
         bool noop_store = false;
         for (auto it = _valid_loads[aliasing].begin(); it != _valid_loads[aliasing].end(); ) {
           LoadInst* load = *it;
@@ -1934,11 +2034,15 @@ namespace metajit {
           }
         }
 
+        if (!noop_store) {
+          invalidate_memory_for_write(aliasing);
+        }
+        _memory[aliasing].store(ptr, offset, value);
         if (noop_store) {
           return nullptr;
         }
 
-        return Builder::build_store(ptr, value, aliasing, offset);
+        return Builder::build_store(ptr, value, flags, aliasing, offset);
       }
     }
 
@@ -1946,21 +2050,33 @@ namespace metajit {
                         size_t args,
                         Type type,
                         CallConv call_conv = CallConv::Default,
-                        CallFlags call_flags = CallFlags::None) {
+                        CallFlags call_flags = CallFlags::None,
+                        AliasingGroup aliasing = 0) {
       if (!_guard_success) {
-        // Calls may read/write memory reachable through pointers, so invalidate
-        // forwarding and exact aliasing state conservatively.
-        invalidate_memory_state();
+        invalidate_memory_for_write(aliasing);
+        if (aliasing > 0) {
+          _valid_loads.erase(aliasing);
+          _memory.erase(aliasing);
+        } else if (aliasing < 0) {
+          size_t index = -static_cast<int64_t>(aliasing);
+          if (index < _exact_loads.real_size()) {
+            _exact_loads[index] = nullptr;
+          }
+          if (index < _exact_memory.real_size()) {
+            _exact_memory[index] = nullptr;
+          }
+        }
       }
-      return Builder::build_call(callee, args, type, call_conv, call_flags);
+      return Builder::build_call(callee, args, type, call_conv, call_flags, aliasing);
     }
 
     Value* build_call(Value* callee,
                       Type type,
                       const lwir::Span<Value*>& args,
                       CallConv call_conv = CallConv::Default,
-                      CallFlags call_flags = CallFlags::None) {
-      CallInst* call = build_call(callee, args.size(), type, call_conv, call_flags);
+                      CallFlags call_flags = CallFlags::None,
+                      AliasingGroup aliasing = 0) {
+      CallInst* call = build_call(callee, args.size(), type, call_conv, call_flags, aliasing);
       for (size_t it = 0; it < args.size(); it++) {
         call->set_arg(it + 1, args[it]);
       }
@@ -1971,8 +2087,9 @@ namespace metajit {
                       Type type,
                       const std::vector<Value*>& args,
                       CallConv call_conv = CallConv::Default,
-                      CallFlags call_flags = CallFlags::None) {
-      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv, call_flags);
+                      CallFlags call_flags = CallFlags::None,
+                      AliasingGroup aliasing = 0) {
+      return build_call(callee, type, lwir::Span<Value*>((Value**) args.data(), args.size()), call_conv, call_flags, aliasing);
     }
 
     template <class... Args>
@@ -2029,6 +2146,7 @@ namespace metajit {
     }
 
     void init_store(Value* ptr, Value* value, AliasingGroup aliasing, uint64_t offset) {
+      invalidate_memory_for_write(aliasing);
       if (aliasing < 0) {
         _exact_memory[-aliasing] = value;
       } else {
@@ -2147,6 +2265,25 @@ namespace metajit {
   }
 
   void Inst::substitute_args_iterated(NameMap<Value*>& substs) {
+    for (size_t index = 0; index < arg_count(); index++) {
+      set_arg(index, resolve_substitution(arg(index), substs));
+    }
+  }
+
+  Value* resolve_substitution(Value* value, std::map<Value*, Value*>& substs) {
+    Value* replacement = value;
+    while (substs.find(replacement) != substs.end()) {
+      replacement = substs.at(replacement);
+    }
+    while (value != replacement) {
+      Value* next = substs.at(value);
+      substs.at(value) = replacement;
+      value = next;
+    }
+    return replacement;
+  }
+
+  void Inst::substitute_args_iterated(std::map<Value*, Value*>& substs) {
     for (size_t index = 0; index < arg_count(); index++) {
       set_arg(index, resolve_substitution(arg(index), substs));
     }
@@ -2303,6 +2440,19 @@ namespace metajit {
       }
     }
 
+    MetadataKind read_metadata_kind() {
+      std::string name = get_word();
+      if (name == "LifetimeStart") {
+        return MetadataKind::LifetimeStart;
+      } else if (name == "LifetimeEnd") {
+        return MetadataKind::LifetimeEnd;
+      } else if (name == "LoopBound") {
+        return MetadataKind::LoopBound;
+      } else {
+        error("Unknown metadata kind '" + name + "'");
+      }
+    }
+
     int32_t read_int32() {
       skip_whitespace();
       std::string int_str;
@@ -2359,6 +2509,8 @@ namespace metajit {
             return Intrinsic::memset;
           } else if (name == "memcpy") {
             return Intrinsic::memcpy;
+          } else if (name == "write_closure") {
+            return Intrinsic::write_closure;
           }
           error("Unknown intrinsic '" + name + "'");
         }
@@ -2371,11 +2523,11 @@ namespace metajit {
 
     std::vector<Value*> read_value_arg_list() {
       std::vector<Value*> args;
-      // read comma separated list of value args (starting with % or a constant)
+      // read comma separated list of value args
       while (true) {
         skip_whitespace();
         char c = _stream.peek();
-        if (c != '%' && !std::isdigit(c)) {
+        if (c != '%' && c != '@' && !std::isdigit(c)) {
           break;
         }
         args.push_back(read_value_arg());
@@ -2436,16 +2588,6 @@ namespace metajit {
       }
       return FlagsType(flags_bits);
     }
-
-    LoadFlags read_load_flags() {
-      // use the templated method to read flags
-      return read_flags<LoadFlags>();
-    }
-
-    CallFlags read_call_flags() {
-      return read_flags<CallFlags>();
-    }
-
 
 /* ${read_opcode} */
 
@@ -2545,7 +2687,8 @@ namespace metajit {
           }
         } else {
           if (dynmatch(Inst, inst, value)) {
-            if (!inst->has_side_effect() && !inst->is_terminator() && !dynamic_cast<CommentInst*>(inst)) {
+            if (!inst->has_side_effect() && !inst->is_terminator() &&
+                !dynamic_cast<CommentInst*>(inst) && !dynamic_cast<MetadataInst*>(inst)) {
               error("Instructions without side effects must be named");
             }
             if (inst->has_side_effect() && inst->type() != Type::Void) {
@@ -2583,14 +2726,19 @@ namespace metajit {
   public:
     DeadCodeElim(Section* section): Pass(section) {
       NameMap<bool> used(section);
+      std::vector<std::pair<Block*, MetadataInst*>> metadata;
 
       for (Block* block : section->rev_range()) {
         for (auto it = block->rbegin(); it != block->rend(); ) {
           Inst* inst = *it;
-          if (used[inst] ||
-              inst->has_side_effect() ||
-              inst->is_terminator() ||
-              dynamic_cast<CommentInst*>(inst)) {
+          if (dynmatch(MetadataInst, marker, inst)) {
+            metadata.emplace_back(block, marker);
+            it++;
+          } else if (used[inst] ||
+                     inst->has_side_effect() ||
+                     inst->is_terminator() ||
+                     dynamic_cast<CommentInst*>(inst)) {
+            used[inst] = true;
             for (Value* arg : inst->args()) {
               if (arg->is_inst()) {
                 used[(Inst*) arg] = true;
@@ -2602,10 +2750,23 @@ namespace metajit {
           }
         }
       }
+
+      for (auto [block, marker] : metadata) {
+        for (Value* arg : marker->args()) {
+          if (dynmatch(Inst, inst, arg); inst && !used[inst]) {
+            block->remove(marker);
+            break;
+          }
+        }
+      }
     }
   };
 
   inline bool could_alias(LoadInst* load, StoreInst* store) {
+    if (load->aliasing() == 0 || store->aliasing() == 0) {
+      return true;
+    }
+
     if (load->aliasing() != store->aliasing()) {
       return false;
     }
@@ -2623,6 +2784,133 @@ namespace metajit {
 
     return load_interval.intersects(store_interval);
   }
+
+  class AllocaAliasing: public Pass<AllocaAliasing> {
+  private:
+    struct AllocaInfo {
+      bool eligible = true;
+      std::optional<AliasingGroup> existing_group;
+      std::vector<Inst*> accesses;
+
+      void make_ineligible() {
+        if (eligible) {
+          eligible = false;
+          existing_group = std::nullopt;
+          accesses.clear();
+        }
+      }
+    };
+
+    std::unordered_map<AllocaInst*, AllocaInfo> _alloca_info;
+    std::unordered_map<AliasingGroup, std::optional<AllocaInst*>> _confined; // ensure idempotency of the pass
+    NameMap<AllocaInst*> _prov;
+    AliasingGroup _max_group = 0;
+
+    AllocaInst* prov_at(Value* ptr) {
+      if (ptr->is_named()) {
+        NamedValue* named_ptr = (NamedValue*) ptr;
+        if (_prov[named_ptr]) {
+          return _prov[named_ptr];
+        }
+      }
+      return nullptr;
+    }
+
+    void access(Inst* access, Value* ptr, AliasingGroup aliasing) {
+      if (aliasing > _max_group) {
+        _max_group = aliasing;
+      }
+      if (AllocaInst* prov = prov_at(ptr)) {
+        AllocaInfo& info = _alloca_info[prov];
+        if (info.eligible) {
+          info.accesses.push_back(access);
+          if (aliasing < 0) {
+            info.make_ineligible();
+          } else if (info.existing_group) {
+            if (aliasing != *info.existing_group) {
+              info.make_ineligible();
+            }
+          } else {
+            info.existing_group = aliasing;
+          }
+        }
+
+        if (_confined.find(aliasing) == _confined.end()) {
+          _confined[aliasing] = prov;
+        } else if (_confined[aliasing] != prov) {
+          _confined[aliasing] = std::nullopt;
+        }
+      } else {
+        _confined[aliasing] = std::nullopt;
+      }
+    }
+
+    void escape(Value* value) {
+      if (AllocaInst* prov = prov_at(value)) {
+        _alloca_info[prov].make_ineligible();
+      }
+    }
+  public:
+    AllocaAliasing(Section* section): Pass(section), _prov(section) {
+      assert(section->ordering() >= BlockOrdering::Dominator);
+      for (Block* block : *section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(AllocaInst, alloca, inst)) {
+            _alloca_info[alloca] = AllocaInfo();
+            _prov[alloca] = alloca;
+          } else if (dynmatch(StoreInst, store, inst)) {
+            access(store, store->ptr(), store->aliasing());
+            escape(store->value());
+          } else if (dynmatch(LoadInst, load, inst)) {
+            access(load, load->ptr(), load->aliasing());
+          } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
+            if (prov_at(add_ptr->arg(0))) {
+              _prov[add_ptr] = prov_at(add_ptr->arg(0));
+            }
+            escape(add_ptr->arg(1));
+          } else if (dynmatch(CallInst, call, inst)) {
+            if (call->callee() == Intrinsic::memset) {
+              access(call, call->arg(1), call->aliasing());
+              escape(call->arg(2));
+              escape(call->arg(3));
+            } else {
+              _max_group = std::max(_max_group, call->aliasing());
+              if (call->aliasing() == 0 && call->flags().has(CallFlags::NoEscape)) {
+                escape(call->callee());
+              } else {
+                for (Value* arg : call->args()) {
+                  escape(arg);
+                }
+              }
+            }
+          } else if (!dynamic_cast<MetadataInst*>(inst)) {
+            for (Value* arg : inst->args()) {
+              escape(arg);
+            }
+          }
+        }
+      }
+
+      for (auto& [alloca, info] : _alloca_info) {
+        if (info.eligible && info.existing_group &&
+            (*info.existing_group == 0 || !_confined.at(*info.existing_group))) {
+          if (_max_group == INT32_MAX) {
+            break;
+          }
+          AliasingGroup group = ++_max_group;
+          for (Inst* access : info.accesses) {
+            if (dynmatch(StoreInst, store, access)) {
+              store->set_aliasing(group);
+            } else if (dynmatch(LoadInst, load, access)) {
+              load->set_aliasing(group);
+            } else if (dynmatch(CallInst, call, access)) {
+              call->set_aliasing(group);
+            }
+          }
+        }
+      }
+    }
+  };
 
   class RefineAliasing: public Pass<RefineAliasing> {
   private:
@@ -2646,7 +2934,7 @@ namespace metajit {
 
     struct KeyHash {
       size_t operator()(const Key& key) const {
-        return std::hash<AliasingGroup>()(key.group) ^ std::hash<uint64_t>()(key.offset);
+        return lwir::hash_16_bytes(static_cast<uint64_t>(key.group), key.offset);
       }
     };
 
@@ -2655,25 +2943,26 @@ namespace metajit {
     std::vector<LoadInst*> _loads;
     std::vector<StoreInst*> _stores;
     std::unordered_map<Key, AliasingGroup, KeyHash> _exact_groups;
+    Value* _only_base;
 
     void access(AliasingGroup aliasing, Value* ptr, uint64_t offset, Type type) {
-      assert(aliasing >= 0);
+      assert(aliasing > 0);
       GroupInfo& group = _groups[aliasing];
       if (!group.is_invalid) {
         if (group.base == nullptr) {
           group.base = ptr;
           group.type = type;
         }
-        if (group.base != ptr || group.type != type || offset % type_size(type) != 0) {
+        if ((_only_base && ptr != _only_base) ||
+            group.base != ptr || group.type != type || offset % type_size(type) != 0) {
           group.is_invalid = true;
         }
       }
     }
 
     AliasingGroup apply(AliasingGroup aliasing, uint64_t offset) {
-      assert(aliasing >= 0);
-      GroupInfo& group = _groups[aliasing];
-      if (group.is_invalid) {
+      assert(aliasing > 0);
+      if (_groups[aliasing].is_invalid) {
         return aliasing;
       }
 
@@ -2684,25 +2973,37 @@ namespace metajit {
       return _exact_groups[key];
     }
   public:
-    RefineAliasing(Section* section): Pass(section) {
+    RefineAliasing(Section* section, Value* only_base = nullptr): Pass(section), _only_base(only_base) {
+      assert(!_only_base || _only_base->type() == Type::Ptr);
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(LoadInst, load, inst)) {
-            if (load->aliasing() >= 0) {
+            if (load->aliasing() > 0) {
               _loads.push_back(load);
               access(load->aliasing(), load->ptr(), load->offset(), inst->type());
             } else {
               _min_exact_group = std::min(_min_exact_group, load->aliasing());
             }
           } else if (dynmatch(StoreInst, store, inst)) {
-            if (store->aliasing() >= 0) {
+            if (store->aliasing() > 0) {
               _stores.push_back(store);
               access(store->aliasing(), store->ptr(), store->offset(), store->value()->type());
             } else {
               _min_exact_group = std::min(_min_exact_group, store->aliasing());
             }
+          } else if (dynmatch(CallInst, call, inst)) {
+            if (call->aliasing() > 0) {
+              _groups[call->aliasing()].is_invalid = true;
+            } else {
+              _min_exact_group = std::min(_min_exact_group, call->aliasing());
+            }
           }
         }
+      }
+
+      if (static_cast<int64_t>(_min_exact_group) + INT32_MAX <
+          static_cast<int64_t>(_loads.size() + _stores.size())) {
+        return;
       }
 
       for (LoadInst* load : _loads) {
@@ -2716,46 +3017,46 @@ namespace metajit {
   };
 
   class DeadStoreElim: public Pass<DeadStoreElim> {
-  public:
-    DeadStoreElim(Section* section): Pass(section) {
-      NameMap<bool> unused(section);
-      ExpandingVector<StoreInst*> last_store;
+  private:
+    NameMap<bool> _unused;
+    ExpandingVector<StoreInst*> _last_store;
 
+    void mark_stores_live() {
+      for (StoreInst*& store : _last_store) {
+        if (store) {
+          _unused[store] = false;
+          store = nullptr;
+        }
+      }
+    }
+  public:
+    DeadStoreElim(Section* section): Pass(section), _unused(section) {
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst)) {
             Pointer pointer(store->ptr(), store->offset());
             if (store->aliasing() < 0) {
-              last_store[-store->aliasing()] = store;
-              unused[store] = true;
+              _last_store[-store->aliasing()] = store;
+              _unused[store] = true;
             }
           } else if (dynmatch(LoadInst, load, inst)) {
             if (load->aliasing() < 0) {
-              StoreInst* store = last_store[-load->aliasing()];
+              StoreInst* store = _last_store[-load->aliasing()];
               if (store) {
-                unused[store] = false;
+                _unused[store] = false;
               }
+            } else if (load->aliasing() == 0) {
+              mark_stores_live();
             }
           } else if (dynamic_cast<CallInst*>(inst)) {
-            // Calls may observe memory from all exact groups.
-            for (StoreInst*& store : last_store) {
-              if (store) {
-                unused[store] = false;
-                store = nullptr;
-              }
-            }
+            mark_stores_live();
           }
         }
 
-        for (StoreInst*& store : last_store) {
-          if (store) {
-            unused[store] = false;
-            store = nullptr; // Clear for next block
-          }
-        }
+        mark_stores_live();
 
         block->filter_inplace([&](Inst* inst) {
-          return !unused[inst];
+          return !_unused[inst];
         });
       }
     }
@@ -2777,25 +3078,29 @@ namespace metajit {
       }
 
       static uint64_t mask_through_highest_bit(uint64_t value) {
-        for (size_t shift = 1; shift < 64; shift *= 2) {
-          value |= value >> shift;
-        }
-        return value;
+        return value ? ~uint64_t(0) >> __builtin_clzll(value) : 0;
+      }
+
+      static Bits unsigned_range(Type type, uint64_t minimum, uint64_t maximum) {
+        assert(minimum <= maximum);
+        assert((maximum & ~type_mask(type)) == 0);
+        return Bits(type, ~mask_through_highest_bit(minimum ^ maximum), minimum);
       }
 
       static Bits unsigned_upper_bound(Type type, uint64_t bound) {
-        assert((bound & ~type_mask(type)) == 0);
-        return Bits(type, ~mask_through_highest_bit(bound), 0);
+        return unsigned_range(type, 0, bound);
       }
 
       static Bits unsigned_lower_bound(Type type, uint64_t bound) {
-        assert((bound & ~type_mask(type)) == 0);
-        uint64_t mask = ~mask_through_highest_bit(~bound & type_mask(type));
-        return Bits(type, mask, mask);
+        return unsigned_range(type, bound, type_mask(type));
       }
 
       uint64_t umin() const {
         return value;
+      }
+
+      Bits popcount() const {
+        return unsigned_range(type, __builtin_popcountll(umin()), __builtin_popcountll(umax()));
       }
 
       uint64_t umax() const {
@@ -3239,6 +3544,10 @@ namespace metajit {
         return {};
       }
 
+      Bits clz() const {
+        return unsigned_range(type, metajit::clz(type, umax()), metajit::clz(type, umin()));
+      }
+
       Bits bit_reverse() const {
         return Bits(type, metajit::bit_reverse(type, mask), metajit::bit_reverse(type, value));
       }
@@ -3264,8 +3573,12 @@ namespace metajit {
           Bits a = at(values, select->arg(1));
           Bits b = at(values, select->arg(2));
           return cond.select(a, b);
+        } else if (dynmatch(ClzInst, clz, inst)) {
+          return at(values, clz->arg(0)).clz();
         } else if (dynmatch(BitReverseInst, bit_reverse, inst)) {
           return at(values, bit_reverse->arg(0)).bit_reverse();
+        } else if (dynmatch(PopcountInst, popcount, inst)) {
+          return at(values, popcount->arg(0)).popcount();
         } else if (dynmatch(ResizeUInst, resize_u, inst)) {
           Bits a = at(values, resize_u->arg(0));
           return a.resize_u(resize_u->type());
@@ -3650,6 +3963,13 @@ namespace metajit {
         return Bits::constant(type, metajit::bit_reverse(type, value));
       }
 
+      Bits clz() const {
+        if (is_poison) {
+          return Bits::poison(type);
+        }
+        return Bits::constant(type, metajit::clz(type, value));
+      }
+
       Bits popcount() const {
         if (is_poison) {
           return Bits::poison(type);
@@ -3659,25 +3979,22 @@ namespace metajit {
 
       void store(uint8_t* ptr) {
         assert(!is_poison);
-        switch (type_size(type)) {
-          case 1: *ptr = (uint8_t) value; break;
-          case 2: *(uint16_t*) ptr = (uint16_t) value; break;
-          case 4: *(uint32_t*) ptr = (uint32_t) value; break;
-          case 8: *(uint64_t*) ptr = (uint64_t) value; break;
-          default:
-            assert(false); // Unreachable
+        size_t size = type_size(type);
+        assert(size > 0);
+        uint64_t bits = value;
+        if constexpr (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__) {
+          bits <<= (sizeof(bits) - size) * 8;
         }
+        std::memcpy(ptr, &bits, size);
       }
 
       static Bits load(uint8_t* ptr, Type type) {
         uint64_t value = 0;
-        switch (type_size(type)) {
-          case 1: value = *ptr; break;
-          case 2: value = *(uint16_t*) ptr; break;
-          case 4: value = *(uint32_t*) ptr; break;
-          case 8: value = *(uint64_t*) ptr; break;
-          default:
-            assert(false); // Unreachable
+        size_t size = type_size(type);
+        assert(size > 0);
+        std::memcpy(&value, ptr, size);
+        if constexpr (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__) {
+          value >>= (sizeof(value) - size) * 8;
         }
         return Bits::constant(type, value);
       }
@@ -3799,6 +4116,18 @@ namespace metajit {
                 size.value
               );
             }
+          } else if (intrinsic == Intrinsic::write_closure) {
+            if (call->arg_count() > 2) {
+              Bits ptr = at(call->arg(1));
+              assert(!ptr.is_poison);
+              uint8_t* closure = (uint8_t*) ptr.value;
+              size_t size = 0;
+              for (size_t it = 2; it < call->arg_count(); it++) {
+                Value* value = call->arg(it);
+                size_t offset = add_record_field(size, value->type());
+                at(value).store(closure + offset);
+              }
+            }
           } else {
             assert(false && "Unsupported intrinsic in interpreter");
           }
@@ -3865,6 +4194,8 @@ namespace metajit {
         _values[_inst] = a.ptr_to_int(ptr_to_int->type());
       } else if (dynmatch(BitReverseInst, bit_reverse, _inst)) {
         _values[_inst] = at(bit_reverse->arg(0)).bit_reverse();
+      } else if (dynmatch(ClzInst, clz, _inst)) {
+        _values[_inst] = at(clz->arg(0)).clz();
       } else if (dynmatch(PopcountInst, popcount, _inst)) {
         Bits a = at(popcount->arg(0));
         _values[_inst] = a.popcount();
@@ -3876,8 +4207,7 @@ namespace metajit {
         } else {
           _values[_inst] = a;
         }
-      } else if (dynmatch(CommentInst, comment, _inst)) {
-        // Ignore comments
+      } else if (dynamic_cast<CommentInst*>(_inst) || dynamic_cast<MetadataInst*>(_inst)) {
       }
 
       #define binop(name, expr) \
@@ -4111,7 +4441,7 @@ namespace metajit {
           } else {
             if (inst->has_side_effect() || inst->is_terminator() ||
                 dynamic_cast<LoadInst*>(inst) || dynamic_cast<AllocaInst*>(inst) ||
-                _values[inst].used != 0) {
+                dynamic_cast<MetadataInst*>(inst) || _values[inst].used != 0) {
               use_all_args(inst);
             } else {
               for (Value* arg : inst->args()) {
@@ -4170,7 +4500,8 @@ namespace metajit {
       return at(inst) == 0 &&
              !inst->has_side_effect() &&
              !inst->is_terminator() &&
-             !dynamic_cast<CommentInst*>(inst);
+             !dynamic_cast<CommentInst*>(inst) &&
+             !dynamic_cast<MetadataInst*>(inst);
     }
 
     void add_use(Value* value) {
@@ -4335,327 +4666,327 @@ namespace metajit {
     }
   };
 
-class SimplifyTrace: public metajit::Pass<SimplifyTrace> {
- using Bits = metajit::KnownBits::Bits;
-private:
-  metajit::Section* _section = nullptr;
-  metajit::Builder _builder;
-  NameMap<Bits> _values;
-  NameMap<Value*> _substs;
-  SaturatingUseCounts _use_counts;
-  struct PendingFact {
-    Value* value;
-    Bits bits;
-  };
-  std::vector<PendingFact> _pending;
-  bool _contradiction = false;
+  class SimplifyTrace: public metajit::Pass<SimplifyTrace> {
+    using Bits = metajit::KnownBits::Bits;
+  private:
+    metajit::Section* _section = nullptr;
+    metajit::Builder _builder;
+    NameMap<Bits> _values;
+    NameMap<Value*> _substs;
+    SaturatingUseCounts _use_counts;
+    struct PendingFact {
+      Value* value;
+      Bits bits;
+    };
+    std::vector<PendingFact> _pending;
+    bool _contradiction = false;
 
-  void _add_subst(Inst* inst, Value* value) {
-    _values.ensure_size(_builder.next_name());
-    _substs.ensure_size(_builder.next_name());
-    _use_counts.invalidate(value);
-    _substs[inst] = value;
-  }
-
-  Value* _resolve_subst(Value* value) {
-    return resolve_substitution(value, _substs);
-  }
-
-  void _substitute_args(Inst* inst) {
-    inst->substitute_args_iterated(_substs);
-  }
-
-  bool _refresh_arguments(Inst* inst) {
-    for (size_t index = 0; index < inst->arg_count(); index++) {
-      Value* arg = inst->arg(index);
-      if (!arg->is_inst() || !is_int_or_bool(arg->type())) {
-        continue;
-      }
-      Bits bits = Bits::at(_values, arg);
-      if (!bits.is_const()) {
-        auto refined = bits.intersect(Bits::eval((Inst*) arg, _values));
-        if (!refined.has_value()) {
-          _contradiction = true;
-          return false;
-        }
-        bits = refined.value();
-        _values[(Inst*) arg] = bits;
-      }
-      if (bits.is_const()) {
-        inst->set_arg(index, _builder.build_const(arg->type(), bits.value));
-      }
-    }
-    return true;
-  }
-
-public:
-
-  SimplifyTrace(metajit::Section* section, metajit::Chain* chain):
-                 Pass(section), _section(section), _builder(section),
-                 _values(section), _substs(section), _use_counts(section) {
-    if (chain->size() == 0) {
-      return;
+    void _add_subst(Inst* inst, Value* value) {
+      _values.ensure_size(_builder.next_name());
+      _substs.ensure_size(_builder.next_name());
+      _use_counts.invalidate(value);
+      _substs[inst] = value;
     }
 
-    _builder.set_next_name();
-    _init_values();
-    BlockMap<size_t> incoming(section);
-    for (Block* block : *section) {
-      if (dynmatch(BranchInst, branch, block->terminator())) {
-        incoming[branch->true_block()]++;
-        incoming[branch->false_block()]++;
-      } else if (dynmatch(JumpInst, jump, block->terminator())) {
-        incoming[jump->block()]++;
-      }
+    Value* _resolve_subst(Value* value) {
+      return resolve_substitution(value, _substs);
     }
-    for (size_t index = 1; index < chain->size(); index++) {
-      assert(incoming[chain->at(index)] == 1);
+
+    void _substitute_args(Inst* inst) {
+      inst->substitute_args_iterated(_substs);
     }
-    for (size_t index = 0; index < chain->size(); index++) {
-      Block* block = chain->at(index);
-      for (Inst* inst : *block) {
-        _substitute_args(inst);
-        if (_use_counts.is_dead(inst)) {
+
+    bool _refresh_arguments(Inst* inst) {
+      for (size_t index = 0; index < inst->arg_count(); index++) {
+        Value* arg = inst->arg(index);
+        if (!arg->is_inst() || !is_int_or_bool(arg->type())) {
           continue;
         }
-        if (!_refresh_arguments(inst)) {
-          return;
+        Bits bits = Bits::at(_values, arg);
+        if (!bits.is_const()) {
+          auto refined = bits.intersect(Bits::eval((Inst*) arg, _values));
+          if (!refined.has_value()) {
+            _contradiction = true;
+            return false;
+          }
+          bits = refined.value();
+          _values[(Inst*) arg] = bits;
         }
-        _builder.move_before(block, inst);
-        if (inst->has_side_effect() ||
-            inst->is_terminator() ||
-            inst->type() == Type::Void ||
-            inst->type() == Type::Ptr) {
-          continue;
-        }
-        Bits bits = Bits::eval(inst, _values);
-        _values[inst] = bits;
-        Inst* previous = inst->prev();
         if (bits.is_const()) {
-          _add_subst(inst, _builder.build_const(inst->type(), bits.value));
-        } else if (Value* replacement = _builder.try_simplify(inst, KnownBits::View(_values), _use_counts)) {
-          _add_subst(inst, replacement);
-        } else if (!is_int_or_bool(inst->type())) {
-          if (dynmatch(SelectInst, select, inst)) {
-            KnownBits::Bits cond = Bits::at(_values, select->cond());
-            if (cond.is_const()) {
-              _add_subst(inst, select->arg(cond.value ? 1 : 2));
+          inst->set_arg(index, _builder.build_const(arg->type(), bits.value));
+        }
+      }
+      return true;
+    }
+
+  public:
+
+    SimplifyTrace(metajit::Section* section, metajit::Chain* chain):
+                   Pass(section), _section(section), _builder(section),
+                   _values(section), _substs(section), _use_counts(section) {
+      if (chain->size() == 0) {
+        return;
+      }
+
+      _builder.set_next_name();
+      _init_values();
+      BlockMap<size_t> incoming(section);
+      for (Block* block : *section) {
+        if (dynmatch(BranchInst, branch, block->terminator())) {
+          incoming[branch->true_block()]++;
+          incoming[branch->false_block()]++;
+        } else if (dynmatch(JumpInst, jump, block->terminator())) {
+          incoming[jump->block()]++;
+        }
+      }
+      for (size_t index = 1; index < chain->size(); index++) {
+        assert(incoming[chain->at(index)] == 1);
+      }
+      for (size_t index = 0; index < chain->size(); index++) {
+        Block* block = chain->at(index);
+        for (Inst* inst : *block) {
+          _substitute_args(inst);
+          if (_use_counts.is_dead(inst)) {
+            continue;
+          }
+          if (!_refresh_arguments(inst)) {
+            return;
+          }
+          _builder.move_before(block, inst);
+          if (inst->has_side_effect() ||
+              inst->is_terminator() ||
+              inst->type() == Type::Void ||
+              inst->type() == Type::Ptr) {
+            continue;
+          }
+          Bits bits = Bits::eval(inst, _values);
+          _values[inst] = bits;
+          Inst* previous = inst->prev();
+          if (bits.is_const()) {
+            _add_subst(inst, _builder.build_const(inst->type(), bits.value));
+          } else if (Value* replacement = _builder.try_simplify(inst, KnownBits::View(_values), _use_counts)) {
+            _add_subst(inst, replacement);
+          } else if (!is_int_or_bool(inst->type())) {
+            if (dynmatch(SelectInst, select, inst)) {
+              KnownBits::Bits cond = Bits::at(_values, select->cond());
+              if (cond.is_const()) {
+                _add_subst(inst, select->arg(cond.value ? 1 : 2));
+              }
+            }
+          }
+          for (Inst* added = inst->prev(); added != previous; added = added->prev()) {
+            for (Value* arg : added->args()) {
+              _use_counts.invalidate(arg);
             }
           }
         }
-        for (Inst* added = inst->prev(); added != previous; added = added->prev()) {
-          for (Value* arg : added->args()) {
-            _use_counts.invalidate(arg);
-          }
+        if (index + 1 == chain->size()) {
+          break;
         }
-      }
-      if (index + 1 == chain->size()) {
-        break;
-      }
-      Block* next = chain->at(index + 1);
-      if (dynmatch(BranchInst, branch, block->terminator())) {
-        if (branch->true_block() == next) {
-          if (!propagate_backwards(branch->cond(), Bits::constant(true))) {
-            return;
-          }
-        } else if (branch->false_block() == next) {
-          if (!propagate_backwards(branch->cond(), Bits::constant(false))) {
-            return;
+        Block* next = chain->at(index + 1);
+        if (dynmatch(BranchInst, branch, block->terminator())) {
+          if (branch->true_block() == next) {
+            if (!propagate_backwards(branch->cond(), Bits::constant(true))) {
+              return;
+            }
+          } else if (branch->false_block() == next) {
+            if (!propagate_backwards(branch->cond(), Bits::constant(false))) {
+              return;
+            }
           }
         }
       }
     }
-  }
 
-  void _init_values() {
-    for (Block* block : *_section) {
-      for (Arg* arg : block->args()) {
-        _values[arg] = Bits(arg->type(), 0, 0);
+    void _init_values() {
+      for (Block* block : *_section) {
+        for (Arg* arg : block->args()) {
+          _values[arg] = Bits(arg->type(), 0, 0);
+        }
+        for (Inst* inst : *block) {
+          _values[inst] = Bits(inst->type(), 0, 0);
+        }
       }
-      for (Inst* inst : *block) {
-        _values[inst] = Bits(inst->type(), 0, 0);
+    }
+
+    bool propagate_backwards(Value* value, const Bits& newinfo) {
+      _enqueue(value, newinfo);
+      while (!_contradiction && !_pending.empty()) {
+        PendingFact fact = _pending.back();
+        _pending.pop_back();
+        _propagate_one(fact.value, fact.bits);
       }
+      return !_contradiction;
     }
-  }
 
-  bool propagate_backwards(Value* value, const Bits& newinfo) {
-    _enqueue(value, newinfo);
-    while (!_contradiction && !_pending.empty()) {
-      PendingFact fact = _pending.back();
-      _pending.pop_back();
-      _propagate_one(fact.value, fact.bits);
-    }
-    return !_contradiction;
-  }
-
-private:
-  void _enqueue(Value* value, const Bits& bits) {
-    if (_contradiction) {
-      return;
-    }
-    if (value->is_named() && ((NamedValue*) value)->name() >= _values.size()) {
-      return;
-    }
-    Bits old_bits = Bits::at(_values, value);
-    auto refined = old_bits.intersect(bits);
-    if (!refined.has_value()) {
-      _contradiction = true;
-      return;
-    }
-    if (refined.value() == old_bits) {
-      return;
-    }
-    _pending.push_back({value, bits});
-  }
-
-  void _enqueue(Value* value, const std::optional<Bits>& bits) {
-    if (bits.has_value()) {
-      _enqueue(value, bits.value());
-    } else {
-      _contradiction = true;
-    }
-  }
-
-  void _propagate_lt(Value* left, Value* right, const Bits& result, uint64_t flip) {
-    assert(result.is_const());
-    Bits x = Bits::at(_values, left);
-    Bits y = Bits::at(_values, right);
-    // use unsigned bounds directly for known nonnegative operands
-    if ((x.mask & y.mask & flip) != 0 && ((x.value | y.value) & flip) == 0) {
-      flip = 0;
-    }
-    // flip the sign bit for signed bounds, then flip inferred facts back on enqueue
-    Bits bias = Bits::constant(left->type(), flip);
-    x = x ^ bias;
-    y = y ^ bias;
-    uint64_t xmax = x.umax();
-    uint64_t ymax = y.umax();
-    if (result.value == 1) {
-      if (x.umin() >= ymax) {
+  private:
+    void _enqueue(Value* value, const Bits& bits) {
+      if (_contradiction) {
+        return;
+      }
+      if (value->is_named() && ((NamedValue*) value)->name() >= _values.size()) {
+        return;
+      }
+      Bits old_bits = Bits::at(_values, value);
+      auto refined = old_bits.intersect(bits);
+      if (!refined.has_value()) {
         _contradiction = true;
         return;
       }
-      _enqueue(left, Bits::unsigned_upper_bound(left->type(), ymax - 1) ^ bias);
-      _enqueue(right, Bits::unsigned_lower_bound(right->type(), x.umin() + 1) ^ bias);
-    } else {
-      if (xmax < y.umin()) {
-        _contradiction = true;
+      if (refined.value() == old_bits) {
         return;
       }
-      _enqueue(left, Bits::unsigned_lower_bound(left->type(), y.umin()) ^ bias);
-      _enqueue(right, Bits::unsigned_upper_bound(right->type(), xmax) ^ bias);
+      _pending.push_back({value, bits});
     }
-  }
 
-  void _propagate_one(Value* value, const Bits& newinfo) {
-    Bits old_bits = Bits::at(_values, value);
-    auto maybe_bits = old_bits.intersect(newinfo);
-    if (!maybe_bits.has_value()) {
-      _contradiction = true;
-      return;
-    }
-    Bits bits = maybe_bits.value();
-    
-    assert(!dynamic_cast<Const*>(value));
-    if (old_bits == bits) {
-      return;
-    }
-    if (dynmatch(NamedValue, val, value)) {
-      _values[val] = bits;
-      if (bits.is_const()) {
-        _substs[val] = _builder.build_const(val->type(), bits.value);
-      }
-    }
-    if (dynmatch(EqInst, eq, value)) {
-      if (bits.is_const() && bits.value == 1) {
-        Bits arg0 = Bits::at(_values, eq->arg(0));
-        Bits arg1 = Bits::at(_values, eq->arg(1));
-        auto common = arg0.intersect(arg1);
-        _enqueue(eq->arg(0), common);
-        _enqueue(eq->arg(1), common);
-      } else if (bits.is_const() && eq->arg(0)->type() == Type::Bool) {
-        Bits arg0 = Bits::at(_values, eq->arg(0));
-        Bits arg1 = Bits::at(_values, eq->arg(1));
-        if (arg0.is_const()) {
-          _enqueue(eq->arg(1), Bits::constant(!arg0.value));
-        }
-        if (arg1.is_const()) {
-          _enqueue(eq->arg(0), Bits::constant(!arg1.value));
-        }
-      }
-    } else if (dynmatch(LtUInst, lt, value)) {
-      _propagate_lt(lt->arg(0), lt->arg(1), bits, 0);
-    } else if (dynmatch(LtSInst, lt, value)) {
-      uint64_t sign = uint64_t(1) << (type_width(lt->arg(0)->type()) - 1);
-      _propagate_lt(lt->arg(0), lt->arg(1), bits, sign);
-    } else if (dynmatch(AndInst, andinst, value)) {
-      auto arg0 = bits.and_backwards(Bits::at(_values, andinst->arg(1)));
-      _enqueue(andinst->arg(0), arg0);
-      auto arg1 = bits.and_backwards(Bits::at(_values, andinst->arg(0)));
-      _enqueue(andinst->arg(1), arg1);
-    } else if (dynmatch(OrInst, orinst, value)) {
-      auto arg0 = bits.or_backwards(Bits::at(_values, orinst->arg(1)));
-      _enqueue(orinst->arg(0), arg0);
-      auto arg1 = bits.or_backwards(Bits::at(_values, orinst->arg(0)));
-      _enqueue(orinst->arg(1), arg1);
-    } else if (dynmatch(SubInst, sub, value)) {
-      Bits arg0 = bits + Bits::at(_values, sub->arg(1));
-      _enqueue(sub->arg(0), arg0);
-      Bits arg1 = Bits::at(_values, sub->arg(0)) - bits;
-      _enqueue(sub->arg(1), arg1);
-    } else if (dynmatch(AddInst, add, value)) {
-      Bits arg0 = bits - Bits::at(_values, add->arg(1));
-      _enqueue(add->arg(0), arg0);
-      Bits arg1 = bits - Bits::at(_values, add->arg(0));
-      _enqueue(add->arg(1), arg1);
-    } else if (dynmatch(XorInst, add, value)) {
-      // xor is its own inverse
-      Bits arg0 = bits ^ Bits::at(_values, add->arg(1));
-      _enqueue(add->arg(0), arg0);
-      Bits arg1 = bits ^ Bits::at(_values, add->arg(0));
-      _enqueue(add->arg(1), arg1);
-    } else if (dynmatch(ShlInst, shl, value)) {
-      Bits arg1 = Bits::at(_values, shl->arg(1));
-      if (arg1.is_const()) {
-        auto arg0 = bits.shl_backwards(arg1.value);
-        _enqueue(shl->arg(0), arg0);
-      }
-    } else if (dynmatch(ShrUInst, shr, value)) {
-      Bits arg1 = Bits::at(_values, shr->arg(1));
-      if (arg1.is_const()) {
-        auto arg0 = bits.shr_u_backwards(arg1.value);
-        _enqueue(shr->arg(0), arg0);
-      }
-    } else if (dynmatch(SelectInst, select, value)) {
-      Bits cond = Bits::at(_values, select->cond());
-      if (cond.is_const()) {
-        return _enqueue(select->arg(cond.value ? 1 : 2), bits);
-      }
-      Bits arg1 = Bits::at(_values, select->arg(1));
-      Bits equal1 = arg1.eq(bits);
-      if (equal1.is_const() && !equal1.value) {
-        _enqueue(select->arg(2), bits);
-        _enqueue(select->arg(0), Bits::constant(Type::Bool, 0));
+    void _enqueue(Value* value, const std::optional<Bits>& bits) {
+      if (bits.has_value()) {
+        _enqueue(value, bits.value());
       } else {
-        Bits arg2 = Bits::at(_values, select->arg(2));
-        Bits equal2 = arg2.eq(bits);
-        if (equal2.is_const() && !equal2.value) {
-          _enqueue(select->arg(1), bits);
-          _enqueue(select->arg(0), Bits::constant(Type::Bool, 1));
+        _contradiction = true;
+      }
+    }
+
+    void _propagate_lt(Value* left, Value* right, const Bits& result, uint64_t flip) {
+      assert(result.is_const());
+      Bits x = Bits::at(_values, left);
+      Bits y = Bits::at(_values, right);
+      // use unsigned bounds directly for known nonnegative operands
+      if ((x.mask & y.mask & flip) != 0 && ((x.value | y.value) & flip) == 0) {
+        flip = 0;
+      }
+      // flip the sign bit for signed bounds, then flip inferred facts back on enqueue
+      Bits bias = Bits::constant(left->type(), flip);
+      x = x ^ bias;
+      y = y ^ bias;
+      uint64_t xmax = x.umax();
+      uint64_t ymax = y.umax();
+      if (result.value == 1) {
+        if (x.umin() >= ymax) {
+          _contradiction = true;
+          return;
+        }
+        _enqueue(left, Bits::unsigned_upper_bound(left->type(), ymax - 1) ^ bias);
+        _enqueue(right, Bits::unsigned_lower_bound(right->type(), x.umin() + 1) ^ bias);
+      } else {
+        if (xmax < y.umin()) {
+          _contradiction = true;
+          return;
+        }
+        _enqueue(left, Bits::unsigned_lower_bound(left->type(), y.umin()) ^ bias);
+        _enqueue(right, Bits::unsigned_upper_bound(right->type(), xmax) ^ bias);
+      }
+    }
+
+    void _propagate_one(Value* value, const Bits& newinfo) {
+      Bits old_bits = Bits::at(_values, value);
+      auto maybe_bits = old_bits.intersect(newinfo);
+      if (!maybe_bits.has_value()) {
+        _contradiction = true;
+        return;
+      }
+      Bits bits = maybe_bits.value();
+
+      assert(!dynamic_cast<Const*>(value));
+      if (old_bits == bits) {
+        return;
+      }
+      if (dynmatch(NamedValue, val, value)) {
+        _values[val] = bits;
+        if (bits.is_const()) {
+          _substs[val] = _builder.build_const(val->type(), bits.value);
         }
       }
-    } else if (dynmatch(ResizeUInst, resize, value)) {
-      Value* arg = resize->arg(0);
-      // we also need to use resize_x here,
-      // we don't know which bits got removed on narrowing
-      return _enqueue(arg, bits.resize_x(arg->type()));
-    } else if (dynmatch(ResizeXInst, resize, value)) {
-      Value* arg = resize->arg(0);
-      return _enqueue(arg, bits.resize_x(arg->type()));
+      if (dynmatch(EqInst, eq, value)) {
+        if (bits.is_const() && bits.value == 1) {
+          Bits arg0 = Bits::at(_values, eq->arg(0));
+          Bits arg1 = Bits::at(_values, eq->arg(1));
+          auto common = arg0.intersect(arg1);
+          _enqueue(eq->arg(0), common);
+          _enqueue(eq->arg(1), common);
+        } else if (bits.is_const() && eq->arg(0)->type() == Type::Bool) {
+          Bits arg0 = Bits::at(_values, eq->arg(0));
+          Bits arg1 = Bits::at(_values, eq->arg(1));
+          if (arg0.is_const()) {
+            _enqueue(eq->arg(1), Bits::constant(!arg0.value));
+          }
+          if (arg1.is_const()) {
+            _enqueue(eq->arg(0), Bits::constant(!arg1.value));
+          }
+        }
+      } else if (dynmatch(LtUInst, lt, value)) {
+        _propagate_lt(lt->arg(0), lt->arg(1), bits, 0);
+      } else if (dynmatch(LtSInst, lt, value)) {
+        uint64_t sign = uint64_t(1) << (type_width(lt->arg(0)->type()) - 1);
+        _propagate_lt(lt->arg(0), lt->arg(1), bits, sign);
+      } else if (dynmatch(AndInst, andinst, value)) {
+        auto arg0 = bits.and_backwards(Bits::at(_values, andinst->arg(1)));
+        _enqueue(andinst->arg(0), arg0);
+        auto arg1 = bits.and_backwards(Bits::at(_values, andinst->arg(0)));
+        _enqueue(andinst->arg(1), arg1);
+      } else if (dynmatch(OrInst, orinst, value)) {
+        auto arg0 = bits.or_backwards(Bits::at(_values, orinst->arg(1)));
+        _enqueue(orinst->arg(0), arg0);
+        auto arg1 = bits.or_backwards(Bits::at(_values, orinst->arg(0)));
+        _enqueue(orinst->arg(1), arg1);
+      } else if (dynmatch(SubInst, sub, value)) {
+        Bits arg0 = bits + Bits::at(_values, sub->arg(1));
+        _enqueue(sub->arg(0), arg0);
+        Bits arg1 = Bits::at(_values, sub->arg(0)) - bits;
+        _enqueue(sub->arg(1), arg1);
+      } else if (dynmatch(AddInst, add, value)) {
+        Bits arg0 = bits - Bits::at(_values, add->arg(1));
+        _enqueue(add->arg(0), arg0);
+        Bits arg1 = bits - Bits::at(_values, add->arg(0));
+        _enqueue(add->arg(1), arg1);
+      } else if (dynmatch(XorInst, add, value)) {
+        // xor is its own inverse
+        Bits arg0 = bits ^ Bits::at(_values, add->arg(1));
+        _enqueue(add->arg(0), arg0);
+        Bits arg1 = bits ^ Bits::at(_values, add->arg(0));
+        _enqueue(add->arg(1), arg1);
+      } else if (dynmatch(ShlInst, shl, value)) {
+        Bits arg1 = Bits::at(_values, shl->arg(1));
+        if (arg1.is_const()) {
+          auto arg0 = bits.shl_backwards(arg1.value);
+          _enqueue(shl->arg(0), arg0);
+        }
+      } else if (dynmatch(ShrUInst, shr, value)) {
+        Bits arg1 = Bits::at(_values, shr->arg(1));
+        if (arg1.is_const()) {
+          auto arg0 = bits.shr_u_backwards(arg1.value);
+          _enqueue(shr->arg(0), arg0);
+        }
+      } else if (dynmatch(SelectInst, select, value)) {
+        Bits cond = Bits::at(_values, select->cond());
+        if (cond.is_const()) {
+          return _enqueue(select->arg(cond.value ? 1 : 2), bits);
+        }
+        Bits arg1 = Bits::at(_values, select->arg(1));
+        Bits equal1 = arg1.eq(bits);
+        if (equal1.is_const() && !equal1.value) {
+          _enqueue(select->arg(2), bits);
+          _enqueue(select->arg(0), Bits::constant(Type::Bool, 0));
+        } else {
+          Bits arg2 = Bits::at(_values, select->arg(2));
+          Bits equal2 = arg2.eq(bits);
+          if (equal2.is_const() && !equal2.value) {
+            _enqueue(select->arg(1), bits);
+            _enqueue(select->arg(0), Bits::constant(Type::Bool, 1));
+          }
+        }
+      } else if (dynmatch(ResizeUInst, resize, value)) {
+        Value* arg = resize->arg(0);
+        // we also need to use resize_x here,
+        // we don't know which bits got removed on narrowing
+        return _enqueue(arg, bits.resize_x(arg->type()));
+      } else if (dynmatch(ResizeXInst, resize, value)) {
+        Value* arg = resize->arg(0);
+        return _enqueue(arg, bits.resize_x(arg->type()));
+      }
+      return;
     }
-    return;
-  }
-};
+  };
 
   class Loop {
   private:
@@ -4717,7 +5048,8 @@ private:
 
       for (Block* block : *loop->chain()) {
         for (Inst* inst : *block) {
-          if (dynamic_cast<CallInst*>(inst)) {
+          if (dynmatch(StoreInst, store, inst);
+              dynamic_cast<CallInst*>(inst) || (store && store->aliasing() == 0)) {
             // Conservative: calls can touch memory backing promoted aliases.
             return;
           }
@@ -4821,8 +5153,10 @@ private:
           if (dynmatch(StoreInst, store, inst)) {
             if (store->aliasing() < 0) {
               stores[-store->aliasing()] = 1;
+            } else if (store->aliasing() == 0) {
+              has_unknown_memory_write = true;
             }
-          } else if (dynamic_cast<CallInst*>(inst)) {
+          } else if (dynamic_cast<CallInst*>(inst) || is_lifetime_marker(inst)) {
             has_unknown_memory_write = true;
           }
         }
@@ -4838,7 +5172,8 @@ private:
           if (inst->has_side_effect() ||
               inst->is_terminator() ||
               dynamic_cast<StoreInst*>(inst) ||
-              dynamic_cast<CommentInst*>(inst)) {
+              dynamic_cast<CommentInst*>(inst) ||
+              dynamic_cast<MetadataInst*>(inst)) {
             inst_it++;
             continue;
           }
@@ -5157,14 +5492,10 @@ private:
                 externally_used_args.insert(block);
               }
               for (size_t i = 0; i < target->args().size(); i++) {
-                Value* arg = jump->arg(i);
-                if (substs.find(arg) != substs.end()) {
-                  arg = substs.at(arg);
-                }
-                substs[target->args().at(i)] = arg;
+                substs[target->args().at(i)] = resolve_substitution(jump->arg(i), substs);
               }
               for (Inst* inst : *target) {
-                inst->substitute_args(substs);
+                inst->substitute_args_iterated(substs);
               }
 
               auto target_successors = target->successors();
@@ -5233,7 +5564,7 @@ private:
         if (substs.size()) {
           for (Block* block : *_section) {
             for (Inst* inst : *block) {
-              inst->substitute_args(substs);
+              inst->substitute_args_iterated(substs);
             }
           }
         }
@@ -5247,12 +5578,10 @@ private:
   class BindingTimeGroups {
   public:
     static constexpr size_t ALWAYS = 0;
-    static constexpr size_t NEW_GROUP = ~size_t(0);
   private:
     Section* _section;
     NameMap<size_t> _groups;
     std::vector<bool> _dynamic_branch;
-    size_t _next_group = 1;
   public:
     BindingTimeGroups(Section* section):
         _section(section),
@@ -5267,60 +5596,52 @@ private:
         }
       }
 
-      for (Block* block : *section) {
-        for (Arg* arg : block->args()) {
-          if (_groups[arg] == NEW_GROUP || _section->ordering() < BlockOrdering::Topological) {
-            _groups[arg] = _next_group++;
-          }
-        }
-
-        for (Inst* inst : *block) {
-          if (dynmatch(PromoteInst, promote, inst)) {
-            _groups[inst] = ALWAYS;
-          } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
-            _groups[inst] = ALWAYS;
-          } else if (dynmatch(LoadInst, load, inst)) {
-            if (load->flags().has(LoadFlags::Pure)) {
-              _groups[inst] = at(load->ptr());
+      bool changed;
+      do {
+        changed = false;
+        for (Block* block : *section) {
+          for (Inst* inst : *block) {
+            if (dynmatch(PromoteInst, promote, inst)) {
+              _groups[inst] = ALWAYS;
+            } else if (dynmatch(AssumeConstInst, assume_const, inst)) {
+              _groups[inst] = ALWAYS;
+            } else if (dynmatch(LoadInst, load, inst)) {
+              if (load->flags().has(LoadFlags::Pure)) {
+                _groups[inst] = at(load->ptr());
+              } else {
+                _groups[inst] = inst->name() + 1;
+              }
+            } else if (inst->has_side_effect() || inst->is_terminator()) {
+              _groups[inst] = inst->name() + 1;
             } else {
-              _groups[inst] = _next_group++;
-            }
-          } else if (inst->has_side_effect() || inst->is_terminator()) {
-            _groups[inst] = _next_group++;
-          } else {
-            size_t group = ALWAYS;
-            for (Value* arg : inst->args()) {
-              size_t arg_group = at(arg);
-              if (arg_group != ALWAYS && arg_group != group) {
-                if (group == ALWAYS) {
-                  group = arg_group;
-                } else {
-                  group = _next_group;
+              size_t group = ALWAYS;
+              for (Value* arg : inst->args()) {
+                size_t arg_group = at(arg);
+                if (arg_group != ALWAYS && arg_group != group) {
+                  if (group == ALWAYS) {
+                    group = arg_group;
+                  } else {
+                    group = inst->name() + 1;
+                  }
                 }
               }
-            }
 
-            // Instructions for which we implement short-circuiting
-            // inside the generating extension may be const even though
-            // not all arguments are const. This means they need to be
-            // in a separate group.
-            if (dynamic_cast<AndInst*>(inst) ||
-                dynamic_cast<OrInst*>(inst) ||
-                dynamic_cast<SelectInst*>(inst)) {
-              if (group != ALWAYS) {
-                group = _next_group;
+              // Instructions for which we implement short-circuiting
+              // inside the generating extension may be const even though
+              // not all arguments are const. This means they need to be
+              // in a separate group.
+              if (dynamic_cast<AndInst*>(inst) ||
+                  dynamic_cast<OrInst*>(inst) ||
+                  dynamic_cast<SelectInst*>(inst)) {
+                if (group != ALWAYS) {
+                  group = inst->name() + 1;
+                }
               }
-            }
 
-            if (group == _next_group) {
-              _next_group++;
+              _groups[inst] = group;
             }
-
-            _groups[inst] = group;
           }
-        }
 
-        if (_section->ordering() >= BlockOrdering::Topological) {
           bool dynamic_branch = _dynamic_branch[block->name()];
           if (dynmatch(BranchInst, branch, block->terminator())) {
             if (!is_static(branch->cond())) {
@@ -5328,18 +5649,22 @@ private:
             }
           } else if (dynmatch(JumpInst, jump, block->terminator())) {
             for (Arg* arg : jump->block()->args()) {
-              if (!is_static(jump->arg(arg->index())) || dynamic_branch) {
-                _groups[arg] = NEW_GROUP;
+              if (is_static(arg) && (!is_static(jump->arg(arg->index())) || dynamic_branch)) {
+                _groups[arg] = arg->name() + 1;
+                changed = true;
               }
             }
           }
           if (dynamic_branch) {
             for (Block* succ : block->successors()) {
-              _dynamic_branch[succ->name()] = true;
+              if (!_dynamic_branch[succ->name()]) {
+                _dynamic_branch[succ->name()] = true;
+                changed = true;
+              }
             }
           }
         }
-      }
+      } while (changed && _section->ordering() < BlockOrdering::Topological);
     }
 
     size_t at(Value* value) const {
@@ -5715,9 +6040,31 @@ private:
 
     BlockMap<std::optional<BranchRegion>> _regions;
     BlockMap<bool> _in_loop;
+    BlockMap<size_t> _dom_start;
+    BlockMap<size_t> _dom_end;
     NameMap<Block*> _parents;
     Uses _uses;
     bool _requires_reorder = false;
+
+    void find_dominator_ranges() {
+      size_t next = 1;
+      DominatorTree::Children children = _dom.children();
+      for (auto [event, block] : children) {
+        if (event == DominatorTree::Children::Event::Open) {
+          _dom_start[block] = next++;
+        } else {
+          _dom_end[block] = next;
+        }
+      }
+    }
+
+    bool dominates(Block* dominator, Block* dominated) {
+      if (dominator->name() == dominated->name() || _dom_start[dominated] == 0) {
+        return dominator == dominated;
+      }
+      return _dom_start[dominator] <= _dom_start[dominated] &&
+             _dom_start[dominated] < _dom_end[dominator];
+    }
 
     static bool can_sink(Inst* inst) {
       return !inst->has_side_effect() && !inst->is_terminator() &&
@@ -5726,7 +6073,8 @@ private:
              !dynamic_cast<FreezeInst*>(inst) &&
              !dynamic_cast<PromoteInst*>(inst) &&
              !dynamic_cast<AssumeConstInst*>(inst) &&
-             !dynamic_cast<CommentInst*>(inst);
+             !dynamic_cast<CommentInst*>(inst) &&
+             !dynamic_cast<MetadataInst*>(inst);
     }
 
     void find_parents() {
@@ -5807,7 +6155,7 @@ private:
         }
       }
       for (Block* block : *_section) {
-        if (_dom.dominates(exit, block) && !_dom.dominates(target, block)) {
+        if (dominates(exit, block) && !dominates(target, block)) {
           for (Inst* inst : *block) {
             if (inst->has_side_effect()) {
               return;
@@ -5834,6 +6182,7 @@ private:
       BranchInst* branch = region->branch();
       entry->remove(branch);
       target->add(branch);
+      _parents[branch] = target;
       builder.move_to_end(entry);
       builder.build_jump(exit);
       _requires_reorder = true;
@@ -5848,11 +6197,14 @@ private:
         _postdom(_incoming),
         _regions(section),
         _in_loop(section),
+        _dom_start(section),
+        _dom_end(section),
         _parents(section),
         _uses(section) {
       
       assert(section->ordering() >= BlockOrdering::Dominator);
       
+      find_dominator_ranges();
       find_parents();
       find_loops();
       for (Block* block : *section) {
@@ -5918,7 +6270,6 @@ private:
     };
 
     using Canon = std::unordered_set<Lookup, LookupHash>;
-    using ValidLoads = std::unordered_map<AliasingGroup, std::vector<LoadInst*>>;
 
     struct CanonUndo {
       Lookup lookup;
@@ -5927,24 +6278,42 @@ private:
 
     Canon _canon;
     std::vector<CanonUndo> _undo;
-
-    void canon_insert(const Lookup& lookup) {
-      _undo.push_back({lookup, true});
-      _canon.insert(lookup);
-    }
+    std::unordered_map<AliasingGroup, std::vector<LoadInst*>> _valid_loads;
 
     void canon_erase(const Lookup& lookup) {
-      if (_canon.find(lookup) != _canon.end()) {
-        _undo.push_back({*_canon.find(lookup), false});
-        _canon.erase(lookup);
+      Canon::iterator entry = _canon.find(lookup);
+      assert(entry != _canon.end());
+      if (entry != _canon.end()) {
+        _undo.push_back({*entry, false});
+        _canon.erase(entry);
       }
+    }
+
+    void invalidate_loads(AliasingGroup group) {
+      if (auto entry = _valid_loads.find(group); entry != _valid_loads.end()) {
+        for (LoadInst* load : entry->second) {
+          canon_erase(Lookup(load));
+        }
+        _valid_loads.erase(entry);
+      }
+    }
+
+    void invalidate_all_loads() {
+      for (auto& [group, loads] : _valid_loads) {
+        for (LoadInst* load : loads) {
+          canon_erase(Lookup(load));
+        }
+      }
+      _valid_loads.clear();
     }
   public:
     CommonSubexprElim(Section* section): Pass(section) {
       DominatorTree domtree(section);
       DominatorTree::Children children = domtree.children();
 
-      std::unordered_map<Value*, Value*> substs;
+      using Substitutions = std::unordered_map<Value*, Value*>;
+      using LastStores = std::unordered_map<AliasingGroup, StoreInst*>;
+      Substitutions substs;
       std::unordered_map<Lookup, Const*, LookupHash> consts;
 
       std::vector<size_t> marks;
@@ -5966,51 +6335,57 @@ private:
         }
 
         marks.push_back(_undo.size());
-        ValidLoads valid_loads;
-        std::unordered_map<AliasingGroup, StoreInst*> last_stores;
+        LastStores last_stores;
 
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
 
           for (size_t it = 0; it < inst->arg_count(); it++) {
             Value* arg = inst->arg(it);
-            if (substs.find(arg) != substs.end()) {
-              inst->set_arg(it, substs.at(arg));
+            if (Substitutions::const_iterator replacement = substs.find(arg);
+                replacement != substs.end()) {
+              inst->set_arg(it, replacement->second);
             } else if (dynmatch(Const, constant, arg)) {
-              Lookup lookup(constant);
-              if (consts.find(lookup) != consts.end()) {
-                inst->set_arg(it, consts.at(lookup));
-                substs[constant] = consts.at(lookup);
-              } else {
-                consts[lookup] = constant;
+              auto [entry, inserted] = consts.try_emplace(Lookup(constant), constant);
+              if (!inserted) {
+                inst->set_arg(it, entry->second);
+                substs[constant] = entry->second;
               }
             }
           }
 
-          if (dynmatch(StoreInst, store, inst)) {
+          dynmatch(StoreInst, store, inst);
+          dynmatch(CallInst, call, inst);
+          if ((store && store->aliasing() == 0) || (call && call->aliasing() == 0) ||
+              is_lifetime_marker(inst)) {
+            invalidate_all_loads();
+            last_stores.clear();
+            if (store) {
+              last_stores[0] = store;
+            }
+          } else if (store) {
+            last_stores.erase(0);
             last_stores[store->aliasing()] = store;
+            invalidate_loads(0);
+            std::vector<LoadInst*>& loads = _valid_loads[store->aliasing()];
             std::vector<LoadInst*> remaining_loads;
-            for (LoadInst* load : valid_loads[store->aliasing()]) {
+            for (LoadInst* load : loads) {
               if (could_alias(load, store)) {
-                assert(_canon.find(Lookup(load)) != _canon.end());
                 canon_erase(Lookup(load));
               } else {
                 remaining_loads.push_back(load);
               }
             }
-            valid_loads[store->aliasing()] = remaining_loads;
-          } else if (dynamic_cast<CallInst*>(inst)) {
-            // Calls can invalidate any cached memory-derived value.
-            for (auto& [group, loads] : valid_loads) {
-              for (LoadInst* load : loads) {
-                canon_erase(Lookup(load));
-              }
-            }
-            valid_loads.clear();
-            last_stores.clear();
+            loads = std::move(remaining_loads);
+          } else if (call) {
+            last_stores.erase(0);
+            last_stores.erase(call->aliasing());
+            invalidate_loads(0);
+            invalidate_loads(call->aliasing());
           } else if (dynmatch(LoadInst, load, inst)) {
-            if (last_stores.find(load->aliasing()) != last_stores.end()) {
-              StoreInst* store = last_stores.at(load->aliasing());
+            if (LastStores::const_iterator last_store = last_stores.find(load->aliasing());
+                last_store != last_stores.end()) {
+              StoreInst* store = last_store->second;
               if (load->type() == store->value()->type() &&
                   (load->aliasing() < 0 ||
                    (load->ptr() == store->ptr() && load->offset() == store->offset()))) {
@@ -6024,31 +6399,28 @@ private:
           if (inst->has_side_effect() ||
               inst->is_terminator() ||
               dynamic_cast<CommentInst*>(inst) ||
+              dynamic_cast<MetadataInst*>(inst) ||
               dynamic_cast<AllocaInst*>(inst)) {
             inst_it++;
             continue;
           }
 
-          Lookup lookup(inst);
-          if (_canon.find(lookup) == _canon.end()) {
-            canon_insert(lookup);
+          auto [entry, inserted] = _canon.insert(Lookup(inst));
+          if (inserted) {
+            _undo.push_back({*entry, true});
             if (dynmatch(LoadInst, load, inst)) {
               if (!load->flags().has(LoadFlags::Pure)) {
-                valid_loads[load->aliasing()].push_back(load);
+                _valid_loads[load->aliasing()].push_back(load);
               }
             }
             inst_it++;
           } else {
-            substs[inst] = _canon.find(lookup)->value;
+            substs[inst] = entry->value;
             inst_it = inst_it.erase();
           }
         }
 
-        for (auto& [group, loads] : valid_loads) {
-          for (LoadInst* load : loads) {
-            canon_erase(Lookup(load));
-          }
-        }
+        invalidate_all_loads();
       }
     }
   };
@@ -6256,10 +6628,21 @@ private:
                      << intrinsic->ret() << ", got " << call->type() << "\n";
               return true;
             }
-            if (call->arg_count() != intrinsic->args().size() + 1) {
-              errors << "Intrinsic " << intrinsic->name() << " expects "
-                     << intrinsic->args().size() << " arguments, got " << call->arg_count() - 1 << "\n";
+            size_t actual_args = call->arg_count() - 1;
+            size_t fixed_args = intrinsic->args().size();
+            if (actual_args < fixed_args || (!intrinsic->variadic() && actual_args > fixed_args)) {
+              errors << "Intrinsic " << intrinsic->name() << " expects ";
+              if (intrinsic->variadic()) {
+                errors << "at least ";
+              }
+              errors << fixed_args << " arguments, got " << actual_args << "\n";
               return true;
+            }
+            for (size_t it = fixed_args; it < actual_args; it++) {
+              if (call->arg(it + 1)->type() == Type::Void) {
+                errors << "Intrinsic " << intrinsic->name() << " has void argument " << it << "\n";
+                return true;
+              }
             }
             for (size_t it = 0; it < intrinsic->args().size(); it++) {
               if (call->arg(it + 1)->type() != intrinsic->args()[it]) {
@@ -6509,11 +6892,7 @@ private:
       size_t size = sizeof(uint32_t);
 
       void add(NamedValue* value) {
-        if (size % type_size(value->type())) {
-          size += type_size(value->type()) - size % type_size(value->type());
-        }
-        captures.emplace_back(value, size);
-        size += type_size(value->type());
+        captures.emplace_back(value, add_record_field(size, value->type()));
       }
 
       Closure to_cloned(const Clone& clone) const {
@@ -6605,38 +6984,45 @@ private:
 
     void populate_closures_and_frontiers() {
       std::vector<std::set<NamedValue*>> live_before_block(_section->block_count());
-      for (Block* block : _section->rev_range()) {
-        std::set<NamedValue*> live;
-        for (Block* succ : block->successors()) {
-          for (NamedValue* value : live_before_block[succ->name()]) {
-            live.insert(value);
-          }
-        }
-
-        for (Inst* inst : block->rev_range()) {
-          live.erase(inst);
-          for (Value* arg : inst->args()) {
-            if (arg->is_named()) {
-              live.insert((NamedValue*) arg);
+      bool changed;
+      do {
+        changed = false;
+        for (Block* block : _section->rev_range()) {
+          std::set<NamedValue*> live;
+          for (Block* succ : block->successors()) {
+            for (NamedValue* value : live_before_block[succ->name()]) {
+              live.insert(value);
             }
           }
 
-          if (_closures.find(inst) != _closures.end()) {
-            Closure& closure = _closures.at(inst);
-            if (!closure.reuse) {
-              for (NamedValue* value : live) {
-                closure.add(value);
+          for (Inst* inst : block->rev_range()) {
+            live.erase(inst);
+            for (Value* arg : inst->args()) {
+              if (arg->is_named()) {
+                live.insert((NamedValue*) arg);
+              }
+            }
+
+            if (_closures.find(inst) != _closures.end()) {
+              Closure& closure = _closures.at(inst);
+              if (!closure.reuse) {
+                closure.captures.clear();
+                closure.size = sizeof(uint32_t);
+                for (NamedValue* value : live) {
+                  closure.add(value);
+                }
               }
             }
           }
-        }
 
-        for (Arg* arg : block->args()) {
-          live.erase(arg);
-        }
+          for (Arg* arg : block->args()) {
+            live.erase(arg);
+          }
 
-        live_before_block[block->name()] = live;
-      }
+          changed |= live_before_block[block->name()] != live;
+          live_before_block[block->name()] = std::move(live);
+        }
+      } while (changed && _section->ordering() < BlockOrdering::Topological);
 
       for (auto& [block, frontier] : _frontiers) {
         for (NamedValue* value : live_before_block[block->name()]) {
@@ -6687,7 +7073,7 @@ private:
         _section(section),
         _binding_time_groups(&binding_time_groups) {
       
-      assert(section->ordering() >= BlockOrdering::Topological);
+      assert(section->ordering() >= BlockOrdering::Natural);
 
       find_reentry_points();
       find_closure_reuse();
@@ -6701,7 +7087,7 @@ private:
                     const std::set<Inst*>& reentry_points):
         _section(section) {
 
-      assert(section->ordering() >= BlockOrdering::Topological);
+      assert(section->ordering() >= BlockOrdering::Natural);
 
       for (Inst* inst : reentry_points) {
         _closures.emplace(inst, Closure());
@@ -7034,9 +7420,21 @@ private:
     Section* _section = nullptr;
     NameMap<size_t> _alloca_index; // alloca name -> dense index, SIZE_MAX if not lowerable
     std::vector<AllocaInst*> _lowerable_allocas; // dense index -> alloca
+    std::vector<Type> _types;
     BlockMap<BlockData> _blocks;
     std::map<LoadInst*, Value*> _loads;
     Builder _builder;
+
+    bool matches_type(AllocaInst* alloca, Type type) {
+      size_t index = _alloca_index[alloca];
+      if (index == SIZE_MAX) {
+        return false;
+      }
+      if (_types[index] == Type::Void) {
+        _types[index] = type;
+      }
+      return _types[index] == type;
+    }
 
     void find_lowerable_allocas() {
       _alloca_index.init(_section);
@@ -7049,23 +7447,25 @@ private:
         }
       }
 
+      _types.assign(_lowerable_allocas.size(), Type::Void);
+
       for (Block* block : *_section) {
         for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst)) {
             if (dynmatch(AllocaInst, alloca, store->value())) {
               _alloca_index[alloca] = SIZE_MAX;
             } else if (dynmatch(AllocaInst, alloca, store->ptr())) {
-              if (store->offset() != 0) {
+              if (store->offset() != 0 || !matches_type(alloca, store->value()->type())) {
                 _alloca_index[alloca] = SIZE_MAX;
               }
             }
           } else if (dynmatch(LoadInst, load, inst)) {
             if (dynmatch(AllocaInst, alloca, load->ptr())) {
-              if (load->offset() != 0) {
+              if (load->offset() != 0 || !matches_type(alloca, load->type())) {
                 _alloca_index[alloca] = SIZE_MAX;
               }
             }
-          } else {
+          } else if (!dynamic_cast<MetadataInst*>(inst)) {
             for (Value* arg : inst->args()) {
               if (dynmatch(AllocaInst, alloca, arg)) {
                 _alloca_index[alloca] = SIZE_MAX;
@@ -7211,7 +7611,17 @@ private:
             }
           }
 
-          if (dynmatch(LoadInst, load, inst)) {
+          if (dynmatch(MetadataInst, metadata, inst)) {
+            if (std::any_of(metadata->args().begin(), metadata->args().end(), [&](Value* arg) {
+              if (dynmatch(AllocaInst, alloca, arg)) {
+                return _alloca_index[alloca] != SIZE_MAX;
+              }
+              return false;
+            })) {
+              it = it.erase();
+              continue;
+            }
+          } else if (dynmatch(LoadInst, load, inst)) {
             if (_loads.find(load) != _loads.end()) {
               it = it.erase();
               continue;

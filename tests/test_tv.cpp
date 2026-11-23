@@ -512,6 +512,20 @@ tv::ValueState expected_poison_mul_high_u(z3::context& context, std::vector<tv::
   return result;
 }
 
+Value* build_clz_test(Builder& builder) {
+  return builder.build_clz(builder.entry_arg(0));
+}
+
+z3::expr clz_reference(z3::context& context, std::vector<tv::ValueState> args) {
+  size_t width = type_width(args[0].type());
+  z3::expr count = context.bv_val(0, width);
+  for (size_t bits = 1; bits <= width; bits++) {
+    z3::expr zero_prefix = args[0].value().extract(width - 1, width - bits) == context.bv_val(0, bits);
+    count = count + z3::ite(zero_prefix, context.bv_val(1, width), context.bv_val(0, width));
+  }
+  return count;
+}
+
 int main(int argc, char** argv) {
   TVTestSuite suite(argc, argv);
 
@@ -555,7 +569,7 @@ b0(%0: Ptr, %1: Int8):
   %6 = And %5, 2:Int8
   %7 = Mul %6, 3:Int8
   %8 = And %7, 1:Int8
-  Store %0, %8, aliasing=0, offset=0
+  Store %0, %8, flags={}, aliasing=0, offset=0
   Exit
 }
 )");
@@ -675,6 +689,10 @@ b0(%0: Ptr, %1: Int8):
   }, [](z3::context& context, std::vector<tv::ValueState> args) {
     return z3::ite(z3::slt(args[0].value(), context.bv_val(0, 32)), -args[0].value(), args[0].value());
   });
+
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    suite.tv_test(std::string("clz_") + to_string(type)).run({type}, build_clz_test, clz_reference);
+  }
 
   suite.tv_test("bit_reverse_twice").run({Type::Int32}, [](Builder& builder) {
     return builder.build_bit_reverse(builder.build_bit_reverse(builder.entry_arg(0)));

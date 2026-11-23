@@ -14,12 +14,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cstddef>
+#include <cstdlib>
+#include <utility>
+
 #include "jitir.hpp"
 
 namespace metajit {
-  class AddRecord: public Pass<AddRecord> {
+  class RecordTape: public Pass<RecordTape> {
   public:
     struct Config {
+      // realloc(x: Ptr, capacity: Int64, new_capacity: Int64): Ptr
+      Value* realloc = nullptr;
       std::set<AliasingGroup> groups;
       size_t min_align = 1;
 
@@ -32,7 +38,98 @@ namespace metajit {
               }
             } else if (dynmatch(StoreInst, store, inst)) {
               groups.insert(store->aliasing());
+            } else if (dynmatch(CallInst, call, inst); call && call->callee() == Intrinsic::write_closure) {
+              groups.insert(call->aliasing());
             }
+          }
+        }
+      }
+
+      void remove_allocas(Section* section) {
+        if (groups.empty() || (groups.size() == 1 && has(0))) {
+          return;
+        }
+        assert(section->ordering() >= BlockOrdering::Dominator);
+        section->autoname();
+
+        struct AllocaInfo {
+          bool eligible = true;
+          std::optional<AliasingGroup> group;
+        };
+
+        NameMap<AllocaInst*> provenance(section);
+        std::unordered_map<AllocaInst*, AllocaInfo> allocas;
+        std::unordered_map<AliasingGroup, AllocaInst*> confined;
+
+        auto prov_at = [&](Value* value) -> AllocaInst* {
+          if (value->is_named()) {
+            return provenance[(NamedValue*) value];
+          }
+          return nullptr;
+        };
+
+        auto access = [&](AliasingGroup group, AllocaInst* alloca) {
+          if (alloca) {
+            AllocaInfo& info = allocas.at(alloca);
+            if (!info.group) {
+              info.group = group;
+            } else if (*info.group != group) {
+              info.eligible = false;
+            }
+          }
+          if (group != 0 && has(group)) {
+            auto [it, inserted] = confined.try_emplace(group, alloca);
+            if (!inserted && it->second != alloca) {
+              it->second = nullptr;
+            }
+          }
+        };
+
+        auto disqualify = [&](Value* value) {
+          if (AllocaInst* alloca = prov_at(value)) {
+            allocas.at(alloca).eligible = false;
+          }
+        };
+
+        for (Block* block : *section) {
+          for (Inst* inst : *block) {
+            if (dynmatch(AllocaInst, alloca, inst)) {
+              allocas.try_emplace(alloca);
+              provenance[alloca] = alloca;
+            } else if (dynmatch(StoreInst, store, inst)) {
+              access(store->aliasing(), prov_at(store->ptr()));
+              disqualify(store->value());
+            } else if (dynmatch(LoadInst, load, inst)) {
+              access(load->aliasing(), prov_at(load->ptr()));
+            } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
+              provenance[add_ptr] = prov_at(add_ptr->arg(0));
+              disqualify(add_ptr->arg(1));
+            } else if (dynmatch(CallInst, call, inst)) {
+              if (call->callee() == Intrinsic::memset || call->callee() == Intrinsic::write_closure) {
+                access(call->aliasing(), prov_at(call->arg(1)));
+                for (size_t i = 2; i < call->arg_count(); i++) {
+                  disqualify(call->arg(i));
+                }
+              } else {
+                access(call->aliasing(), nullptr);
+                disqualify(call->callee());
+                if (!call->flags().has(CallFlags::NoEscape) || !call->flags().has(CallFlags::ArgsReadOnly)) {
+                  for (size_t i = 1; i < call->arg_count(); i++) {
+                    disqualify(call->arg(i));
+                  }
+                }
+              }
+            } else if (!dynamic_cast<MetadataInst*>(inst)) {
+              for (Value* arg : inst->args()) {
+                disqualify(arg);
+              }
+            }
+          }
+        }
+
+        for (auto [group, alloca] : confined) {
+          if (alloca && allocas.at(alloca).eligible) {
+            groups.erase(group);
           }
         }
       }
@@ -41,83 +138,131 @@ namespace metajit {
         return groups.find(group) != groups.end();
       }
     };
+
+    struct Tape {
+      void* data = nullptr;
+      int64_t size = 0;
+      int64_t capacity = 0;
+
+      Tape() = default;
+
+      explicit Tape(int64_t _capacity): capacity(_capacity) {
+        constexpr size_t alignment = alignof(std::max_align_t);
+        assert(capacity >= 16 && capacity % alignment == 0);
+        data = std::aligned_alloc(alignment, capacity);
+      }
+
+      ~Tape() { std::free(data); }
+
+      Tape(const Tape&) = delete;
+      Tape& operator=(const Tape&) = delete;
+
+      Tape(Tape&& other) noexcept:
+        data(std::exchange(other.data, nullptr)),
+        size(std::exchange(other.size, 0)),
+        capacity(std::exchange(other.capacity, 0)) {}
+
+      void clear() { size = 0; }
+    };
+
+    static void* realloc(void* ptr, int64_t capacity, int64_t new_capacity) {
+      assert(new_capacity > capacity);
+      void* new_ptr = std::aligned_alloc(alignof(std::max_align_t), new_capacity);
+      std::copy((char*)ptr, (char*)ptr + capacity, (char*)new_ptr);
+      std::free(ptr);
+      return new_ptr;
+    }
   private:
     Section* _section;
     Builder _builder;
     Config _config;
 
-    size_t _max_write_size = 0;
-
-    void find_max_write_size() {
-      assert(_section->ordering() >= BlockOrdering::Topological);
-
-      _max_write_size = 0;
-      size_t max_load_size = 0;
-      std::unordered_map<Block*, size_t> max_entry_sizes;
-      for (Block* block : *_section) {
-        size_t size = max_entry_sizes[block];
-        for (Inst* inst : *block) {
-          if (dynmatch(LoadInst, load, inst)) {
-            if (_config.has(load->aliasing())) {
-              size_t load_size = std::max(_config.min_align, type_size(load->type()));
-              if (size % load_size != 0) {
-                size += load_size - (size % load_size);
-              }
-              size += load_size;
-              max_load_size = std::max(max_load_size, load_size);
-            }
-          }
-        }
-
-        for (Block* succ : block->successors()) {
-          max_entry_sizes[succ] = std::max(max_entry_sizes[succ], size);
-        }
-
-        _max_write_size = std::max(_max_write_size, size);
+    static Value* align_to(Builder& builder, Value* value, size_t align) {
+      Value* int_value = value;
+      if (int_value->type() == Type::Ptr) {
+        int_value = builder.fold_ptr_to_int(value, Type::Int64);
       }
-
-      _max_write_size += max_load_size; // Add padding for worst-case alignment (+1)
-      assert(_max_write_size % _config.min_align == 0);
+      Value* align_const = builder.build_const(int_value->type(), align);
+      Value* current = builder.fold_mod_u(int_value, align_const);
+      Value* zero = builder.build_const(int_value->type(), 0);
+      Value* align_offset = builder.fold_select(
+        builder.build_eq(current, zero),
+        zero,
+        builder.fold_sub(align_const, current)
+      );
+      if (value->type() == Type::Ptr) {
+        return builder.fold_add_ptr(value, align_offset);
+      } else {
+        return builder.fold_add(value, align_offset);
+      }
     }
 
-    void apply() {
+    // The tape pointer points to a struct Tape
+    void build_tape_store(Value* tape_ptr, Value* value, Block* join_block) {
+      size_t load_size = std::max(_config.min_align, type_size(value->type()));
+
+      Value* size = _builder.build_load(tape_ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), offsetof(Tape, size));
+      Value* capacity = _builder.build_load(tape_ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), offsetof(Tape, capacity));
+
+      Value* offset = size;
+      if (load_size > 1 && load_size > _config.min_align) {
+        offset = align_to(_builder, offset, load_size);
+      }
+      Value* new_size = _builder.fold_add(offset, _builder.build_const(Type::Int64, load_size));
+      Value* needs_realloc = _builder.fold_gt_u(new_size, capacity);
+
+      Block* realloc_block = _builder.build_block_after(_builder.block());
+
+      _builder.build_branch(needs_realloc, realloc_block, join_block);
+
+      _builder.move_to_end(realloc_block);
+      Value* old_data = _builder.build_load(tape_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), offsetof(Tape, data));
+      Value* new_capacity = _builder.fold_add(capacity, capacity);
+      Value* new_data = _builder.build_call(_config.realloc, Type::Ptr, {old_data, capacity, new_capacity});
+      _builder.build_store(tape_ptr, new_data, AliasingGroup(0), offsetof(Tape, data));
+      _builder.build_store(tape_ptr, new_capacity, AliasingGroup(0), offsetof(Tape, capacity));
+      _builder.build_jump(join_block);
+
+      _builder.move_to_end(join_block);
+
+      Value* data = _builder.build_load(tape_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), offsetof(Tape, data));
+      Value* ptr = _builder.fold_add_ptr(data, offset);
+      _builder.build_store(ptr, value, AliasingGroup(0), 0);
+
+      _builder.build_store(tape_ptr, new_size, AliasingGroup(0), offsetof(Tape, size));
+    }
+
+  public:
+    RecordTape(Section* section, Config config):
+        Pass(section),
+        _section(section),
+        _builder(section),
+        _config(config) {
+
+      assert(_config.min_align <= 16);
+      if (!_config.realloc) {
+        _config.realloc = _builder.build_const(Type::Ptr, reinterpret_cast<uintptr_t>(&RecordTape::realloc));
+      }
       Arg* tape_ptr = _builder.alloc_arg(Type::Ptr, _section->entry()->args().size());
       _builder.add_args_to_block(_section->entry(), {tape_ptr});
-      
-      for (Block* block : *_section) {
-        for (Inst* inst = *block->begin(); inst; inst = inst->next()) {
+
+      for (Block* block = _section->entry(); block; block = block->next()) {
+        for (Inst* inst = *block->begin(); inst;) {
+          Inst* next = inst->next();
           if (dynmatch(LoadInst, load, inst)) {
             if (_config.has(load->aliasing())) {
-              _builder.move_after(block, inst);
-
-              Value* aligned_ptr = build_tape_advance(_builder, tape_ptr, _config.min_align, load->type());
-              inst = _builder.build_store(aligned_ptr, load, AliasingGroup(0), 0);
+              Block* join_block = _builder.build_block_after(block);
+              Inst* last = block->terminator();
+              block->remove(next, last);
+              _builder.move_to_end(block);
+              build_tape_store(tape_ptr, load, join_block);
+              join_block->add(next, last);
+              block = join_block;
             }
           }
+          inst = next;
         }
       }
-    }
-  public:
-    AddRecord(Section* section, Config config):
-        Pass(section),
-        _section(section),
-        _builder(section),
-        _config(config) {
-      
-      find_max_write_size();
-      apply();
-    }
-
-    AddRecord(Section* section, size_t* max_write_size, Config config):
-        Pass(section),
-        _section(section),
-        _builder(section),
-        _config(config) {
-
-      find_max_write_size();
-      apply();
-
-      *max_write_size = _max_write_size;
     }
 
     static Value* build_tape_advance(Builder& builder, Value* tape_ptr, size_t min_align, Type type) {
@@ -125,22 +270,13 @@ namespace metajit {
       Value* ptr = builder.build_load(tape_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), 0);
       Value* size = builder.build_const(Type::Int64, load_size);
       if (load_size > 1 && load_size > min_align) {
-        Value* align = builder.fold_mod_u(builder.fold_ptr_to_int(ptr, Type::Int64), size);
-        Value* align_offset = builder.fold_select(
-          builder.build_eq(align, builder.build_const(Type::Int64, 0)),
-          builder.build_const(Type::Int64, 0),
-          builder.fold_sub(size, align)
-        );
-        ptr = builder.fold_add_ptr(ptr, align_offset);
+        ptr = align_to(builder, ptr, load_size);
       }
       Value* aligned_ptr = ptr;
       ptr = builder.fold_add_ptr(ptr, size);
       builder.build_store(tape_ptr, ptr, AliasingGroup(0), 0);
-
       return aligned_ptr;
     }
-
-    size_t max_write_size() const { return _max_write_size; }
   };
 
   // Codegen for the generating extension uses topological sorting.
@@ -233,7 +369,7 @@ namespace metajit {
       _groups.push_back(group);
       return group;
     }
-  
+
   private:
     void write_escaped(std::ostream& stream, const std::string& str) {
       for (char chr : str) {
@@ -414,7 +550,11 @@ namespace metajit {
     NameMap<bool> _can_trace_inst;
     NameMap<bool> _can_trace_const;
 
+    bool _changed = false;
+
     void used_by(NamedValue* value, NamedValue* by) {
+      bool was_inst = _can_trace_inst.at(value);
+      bool was_const = _can_trace_const.at(value);
       if (_can_trace_inst.at(by)) {
         if (_binding_time_groups.at(by) != _binding_time_groups.at(value) ||
             (is_int_or_bool(value->type()) && !is_int_or_bool(by->type()))) {
@@ -438,6 +578,7 @@ namespace metajit {
         _can_trace_inst[value] = true;
         _can_trace_const[value] = true;
       }
+      _changed |= was_inst != _can_trace_inst.at(value) || was_const != _can_trace_const.at(value);
     }
   public:
     TraceCapabilities(Section* section, BindingTimeGroups& constness,
@@ -460,35 +601,39 @@ namespace metajit {
         }
       }
 
-      for (Block* block : section->rev_range()) {
-        for (Inst* inst : block->rev_range()) {
-          if (inst->has_side_effect() ||
-              inst->is_terminator() ||
-              dynamic_cast<PromoteInst*>(inst) ||
-              dynamic_cast<AssumeConstInst*>(inst) ||
-              dynamic_cast<CommentInst*>(inst) ||
-              (reentry_closures && reentry_closures->is_captured(inst))) {
-            _can_trace_inst[inst] = true;
-            _can_trace_const[inst] = true;
-          }
-
-          if (dynmatch(JumpInst, jump, inst)) {
-            // Jump arguments are passed to block arguments
-            for (Arg* block_arg : jump->block()->args()) {
-              Value* arg = jump->arg(block_arg->index());
-              if (arg->is_named()) {
-                used_by((NamedValue*) arg, block_arg);
-              }
+      do {
+        _changed = false;
+        for (Block* block : section->rev_range()) {
+          for (Inst* inst : block->rev_range()) {
+            if (inst->has_side_effect() ||
+                inst->is_terminator() ||
+                dynamic_cast<PromoteInst*>(inst) ||
+                dynamic_cast<AssumeConstInst*>(inst) ||
+                dynamic_cast<CommentInst*>(inst) ||
+                dynamic_cast<MetadataInst*>(inst) ||
+                (reentry_closures && reentry_closures->is_captured(inst))) {
+              _can_trace_inst[inst] = true;
+              _can_trace_const[inst] = true;
             }
-          } else {
-            for (Value* arg : inst->args()) {
-              if (arg->is_named()) {
-                used_by((NamedValue*) arg, inst);
+
+            if (dynmatch(JumpInst, jump, inst)) {
+              // Jump arguments are passed to block arguments
+              for (Arg* block_arg : jump->block()->args()) {
+                Value* arg = jump->arg(block_arg->index());
+                if (arg->is_named()) {
+                  used_by((NamedValue*) arg, block_arg);
+                }
+              }
+            } else {
+              for (Value* arg : inst->args()) {
+                if (arg->is_named()) {
+                  used_by((NamedValue*) arg, inst);
+                }
               }
             }
           }
         }
-      }
+      } while (_changed && section->ordering() < BlockOrdering::Topological);
     }
 
     bool can_trace_const(NamedValue* value) const {
@@ -542,7 +687,7 @@ namespace metajit {
   class CreateGenExt: public Pass<CreateGenExt> {
   public:
     struct Config {
-      std::optional<AddRecord::Config> record;
+      std::optional<RecordTape::Config> record;
       bool comments;
 
       constexpr Config():
@@ -647,13 +792,16 @@ namespace metajit {
       if (_config.record.has_value()) {
         if (dynmatch(LoadInst, load, inst)) {
           if (_config.record->has(load->aliasing())) {
-            Value* aligned_ptr = AddRecord::build_tape_advance(_builder, _tape_ptr, _config.record->min_align, load->type());
+            Value* aligned_ptr = RecordTape::build_tape_advance(_builder, _tape_ptr, _config.record->min_align, load->type());
             return _builder.build_load(aligned_ptr, load->type(), LoadFlags::None, AliasingGroup(0), 0);
           }
         } else if (dynmatch(StoreInst, store, inst)) {
           if (_config.record->has(store->aliasing())) {
             return nullptr;
           }
+        } else if (dynmatch(CallInst, call, inst);
+                   call && call->callee() == Intrinsic::write_closure && _config.record->has(call->aliasing())) {
+          return nullptr;
         }
       }
       return Clone::clone(inst, _builder, _blocks, _values);
@@ -746,7 +894,8 @@ namespace metajit {
       } else {
         if (inst->has_side_effect() ||
             inst->is_terminator() ||
-            dynamic_cast<CommentInst*>(inst)) {
+            dynamic_cast<CommentInst*>(inst) ||
+            dynamic_cast<MetadataInst*>(inst)) {
           return _builder.build_const(Type::Bool, 0);
         }
 
@@ -868,25 +1017,33 @@ namespace metajit {
         _builder.build_const(Type::Int64, _section->entry()->args().size())
       });
 
-      _builder.build_call(_syms.build_store, Type::Ptr, {
+      Value* write = _builder.build_call(_syms.build_call, Type::Ptr, {
         _jitir_builder,
-        closure_arg,
-        _builder.build_call(_syms.build_const_fast, Type::Ptr, {
-          _jitir_builder,
-          _builder.build_const(Type::Int32, (uint64_t) Type::Int32),
-          _builder.build_const(Type::Int64, closure.id),
-        }),
-        _builder.build_const(Type::Int32, 0),
-        _builder.build_const(Type::Int64, 0)
+        emit_built_arg(Intrinsic::write_closure),
+        _builder.build_const(Type::Int64, 2 + closure.captures.size()),
+        _builder.build_const(Type::Int32, (uint64_t) Type::Void),
+        _builder.build_const(Type::Int32, (uint64_t) CallConv::Default),
+        _builder.build_const(Type::Int32, (uint64_t) CallFlags::None),
+        _builder.build_const(Type::Int32, 0)
+      });
+      _builder.build_call(_syms.set_arg, Type::Void, {
+        write, _builder.build_const(Type::Int64, 1), closure_arg
+      });
+      Value* id = _builder.build_call(_syms.build_const_fast, Type::Ptr, {
+        _jitir_builder,
+        _builder.build_const(Type::Int32, (uint64_t) Type::Int32),
+        _builder.build_const(Type::Int64, closure.id)
+      });
+      _builder.build_call(_syms.set_arg, Type::Void, {
+        write, _builder.build_const(Type::Int64, 2), id
       });
 
-      for (ReentryClosures::Capture& capture : closure.captures) {
-        _builder.build_call(_syms.build_store, Type::Ptr, {
-          _jitir_builder,
-          closure_arg,
-          emit_built_arg(capture.value),
-          _builder.build_const(Type::Int32, 0),
-          _builder.build_const(Type::Int64, capture.offset)
+      size_t index = 3;
+      for (const ReentryClosures::Capture& capture : closure.captures) {
+        _builder.build_call(_syms.set_arg, Type::Void, {
+          write,
+          _builder.build_const(Type::Int64, index++),
+          emit_built_arg(capture.value)
         });
       }
 
@@ -902,7 +1059,8 @@ namespace metajit {
           _builder.build_const(Type::Int64, 1),
           _builder.build_const(Type::Int32, (uint64_t) Type::Void),
           _builder.build_const(Type::Int32, (uint64_t) CallConv::PreserveNone),
-          _builder.build_const(Type::Int32, (uint64_t) CallFlags())
+          _builder.build_const(Type::Int32, (uint64_t) CallFlags()),
+          _builder.build_const(Type::Int32, 0)
         });
         _builder.build_call(_syms.set_arg, Type::Void, {
           call,
@@ -1080,7 +1238,9 @@ namespace metajit {
             emit_deps.push_back(emit_groups.at(arg));
           }
         }
-        if (inst->has_side_effect() || dynamic_cast<LoadInst*>(inst)) {
+        bool ordered_emit = inst->has_side_effect() || dynamic_cast<LoadInst*>(inst) ||
+                            is_lifetime_marker(inst);
+        if (ordered_emit) {
           emit_deps.push_back(last_emit_group);
         }
 
@@ -1116,7 +1276,7 @@ namespace metajit {
 
         emit_groups[inst] = emit_group;
         
-        if (inst->has_side_effect() || dynamic_cast<LoadInst*>(inst)) {
+        if (ordered_emit) {
           last_emit_group = emit_group;
         }
 
@@ -1141,6 +1301,7 @@ namespace metajit {
         if (inst->has_side_effect() ||
             dynamic_cast<PromoteInst*>(inst) ||
             dynamic_cast<CommentInst*>(inst) ||
+            dynamic_cast<MetadataInst*>(inst) ||
             (_reentry_closures && _reentry_closures->is_captured(inst))) {
           always_used[inst] = true;
         } else {

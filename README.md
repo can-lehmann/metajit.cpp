@@ -20,7 +20,7 @@ b0(%0: Ptr, %1: Ptr, %2: Ptr):
   %3 = Load %0, type=Int32, flags={}, aliasing=0, offset=0
   %4 = Load %1, type=Int32, flags={}, aliasing=0, offset=0
   %5 = Add %3, %4
-  Store %2, %5, aliasing=0, offset=0
+  Store %2, %5, flags={}, aliasing=0, offset=0
   Exit
 }
 ```
@@ -59,10 +59,10 @@ b1:
 ### Aliasing
 
 Aliasing information is encoded using aliasing groups.
-Memory operations can only alias if they are in the same aliasing group.
 Aliasing groups are represented as integers.
 Negative integers are used to represent exact aliasing (i.e., two operations with the same negative aliasing group always alias).
-Non-negative integers are used to represent potential aliasing (i.e., two operations with the same non-negative aliasing group may alias, but do not have to).
+Positive integers represent potential aliasing within the same group.
+Group 0 may alias every group, including exact groups. Distinct nonzero groups are disjoint.
 
 ## LLVM Frontend
 

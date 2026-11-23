@@ -54,6 +54,67 @@ namespace metajit {
     std::map<Block*, llvm::BasicBlock*> _end_blocks;
 
     NameMap<llvm::Value*> _values;
+    std::unordered_map<AllocaInst*, Type> _alloca_types;
+    llvm::MDNode* _tbaa_root = nullptr;
+    std::unordered_map<AliasingGroup, llvm::MDNode*> _tbaa_tags;
+
+    llvm::MDNode* tbaa_tag(AliasingGroup group) {
+      if (group == 0) {
+        return nullptr;
+      }
+      llvm::MDNode*& tag = _tbaa_tags[group];
+      if (!tag) {
+        llvm::MDBuilder metadata(_context);
+        if (!_tbaa_root) {
+          _tbaa_root = metadata.createAnonymousTBAARoot();
+        }
+        llvm::MDNode* type = metadata.createTBAAScalarTypeNode(std::to_string(group), _tbaa_root);
+        tag = metadata.createTBAAStructTagNode(type, type, 0);
+      }
+      return tag;
+    }
+
+    void find_alloca_types() {
+      for (Block* block : *_section) {
+        for (Inst* inst : *block) {
+          if (dynmatch(AllocaInst, alloca, inst)) {
+            _alloca_types.emplace(alloca, Type::Void);
+          } else if (dynamic_cast<StoreInst*>(inst) || dynamic_cast<LoadInst*>(inst)) {
+            Value* ptr;
+            Type type;
+            uint64_t offset;
+            if (dynmatch(StoreInst, store, inst)) {
+              ptr = store->ptr();
+              type = store->value()->type();
+              offset = store->offset();
+            } else if (dynmatch(LoadInst, load, inst)) {
+              ptr = load->ptr();
+              type = load->type();
+              offset = load->offset();
+            } else {
+              assert(false);
+            }
+            if (dynmatch(AllocaInst, alloca, ptr)) {
+              if (_alloca_types.find(alloca) != _alloca_types.end()) {
+                if (_alloca_types.at(alloca) == Type::Void) {
+                  _alloca_types.at(alloca) = type;
+                }
+                dynmatch(Const, size, alloca->size());
+                if (offset != 0 || !size || size->value() != type_size(type) || _alloca_types.at(alloca) != type) {
+                  _alloca_types.erase(alloca);
+                }
+              }
+            }
+          } else if (!dynamic_cast<MetadataInst*>(inst)) {
+            for (Value* arg : inst->args()) {
+              if (dynmatch(AllocaInst, alloca, arg)) {
+                _alloca_types.erase(alloca);
+              }
+            }
+          }
+        }
+      }
+    }
 
     void emit_branch(llvm::Value* cond,
                      const std::function<void()>& emit_then,
@@ -205,22 +266,39 @@ namespace metajit {
           emit_type(load->type()),
           emit_add_offset(emit_arg(load->arg(0)), load->offset())
         );
+        if (load->flags().has(LoadFlags::Unaligned)) {
+          result->setAlignment(llvm::Align(1));
+        }
+        result->setMetadata(llvm::LLVMContext::MD_tbaa, tbaa_tag(load->aliasing()));
         if (load->flags().has(LoadFlags::Pure)) {
           result->setMetadata(llvm::LLVMContext::MD_invariant_load, llvm::MDNode::get(_context, {}));
         }
         return result;
       } else if (dynmatch(StoreInst, store, inst)) {
-        return _builder.CreateStore(
-          emit_arg(store->arg(1)),
-          emit_add_offset(emit_arg(store->arg(0)), store->offset())
+        llvm::StoreInst* result = _builder.CreateStore(
+          emit_arg(store->value()),
+          emit_add_offset(emit_arg(store->ptr()), store->offset())
         );
+        if (store->flags().has(StoreFlags::Unaligned)) {
+          result->setAlignment(llvm::Align(1));
+        }
+        result->setMetadata(llvm::LLVMContext::MD_tbaa, tbaa_tag(store->aliasing()));
+        return result;
       } else if (dynmatch(AllocaInst, alloca, inst)) {
-        llvm::AllocaInst* llvm_alloca = _builder.CreateAlloca(
-          llvm::Type::getInt8Ty(_context),
-          emit_arg(alloca->size())
-        );
+        llvm::AllocaInst* llvm_alloca;
+        if (_alloca_types.find(alloca) != _alloca_types.end() && _alloca_types.at(alloca) != Type::Void) {
+          llvm_alloca = _builder.CreateAlloca(emit_type(_alloca_types.at(alloca)));
+        } else {
+          llvm_alloca = _builder.CreateAlloca(llvm::Type::getInt8Ty(_context), emit_arg(alloca->size()));
+        }
         llvm_alloca->setAlignment(llvm::Align(alloca->align()));
         return llvm_alloca;
+      } else if (dynmatch(ClzInst, clz, inst)) {
+        return _builder.CreateIntrinsic(
+          llvm::Intrinsic::ctlz,
+          {emit_type(clz->type())},
+          {emit_arg(clz->arg(0)), _builder.getFalse()}
+        );
       } else if (dynmatch(PopcountInst, popcount, inst)) {
         return _builder.CreateIntrinsic(
           llvm::Intrinsic::ctpop,
@@ -256,6 +334,17 @@ namespace metajit {
               llvm::MaybeAlign(),
               emit_arg(call->arg(3))
             );
+          } else if (intrinsic == Intrinsic::write_closure) {
+            if (call->arg_count() > 2) {
+              llvm::Value* closure = emit_arg(call->arg(1));
+              size_t size = 0;
+              for (size_t it = 2; it < call->arg_count(); it++) {
+                Value* value = call->arg(it);
+                size_t offset = add_record_field(size, value->type());
+                _builder.CreateStore(emit_arg(value), emit_add_offset(closure, offset));
+              }
+            }
+            return nullptr;
           } else {
             assert(false && "Unsupported intrinsic");
             return nullptr;
@@ -344,7 +433,21 @@ namespace metajit {
 
       #undef binop
 
-      else if (dynmatch(CommentInst, comment, inst)) {
+      else if (dynmatch(MetadataInst, metadata, inst)) {
+        switch (metadata->kind()) {
+          case MetadataKind::LifetimeStart:
+          case MetadataKind::LifetimeEnd: {
+            assert(metadata->arg_count() > 0 && dynamic_cast<AllocaInst*>(metadata->arg(0)));
+            llvm::Value* ptr = emit_arg(metadata->arg(0));
+            if (metadata->kind() == MetadataKind::LifetimeStart) {
+              return _builder.CreateLifetimeStart(ptr);
+            }
+            return _builder.CreateLifetimeEnd(ptr);
+          }
+          case MetadataKind::LoopBound:
+            return nullptr;
+        }
+      } else if (dynmatch(CommentInst, comment, inst)) {
         return nullptr;
       }
 
@@ -403,6 +506,7 @@ namespace metajit {
 
       section->autoname();
       _values.init(section);
+      find_alloca_types();
 
       llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(_context, "entry", _function);
       for (Block* block : *_section) {

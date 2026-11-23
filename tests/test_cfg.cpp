@@ -24,6 +24,23 @@ int main(int argc, char** argv) {
 
   DiffTestSuite suite("tests/output/test_cfg", argc, argv);
 
+  suite.test("code_heap_alloc").run([]() {
+    CodeHeap heap;
+    uint8_t code[] = {0xb8, 42, 0, 0, 0, 0xc3};
+    using Func = int(*)();
+    void* first = heap.alloc(code, sizeof(code));
+    code[1] = 17;
+    void* second = heap.alloc(code, sizeof(code));
+    unittest_assert(first != second);
+    unittest_assert(((Func) first)() == 42);
+    unittest_assert(((Func) second)() == 17);
+    std::vector<uint8_t> bytes(128 * 1024, 0xab);
+    void* large = heap.alloc(bytes.data(), bytes.size());
+    unittest_assert(memcmp(large, bytes.data(), bytes.size()) == 0);
+    unittest_assert(((Func) first)() == 42);
+    unittest_assert(((Func) second)() == 17);
+  });
+
   for (Type type : {Type::Float32, Type::Float64, Type::Int32, Type::Int64}) {
     suite.test(std::string("entry_argument_") + to_string(type)).run([type]() {
       for (auto mode : {X86CodeGen::Mode::JIT, X86CodeGen::Mode::AOT}) {
@@ -38,16 +55,17 @@ int main(int argc, char** argv) {
         section->autoname();
         section->set_ordering(BlockOrdering::Natural);
 
+        CodeHeap heap;
         uint64_t bits = 0x123456789abcdef0;
         uint64_t result = 0;
         if (is_float(type)) {
           X86CodeGen codegen(section, {Reg::X86_R12(), Reg::X86_R13()}, mode);
           using Func = void(* [[clang::preserve_none]])(uint64_t, uint64_t*);
-          ((Func) codegen.deploy())(bits, &result);
+          ((Func) codegen.deploy(heap))(bits, &result);
         } else {
           X86CodeGen codegen(section, {Reg::X86_XMM(0), Reg::X86_R12()}, mode);
           using Func = void(* [[clang::preserve_none]])(double, uint64_t*);
-          ((Func) codegen.deploy())(bit_cast<double>(bits), &result);
+          ((Func) codegen.deploy(heap))(bit_cast<double>(bits), &result);
         }
         unittest_assert(result == (bits & type_mask(type)));
         delete section;

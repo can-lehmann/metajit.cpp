@@ -748,6 +748,30 @@ void test_ptr_to_int(DiffTestSuite& suite) {
   suite.diff_test("ptr_to_int_Int64").run(ptr_to_int_inputs<Type::Int64>);
 }
 
+template<Type type>
+void clz_inputs(Builder& builder, TestData& data) {
+  data.output(builder.build_clz(data.input(type)));
+  data.output(builder.build_clz(data.input(RandomRange(type, 0, 0))));
+  data.output(builder.build_clz(data.input(RandomRange(type, type_mask(type), type_mask(type)))));
+  for (size_t bit = 0; bit < type_width(type); bit++) {
+    uint64_t value = uint64_t(1) << bit;
+    data.output(builder.build_clz(data.input(RandomRange(type, value, value))));
+    data.output(builder.build_clz(data.input(RandomRange(type, value - 1, value - 1))));
+    data.output(builder.build_clz(data.input(RandomRange(type, value + 1, value + 1))));
+  }
+  if (type != Type::Int64) {
+    Value* wide = data.input(Type::Int64);
+    data.output(builder.build_clz(builder.build_resize_x(wide, type)));
+  }
+}
+
+void test_clz(DiffTestSuite& suite) {
+  suite.diff_test("clz_Int8").run(clz_inputs<Type::Int8>);
+  suite.diff_test("clz_Int16").run(clz_inputs<Type::Int16>);
+  suite.diff_test("clz_Int32").run(clz_inputs<Type::Int32>);
+  suite.diff_test("clz_Int64").run(clz_inputs<Type::Int64>);
+}
+
 void test_popcount(DiffTestSuite& suite) {
   #define popcount_type(type) \
     suite.diff_test("popcount_" #type).run([](Builder& builder, TestData& data) { \
@@ -791,6 +815,7 @@ int main(int argc, char** argv) {
   test_binop_f(suite);
   test_convert_f(suite);
   test_ptr_to_int(suite);
+  test_clz(suite);
   test_popcount(suite);
   test_bit_reverse(suite);
 

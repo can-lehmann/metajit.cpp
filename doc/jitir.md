@@ -153,6 +153,20 @@ Type Checks:
 - `is_float(a->type())`
 - `is_float(type)`
 
+### Clz
+
+Count leading zero bits. Zero returns the operand bit width; poison propagates.
+
+Arguments
+
+- **a**: `Value*`
+
+Return Type: `a->type()`
+
+Type Checks:
+
+- `is_int(a->type())`
+
 ### Popcount
 
 Arguments
@@ -213,6 +227,7 @@ Arguments
 
 - **ptr**: `Value*`
 - **value**: `Value*`
+- **flags**: `StoreFlags`
 - **aliasing**: `AliasingGroup`
 - **offset**: `uint64_t`
 
@@ -575,7 +590,7 @@ Type Checks:
 
 ### Call
 
-Call a function pointer.
+Call a function pointer. The call may read and write memory in its aliasing group. Group 0 may alias any group.
 
 Arguments
 
@@ -584,6 +599,7 @@ Arguments
 - **type**: `Type`
 - **call_conv**: `CallConv`
 - **flags**: `CallFlags`
+- **aliasing**: `AliasingGroup`
 
 Return Type: `type`
 
@@ -625,6 +641,18 @@ Return from section.
 
 Arguments
 
+
+Return Type: `Type::Void`
+
+
+### Metadata
+
+Optional annotation with a variable operand list
+
+Arguments
+
+- **args**: Variable number of arguments
+- **kind**: `MetadataKind`
 
 Return Type: `Type::Void`
 
