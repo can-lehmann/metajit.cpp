@@ -890,7 +890,7 @@ namespace metajit {
       using GenExtFunc = void(*)(uint8_t*, void*, void*);
 
       using RecordFunc = void(*)(uint8_t*, RecordTape::Tape*);
-      using ReplayGenExtFunc = void(*)(uint8_t*, void*, RecordTape::Tape*, void*);
+      using ReplayGenExtFunc = void(*)(uint8_t*, void*, uint8_t**, void*);
 
       GenExtFunc genext_func = nullptr;
       RecordFunc record_func = nullptr;
@@ -928,9 +928,9 @@ namespace metajit {
         if (record_replay) {
           tape.size = 0;
           record_func(static_data, &tape);
-          RecordTape::Tape replay_tape{tape.data, 0, tape.capacity};
-          replay_genext_func(static_data, &trace_builder, &replay_tape, reentry_func);
-          unittest_assert(tape.size == replay_tape.size);
+          uint8_t* replay_tape_ptr = static_cast<uint8_t*>(tape.data);
+          replay_genext_func(static_data, &trace_builder, &replay_tape_ptr, reentry_func);
+          unittest_assert(replay_tape_ptr == static_cast<uint8_t*>(tape.data) + tape.size);
           unittest_assert(tape.size <= tape.capacity);
         } else {
           genext_func(static_data, &trace_builder, reentry_func);
