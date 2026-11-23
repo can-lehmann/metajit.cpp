@@ -511,8 +511,6 @@ namespace metajit {
   };
 
   class Block;
-  class DominatorTree;
-  class Incoming;
   
   template<class T>
   class NameMap;
@@ -4813,6 +4811,196 @@ private:
   }
 };
 
+  class Incoming {
+  private:
+    Section* _section;
+    BlockMap<std::vector<Block*>> _incoming;
+
+    static size_t block_count(Section* section) {
+      section->autoname();
+      return section->block_count();
+    }
+  public:
+    Incoming(Section* section): _section(section), _incoming(block_count(section)) {
+      for (Block* block : *section) {
+        for (Block* successor : block->successors()) {
+          std::vector<Block*>& predecessors = _incoming[successor];
+          if (predecessors.empty() || predecessors.back() != block) {
+            predecessors.push_back(block);
+          }
+        }
+      }
+    }
+
+    Section* section() const { return _section; }
+    const std::vector<Block*>& at(Block* block) const { return _incoming[block]; }
+  };
+
+  template <class Self>
+  class DominatorTreeBase: public lwir::DominatorTreeBase<Self, Block, BlockMap> {
+  private:
+    size_t _block_count;
+  protected:
+    DominatorTreeBase(size_t block_count): lwir::DominatorTreeBase<Self, Block, BlockMap>(block_count), _block_count(block_count) {}
+  public:
+    class Children {
+    private:
+      Self& _domtree;
+      BlockMap<size_t> _start;
+      BlockMap<Block*> _children;
+      size_t _count = 0;
+    public:
+      Children(Self& domtree): _domtree(domtree) {
+        _start.init_size(domtree._block_count);
+        _children.init_size(domtree._block_count);
+
+        for (Block* block : *domtree.section()) {
+          Block* idom = domtree.idom(block);
+          if (idom) {
+            _start[idom]++;
+          }
+        }
+
+        BlockMap<size_t> end(domtree._block_count);
+        size_t offset = 0;
+        for (size_t name = 0; name < _start.size(); name++) {
+          size_t count = _start.at_name(name);
+          _start.at_name(name) = offset;
+          end.at_name(name) = offset;
+          offset += count;
+        }
+        _count = offset;
+
+        for (Block* block : *domtree.section()) {
+          Block* idom = domtree.idom(block);
+          if (idom) {
+            _children.at_name(end[idom]++) = block;
+          }
+        }
+      }
+
+      Self& domtree() const { return _domtree; }
+
+      lwir::Span<Block*> at(Block* block) {
+        size_t start = _start[block];
+        size_t end = (block->name() + 1 >= _start.size()) ? _count : _start.at_name(block->name() + 1);
+        return lwir::Span<Block*>(start == end ? nullptr : &_children.at_name(start), end - start);
+      }
+
+      enum class Event { Open, Close };
+
+      class iterator {
+      private:
+        Children* _children = nullptr;
+        std::vector<std::pair<Event, Block*>> _stack;
+      public:
+        iterator() {}
+
+        iterator(Children* children, Block* root): _children(children) {
+          _stack.push_back({Event::Open, root});
+        }
+
+        std::pair<Event, Block*> operator*() const { return _stack.back(); }
+
+        iterator& operator++() {
+          if (_stack.empty()) {
+            return *this;
+          }
+
+          auto [event, block] = _stack.back();
+          _stack.pop_back();
+
+          if (event == Event::Open) {
+            _stack.push_back({Event::Close, block});
+            lwir::Span<Block*> children = _children->at(block);
+            for (size_t it = children.size(); it-- > 0; ) {
+              _stack.push_back({Event::Open, children[it]});
+            }
+          }
+
+          return *this;
+        }
+
+        bool operator==(const iterator& other) const { return _stack == other._stack; }
+        bool operator!=(const iterator& other) const { return !(*this == other); }
+      };
+
+      iterator begin() { return iterator(this, _domtree.root()); }
+      iterator end() { return iterator(); }
+    };
+
+    Children children() { return Children(*static_cast<Self*>(this)); }
+
+    void write_dot(std::ostream& stream) {
+      stream << "digraph {\n";
+      for (Block* block : static_cast<Self*>(this)->blocks()) {
+        stream << "  b" << block->name() << " [shape=box";
+        if (block->terminator() && dynamic_cast<ExitInst*>(block->terminator())) {
+          stream << ", peripheries=2";
+        }
+        stream << "];\n";
+      }
+      for (Block* block : static_cast<Self*>(this)->blocks()) {
+        if (this->idom(block)) {
+          stream << "  b" << this->idom(block)->name() << " -> b" << block->name() << ";\n";
+        }
+      }
+      stream << "}\n";
+    }
+
+    void save_dot(const std::string& path) {
+      std::ofstream file(path);
+      if (!file) {
+        throw std::runtime_error("Failed to open file for writing: " + path);
+      }
+      write_dot(file);
+    }
+  };
+
+  class DominatorTree: public DominatorTreeBase<DominatorTree> {
+  private:
+    Section* _section;
+
+    static size_t block_count(Section* section) {
+      section->autoname();
+      return section->block_count();
+    }
+  public:
+    std::vector<Block*> successors(Block* block) {
+      return block->successors();
+    }
+
+    std::vector<Block*> blocks() {
+      std::vector<Block*> result;
+      for (Block* block : *_section) {
+        result.push_back(block);
+      }
+      return result;
+    }
+
+    DominatorTree(Section* section):
+        DominatorTreeBase<DominatorTree>(block_count(section)),
+        _section(section) {
+      build(section->entry());
+    }
+
+    Section* section() const { return _section; }
+    Block* root() const { return _section->entry(); }
+
+
+    Block* common_dominator(Block* a, Block* b) {
+      assert(_section->ordering() >= BlockOrdering::Dominator);
+      while (a != b) {
+        if (a->name() > b->name()) {
+          a = idom(a);
+        } else {
+          b = idom(b);
+        }
+      }
+      return a;
+    }
+  };
+
   class Loop {
   private:
     Section* _section = nullptr;
@@ -4831,7 +5019,41 @@ private:
     Loop(Section* section, Block* header, Block* extent):
         _section(section), _header(header), _extent(extent) {}
 
-    static std::map<Block*, std::unique_ptr<Loop>> find_loops(DominatorTree& domtree, const Incoming& incoming);
+    static std::map<Block*, std::unique_ptr<Loop>> find_loops(DominatorTree& domtree, const Incoming& incoming) {
+      Section* section = domtree.section();
+      assert(incoming.section() == section);
+
+      std::map<Block*, std::unique_ptr<Loop>> loops;
+      for (Block* header : *section) {
+        if (header != domtree.root() && !domtree.idom(header)) {
+          continue;
+        }
+
+        Block* extent = nullptr;
+        Block* preheader = domtree.idom(header);
+        std::set<Block*> backedges;
+        for (Block* pred : incoming.at(header)) {
+          if (domtree.dominates(header, pred)) {
+            backedges.insert(pred);
+            if (!extent || pred->name() > extent->name()) {
+              extent = pred;
+            }
+          } else if (pred != preheader) {
+            preheader = nullptr;
+          }
+        }
+        if (extent) {
+          auto loop = std::make_unique<Loop>(section, header, extent);
+          loop->_backedges = std::move(backedges);
+          if (preheader && dynamic_cast<JumpInst*>(preheader->terminator())) {
+            loop->set_preheader(preheader);
+          }
+          loops.emplace(header, std::move(loop));
+        }
+      }
+
+      return loops;
+    }
 
     Section* section() const { return _section; }
 
@@ -4871,7 +5093,25 @@ private:
       return (*_header->begin())->name();
     }
 
-    void analyze_body(const Incoming& incoming, DominatorTree& domtree);
+    void analyze_body(const Incoming& incoming, DominatorTree& domtree) {
+      std::set<Block*> body = {_header};
+      std::deque<Block*> open;
+      for (Block* backedge : _backedges.value()) {
+        if (body.insert(backedge).second) {
+          open.push_back(backedge);
+        }
+      }
+      while (!open.empty()) {
+        Block* block = open.front();
+        open.pop_front();
+        for (Block* pred : incoming.at(block)) {
+          if ((pred == domtree.root() || domtree.idom(pred)) && body.insert(pred).second) {
+            open.push_back(pred);
+          }
+        }
+      }
+      _body = std::move(body);
+    }
 
     void analyze_exits() {
       assert(_body.has_value());
@@ -4995,7 +5235,18 @@ private:
     Section* _section;
     std::map<Block*, std::unique_ptr<Loop>> _loops;
   public:
-    LoopCFG(Section* section);
+    LoopCFG(Section* section): _section(section) {
+      if (!section->entry()) {
+        return;
+      }
+      Incoming incoming(section);
+      DominatorTree domtree(section);
+      _loops = Loop::find_loops(domtree, incoming);
+      for (auto& [header, loop] : _loops) {
+        loop->analyze_body(incoming, domtree);
+        loop->analyze_exits();
+      }
+    }
 
     Node outer(Block* block, const std::set<Block*>& exits) const {
       if (_loops.find(block) != _loops.end()) {
@@ -5748,265 +5999,6 @@ private:
       _section->write(stream, &info_writer);
     }
   };
-
-  class Incoming {
-  private:
-    Section* _section;
-    BlockMap<std::vector<Block*>> _incoming;
-
-    static size_t block_count(Section* section) {
-      section->autoname();
-      return section->block_count();
-    }
-  public:
-    Incoming(Section* section): _section(section), _incoming(block_count(section)) {
-      for (Block* block : *section) {
-        for (Block* successor : block->successors()) {
-          std::vector<Block*>& predecessors = _incoming[successor];
-          if (predecessors.empty() || predecessors.back() != block) {
-            predecessors.push_back(block);
-          }
-        }
-      }
-    }
-
-    Section* section() const { return _section; }
-    const std::vector<Block*>& at(Block* block) const { return _incoming[block]; }
-  };
-
-  template <class Self>
-  class DominatorTreeBase: public lwir::DominatorTreeBase<Self, Block, BlockMap> {
-  private:
-    size_t _block_count;
-  protected:
-    DominatorTreeBase(size_t block_count): lwir::DominatorTreeBase<Self, Block, BlockMap>(block_count), _block_count(block_count) {}
-  public:
-    class Children {
-    private:
-      Self& _domtree;
-      BlockMap<size_t> _start;
-      BlockMap<Block*> _children;
-      size_t _count = 0;
-    public:
-      Children(Self& domtree): _domtree(domtree) {
-        _start.init_size(domtree._block_count);
-        _children.init_size(domtree._block_count);
-
-        for (Block* block : *domtree.section()) {
-          Block* idom = domtree.idom(block);
-          if (idom) {
-            _start[idom]++;
-          }
-        }
-
-        BlockMap<size_t> end(domtree._block_count);
-        size_t offset = 0;
-        for (size_t name = 0; name < _start.size(); name++) {
-          size_t count = _start.at_name(name);
-          _start.at_name(name) = offset;
-          end.at_name(name) = offset;
-          offset += count;
-        }
-        _count = offset;
-
-        for (Block* block : *domtree.section()) {
-          Block* idom = domtree.idom(block);
-          if (idom) {
-            _children.at_name(end[idom]++) = block;
-          }
-        }
-      }
-
-      Self& domtree() const { return _domtree; }
-
-      lwir::Span<Block*> at(Block* block) {
-        size_t start = _start[block];
-        size_t end = (block->name() + 1 >= _start.size()) ? _count : _start.at_name(block->name() + 1);
-        return lwir::Span<Block*>(start == end ? nullptr : &_children.at_name(start), end - start);
-      }
-
-      enum class Event { Open, Close };
-
-      class iterator {
-      private:
-        Children* _children = nullptr;
-        std::vector<std::pair<Event, Block*>> _stack;
-      public:
-        iterator() {}
-
-        iterator(Children* children, Block* root): _children(children) {
-          _stack.push_back({Event::Open, root});
-        }
-
-        std::pair<Event, Block*> operator*() const { return _stack.back(); }
-
-        iterator& operator++() {
-          if (_stack.empty()) {
-            return *this;
-          }
-
-          auto [event, block] = _stack.back();
-          _stack.pop_back();
-
-          if (event == Event::Open) {
-            _stack.push_back({Event::Close, block});
-            lwir::Span<Block*> children = _children->at(block);
-            for (size_t it = children.size(); it-- > 0; ) {
-              _stack.push_back({Event::Open, children[it]});
-            }
-          }
-
-          return *this;
-        }
-
-        bool operator==(const iterator& other) const { return _stack == other._stack; }
-        bool operator!=(const iterator& other) const { return !(*this == other); }
-      };
-
-      iterator begin() { return iterator(this, _domtree.root()); }
-      iterator end() { return iterator(); }
-    };
-
-    Children children() { return Children(*static_cast<Self*>(this)); }
-
-    void write_dot(std::ostream& stream) {
-      stream << "digraph {\n";
-      for (Block* block : static_cast<Self*>(this)->blocks()) {
-        stream << "  b" << block->name() << " [shape=box";
-        if (block->terminator() && dynamic_cast<ExitInst*>(block->terminator())) {
-          stream << ", peripheries=2";
-        }
-        stream << "];\n";
-      }
-      for (Block* block : static_cast<Self*>(this)->blocks()) {
-        if (this->idom(block)) {
-          stream << "  b" << this->idom(block)->name() << " -> b" << block->name() << ";\n";
-        }
-      }
-      stream << "}\n";
-    }
-
-    void save_dot(const std::string& path) {
-      std::ofstream file(path);
-      if (!file) {
-        throw std::runtime_error("Failed to open file for writing: " + path);
-      }
-      write_dot(file);
-    }
-  };
-
-  class DominatorTree: public DominatorTreeBase<DominatorTree> {
-  private:
-    Section* _section;
-
-    static size_t block_count(Section* section) {
-      section->autoname();
-      return section->block_count();
-    }
-  public:
-    std::vector<Block*> successors(Block* block) {
-      return block->successors();
-    }
-
-    std::vector<Block*> blocks() {
-      std::vector<Block*> result;
-      for (Block* block : *_section) {
-        result.push_back(block);
-      }
-      return result;
-    }
-
-    DominatorTree(Section* section):
-        DominatorTreeBase<DominatorTree>(block_count(section)),
-        _section(section) {
-      build(section->entry());
-    }
-
-    Section* section() const { return _section; }
-    Block* root() const { return _section->entry(); }
-
-
-    Block* common_dominator(Block* a, Block* b) {
-      assert(_section->ordering() >= BlockOrdering::Dominator);
-      while (a != b) {
-        if (a->name() > b->name()) {
-          a = idom(a);
-        } else {
-          b = idom(b);
-        }
-      }
-      return a;
-    }
-  };
-
-  inline std::map<Block*, std::unique_ptr<Loop>> Loop::find_loops(DominatorTree& domtree, const Incoming& incoming) {
-    Section* section = domtree.section();
-    assert(incoming.section() == section);
-
-    std::map<Block*, std::unique_ptr<Loop>> loops;
-    for (Block* header : *section) {
-      if (header != domtree.root() && !domtree.idom(header)) {
-        continue;
-      }
-
-      Block* extent = nullptr;
-      Block* preheader = domtree.idom(header);
-      std::set<Block*> backedges;
-      for (Block* pred : incoming.at(header)) {
-        if (domtree.dominates(header, pred)) {
-          backedges.insert(pred);
-          if (!extent || pred->name() > extent->name()) {
-            extent = pred;
-          }
-        } else if (pred != preheader) {
-          preheader = nullptr;
-        }
-      }
-      if (extent) {
-        auto loop = std::make_unique<Loop>(section, header, extent);
-        loop->_backedges = std::move(backedges);
-        if (preheader && dynamic_cast<JumpInst*>(preheader->terminator())) {
-          loop->set_preheader(preheader);
-        }
-        loops.emplace(header, std::move(loop));
-      }
-    }
-
-    return loops;
-  }
-
-  inline void Loop::analyze_body(const Incoming& incoming, DominatorTree& domtree) {
-    std::set<Block*> body = {_header};
-    std::deque<Block*> open;
-    for (Block* backedge : _backedges.value()) {
-      if (body.insert(backedge).second) {
-        open.push_back(backedge);
-      }
-    }
-    while (!open.empty()) {
-      Block* block = open.front();
-      open.pop_front();
-      for (Block* pred : incoming.at(block)) {
-        if ((pred == domtree.root() || domtree.idom(pred)) && body.insert(pred).second) {
-          open.push_back(pred);
-        }
-      }
-    }
-    _body = std::move(body);
-  }
-
-  inline LoopCFG::LoopCFG(Section* section): _section(section) {
-    if (!section->entry()) {
-      return;
-    }
-    Incoming incoming(section);
-    DominatorTree domtree(section);
-    _loops = Loop::find_loops(domtree, incoming);
-    for (auto& [header, loop] : _loops) {
-      loop->analyze_body(incoming, domtree);
-      loop->analyze_exits();
-    }
-  }
 
   class PostDominatorTree: public DominatorTreeBase<PostDominatorTree> {
   public:
