@@ -1877,16 +1877,52 @@ namespace metajit {
     Chain* chain() { return _chain; }
     void set_chain(Chain* chain) { _chain = chain; }
 
-    AllocaInst* build_shared_alloca(const AllocaInst* original, Const* size, uint32_t align) {
-      auto [it, inserted] = _shared_allocas.try_emplace(original, nullptr);
-      if (inserted) {
-        Block* saved_block = block();
-        Inst* saved_before = before();
-        move_to_begin(section()->entry());
-        it->second = build_alloca(size, align);
-        move_to(saved_block, saved_before);
+    AllocaInst* build_shared_alloca(const AllocaInst* key, Value* size, uint32_t align) {
+      AllocaInst*& shared = _shared_allocas[key];
+      if (shared && shared->size() == size) {
+        return shared;
       }
-      return it->second;
+
+      Block* entry = section()->entry();
+      Block* saved_block = block();
+      Inst* saved_before = before();
+      Inst* insert_before = shared;
+      if (!insert_before) {
+        insert_before = entry->terminator();
+        if (saved_block == entry && saved_before) {
+          insert_before = saved_before;
+        }
+      }
+
+      if (dynmatch(Arg, arg, size)) {
+        if (arg->index() >= entry->args().size() || entry->arg(arg->index()) != arg) {
+          return build_alloca(size, align);
+        }
+      } else if (size->is_inst()) {
+        bool available = false;
+        for (Inst* inst : *entry) {
+          if (inst == insert_before) {
+            break;
+          }
+          if (inst == size) {
+            available = true;
+            break;
+          }
+        }
+        if (!available) {
+          return build_alloca(size, align);
+        }
+      }
+
+      move_to(entry, insert_before);
+      if (shared) {
+        Value* previous_size = shared->size();
+        shared->set_arg(0, fold_select(fold_lt_u(previous_size, size), size, previous_size));
+      } else {
+        shared = build_alloca(size, align);
+      }
+      move_to(saved_block, saved_before);
+      return shared;
     }
 
     // Use folding versions so that we get short-circuit behavior and simplifications

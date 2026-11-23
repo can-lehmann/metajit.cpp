@@ -107,10 +107,9 @@ namespace metajit {
   };
 
   extern "C" {
-    void* jitir_build_shared_alloca(void* builder_ptr, const void* original_ptr,
-                                  void* size_ptr, uint32_t align) {
+    void* jitir_build_shared_alloca(void* builder_ptr, const void* key, void* size_ptr, uint32_t align) {
       TraceBuilder& builder = *(TraceBuilder*)builder_ptr;
-      return builder.build_shared_alloca((const AllocaInst*)original_ptr, (Const*)size_ptr, align);
+      return builder.build_shared_alloca((const AllocaInst*)key, (Value*)size_ptr, align);
     }
 
     void* jitir_build_const(void* builder_ptr, uint32_t type, uint64_t value) {
