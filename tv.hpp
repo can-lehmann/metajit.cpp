@@ -535,7 +535,7 @@ namespace metajit {
           enter(jump->block(), block, _context.bool_val(true), args);
         } else if (dynmatch(ExitInst, exit, inst)) {
           enter(nullptr, block, _context.bool_val(true), {});
-        } else if (dynmatch(CommentInst, comment, inst)) {
+        } else if (dynamic_cast<CommentInst*>(inst) || dynamic_cast<MetadataInst*>(inst)) {
         } else {
           assert(false && "Unknown instruction");
         }

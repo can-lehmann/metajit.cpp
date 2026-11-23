@@ -105,7 +105,7 @@ namespace metajit {
                 }
               }
             }
-          } else {
+          } else if (!dynamic_cast<MetadataInst*>(inst)) {
             for (Value* arg : inst->args()) {
               if (dynmatch(AllocaInst, alloca, arg)) {
                 _alloca_types.erase(alloca);
@@ -433,7 +433,21 @@ namespace metajit {
 
       #undef binop
 
-      else if (dynmatch(CommentInst, comment, inst)) {
+      else if (dynmatch(MetadataInst, metadata, inst)) {
+        switch (metadata->kind()) {
+          case MetadataKind::LifetimeStart:
+          case MetadataKind::LifetimeEnd: {
+            assert(metadata->arg_count() > 0 && dynamic_cast<AllocaInst*>(metadata->arg(0)));
+            llvm::Value* ptr = emit_arg(metadata->arg(0));
+            if (metadata->kind() == MetadataKind::LifetimeStart) {
+              return _builder.CreateLifetimeStart(ptr);
+            }
+            return _builder.CreateLifetimeEnd(ptr);
+          }
+          case MetadataKind::LoopBound:
+            return nullptr;
+        }
+      } else if (dynmatch(CommentInst, comment, inst)) {
         return nullptr;
       }
 

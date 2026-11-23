@@ -645,6 +645,18 @@ Arguments
 Return Type: `Type::Void`
 
 
+### Metadata
+
+Optional annotation with a variable operand list
+
+Arguments
+
+- **args**: Variable number of arguments
+- **kind**: `MetadataKind`
+
+Return Type: `Type::Void`
+
+
 ### Comment
 
 No-op. Used for adding comments to the IR.
