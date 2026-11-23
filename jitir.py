@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from copy import copy
-
 from lwir import *
 
 class CountVarargsValueType(BaseType):
@@ -287,24 +285,36 @@ class PrettyInstWritePlugin(InstWritePlugin):
         return code
 
 class JitirInstWriteJsonPlugin(InstWriteJsonPlugin):
-    def run(self, inst, ir):
-        if inst.name == "Metadata":
-            inst = copy(inst)
-            inst.args = [*inst.args[:-1], Arg("metadata_kind", Type("MetadataKind"))]
-        return super().run(inst, ir)
+    def __init__(self, kind_field="kind"):
+        super().__init__()
+        self.kind_field = kind_field
 
-    def write_misc(self, stream):
-        return {
-            "name": f"{stream} << name()",
-            "type": f"{stream} << \"\\\"\" << type() << \"\\\"\""
+    def run(self, inst, ir):
+        fields = {
+            self.kind_field: f'stream << "\\"{self.escape_json(inst.name)}\\""',
+            "args": "write_args_json(stream)",
+            "name": "stream << name()",
+            "type": 'stream << "\\"" << type() << "\\""',
         }
+        for arg in inst.args:
+            if not arg.type.is_value():
+                fields[arg.name] = self.write_arg(arg, f"_{arg.name}", "stream")
+
+        code = f"  void write_json({self.stream_type} stream) const override {{\n"
+        code += '    stream << "{";\n'
+        for index, (key, value) in enumerate(fields.items()):
+            if index:
+                code += '    stream << ", ";\n'
+            code += f'    stream << "\\"{self.escape_json(key)}\\": ";\n'
+            code += f"    {value};\n"
+        code += '    stream << "}";\n'
+        code += "  }\n"
+        return code
 
     def write_arg(self, arg, value, stream):
         if arg.type == Type("Block*"):
             return f"{stream} << {value}->name()"
-        elif arg.type == Type("MetadataKind"):
-            return f'{stream} << "\\"" << kind() << "\\""'
-        elif arg.type in (Type("Type"), Type("CallConv")):
+        elif arg.type in (Type("Type"), Type("CallConv"), Type("MetadataKind")):
             return f'{stream} << "\\"" << {value} << "\\""'
         elif arg.type in (Type("LoadFlags"), Type("StoreFlags"), Type("CallFlags")):
             return f"{value}.write_json({stream})"
@@ -625,7 +635,7 @@ lwir(
             InstGetterPlugin(),
             InstSetterPlugin(),
             PrettyInstWritePlugin(),
-            JitirInstWriteJsonPlugin(),
+            JitirInstWriteJsonPlugin(kind_field="inst_kind"),
             InstEqualsPlugin(),
             InstHashPlugin()
         ]),

@@ -437,9 +437,7 @@ namespace metajit {
         switch (metadata->kind()) {
           case MetadataKind::LifetimeStart:
           case MetadataKind::LifetimeEnd: {
-            if (metadata->arg_count() == 0 || !dynamic_cast<AllocaInst*>(metadata->arg(0))) {
-              return nullptr;
-            }
+            assert(metadata->arg_count() > 0 && dynamic_cast<AllocaInst*>(metadata->arg(0)));
             llvm::Value* ptr = emit_arg(metadata->arg(0));
             if (metadata->kind() == MetadataKind::LifetimeStart) {
               return _builder.CreateLifetimeStart(ptr);
