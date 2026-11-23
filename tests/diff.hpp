@@ -14,10 +14,10 @@
 
 #pragma once
 
-#include <cstdlib>
 #include <memory>
 #include <fstream>
 #include <filesystem>
+#include <optional>
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -905,12 +905,10 @@ namespace metajit {
       void* reentry_func = ExitOnErr(jit->lookup("reentry_func")).toPtr<void*>();
 
       uint8_t* static_data = new uint8_t[data.data_size()]();
-      RecordTape::Tape tape{};
+      std::optional<RecordTape::Tape> tape;
       if (record_replay) {
-        constexpr size_t alignment = alignof(std::max_align_t);
-        tape.capacity = std::max(size_t(16), alignment);
-        tape.data = std::aligned_alloc(alignment, tape.capacity);
-        unittest_assert(tape.data != nullptr);
+        tape.emplace(16);
+        unittest_assert(tape->data != nullptr);
       }
 
       for (size_t static_sample = 0; static_sample < static_sample_count; static_sample++) {
@@ -926,12 +924,12 @@ namespace metajit {
         trace_builder.move_to_end(trace_builder.build_block(args));
 
         if (record_replay) {
-          tape.size = 0;
-          record_func(static_data, &tape);
-          uint8_t* replay_tape_ptr = static_cast<uint8_t*>(tape.data);
+          tape->clear();
+          record_func(static_data, &*tape);
+          uint8_t* replay_tape_ptr = static_cast<uint8_t*>(tape->data);
           replay_genext_func(static_data, &trace_builder, &replay_tape_ptr, reentry_func);
-          unittest_assert(replay_tape_ptr == static_cast<uint8_t*>(tape.data) + tape.size);
-          unittest_assert(tape.size <= tape.capacity);
+          unittest_assert(replay_tape_ptr == static_cast<uint8_t*>(tape->data) + tape->size);
+          unittest_assert(tape->size <= tape->capacity);
         } else {
           genext_func(static_data, &trace_builder, reentry_func);
         }
@@ -1076,7 +1074,6 @@ namespace metajit {
       }
 
       delete[] static_data;
-      std::free(tape.data);
       delete genext_section;
     }
 

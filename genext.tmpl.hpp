@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <utility>
 
 #include "jitir.hpp"
 
@@ -50,9 +51,29 @@ namespace metajit {
     };
 
     struct Tape {
-      void* data;
-      int64_t size;
-      int64_t capacity;
+      void* data = nullptr;
+      int64_t size = 0;
+      int64_t capacity = 0;
+
+      Tape() = default;
+
+      explicit Tape(int64_t _capacity): capacity(_capacity) {
+        constexpr size_t alignment = alignof(std::max_align_t);
+        assert(capacity >= 16 && capacity % alignment == 0);
+        data = std::aligned_alloc(alignment, capacity);
+      }
+
+      ~Tape() { std::free(data); }
+
+      Tape(const Tape&) = delete;
+      Tape& operator=(const Tape&) = delete;
+
+      Tape(Tape&& other) noexcept:
+        data(std::exchange(other.data, nullptr)),
+        size(std::exchange(other.size, 0)),
+        capacity(std::exchange(other.capacity, 0)) {}
+
+      void clear() { size = 0; }
     };
 
     static void* realloc(void* ptr, int64_t capacity, int64_t new_capacity) {
