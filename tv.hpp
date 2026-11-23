@@ -448,9 +448,12 @@ namespace metajit {
         } else if (dynmatch(CallInst, call, inst); call && call->callee() == Intrinsic::write_closure) {
           if (call->arg_count() > 2) {
             ValueState ptr_state = emit(call->arg(1));
-            for_each_closure_field(call, [&](Value* value, size_t offset) {
+            size_t size = 0;
+            for (size_t it = 2; it < call->arg_count(); it++) {
+              Value* value = call->arg(it);
+              size_t offset = append_closure_field(size, value->type());
               emit_store(block, ptr_state, value, offset);
-            });
+            }
           }
         } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
           ValueState pointer = emit(add_ptr->arg(0));

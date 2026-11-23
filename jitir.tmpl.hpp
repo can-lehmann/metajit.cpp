@@ -987,15 +987,6 @@ namespace metajit {
     return offset;
   }
 
-  template <class Fn>
-  void for_each_closure_field(CallInst* call, Fn&& fn) {
-    size_t size = 0;
-    for (size_t it = 2; it < call->arg_count(); it++) {
-      Value* value = call->arg(it);
-      fn(value, append_closure_field(size, value->type()));
-    }
-  }
-
   bool Inst::is_commutative() const {
     return /* ${commutative_checks} */;
   }
@@ -4063,9 +4054,12 @@ namespace metajit {
               Bits ptr = at(call->arg(1));
               assert(!ptr.is_poison);
               uint8_t* closure = (uint8_t*) ptr.value;
-              for_each_closure_field(call, [&](Value* value, size_t offset) {
+              size_t size = 0;
+              for (size_t it = 2; it < call->arg_count(); it++) {
+                Value* value = call->arg(it);
+                size_t offset = append_closure_field(size, value->type());
                 at(value).store(closure + offset);
-              });
+              }
             }
           } else {
             assert(false && "Unsupported intrinsic in interpreter");

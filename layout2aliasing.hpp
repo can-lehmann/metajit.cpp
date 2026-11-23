@@ -284,15 +284,11 @@ namespace metajit {
     void mark_impure() {
       for (Block* block : *_section) {
         for (Inst* inst : *block) {
-          Pointer ptr;
           if (dynmatch(StoreInst, store, inst)) {
-            ptr = at(store->ptr()).add_offset(store->offset());
-          } else if (dynmatch(CallInst, call, inst); call && call->callee() == Intrinsic::write_closure &&
-                     call->arg_count() > 2) {
-            ptr = at(call->arg(1));
-          }
-          if (!ptr.is_bottom()) {
-            ptr.layout->set_pure(false);
+            Pointer ptr = at(store->ptr()).add_offset(store->offset());
+            if (!ptr.is_bottom()) {
+              ptr.layout->set_pure(false);
+            }
           }
         }
       }

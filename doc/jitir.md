@@ -657,10 +657,3 @@ Return Type: `Type::Void`
 
 
 
-
-## Intrinsics
-
-`@intrinsic::write_closure` takes a closure pointer followed by any number of
-values. It stores the values in order starting at offset zero, aligning each
-field to its type size and leaving padding untouched. Guard-failure traces pass
-the 32-bit reentry ID as the first value, followed by the captures.
