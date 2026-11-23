@@ -86,7 +86,7 @@ class BuildBuildInstPlugin:
             for arg in inst.args:
                 match arg.type:
                     case CountVarargsValueType():
-                        code += f"    build_args.push_back(llvm::ConstantInt::get({self.type_substitutions[arg.type]}, {arg.name}.size() - {value_index}, false));\n"
+                        code += f"    build_args.push_back(llvm::ConstantInt::get({self.type_substitutions[arg.type]}, args.size() - {value_index}, false));\n"
                         varargs = arg
                     case ValueType():
                         code += f"    build_args.push_back(args[{value_index}]);\n"
@@ -199,8 +199,10 @@ class InstReadPlugin:
             varargs = None
             varargs_offset = 0
             build_args = []
-            for arg in inst.args:
-                if need_comma:
+            for index, arg in enumerate(inst.args):
+                optional_list = (need_comma and isinstance(arg.type, CountVarargsValueType)
+                                 and index == len(inst.args) - 1)
+                if need_comma and not optional_list:
                     code += "    expect_char(','); skip_whitespace();\n"
                 need_comma = True
                 if arg.type == ValueType():
@@ -210,7 +212,8 @@ class InstReadPlugin:
                         varargs_offset += 1
                     continue
                 elif arg.type == CountVarargsValueType():
-                    code += f"    std::vector<Value*> {arg.name} = read_value_arg_list();\n"
+                    list_arg = "true" if optional_list else ""
+                    code += f"    std::vector<Value*> {arg.name} = read_value_arg_list({list_arg});\n"
                     need_comma = False # read_value_arg_list needs to consume the comma
                     varargs = arg.name
                     build_args.append(f"{arg.name}.size()")
@@ -501,6 +504,15 @@ jitir = IR(
             ],
             type = "Type::Void",
             type_checks = ["ptr->type() == Type::Ptr"]
+        ),
+        Inst("WriteClosure",
+            args = [
+                Arg("closure", getter=Getter.Always),
+                Arg("data", type=CountVarargsValueType())
+            ],
+            type = "Type::Void",
+            type_checks = ["closure->type() == Type::Ptr"],
+            doc = "Store the fields in order starting at offset zero. Align each field to its type size and leave padding untouched."
         ),
         Inst("Alloca",
             args = [

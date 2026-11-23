@@ -967,12 +967,30 @@ namespace metajit {
 
   /* ${insts} */
 
+  inline size_t append_closure_field(size_t& size, Type type) {
+    size_t field_size = type_size(type);
+    assert(field_size != 0);
+    size_t offset = (size + field_size - 1) & ~(field_size - 1);
+    size = offset + field_size;
+    return offset;
+  }
+
+  template <class Fn>
+  void for_each_closure_field(WriteClosureInst* write, Fn&& fn) {
+    size_t size = 0;
+    for (size_t it = 1; it < write->arg_count(); it++) {
+      Value* value = write->arg(it);
+      fn(value, append_closure_field(size, value->type()));
+    }
+  }
+
   bool Inst::is_commutative() const {
     return /* ${commutative_checks} */;
   }
 
   bool Inst::has_side_effect() const {
     return dynamic_cast<const StoreInst*>(this) ||
+           dynamic_cast<const WriteClosureInst*>(this) ||
            dynamic_cast<const CallInst*>(this);
   }
 
@@ -1987,6 +2005,13 @@ namespace metajit {
       }
     }
 
+    WriteClosureInst* build_write_closure(Value* closure, size_t data) {
+      if (!_guard_success && data != 0) {
+        invalidate_memory_for_write(0);
+      }
+      return Builder::build_write_closure(closure, data);
+    }
+
     CallInst* build_call(Value* callee,
                         size_t args,
                         Type type,
@@ -2447,13 +2472,20 @@ namespace metajit {
       }
     }
 
-    std::vector<Value*> read_value_arg_list() {
+    std::vector<Value*> read_value_arg_list(bool after_arg = false) {
       std::vector<Value*> args;
-      // read comma separated list of value args (starting with % or a constant)
+      if (after_arg) {
+        skip_whitespace();
+        if (_stream.peek() != ',') {
+          return args;
+        }
+        get_char();
+      }
+      // read comma separated list of value args
       while (true) {
         skip_whitespace();
         char c = _stream.peek();
-        if (c != '%' && !std::isdigit(c)) {
+        if (c != '%' && c != '@' && !std::isdigit(c)) {
           break;
         }
         args.push_back(read_value_arg());
@@ -2959,7 +2991,7 @@ namespace metajit {
             } else if (load->aliasing() == 0) {
               mark_stores_live();
             }
-          } else if (dynamic_cast<CallInst*>(inst)) {
+          } else if (dynamic_cast<CallInst*>(inst) || dynamic_cast<WriteClosureInst*>(inst)) {
             mark_stores_live();
           }
         }
@@ -4005,6 +4037,16 @@ namespace metajit {
         uint8_t* ptr = (uint8_t*) ptr_bits.value + store->offset();
         value_bits.store(ptr);
         _values[store] = Bits();
+      } else if (dynmatch(WriteClosureInst, write, _inst)) {
+        if (write->arg_count() > 1) {
+          Bits ptr_bits = at(write->closure());
+          assert(!ptr_bits.is_poison);
+          uint8_t* closure = (uint8_t*) ptr_bits.value;
+          for_each_closure_field(write, [&](Value* value, size_t offset) {
+            at(value).store(closure + offset);
+          });
+        }
+        _values[write] = Bits();
       } else if (dynmatch(CallInst, call, _inst)) {
         if (dynmatch(Intrinsic, intrinsic, call->callee())) {
           if (intrinsic == Intrinsic::memset) {
@@ -4870,7 +4912,8 @@ private:
       for (Block* block : *loop->chain()) {
         for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst);
-              dynamic_cast<CallInst*>(inst) || (store && store->aliasing() == 0)) {
+              dynamic_cast<CallInst*>(inst) || dynamic_cast<WriteClosureInst*>(inst) ||
+              (store && store->aliasing() == 0)) {
             // Conservative: calls can touch memory backing promoted aliases.
             return;
           }
@@ -4977,7 +5020,7 @@ private:
             } else if (store->aliasing() == 0) {
               has_unknown_memory_write = true;
             }
-          } else if (dynamic_cast<CallInst*>(inst)) {
+          } else if (dynamic_cast<CallInst*>(inst) || dynamic_cast<WriteClosureInst*>(inst)) {
             has_unknown_memory_write = true;
           }
         }
@@ -6175,7 +6218,8 @@ private:
 
           dynmatch(StoreInst, store, inst);
           dynmatch(CallInst, call, inst);
-          if ((store && store->aliasing() == 0) || (call && call->aliasing() == 0)) {
+          if ((store && store->aliasing() == 0) || (call && call->aliasing() == 0) ||
+              dynamic_cast<WriteClosureInst*>(inst)) {
             invalidate_all_loads();
             last_stores.clear();
             if (store) {
@@ -6561,9 +6605,7 @@ private:
       for (Block* block : *section) {
         bool memory_written = memory_written_per_block[block->name()];
         for (Inst* inst : *block) {
-          if (dynmatch(StoreInst, store, inst)) {
-            memory_written = true;
-          } else if (dynmatch(CallInst, call, inst)) {
+          if (inst->has_side_effect()) {
             memory_written = true;
           } else if (dynmatch(BranchInst, branch, inst)) {
             if (memory_written && !binding_time_groups.is_static(branch->cond())) {
@@ -6698,11 +6740,7 @@ private:
       size_t size = sizeof(uint32_t);
 
       void add(NamedValue* value) {
-        if (size % type_size(value->type())) {
-          size += type_size(value->type()) - size % type_size(value->type());
-        }
-        captures.emplace_back(value, size);
-        size += type_size(value->type());
+        captures.emplace_back(value, append_closure_field(size, value->type()));
       }
 
       Closure to_cloned(const Clone& clone) const {

@@ -237,6 +237,21 @@ Type Checks:
 
 - `ptr->type() == Type::Ptr`
 
+### WriteClosure
+
+Store the fields in order starting at offset zero. Align each field to its type size and leave padding untouched.
+
+Arguments
+
+- **closure**: `Value*`
+- **data**: Variable number of arguments
+
+Return Type: `Type::Void`
+
+Type Checks:
+
+- `closure->type() == Type::Ptr`
+
 ### Alloca
 
 Allocate memory on the stack.

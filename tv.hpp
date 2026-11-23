@@ -371,6 +371,17 @@ namespace metajit {
         return result;
       }
 
+      void emit_store(Block* block, const ValueState& ptr_state, Value* value, uint64_t offset) {
+        ValueState val_state = emit(value);
+        _blocks.at(block).ub = _blocks.at(block).ub ||
+          (_blocks.at(block).active &&
+           (ptr_state.is_poison() || val_state.is_poison()));
+        if (ptr_state.has_provenance()) {
+          ValueState pointer = ptr_state.add_ptr(offset);
+          memory_state(block).store(pointer, val_state);
+        }
+      }
+
       ValueState emit_inst(Inst* inst, Block* block) {
         if (dynmatch(FreezeInst, freeze, inst)) {
           ValueState input = emit(freeze->arg(0));
@@ -433,14 +444,13 @@ namespace metajit {
           }
           return ValueState(load->type(), _context.bv_val(0, type_width(load->type())));
         } else if (dynmatch(StoreInst, store, inst)) {
-          ValueState ptr_state = emit(store->arg(0));
-          ValueState val_state = emit(store->arg(1));
-          _blocks.at(block).ub = _blocks.at(block).ub ||
-            (_blocks.at(block).active &&
-             (ptr_state.is_poison() || val_state.is_poison()));
-          if (ptr_state.has_provenance()) {
-            ValueState pointer = ptr_state.add_ptr(store->offset());
-            memory_state(block).store(pointer, val_state);
+          emit_store(block, emit(store->ptr()), store->value(), store->offset());
+        } else if (dynmatch(WriteClosureInst, write, inst)) {
+          if (write->arg_count() > 1) {
+            ValueState ptr_state = emit(write->closure());
+            for_each_closure_field(write, [&](Value* value, size_t offset) {
+              emit_store(block, ptr_state, value, offset);
+            });
           }
         } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
           ValueState pointer = emit(add_ptr->arg(0));

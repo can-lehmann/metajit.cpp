@@ -284,6 +284,14 @@ namespace metajit {
         }
         result->setMetadata(llvm::LLVMContext::MD_tbaa, tbaa_tag(store->aliasing()));
         return result;
+      } else if (dynmatch(WriteClosureInst, write, inst)) {
+        if (write->arg_count() > 1) {
+          llvm::Value* closure = emit_arg(write->closure());
+          for_each_closure_field(write, [&](Value* value, size_t offset) {
+            _builder.CreateStore(emit_arg(value), emit_add_offset(closure, offset));
+          });
+        }
+        return nullptr;
       } else if (dynmatch(AllocaInst, alloca, inst)) {
         llvm::AllocaInst* llvm_alloca;
         if (_alloca_types.find(alloca) != _alloca_types.end() && _alloca_types.at(alloca) != Type::Void) {
