@@ -1088,7 +1088,7 @@ namespace metajit {
         return _builder.build_call(_syms.build_shared_alloca, Type::Ptr, {
           _jitir_builder,
           _builder.build_const(Type::Ptr, (uint64_t)(void*)alloca),
-          args[0],
+          _builder.build_const(Type::Int64, alloca->size()),
           _builder.build_const(Type::Int32, alloca->align())
         });
       } else if (dynmatch(SelectInst, select, inst)) {

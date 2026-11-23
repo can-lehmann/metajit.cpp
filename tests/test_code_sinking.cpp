@@ -290,7 +290,7 @@ b0(%0: Ptr):
   %2 = Freeze %1
   %3 = Promote %2
   %4 = AssumeConst %3
-  %5 = Alloca 8:Int64, align=8
+  %5 = Alloca size=8, align=8
   %6 = Load %0, type=Bool, flags={}, aliasing=0, offset=1
   Branch %6, true_block=b1, false_block=b2
 b1:

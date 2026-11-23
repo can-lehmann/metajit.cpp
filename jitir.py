@@ -519,15 +519,15 @@ jitir = IR(
         ),
         Inst("Alloca",
             args = [
-                Arg("size", getter=Getter.Always),
+                Arg("size", Type("uint64_t")),
                 Arg("align", Type("uint32_t"), setter=True)
             ],
             type = "Type::Ptr",
             type_checks = [
-                "size->type() == Type::Int64",
+                "size > 0",
                 "align >= 1"
             ],
-            doc = "Allocate memory on the stack."
+            doc = "Allocate a fixed number of bytes on the stack."
         ),
         Inst("AddPtr",
             args = [
@@ -753,6 +753,8 @@ class GenExtPlugin:
                         value_index += 1
                     case Type(name="Block*"):
                         func += f"    build_args.push_back(builder.build_const(Type::Ptr, (uint64_t)(void*)blocks.at(i->{arg.name}())));\n"
+                    case Type(name="uint64_t"):
+                        func += f"    build_args.push_back(builder.build_const(Type::Int64, i->{arg.name}()));\n"
                     case Type():
                         func += f"    build_args.push_back(builder.build_const(Type::Int32, (uint64_t)i->{arg.name}()));\n"
 

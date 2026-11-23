@@ -239,18 +239,18 @@ Type Checks:
 
 ### Alloca
 
-Allocate memory on the stack.
+Allocate a fixed number of bytes on the stack.
 
 Arguments
 
-- **size**: `Value*`
+- **size**: `uint64_t`
 - **align**: `uint32_t`
 
 Return Type: `Type::Ptr`
 
 Type Checks:
 
-- `size->type() == Type::Int64`
+- `size > 0`
 - `align >= 1`
 
 ### AddPtr
