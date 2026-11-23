@@ -647,7 +647,7 @@ Return Type: `Type::Void`
 
 ### Metadata
 
-Optional annotation with a variable operand list. Supported kinds are LifetimeStart, LifetimeEnd, and LoopBound. LLVM emits lifetime intrinsics when the first operand is a stack allocation.
+Optional annotation with a variable operand list
 
 Arguments
 

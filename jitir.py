@@ -610,7 +610,7 @@ jitir = IR(
             ],
             type = "Type::Void",
             type_checks = [],
-            doc = "Optional annotation with a variable operand list. Supported kinds are LifetimeStart, LifetimeEnd, and LoopBound. LLVM emits lifetime intrinsics when the first operand is a stack allocation."
+            doc = "Optional annotation with a variable operand list"
         ),
         Inst("Comment",
             args = [Arg("text", Type("const char*"), setter=True)],
