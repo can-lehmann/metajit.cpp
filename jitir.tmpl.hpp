@@ -888,6 +888,8 @@ namespace metajit {
       MustTail = 1 << 2,
       // Pointer arguments do not escape through the call.
       NoEscape = 1 << 3,
+      // Memory accessed through pointer arguments is read-only. Globals may still be read or written.
+      ArgsReadOnly = 1 << 4,
     };
 
     using BaseFlags<CallFlags>::BaseFlags;
@@ -897,9 +899,10 @@ namespace metajit {
       "Idempotent",
       "MustTail",
       "NoEscape",
+      "ArgsReadOnly",
     };
 
-    constexpr static size_t COUNT = 4;
+    constexpr static size_t COUNT = 5;
   };
 
   enum class MetadataKind : uint32_t {
