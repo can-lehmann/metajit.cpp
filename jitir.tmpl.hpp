@@ -4454,12 +4454,13 @@ namespace metajit {
     }
 
     Bits at(Value* value) const {
-      if (value->is_inst()) {
-        return _values.at((Inst*) value);
-      } else {
-        assert(false); // Unreachable
-        return Bits();
+      if (value->is_inst() && ((Inst*) value)->name() < _values.size()) {
+        Bits bits = _values.at((Inst*) value);
+        if (bits.type == value->type()) {
+          return bits;
+        }
       }
+      return Bits::all(value->type());
     }
 
     void write(std::ostream& stream) {
@@ -4467,6 +4468,59 @@ namespace metajit {
         _values[inst].write(stream);
       });
       _section->write(stream, &info_writer);
+    }
+  };
+
+  class SaturatingUseCounts {
+  private:
+    NameMap<uint8_t> _counts;
+  public:
+    static constexpr uint8_t unknown = 255;
+
+    explicit SaturatingUseCounts(Section* section): _counts(section) {
+      for (Block* block : section->rev_range()) {
+        for (Inst* inst : block->rev_range()) {
+          if (!is_dead(inst)) {
+            for (Value* arg : inst->args()) {
+              add_use(arg);
+            }
+          }
+        }
+      }
+    }
+
+    uint8_t at(Value* value) const {
+      if (!value->is_named() || ((NamedValue*) value)->name() >= _counts.size()) {
+        return unknown;
+      }
+      return _counts.at((NamedValue*) value);
+    }
+
+    bool is_dead(Inst* inst) const {
+      return at(inst) == 0 &&
+             !inst->has_side_effect() &&
+             !inst->is_terminator() &&
+             !dynamic_cast<CommentInst*>(inst) &&
+             !dynamic_cast<MetadataInst*>(inst);
+    }
+
+    void add_use(Value* value) {
+      if (at(value) != unknown) {
+        _counts.at((NamedValue*) value)++;
+      }
+    }
+
+    void remove_use(Value* value) {
+      if (at(value) != unknown) {
+        assert(at(value) > 0);
+        _counts.at((NamedValue*) value)--;
+      }
+    }
+
+    void invalidate(Value* value) {
+      if (value->is_named() && ((NamedValue*) value)->name() < _counts.size()) {
+        _counts.at((NamedValue*) value) = unknown;
+      }
     }
   };
 
@@ -4508,13 +4562,18 @@ namespace metajit {
     Builder _builder;
 
     template <class Fn>
-    bool substitute(const Fn& fn) {
+    bool substitute(const Fn& fn, SaturatingUseCounts* use_counts = nullptr) {
       NameMap<Value*> substs(_section);
       bool changed = false;
       for (Block* block : *_section) {
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
           inst->substitute_args_iterated(substs);
+
+          if (use_counts && use_counts->is_dead(inst)) {
+            inst_it++;
+            continue;
+          }
 
           if (inst->is_commutative() && inst->arg_count() == 2 &&
               dynamic_cast<Const*>(inst->arg(0)) &&
@@ -4526,8 +4585,19 @@ namespace metajit {
           }
 
           _builder.move_before(block, inst);
+          Inst* previous = inst->prev();
           Value* subst = fn(inst);
+          if (use_counts) {
+            for (Inst* added = inst->prev(); added != previous; added = added->prev()) {
+              for (Value* arg : added->args()) {
+                use_counts->invalidate(arg);
+              }
+            }
+          }
           if (subst) {
+            if (use_counts) {
+              use_counts->invalidate(subst);
+            }
             substs[inst] = subst;
             inst_it = inst_it.erase();
             changed = true;
@@ -4551,6 +4621,7 @@ namespace metajit {
         section->autoname();
         _builder.set_next_name();
         KnownBits known_bits(section);
+        SaturatingUseCounts use_counts(section);
 
         changed |= substitute([&](Inst* inst) -> Value* {
           if (!inst->has_side_effect() &&
@@ -4562,7 +4633,7 @@ namespace metajit {
             return _builder.build_const(inst->type(), known_bits.at(inst).value);
           }
 
-          if (Value* replacement = _builder.try_simplify(inst, known_bits.view())) {
+          if (Value* replacement = _builder.try_simplify(inst, known_bits.view(), use_counts)) {
             return replacement;
           }
 
@@ -4575,11 +4646,12 @@ namespace metajit {
             }
           }
           return nullptr;
-        });
+        }, &use_counts);
 
         section->autoname();
         _builder.set_next_name();
         UsedBits used_bits(section);
+        SaturatingUseCounts used_use_counts(section);
         
         changed |= substitute([&](Inst* inst) -> Value* {
           if (is_int_or_bool(inst->type()) &&
@@ -4588,37 +4660,8 @@ namespace metajit {
               used_bits.at(inst).used == 0) {
             return _builder.build_const(inst->type(), 0);
           }
-          if (dynmatch(AndInst, and_inst, inst)) {
-            UsedBits::Bits used = used_bits.at(inst);
-
-            if (dynmatch(Const, b, and_inst->arg(1))) {
-              if ((used.used & ~b->value()) == 0) {
-                return and_inst->arg(0);
-              }
-              uint64_t mask = b->value() & used.used;
-              if (mask != b->value()) {
-                return _builder.fold_and(and_inst->arg(0), _builder.build_const(inst->type(), mask));
-              }
-            }
-          } else if (dynmatch(OrInst, or_inst, inst)) {
-            UsedBits::Bits used = used_bits.at(inst);
-
-            if (dynmatch(Const, b, or_inst->arg(1))) {
-              if ((used.used & b->value()) == 0) {
-                return or_inst->arg(0);
-              }
-            }
-          } else if ((dynamic_cast<ResizeUInst*>(inst) ||
-                      dynamic_cast<ResizeSInst*>(inst)) &&
-                     type_width(inst->arg(0)->type()) < type_width(inst->type())) {
-            UsedBits::Bits used = used_bits.at(inst);
-            uint64_t mask = type_mask(inst->type()) & type_mask(inst->arg(0)->type());
-            if ((used.used & ~mask) == 0) {
-              return _builder.build_resize_x(inst->arg(0), inst->type());
-            }
-          }
-          return nullptr;
-        });
+          return _builder.try_simplify_used_bits(inst, used_bits.at(inst).used, used_use_counts);
+        }, &used_use_counts);
       }
     }
   };
@@ -4630,6 +4673,7 @@ namespace metajit {
     metajit::Builder _builder;
     NameMap<Bits> _values;
     NameMap<Value*> _substs;
+    SaturatingUseCounts _use_counts;
     struct PendingFact {
       Value* value;
       Bits bits;
@@ -4640,6 +4684,7 @@ namespace metajit {
     void _add_subst(Inst* inst, Value* value) {
       _values.ensure_size(_builder.next_name());
       _substs.ensure_size(_builder.next_name());
+      _use_counts.invalidate(value);
       _substs[inst] = value;
     }
 
@@ -4651,15 +4696,37 @@ namespace metajit {
       inst->substitute_args_iterated(_substs);
     }
 
+    bool _refresh_arguments(Inst* inst) {
+      for (size_t index = 0; index < inst->arg_count(); index++) {
+        Value* arg = inst->arg(index);
+        if (!arg->is_inst() || !is_int_or_bool(arg->type())) {
+          continue;
+        }
+        Bits bits = Bits::at(_values, arg);
+        if (!bits.is_const()) {
+          auto refined = bits.intersect(Bits::eval((Inst*) arg, _values));
+          if (!refined.has_value()) {
+            _contradiction = true;
+            return false;
+          }
+          bits = refined.value();
+          _values[(Inst*) arg] = bits;
+        }
+        if (bits.is_const()) {
+          inst->set_arg(index, _builder.build_const(arg->type(), bits.value));
+        }
+      }
+      return true;
+    }
+
   public:
 
     SimplifyTrace(metajit::Section* section, metajit::Chain* chain):
-        Pass(section), _section(section), _builder(section),
-        _values(section), _substs(section) {
+                   Pass(section), _section(section), _builder(section),
+                   _values(section), _substs(section), _use_counts(section) {
       if (chain->size() == 0) {
         return;
       }
-      section->autoname();
 
       _builder.set_next_name();
       _init_values();
@@ -4679,6 +4746,12 @@ namespace metajit {
         Block* block = chain->at(index);
         for (Inst* inst : *block) {
           _substitute_args(inst);
+          if (_use_counts.is_dead(inst)) {
+            continue;
+          }
+          if (!_refresh_arguments(inst)) {
+            return;
+          }
           _builder.move_before(block, inst);
           if (inst->has_side_effect() ||
               inst->is_terminator() ||
@@ -4688,9 +4761,10 @@ namespace metajit {
           }
           Bits bits = Bits::eval(inst, _values);
           _values[inst] = bits;
+          Inst* previous = inst->prev();
           if (bits.is_const()) {
             _add_subst(inst, _builder.build_const(inst->type(), bits.value));
-          } else if (Value* replacement = _builder.try_simplify(inst, KnownBits::View(_values))) {
+          } else if (Value* replacement = _builder.try_simplify(inst, KnownBits::View(_values), _use_counts)) {
             _add_subst(inst, replacement);
           } else if (!is_int_or_bool(inst->type())) {
             if (dynmatch(SelectInst, select, inst)) {
@@ -4698,6 +4772,11 @@ namespace metajit {
               if (cond.is_const()) {
                 _add_subst(inst, select->arg(cond.value ? 1 : 2));
               }
+            }
+          }
+          for (Inst* added = inst->prev(); added != previous; added = added->prev()) {
+            for (Value* arg : added->args()) {
+              _use_counts.invalidate(arg);
             }
           }
         }

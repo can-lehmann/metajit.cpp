@@ -117,6 +117,10 @@ class Lowerer:
         self.decision(tree.next, block, paths, constants)
 
     def candidate(self, candidate, block, paths, constants):
+        if candidate.checked.used_bits_binding is not None and not hasattr(self, "used_mask"):
+            raise ValueError("UsedBits rules require the masked simplification backend")
+        if candidate.checked.requires_use_counts and not hasattr(self, "use_counts"):
+            raise ValueError("@single_use requires the simplification backend")
         types = {}
         facts = TypeFacts(candidate.pattern)
         for binding in candidate.types:
@@ -148,6 +152,10 @@ class Lowerer:
                                  call("type_mask", self.path_type(literal.path, paths)))
             block = self.guard(block, ir.Binary("==", bits, expected))
         lowerer = RuleLowerer(self, candidate, types, paths)
+        if candidate.checked.used_bits_binding is not None:
+            lowerer.calculations[candidate.checked.used_bits_binding] = self.bind(
+                block, candidate.checked.used_bits_binding,
+                ir.Binary("&", self.used_mask, call("type_mask", self.result_type)))
         for binding in candidate.bindings:
             lowerer.values[binding.name] = paths[binding.path]
             if binding.constant:

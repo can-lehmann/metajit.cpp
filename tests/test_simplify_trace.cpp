@@ -67,6 +67,194 @@ void check_trace_simplify(const std::string& input,
   }
 }
 
+void test_forward_refresh_after_guard() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Ptr, Type::Bool, Type::Bool});
+  Block* taken = builder.build_block();
+  Block* other = builder.build_block();
+  builder.move_to_end(entry);
+  Value* condition = entry->arg(1);
+  Inst* value = builder.build_and(entry->arg(2), condition);
+  StoreInst* before = builder.build_store(entry->arg(0), value, 0, 0);
+  builder.build_branch(condition, other, taken);
+  builder.move_to_end(taken);
+  StoreInst* after = builder.build_store(entry->arg(0), value, 0, 8);
+  builder.build_exit();
+  builder.move_to_end(other);
+  StoreInst* side_exit = builder.build_store(entry->arg(0), value, 0, 16);
+  builder.build_exit();
+  section.order_blocks(BlockOrdering::Dominator);
+  Chain chain;
+  chain.add(entry);
+  chain.add(taken);
+  SimplifyTrace::run(&section, &chain);
+  unittest_assert(before->value() == value);
+  unittest_assert(side_exit->value() == value);
+  unittest_assert(value->arg(1) == condition);
+  Const* constant = dynamic_cast<Const*>(after->value());
+  unittest_assert(constant && constant->value() == 0);
+  unittest_assert(!section.verify(std::cout));
+  for (bool cond : {false, true}) {
+    for (bool input : {false, true}) {
+      uint64_t output[3] = {42, 42, 42};
+      Interpreter interpreter(&section, {Interpreter::Bits::constant(output),
+                               Interpreter::Bits::constant(Type::Bool, cond),
+                               Interpreter::Bits::constant(Type::Bool, input)});
+      unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+      unittest_assert(output[0] == (cond && input));
+      unittest_assert(output[1] == (cond ? 42 : 0));
+      unittest_assert(output[2] == (cond ? input : 42));
+    }
+  }
+}
+
+void test_forward_refresh_stops_on_contradiction() {
+  const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = BitReverse %1
+  %3 = LtU %2, 128:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = Eq %1, 1:Int8
+  Branch %5, true_block=b3, false_block=b2
+b2:
+  Exit
+b3:
+  Store %0, %2, flags={}, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=2
+  Exit
+}
+)";
+  check_trace_simplify(ir, {0, 1, 3}, ir);
+}
+
+void test_forward_refresh_preserves_guard_facts() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Ptr, Type::Int8, Type::Int8});
+  Block* taken = builder.build_block();
+  Block* other = builder.build_block();
+  builder.move_to_end(entry);
+  Inst* sum = builder.build_add(entry->arg(1), entry->arg(2));
+  Value* cond = builder.build_lt_u(sum, builder.build_const(Type::Int8, 8));
+  builder.build_branch(cond, taken, other);
+  builder.move_to_end(taken);
+  Value* comparison = builder.build_eq(sum, builder.build_const(Type::Int8, 16));
+  StoreInst* output = builder.build_store(entry->arg(0), comparison, 0, 0);
+  builder.build_exit();
+  builder.move_to_end(other);
+  builder.build_exit();
+  section.order_blocks(BlockOrdering::Dominator);
+  Chain chain;
+  chain.add(entry);
+  chain.add(taken);
+  SimplifyTrace::run(&section, &chain);
+  Const* constant = dynamic_cast<Const*>(output->value());
+  unittest_assert(constant && constant->value() == 0);
+  unittest_assert(!section.verify(std::cout));
+  for (uint64_t a : {uint64_t(0), uint64_t(7), uint64_t(16), uint64_t(255)}) {
+    for (uint64_t b : {uint64_t(0), uint64_t(1), uint64_t(17), uint64_t(255)}) {
+      uint64_t result = 42;
+      Interpreter interpreter(&section, {Interpreter::Bits::constant(&result),
+                               Interpreter::Bits::constant(Type::Int8, a),
+                               Interpreter::Bits::constant(Type::Int8, b)});
+      unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+      unittest_assert(result == (((a + b) & 255) < 8 ? 0 : 42));
+    }
+  }
+}
+
+void test_single_use_rules_across_blocks() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (size_t mode = 0; mode < 4; mode++) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* entry = builder.build_block({Type::Ptr, type, Type::Bool});
+      Block* taken = builder.build_block();
+      Block* other = builder.build_block();
+      builder.move_to_end(entry);
+      Value* x = entry->arg(1);
+      Inst* inner = builder.build_or(x, builder.build_const(type, 1));
+      builder.build_branch(entry->arg(2), taken, other);
+      builder.move_to_end(taken);
+      Inst* root = builder.build_shl(inner, builder.build_const(type, 3));
+      StoreInst* output = builder.build_store(entry->arg(0), root, 0, 0);
+      if (mode == 2) {
+        builder.build_store(entry->arg(0), inner, 0, 8);
+      }
+      builder.build_exit();
+      builder.move_to_end(other);
+      if (mode == 1 || mode == 3) {
+        size_t uses = mode == 3 ? 255 : 1;
+        for (size_t index = 0; index < uses; index++) {
+          builder.build_store(entry->arg(0), inner, 0, 8);
+        }
+      }
+      builder.build_exit();
+      section.order_blocks(BlockOrdering::Dominator);
+      Chain chain;
+      chain.add(entry);
+      chain.add(taken);
+      SimplifyTrace::run(&section, &chain);
+      if (mode == 0) {
+        OrInst* replacement = dynamic_cast<OrInst*>(output->value());
+        unittest_assert(replacement);
+        ShlInst* shifted = dynamic_cast<ShlInst*>(replacement->arg(0));
+        unittest_assert(shifted && shifted->arg(0) == x);
+        Const* constant = dynamic_cast<Const*>(replacement->arg(1));
+        unittest_assert(constant && constant->value() == 8);
+      } else {
+        unittest_assert(output->value() == root);
+      }
+      unittest_assert(!section.verify(std::cout));
+      for (bool condition : {false, true}) {
+        for (uint64_t input : {uint64_t(0), uint64_t(42), type_mask(type)}) {
+          uint64_t values[2] = {42, 42};
+          Interpreter interpreter(&section, {Interpreter::Bits::constant(values),
+                                   Interpreter::Bits::constant(type, input),
+                                   Interpreter::Bits::constant(Type::Bool, condition)});
+          unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+          unittest_assert(values[0] == (condition ? ((input | 1) << 3) & type_mask(type) : 42));
+          bool stored = condition ? mode == 2 : mode == 1 || mode == 3;
+          unittest_assert(values[1] == (stored ? input | 1 : 42));
+        }
+      }
+    }
+  }
+}
+
+void test_single_use_rules_fresh_values() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({Type::Ptr, type, Type::Bool});
+    builder.move_to_end(block);
+    Value* condition = block->arg(2);
+    Inst* inner = builder.build_select(condition, block->arg(1), builder.build_const(type, 17));
+    Inst* difference = builder.build_sub(inner, builder.build_const(type, 1));
+    Inst* root = builder.build_select(condition, difference, builder.build_const(type, 23));
+    StoreInst* output = builder.build_store(block->arg(0), root, 0, 0);
+    builder.build_exit();
+    Chain chain;
+    chain.add(block);
+    SimplifyTrace::run(&section, &chain);
+    unittest_assert(output->value() == root);
+    AddInst* fresh = dynamic_cast<AddInst*>(root->arg(1));
+    unittest_assert(fresh && fresh->arg(0) == inner);
+    unittest_assert(!section.verify(std::cout));
+  }
+}
+
 void test_known_bits_rule_guard_facts() {
   Context context;
   Allocator allocator;
@@ -496,6 +684,11 @@ int main(int argc, char** argv) {
 
   suite.test("generated rewrite guard facts").run(test_generated_rewrite_guard_facts);
   suite.test("known bits rule guard facts").run(test_known_bits_rule_guard_facts);
+  suite.test("single use rules across blocks").run(test_single_use_rules_across_blocks);
+  suite.test("single use rules fresh values").run(test_single_use_rules_fresh_values);
+  suite.test("forward refresh after guard").run(test_forward_refresh_after_guard);
+  suite.test("forward refresh stops on contradiction").run(test_forward_refresh_stops_on_contradiction);
+  suite.test("forward refresh preserves guard facts").run(test_forward_refresh_preserves_guard_facts);
   suite.test("signed guard boundaries").run(test_signed_guard_boundaries);
   suite.test("signed guard nonconstant bounds").run(test_signed_guard_nonconstant_bounds);
   suite.test("signed guard known bits").run(test_signed_guard_known_bits);
@@ -579,7 +772,11 @@ b0(%0: Ptr):
   %8 = Freeze %3
   %9 = Freeze %4
   %10 = Freeze %5
-  Store %0, 0:Int64, flags={}, aliasing=0, offset=0
+  Store %0, %6, flags={}, aliasing=0, offset=0
+  Store %0, %7, flags={}, aliasing=0, offset=8
+  Store %0, %8, flags={}, aliasing=0, offset=16
+  Store %0, %9, flags={}, aliasing=0, offset=24
+  Store %0, %10, flags={}, aliasing=0, offset=32
   Exit
 }
 )";
@@ -596,7 +793,11 @@ b0(%0: Ptr):
   %9 = Freeze %3
   %10 = Freeze %4
   %11 = Freeze %5
-  Store %0, 0:Int64, flags={}, aliasing=0, offset=0
+  Store %0, %7, flags={}, aliasing=0, offset=0
+  Store %0, %8, flags={}, aliasing=0, offset=8
+  Store %0, %9, flags={}, aliasing=0, offset=16
+  Store %0, %10, flags={}, aliasing=0, offset=24
+  Store %0, %11, flags={}, aliasing=0, offset=32
   Exit
 }
 )", false);
@@ -734,10 +935,11 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = Or %1, 6:Int8
-  %3 = ResizeU %2, type=Bool
+  %3 = ResizeU %1, type=Bool
+  %4 = ResizeU %2, type=Bool
   Branch %3, true_block=b1, false_block=b2
 b1:
-  %5 = And %2, 7:Int8
+  %6 = And %2, 7:Int8
   Store %0, 7:Int8, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
@@ -844,6 +1046,7 @@ b1:
   Store %0, %5, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
+  Store %0, %2, flags={}, aliasing=0, offset=2
   Exit
 }
 )", {0, 1}, R"(section {
@@ -857,6 +1060,7 @@ b1:
   Store %0, 1:Int8, flags={}, aliasing=0, offset=1
   Jump block=b2
 b2:
+  Store %0, %2, flags={}, aliasing=0, offset=2
   Exit
 }
 )");
@@ -879,7 +1083,8 @@ b2:
 b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = ResizeU %1, type=Int64
-  %3 = Eq %2, 4:Int64
+  %3 = Eq %1, 4:Int8
+  %4 = Eq %2, 4:Int64
   Branch %3, true_block=b1, false_block=b2
 b1:
   Store %0, 4:Int8, flags={}, aliasing=0, offset=1
@@ -2432,6 +2637,7 @@ b1:
   Store %0, %2, flags={}, aliasing=0, offset=3
   Exit
 b2:
+  Store %0, %3, flags={}, aliasing=0, offset=4
   Exit
 }
 )", {0, 1}, R"(section {
@@ -2446,6 +2652,7 @@ b1:
   Store %0, 7:Int8, flags={}, aliasing=0, offset=3
   Exit
 b2:
+  Store %0, %3, flags={}, aliasing=0, offset=4
   Exit
 }
 )");
@@ -2534,7 +2741,11 @@ b6:
   Exit
 }
 )";
-    check_trace_simplify(ir, {0, 1, 3, 5}, ir);
+    const std::string branch = "  Branch %3, true_block=b5, false_block=b6\n";
+    std::string expected = ir;
+    expected.replace(expected.find(branch), branch.size(),
+                     "  Branch 0:Bool, true_block=b5, false_block=b6\n");
+    check_trace_simplify(ir, {0, 1, 3, 5}, expected);
   });
 
   suite.test("and_or_partial_knownbits_insufficient_for_substitution").run([]() {

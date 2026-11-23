@@ -19,6 +19,212 @@
 using namespace metajit;
 using namespace metajit::test;
 
+void test_saturating_use_counts() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Int32, Type::Int32, Type::Ptr});
+  Block* next = builder.build_block({Type::Int32});
+  builder.move_to_end(entry);
+  Inst* shared = builder.build_add(entry->arg(0), entry->arg(0));
+  Inst* unused = builder.build_sub(entry->arg(0), entry->arg(1));
+  builder.build_or(unused, shared);
+  builder.build_jump(next, {shared});
+  builder.move_to_end(next);
+  Inst* result = builder.build_xor(shared, next->arg(0));
+  StoreInst* store = builder.build_store(entry->arg(2), result, 0, 0);
+  CommentInst* comment = builder.build_comment("retained");
+  MetadataInst* marker = builder.build_metadata(1, MetadataKind::LifetimeEnd);
+  marker->set_arg(0, entry->arg(2));
+  Inst* exit = builder.build_exit();
+  section.autoname();
+
+  SaturatingUseCounts counts(&section);
+  unittest_assert(counts.at(entry->arg(0)) == 2);
+  unittest_assert(counts.at(entry->arg(1)) == 0);
+  unittest_assert(counts.at(shared) == 2);
+  unittest_assert(counts.at(unused) == 0);
+  unittest_assert(counts.is_dead(unused));
+  unittest_assert(!counts.is_dead(shared));
+  unittest_assert(counts.at(store) == 0 && !counts.is_dead(store));
+  unittest_assert(counts.at(comment) == 0 && !counts.is_dead(comment));
+  unittest_assert(!counts.is_dead(marker));
+  unittest_assert(counts.at(entry->arg(2)) == 2);
+  unittest_assert(counts.at(exit) == 0 && !counts.is_dead(exit));
+  counts.invalidate(unused);
+  unittest_assert(!counts.is_dead(unused));
+  unittest_assert(counts.at(next->arg(0)) == 1);
+  counts.remove_use(shared);
+  unittest_assert(counts.at(shared) == 1);
+  counts.remove_use(shared);
+  unittest_assert(counts.at(shared) == 0);
+  counts.add_use(shared);
+  unittest_assert(counts.at(shared) == 1);
+  counts.invalidate(shared);
+  counts.remove_use(shared);
+  counts.add_use(shared);
+  unittest_assert(counts.at(shared) == SaturatingUseCounts::unknown);
+
+  Value* constant = builder.build_const(Type::Int32, 7);
+  counts.add_use(constant);
+  counts.remove_use(constant);
+  counts.invalidate(constant);
+  unittest_assert(counts.at(constant) == SaturatingUseCounts::unknown);
+
+  builder.set_next_name();
+  builder.move_before(next, next->terminator());
+  Inst* fresh = builder.build_add(shared, constant);
+  counts.add_use(fresh);
+  counts.remove_use(fresh);
+  counts.invalidate(fresh);
+  unittest_assert(counts.at(fresh) == SaturatingUseCounts::unknown);
+  unittest_assert(!counts.is_dead(fresh));
+  section.autoname();
+  SaturatingUseCounts recomputed(&section);
+  unittest_assert(recomputed.at(shared) == 2);
+  unittest_assert(recomputed.at(fresh) == 0);
+}
+
+void test_saturating_use_counts_saturation() {
+  for (size_t uses : {size_t(254), size_t(255), size_t(256)}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({Type::Int32, Type::Ptr});
+    builder.move_to_end(block);
+    Value* value = block->arg(0);
+    Value* constant = builder.build_const(Type::Int32, 7);
+    for (size_t index = 0; index < uses; index++) {
+      builder.build_store(block->arg(1), builder.build_add(value, constant), 0, 0);
+    }
+    builder.build_exit();
+    section.autoname();
+    SaturatingUseCounts counts(&section);
+    unittest_assert(counts.at(value) == std::min(uses, size_t(255)));
+    counts.remove_use(value);
+    unittest_assert(counts.at(value) == (uses == 254 ? 253 : 255));
+    counts.add_use(value);
+    counts.add_use(value);
+    counts.remove_use(value);
+    unittest_assert(counts.at(value) == SaturatingUseCounts::unknown);
+  }
+}
+
+void test_saturating_use_counts_loop() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Int32, Type::Bool, Type::Ptr});
+  Block* loop = builder.build_block({Type::Int32});
+  Block* backedge = builder.build_block();
+  Block* exit = builder.build_block();
+  builder.move_to_end(entry);
+  Inst* shared = builder.build_add(entry->arg(0), entry->arg(0));
+  builder.build_jump(loop, {shared});
+  builder.move_to_end(loop);
+  Inst* dead = builder.build_sub(shared, loop->arg(0));
+  builder.build_xor(dead, shared);
+  builder.build_branch(entry->arg(1), backedge, exit);
+  builder.move_to_end(backedge);
+  Inst* carried = builder.build_add(loop->arg(0), shared);
+  builder.build_jump(loop, {carried});
+  builder.move_to_end(exit);
+  builder.build_store(entry->arg(2), loop->arg(0), 0, 0);
+  builder.build_exit();
+  section.order_blocks(BlockOrdering::Dominator);
+  section.autoname();
+  unittest_assert(!section.verify(std::cout));
+
+  SaturatingUseCounts counts(&section);
+  unittest_assert(counts.at(entry->arg(0)) == 2);
+  unittest_assert(counts.at(entry->arg(1)) == 1);
+  unittest_assert(counts.at(shared) == 2);
+  unittest_assert(counts.at(loop->arg(0)) == 2);
+  unittest_assert(counts.at(carried) == 1);
+  unittest_assert(counts.at(dead) == 0);
+
+  DeadCodeElim::run(&section);
+  SaturatingUseCounts recomputed(&section);
+  Uses uses(&section);
+  for (Block* block : section) {
+    for (Arg* arg : block->args()) {
+      unittest_assert(recomputed.at(arg) == uses.at(arg).size());
+    }
+    for (Inst* inst : *block) {
+      unittest_assert(recomputed.at(inst) == uses.at(inst).size());
+    }
+  }
+}
+
+void test_simplify_skip_dead() {
+  for (bool trace : {false, true}) {
+    for (size_t uses : {size_t(1), size_t(255)}) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* entry = builder.build_block({Type::Ptr, Type::Int32});
+      Block* next = builder.build_block();
+      builder.move_to_end(entry);
+      Value* x = entry->arg(1);
+      Value* zero = builder.build_const(Type::Int32, 0);
+      Inst* dead = builder.build_add(x, zero);
+      Inst* dead_chain = builder.build_or(dead, zero);
+      Inst* dead_constant = builder.build_add(builder.build_const(Type::Int32, 1),
+                                              builder.build_const(Type::Int32, 2));
+      Inst* dead_constant_user = builder.build_add(dead_constant, x);
+      Inst* live = builder.build_add(x, zero);
+      std::vector<StoreInst*> stores;
+      for (size_t index = 0; index < uses; index++) {
+        stores.push_back(builder.build_store(entry->arg(0), live, 0, 0));
+      }
+      Inst* dead_live_user = builder.build_add(live, zero);
+      Inst* outside = builder.build_add(x, zero);
+      Inst* dead_outside_user = builder.build_add(outside, zero);
+      builder.build_jump(next);
+      builder.move_to_end(next);
+      StoreInst* outside_store = builder.build_store(entry->arg(0), outside, 0, 8);
+      builder.build_exit();
+      section.order_blocks(BlockOrdering::Dominator);
+      if (trace) {
+        Chain chain;
+        chain.add(entry);
+        SimplifyTrace::run(&section, &chain);
+      } else {
+        Simplify::run(&section, 2);
+        unittest_assert(outside_store->value() == x);
+      }
+      bool found_dead = false;
+      bool found_chain = false;
+      for (Inst* inst : *entry) {
+        found_dead |= inst == dead;
+        found_chain |= inst == dead_chain;
+      }
+      unittest_assert(found_dead && found_chain);
+      unittest_assert(dead_chain->arg(0) == dead);
+      unittest_assert(dead_constant_user->arg(0) == dead_constant);
+      unittest_assert(dead_live_user->arg(0) == x);
+      unittest_assert(dead_outside_user->arg(0) == x);
+      for (StoreInst* store : stores) {
+        unittest_assert(store->value() == x);
+      }
+      unittest_assert(!section.verify(std::cout));
+      DeadCodeElim::run(&section);
+      unittest_assert(!section.verify(std::cout));
+      for (uint64_t input : {uint64_t(0), uint64_t(42), uint64_t(0xffffffff)}) {
+        uint64_t values[2] = {};
+        Interpreter interpreter(&section, {Interpreter::Bits::constant(values),
+                                 Interpreter::Bits::constant(Type::Int32, input)});
+        unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+        unittest_assert(values[0] == input && values[1] == input);
+      }
+    }
+  }
+}
+
 void check_simplify(const std::string& expected, Section* section) {
   metajit::Simplify::run(section, 1);
   std::stringstream ss;
@@ -59,12 +265,159 @@ b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
 }
 )", R"(section {
 b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
-  %5 = And %3, 255:Int16
-  %6 = Or %5, %4
-  Store %0, %6, flags={}, aliasing=0, offset=0
+  %5 = Or %1, %2
+  %6 = And %5, 65280:Int16
+  %7 = Or %6, %3
+  %8 = And %3, 255:Int16
+  %9 = Or %8, %4
+  Store %0, %9, flags={}, aliasing=0, offset=0
   Exit
 }
 )");
+}
+
+void test_used_bits_missing_values() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Ptr, Type::Int32});
+  builder.move_to_end(block);
+  Value* x = block->arg(1);
+  Inst* masked = builder.build_and(x, builder.build_const(Type::Int32, 255));
+  Value* narrowed = builder.build_resize_u(masked, Type::Int8);
+  builder.build_store(block->arg(0), narrowed, 0, 0);
+  builder.build_exit();
+  section.order_blocks(BlockOrdering::Dominator);
+  section.autoname();
+  UsedBits used(&section);
+  unittest_assert(used.at(masked).used == 255);
+  unittest_assert(used.at(x).used == type_mask(Type::Int32));
+  unittest_assert(used.at(builder.build_const(Type::Int8, 0)).used == 255);
+  builder.set_next_name();
+  builder.move_before(block, block->terminator());
+  Inst* fresh = builder.build_and(x, builder.build_const(Type::Int32, 1));
+  unittest_assert(used.at(fresh).type == Type::Int32);
+  unittest_assert(used.at(fresh).used == type_mask(Type::Int32));
+  section.autoname();
+  UsedBits recomputed(&section);
+  unittest_assert(recomputed.at(fresh).used == 0);
+}
+
+void test_simplify_used_bits_recompute() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* block = builder.build_block({Type::Ptr, Type::Int16});
+  builder.move_to_end(block);
+  Value* x = block->arg(1);
+  Inst* masked = builder.build_and(x, builder.build_const(Type::Int16, 255));
+  Value* resized = builder.build_resize_s(masked, Type::Int32);
+  Value* shifted = builder.build_shl(resized, builder.build_const(Type::Int32, 24));
+  StoreInst* output = builder.build_store(block->arg(0), shifted, 0, 0);
+  builder.build_exit();
+  section.order_blocks(BlockOrdering::Dominator);
+  Simplify::run(&section, 1);
+  ShlInst* result = dynamic_cast<ShlInst*>(output->value());
+  unittest_assert(result);
+  ResizeXInst* first = dynamic_cast<ResizeXInst*>(result->arg(0));
+  unittest_assert(first && first->arg(0) == masked);
+  Simplify::run(&section, 1);
+  result = dynamic_cast<ShlInst*>(output->value());
+  unittest_assert(result);
+  ResizeXInst* second = dynamic_cast<ResizeXInst*>(result->arg(0));
+  unittest_assert(second && second->arg(0) == x);
+  unittest_assert(!section.verify(std::cout));
+  for (uint64_t input : {uint64_t(0), uint64_t(1), uint64_t(0x1234), uint64_t(0xffff)}) {
+    uint64_t value = 0;
+    Interpreter interpreter(&section, {Interpreter::Bits::constant(&value),
+                             Interpreter::Bits::constant(Type::Int16, input)});
+    unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+    unittest_assert(value == ((input & 255) << 24));
+  }
+}
+
+void test_simplify_used_bits_xor_or_constants() {
+  for (Type type : {Type::Int16, Type::Int32, Type::Int64}) {
+    Context context;
+    Allocator allocator;
+    Section section(context, allocator);
+    Builder builder(&section);
+    Block* block = builder.build_block({Type::Ptr, type});
+    builder.move_to_end(block);
+    Value* x = block->arg(1);
+    uint64_t high = type_mask(type) & ~uint64_t(255);
+    Value* inverted = builder.build_xor(x, builder.build_const(type, high));
+    Value* set = builder.build_or(x, builder.build_const(type, high | 3));
+    Value* flipped = builder.build_xor(x, builder.build_const(type, high | 3));
+    StoreInst* xor_output = builder.build_store(block->arg(0), builder.build_resize_u(inverted, Type::Int8), 0, 0);
+    StoreInst* or_output = builder.build_store(block->arg(0), builder.build_resize_u(set, Type::Int8), 0, 8);
+    StoreInst* flipped_output = builder.build_store(block->arg(0), builder.build_resize_u(flipped, Type::Int8), 0, 16);
+    builder.build_exit();
+    section.order_blocks(BlockOrdering::Dominator);
+    Simplify::run(&section, 1);
+    ResizeUInst* xor_resize = dynamic_cast<ResizeUInst*>(xor_output->value());
+    ResizeUInst* or_resize = dynamic_cast<ResizeUInst*>(or_output->value());
+    unittest_assert(xor_resize && xor_resize->arg(0) == x);
+    unittest_assert(or_resize);
+    OrInst* result = dynamic_cast<OrInst*>(or_resize->arg(0));
+    unittest_assert(result && result->arg(0) == x);
+    Const* mask = dynamic_cast<Const*>(result->arg(1));
+    unittest_assert(mask && mask->value() == 3);
+    ResizeUInst* flipped_resize = dynamic_cast<ResizeUInst*>(flipped_output->value());
+    unittest_assert(flipped_resize);
+    XorInst* flipped_result = dynamic_cast<XorInst*>(flipped_resize->arg(0));
+    unittest_assert(flipped_result && flipped_result->arg(0) == x);
+    Const* flipped_mask = dynamic_cast<Const*>(flipped_result->arg(1));
+    unittest_assert(flipped_mask && flipped_mask->value() == 3);
+    unittest_assert(!section.verify(std::cout));
+    for (uint64_t input : {uint64_t(0), uint64_t(1), uint64_t(42), type_mask(type)}) {
+      uint64_t values[3] = {};
+      Interpreter interpreter(&section, {Interpreter::Bits::constant(values),
+                               Interpreter::Bits::constant(type, input)});
+      unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+      unittest_assert(values[0] == (input & 255));
+      unittest_assert(values[1] == ((input | 3) & 255));
+      unittest_assert(values[2] == ((input ^ 3) & 255));
+    }
+  }
+}
+
+void test_simplify_used_bits_add_constant() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (bool shared : {false, true}) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* block = builder.build_block({Type::Ptr, type});
+      builder.move_to_end(block);
+      Value* x = block->arg(1);
+      Inst* sum = builder.build_add(x, builder.build_const(type, 8));
+      Value* low_bits = builder.build_and(sum, builder.build_const(type, 7));
+      StoreInst* output = builder.build_store(block->arg(0), low_bits, 0, 0);
+      if (shared) {
+        builder.build_store(block->arg(0), sum, 0, 8);
+      }
+      builder.build_exit();
+      section.order_blocks(BlockOrdering::Dominator);
+      Simplify::run(&section, 1);
+      AndInst* masked = dynamic_cast<AndInst*>(output->value());
+      unittest_assert(masked && masked->arg(0) == (shared ? (Value*) sum : x));
+      unittest_assert(!section.verify(std::cout));
+      for (uint64_t input : {uint64_t(0), uint64_t(1), uint64_t(7), type_mask(type)}) {
+        uint64_t values[2] = {};
+        Interpreter interpreter(&section, {Interpreter::Bits::constant(values),
+                                 Interpreter::Bits::constant(type, input)});
+        unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+        unittest_assert(values[0] == (input & 7));
+        if (shared) {
+          unittest_assert(values[1] == ((input + 8) & type_mask(type)));
+        }
+      }
+    }
+  }
 }
 
 void test_simplify_used_bits_other_use() {
@@ -84,9 +437,11 @@ b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
 b0(%0: Ptr, %1: Int16, %2: Int16, %3: Int16, %4: Int16):
   %5 = Or %1, %2
   Store %0, %5, flags={}, aliasing=0, offset=2
-  %7 = And %3, 255:Int16
-  %8 = Or %7, %4
-  Store %0, %8, flags={}, aliasing=0, offset=0
+  %7 = And %5, 65280:Int16
+  %8 = Or %7, %3
+  %9 = And %3, 255:Int16
+  %10 = Or %9, %4
+  Store %0, %10, flags={}, aliasing=0, offset=0
   Exit
 }
 )");
@@ -285,7 +640,7 @@ void test_and_or_idempotence_simplify(Builder& builder, TestData& data) {
   Value* value = data.input(Type::Int32);
   Value* other = data.input(Type::Int32);
   Value* masked = builder.fold_and(input, builder.build_const(Type::Int32, 1));
-  Value* condition = builder.fold_eq(masked, builder.build_const(Type::Int32, 2));
+  Value* condition = builder.build_eq(masked, builder.build_const(Type::Int32, 2));
   Value* selected = builder.fold_select(condition, other, value);
   Value* and_result = builder.fold_and(value, selected);
   Value* or_result = builder.fold_or(value, selected);
@@ -2734,6 +3089,116 @@ void test_rule_dsl_known_bits() {
   }
 }
 
+void check_rule_dsl_single_use(bool trace) {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (size_t mode = 0; mode < 4; mode++) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* block = builder.build_block({Type::Ptr, type});
+      builder.move_to_end(block);
+      Value* x = block->arg(1);
+      Value* one = builder.build_const(type, 1);
+      Value* shift = builder.build_const(type, 3);
+      Inst* inner = builder.build_or(x, one);
+      Value* operand = inner;
+      if (mode == 2) {
+        builder.build_xor(inner, x);
+      }
+      if (mode == 3) {
+        operand = builder.build_resize_u(inner, type);
+      }
+      StoreInst* extra = nullptr;
+      if (mode == 1 || mode == 3) {
+        extra = builder.build_store(block->arg(0), operand, 0, 8);
+      }
+      Inst* root = builder.build_shl(operand, shift);
+      StoreInst* output = builder.build_store(block->arg(0), root, 0, 0);
+      builder.build_exit();
+      section.order_blocks(BlockOrdering::Dominator);
+      section.autoname();
+      unittest_assert(!section.verify(std::cout));
+      if (trace) {
+        Chain chain;
+        chain.add(block);
+        SimplifyTrace::run(&section, &chain);
+      } else {
+        Simplify::run(&section, 1);
+      }
+      if (mode == 0 || mode == 2) {
+        OrInst* result = dynamic_cast<OrInst*>(output->value());
+        unittest_assert(result);
+        ShlInst* shifted = dynamic_cast<ShlInst*>(result->arg(0));
+        unittest_assert(shifted && shifted->arg(0) == x);
+        check_const(result->arg(1), type, 8);
+      } else {
+        unittest_assert(output->value() == root);
+        unittest_assert(root->arg(0) == inner);
+        unittest_assert(extra->value() == inner);
+      }
+      DeadCodeElim::run(&section);
+      unittest_assert(!section.verify(std::cout));
+      for (uint64_t input : {uint64_t(0), uint64_t(1), uint64_t(42), type_mask(type)}) {
+        uint64_t values[2] = {};
+        Interpreter interpreter(&section, {Interpreter::Bits::constant(values),
+                                 Interpreter::Bits::constant(type, input)});
+        unittest_assert(interpreter.run() == Interpreter::Event::Exit);
+        unittest_assert(values[0] == (((input | 1) << 3) & type_mask(type)));
+        if (extra) {
+          unittest_assert(values[1] == (input | 1));
+        }
+      }
+    }
+  }
+}
+
+void test_rule_dsl_single_use() {
+  check_rule_dsl_single_use(false);
+}
+
+void test_rule_dsl_single_use_trace() {
+  check_rule_dsl_single_use(true);
+}
+
+void test_rule_dsl_redundant_constants() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (bool is_or : {false, true}) {
+      for (bool inner_swapped : {false, true}) {
+        for (bool outer_swapped : {false, true}) {
+          Context context;
+          Allocator allocator;
+          Section section(context, allocator);
+          Builder builder(&section);
+          Block* block = builder.build_block({type});
+          builder.move_to_end(block);
+          Value* x = block->arg(0);
+          Value* c1 = builder.build_const(type, 5);
+          Value* c2 = builder.build_const(type, is_or ? 1 : 7);
+          Value* left = inner_swapped ? c1 : x;
+          Value* right = inner_swapped ? x : c1;
+          Inst* inner = is_or ? (Inst*) builder.build_or(left, right) : builder.build_and(left, right);
+          left = outer_swapped ? c2 : inner;
+          right = outer_swapped ? inner : c2;
+          size_t before = builder.next_name();
+          Value* result = is_or ? builder.fold_or(left, right) : builder.fold_and(left, right);
+          unittest_assert(result == inner);
+          unittest_assert(builder.next_name() == before);
+          Inst* root = is_or ? (Inst*) builder.build_or(left, right) : builder.build_and(left, right);
+          before = builder.next_name();
+          unittest_assert(builder.try_simplify(root) == inner);
+          unittest_assert(builder.next_name() == before);
+          Value* changed = builder.build_const(type, is_or ? 2 : 1);
+          result = is_or ? builder.fold_or(inner, changed) : builder.fold_and(inner, changed);
+          Inst* combined = dynamic_cast<Inst*>(result);
+          unittest_assert(combined && combined != inner && combined->arg(0) == x);
+          check_const(combined->arg(1), type, is_or ? 7 : 1);
+        }
+      }
+    }
+  }
+}
+
 void test_rule_dsl_resolved_arguments() {
   Context context;
   Allocator allocator;
@@ -2875,6 +3340,7 @@ b0(%0: Ptr, %1: Int8):
   %2 = And %1, 31:Int8
   %3 = ResizeU %2, type=Int64
   %4 = ResizeU %3, type=Int32
+  %5 = ShrU 4294967295:Int32, %4
   Store %0, 1:Bool, flags={}, aliasing=0, offset=0
   Exit
 }
@@ -2951,11 +3417,18 @@ int main(int argc, char** argv) {
   metajit::LLVMCodeGen::initilize_llvm_jit();
 
   DiffTestSuite suite("tests/output/test_opt", argc, argv);
+  suite.test("saturating use counts").run(test_saturating_use_counts);
+  suite.test("saturating use counts saturation").run(test_saturating_use_counts_saturation);
+  suite.test("saturating use counts loop").run(test_saturating_use_counts_loop);
+  suite.test("simplify skip dead").run(test_simplify_skip_dead);
   suite.test("knownbits variable shift witness").run(test_knownbits_variable_shift_witness);
 
   suite.test("rule DSL builder integration").run(test_rule_dsl_builder_integration);
   suite.test("rule DSL local rewriter").run(test_rule_dsl_local_rewriter);
   suite.test("rule DSL resolved arguments").run(test_rule_dsl_resolved_arguments);
+  suite.test("rule DSL redundant constants").run(test_rule_dsl_redundant_constants);
+  suite.test("rule DSL single use").run(test_rule_dsl_single_use);
+  suite.test("rule DSL single use trace").run(test_rule_dsl_single_use_trace);
   suite.test("rule DSL known bits").run(test_rule_dsl_known_bits);
   suite.test("rule DSL known select").run(test_rule_dsl_known_select);
   suite.test("rule DSL known resize roundtrip").run(test_rule_dsl_known_resize_roundtrip);
@@ -3056,6 +3529,10 @@ int main(int argc, char** argv) {
   suite.test("fold sub same operand").run(test_fold_sub_same_operand);
   suite.test("simplify overwritten bytes").run(test_simplify_overwritten_bytes);
   suite.test("simplify used bits other use").run(test_simplify_used_bits_other_use);
+  suite.test("used bits missing values").run(test_used_bits_missing_values);
+  suite.test("simplify used bits recompute").run(test_simplify_used_bits_recompute);
+  suite.test("simplify used bits xor or constants").run(test_simplify_used_bits_xor_or_constants);
+  suite.test("simplify used bits add constant").run(test_simplify_used_bits_add_constant);
   suite.test("simplify used bits effects").run(test_simplify_used_bits_effects);
   suite.test("simplify used bits shl mask").run(test_simplify_used_bits_shl_mask);
   suite.test("narrowing resize normalization").run(test_narrowing_resize_normalization);
@@ -3100,8 +3577,9 @@ int main(int argc, char** argv) {
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = And %1, 255:Int64
-  Store %0, %2, flags={}, aliasing=0, offset=8
+  %2 = ResizeU %1, type=Int8
+  %3 = And %1, 255:Int64
+  Store %0, %3, flags={}, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3118,8 +3596,10 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = And %1, 6:Int64
-  Store %0, %2, flags={}, aliasing=0, offset=8
+  %2 = ShrU %1, 1:Int64
+  %3 = And %2, 3:Int64
+  %4 = And %1, 6:Int64
+  Store %0, %4, flags={}, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3136,9 +3616,11 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = ShrU %1, 9:Int64
-  %3 = And %2, 2:Int64
-  Store %0, %3, flags={}, aliasing=0, offset=8
+  %2 = ShrU %1, 10:Int64
+  %3 = And %2, 1:Int64
+  %4 = ShrU %1, 9:Int64
+  %5 = And %4, 2:Int64
+  Store %0, %5, flags={}, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3154,9 +3636,11 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = Shl %1, 2:Int64
-  %3 = And %2, 8:Int64
-  Store %0, %3, flags={}, aliasing=0, offset=8
+  %2 = ShrU %1, 1:Int64
+  %3 = And %2, 1:Int64
+  %4 = Shl %1, 2:Int64
+  %5 = And %4, 8:Int64
+  Store %0, %5, flags={}, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3173,9 +3657,11 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = Shl %1, 4:Int64
-  %3 = And %2, 2040:Int64
-  Store %0, %3, flags={}, aliasing=0, offset=8
+  %2 = Shl %1, 1:Int64
+  %3 = And %2, 255:Int64
+  %4 = Shl %1, 4:Int64
+  %5 = And %4, 2040:Int64
+  Store %0, %5, flags={}, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3190,8 +3676,10 @@ b0(%0: Ptr):
     check_simplify(R"(section {
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
-  %2 = And %1, 15:Int64
-  Store %0, %2, flags={}, aliasing=0, offset=8
+  %2 = And %1, 3:Int64
+  %3 = And %1, 12:Int64
+  %4 = And %1, 15:Int64
+  Store %0, %4, flags={}, aliasing=0, offset=8
 }
 )", builder.section());
   });
@@ -3208,8 +3696,10 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Int64, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
-  %3 = And %2, 4294902015:Int64
-  Store %0, %3, flags={}, aliasing=0, offset=16
+  %3 = And %1, 65280:Int64
+  %4 = Or %2, %3
+  %5 = And %2, 4294902015:Int64
+  Store %0, %5, flags={}, aliasing=0, offset=16
 }
 )", builder.section());
   });
@@ -3256,6 +3746,7 @@ b0(%0: Ptr):
 b0(%0: Ptr):
   %1 = Load %0, type=Bool, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int64, flags={}, aliasing=0, offset=8
+  %3 = ResizeU %1, type=Int64
   Store %0, %2, flags={}, aliasing=0, offset=16
 }
 )", builder.section());
@@ -3273,6 +3764,7 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int8, flags={}, aliasing=0, offset=1
   %3 = And %1, 240:Int8
+  %4 = Or %2, 240:Int8
   Store %0, %3, flags={}, aliasing=0, offset=2
 }
 )", builder.section());
@@ -3330,8 +3822,12 @@ b0(%0: Ptr):
   %1 = Load %0, type=Int16, flags={}, aliasing=0, offset=0
   %2 = Load %0, type=Int16, flags={}, aliasing=0, offset=2
   %3 = Load %0, type=Int16, flags={}, aliasing=0, offset=4
-  %4 = And %1, 4095:Int16
-  Store %0, %4, flags={}, aliasing=0, offset=6
+  %4 = And %3, 61440:Int16
+  %5 = Shl %2, 14:Int16
+  %6 = Or %4, %1
+  %7 = Or %6, %5
+  %8 = And %1, 4095:Int16
+  Store %0, %8, flags={}, aliasing=0, offset=6
 }
 )", builder.section());
   });

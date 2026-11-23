@@ -222,6 +222,18 @@ class MatcherTests(unittest.TestCase):
         root = Value("Add", args=(Value("input"), Value("Const", constant=0)))
         self.assertEqual(first_match(program, root).checked.rule.name, "first")
 
+    def test_redundant_constant_precedes_reassociation(self):
+        for operation, operator, redundant in (("Or", "|", 1), ("And", "&", 7)):
+            with self.subTest(operation=operation):
+                program = self.program(
+                    f"combine: {operation}({operation}(x, C1), C2)\n"
+                    f"    C = C1 {operator} C2\n    => {operation}(x, C)\n"
+                    f"reuse: {operation}({operation}(x, C1), C2)\n"
+                    f"    check C1 {operator} C2 == C1\n    => {operation}(x, C1)\n")
+                inner = Value(operation, args=(Value("input"), Value("Const", constant=5)))
+                root = Value(operation, args=(inner, Value("Const", constant=redundant)))
+                self.assertEqual(first_match(program, root).checked.rule.name, "reuse")
+
     def test_shared_constant_check_and_literal_fallback(self):
         program = self.program(
             "zero: Add(x, 0)\n    => x\n"

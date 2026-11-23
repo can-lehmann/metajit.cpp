@@ -19,6 +19,16 @@ from .types import BIT_TYPES, BOOL, INT8, INT16, INT32, INT64, INT_TYPES, TypeCo
 
 
 class TypeCheckTests(unittest.TestCase):
+    def test_single_use_annotation(self):
+        checked, = check("shift: Shl(Or(x, C1) @single_use, C2)\n    => x\n")
+        self.assertTrue(checked.requires_use_counts)
+        for source, message in [
+            ("bad: Or(x, C) @single_use\n    => x\n", "nested input operations"),
+            ("bad: Or(x, C)\n    => Or(x, C) @single_use\n", "input-pattern operations"),
+        ]:
+            with self.subTest(source=source), self.assertRaisesRegex(TypeCheckError, message):
+                check(source)
+
     def test_unified_domains_exist_only_at_roots(self):
         constraints = TypeConstraints()
         first = constraints.fresh((INT8, INT16))

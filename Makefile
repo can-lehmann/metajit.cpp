@@ -1,6 +1,6 @@
 LLVM_FLAGS := $(shell llvm-config --cflags --libs)
 PYTHON ?= python3
-RULEDSL_FILES := fold.rules simplify.rules $(filter-out ruledsl/test_%.py,$(wildcard ruledsl/*.py))
+RULEDSL_FILES := fold.rules simplify.rules usedbits.rules $(filter-out ruledsl/test_%.py,$(wildcard ruledsl/*.py))
 Z3_FLAGS := -I/usr/include/z3 -lz3
 CFLAGS := ${LLVM_FLAGS} -g
 HEADER_FILES := jitir.hpp jitir_llvmapi.hpp genext.hpp generated.inc.hpp $(wildcard *.hpp)
@@ -127,7 +127,7 @@ jitir.hpp jitir_llvmapi.hpp genext.hpp &: jitir.py jitir.tmpl.hpp jitir_llvmapi.
 	PYTHONPATH="../lwir.cpp" $(PYTHON) jitir.py
 
 generated.inc.hpp: $(RULEDSL_FILES) Makefile
-	$(PYTHON) -m ruledsl fold.rules --include-simplify --simplify-folds --simplify-rules simplify.rules --handwritten Eq --handwritten Select --handwritten ResizeX -o $@
+	$(PYTHON) -m ruledsl fold.rules --include-simplify --simplify-folds --simplify-rules simplify.rules --usedbits-rules usedbits.rules --handwritten Eq --handwritten Select --handwritten ResizeX -o $@
 
 COVERAGE_PROFRAW_FILES := $(patsubst %,tests/coverage/%.profraw,$(COVERAGE_TESTS))
 COVERAGE_LCOV_FILES := $(patsubst %,tests/coverage/%.lcov,$(COVERAGE_TESTS))

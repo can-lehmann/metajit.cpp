@@ -35,9 +35,9 @@ class LexerTests(unittest.TestCase):
 
     def test_invalid_character_is_not_skipped(self):
         with self.assertRaises(ParseError) as raised:
-            tokenize("Add(x, @y)", "example.rules")
+            tokenize("Add(x, $y)", "example.rules")
         self.assertEqual(raised.exception.span.start, 7)
-        self.assertIn("example.rules:1:8: unexpected character '@'", str(raised.exception))
+        self.assertIn("example.rules:1:8: unexpected character '$'", str(raised.exception))
 
     def test_indentation_and_comments(self):
         tokens = tokenize("a\n    # ignored\n    b # inline\n\n    c\nd")
@@ -63,6 +63,18 @@ class LexerTests(unittest.TestCase):
 
 
 class ParserTests(unittest.TestCase):
+    def test_single_use_annotation(self):
+        source = "shift: Shl(Or(x: T, C1): T @single_use, C2)\n    => x\n"
+        rule, = parse(source)
+        inner = rule.pattern.args[0]
+        self.assertTrue(inner.value.single_use)
+        self.assertFalse(rule.pattern.single_use)
+        self.assertEqual(ast.format_pattern(rule.pattern), source.split(": ", 1)[1].split("\n")[0])
+        for pattern, message in [("Or(x @single_use, C)", "requires an operation"),
+                                 ("Or(x, C) @unknown", "unknown pattern annotation")]:
+            with self.subTest(pattern=pattern), self.assertRaisesRegex(ParseError, message):
+                parse(f"bad: {pattern}\n    => x\n")
+
     def calculation(self, expression):
         return parse(f"example: Add(x, C)\n    R = {expression}\n    => R\n")[0].body[0].value
 

@@ -1,0 +1,110 @@
+# Copyright 2026 Can Joshua Lehmann
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+# And
+
+and_used_redundant: And(x, C) @used_bits(Cused)
+    check Cused & ~C == 0
+    => x
+
+and_used_mask: And(x, C) @used_bits(Cused)
+    Cnew = C & Cused
+    check Cnew != C
+    => And(x, Cnew)
+
+
+# Or
+
+or_used_redundant: Or(x, C) @used_bits(Cused)
+    check Cused & C == 0
+    => x
+
+or_used_mask: Or(x, C) @used_bits(Cused)
+    Cnew = C & Cused
+    check Cnew != C
+    => Or(x, Cnew)
+
+or_used_shl: Or(x, Shl(y: T, C)) @used_bits(Cused)
+    check C < width(T)
+    check Cused >> C == 0
+    => x
+
+or_used_shr_u: Or(x, ShrU(y: T, C)) @used_bits(Cused)
+    check C < width(T)
+    check Cused << C == 0
+    => x
+
+
+# ResizeU
+
+resize_u_unused_upper: ResizeU(x: T): U @used_bits(Cused)
+    where width(T) < width(U)
+    Cmask = bits(bits(-1, T), U)
+    check Cused & ~Cmask == 0
+    => ResizeX(x): U
+
+
+# ResizeS
+
+resize_s_unused_upper: ResizeS(x: T): U @used_bits(Cused)
+    where width(T) < width(U)
+    Cmask = bits(bits(-1, T), U)
+    check Cused & ~Cmask == 0
+    => ResizeX(x): U
+
+
+# Xor
+
+xor_unused_constant: Xor(x, C) @used_bits(Cused)
+    check Cused & C == 0
+    => x
+
+xor_used_mask: Xor(x, C) @used_bits(Cused)
+    Cnew = C & Cused
+    check Cnew != C
+    => Xor(x, Cnew)
+
+
+# Add
+
+add_unused_constant: Add(x, C) @used_bits(Cused)
+    Clow = C & -C
+    check Cused < Clow
+    => x
+
+
+# Select
+
+select_used_constants: Select(c, C1, C2) @used_bits(Cused)
+    Ctrue = C1 & Cused
+    Cfalse = C2 & Cused
+    check Ctrue != C1 or Cfalse != C2
+    => Select(c, Ctrue, Cfalse)
+
+
+# Shl
+
+shl_used_zero: Shl(x: T, C) @used_bits(Cused)
+    check C < width(T)
+    check Cused >> C == 0
+    => 0
+
+
+# ShrU
+
+shr_u_used_zero: ShrU(x: T, C) @used_bits(Cused)
+    check C < width(T)
+    check Cused << C == 0
+    => 0

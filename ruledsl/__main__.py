@@ -30,6 +30,7 @@ def main(argv=None):
     parser.add_argument("--include-simplify", action="store_true")
     parser.add_argument("--simplify-rules", type=Path)
     parser.add_argument("--simplify-folds", action="store_true")
+    parser.add_argument("--usedbits-rules", type=Path)
     args = parser.parse_args(argv)
     try:
         source = args.rules.read_text()
@@ -37,7 +38,9 @@ def main(argv=None):
                           include_simplify=args.include_simplify,
                           simplify_source=args.simplify_rules.read_text() if args.simplify_rules else None,
                           simplify_filename=str(args.simplify_rules),
-                          simplify_folds=args.simplify_folds)
+                          simplify_folds=args.simplify_folds,
+                          used_bits_source=args.usedbits_rules.read_text() if args.usedbits_rules else None,
+                          used_bits_filename=str(args.usedbits_rules))
         if args.output is None:
             sys.stdout.write(result)
         else:

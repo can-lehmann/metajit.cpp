@@ -36,6 +36,8 @@ class Number(Expr):
 class Call(Expr):
     name: str
     args: tuple[Expr, ...]
+    single_use: bool = False
+    used_bits: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,15 +89,28 @@ class Rule:
     small_widths_only: bool = False
 
 
+def format_annotations(node):
+    suffix = " @single_use" if node.single_use else ""
+    if node.used_bits is not None:
+        suffix += f" @used_bits({node.used_bits})"
+    return suffix
+
+
 def format_pattern(node):
     if isinstance(node, Name):
         return node.name
     if isinstance(node, Number):
         return str(node.value)
     if isinstance(node, Call):
-        return f"{node.name}({', '.join(format_pattern(arg) for arg in node.args)})"
+        suffix = format_annotations(node)
+        return f"{node.name}({', '.join(format_pattern(arg) for arg in node.args)}){suffix}"
     if isinstance(node, Typed):
-        return f"{format_pattern(node.value)}: {node.type_name}"
+        value = format_pattern(node.value)
+        if isinstance(node.value, Call):
+            suffix = format_annotations(node.value)
+            if suffix:
+                return f"{value[:-len(suffix)]}: {node.type_name}{suffix}"
+        return f"{value}: {node.type_name}"
     raise ValueError(f"unsupported pattern {node!r}")
 
 

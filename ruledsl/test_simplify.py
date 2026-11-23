@@ -20,10 +20,12 @@ import unittest
 
 from .cpp import emit
 from .generate import generate
+from .lower import candidates
 from .lower_simplify import lower
 from .matcher import build_matchers
 from .parser import parse
-from .proof import prove
+from .proof import ProofError, prove
+from .source import TypeCheckError
 
 
 RULES = """zero: Add(x, 0)
@@ -53,6 +55,272 @@ same_constants: Select(c, C, C)
 
 
 class SimplifyTests(unittest.TestCase):
+    def test_paired_select_or(self):
+        source = (Path(__file__).resolve().parent.parent / "fold.rules").read_text()
+        names = {"or_select_value", "or_select_redundant_mask", "or_resized_select_redundant_mask"}
+        source = "\n".join(source[rule.span.start:rule.span.end] for rule in parse(source)
+                           if rule.name in names)
+        self.assertEqual([len(rule.instantiations) for rule in prove(source)], [5, 5, 25])
+        code = generate(source, include_simplify=True, simplify_folds=True)
+        self.run_cpp(code, """
+int main() {
+  Generated builder;
+  Value c(Type::Bool), other(Type::Bool);
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(type);
+    Const zero(type, 0);
+    for (uint64_t a : {uint64_t(1), uint64_t(5), type_mask(type)}) {
+      for (uint64_t b : {uint64_t(0), uint64_t(2), type_mask(type)}) {
+        Const first(type, a), second(type, b);
+        Inst* left = builder.build_select(&c, &x, &first);
+        Inst* right = builder.build_select(&c, &zero, &second);
+        for (bool swapped : {false, true}) {
+          Inst* root = swapped ? builder.build_or(right, left) : builder.build_or(left, right);
+          for (bool simplify : {false, true}) {
+            size_t before = builder.allocated.size();
+            Value* replacement = simplify ? builder.try_simplify(root)
+                                         : builder.fold_or(root->arg(0), root->arg(1));
+            if ((first.value() | second.value()) == first.value()) {
+              assert(replacement == left);
+              assert(builder.allocated.size() == before);
+            } else {
+              SelectInst* result = dynamic_cast<SelectInst*>(replacement);
+              assert(result && result->arg(0) == &c && result->arg(1) == &x);
+              Const* constant = dynamic_cast<Const*>(result->arg(2));
+              assert(constant && constant->value() == (first.value() | second.value()));
+            }
+          }
+        }
+        Inst* different = builder.build_select(&other, &zero, &second);
+        Inst* miss = builder.build_or(left, different);
+        size_t before = builder.allocated.size();
+        assert(!builder.try_simplify(miss));
+        assert(builder.allocated.size() == before);
+      }
+    }
+  }
+  for (Type source : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(source);
+    Const first(source, type_mask(source));
+    Inst* selected = builder.build_select(&c, &x, &first);
+    for (Type target : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+      Const zero(target, 0), second(target, first.value()), subset_mask(target, 0);
+      Inst* resized = builder.build_resize_u(selected, target);
+      Inst* mask = builder.build_select(&c, &zero, &second);
+      for (bool swapped : {false, true}) {
+        Inst* root = swapped ? builder.build_or(mask, resized) : builder.build_or(resized, mask);
+        size_t before = builder.allocated.size();
+        assert(builder.try_simplify(root) == resized);
+        assert(builder.fold_or(root->arg(0), root->arg(1)) == resized);
+        assert(builder.allocated.size() == before);
+      }
+      Inst* subset = builder.build_or(resized, builder.build_select(&c, &zero, &subset_mask));
+      size_t before = builder.allocated.size();
+      assert(builder.try_simplify(subset) == resized);
+      assert(builder.allocated.size() == before);
+    }
+  }
+}
+""")
+
+    def test_select_add_same_condition(self):
+        source = (Path(__file__).resolve().parent.parent / "simplify.rules").read_text()
+        rule, = [rule for rule in parse(source) if rule.name == "select_add_same_condition"]
+        source = source[rule.span.start:rule.span.end]
+        checked, = prove(source)
+        self.assertEqual(len(checked.instantiations), 4)
+        code = generate("", simplify_source=source, include_simplify=True)
+        self.run_cpp(code, """
+struct Counts {
+  Value* value;
+  uint8_t count;
+  uint8_t at(Value* arg) const { return arg == value ? count : 255; }
+};
+int main() {
+  Generated builder;
+  Value c(Type::Bool), other(Type::Bool);
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Value x(type);
+    Const first(type, 17), increment(type, 1), last(type, type_mask(type));
+    Inst* inner = builder.build_select(&c, &x, &first);
+    for (bool swapped : {false, true}) {
+      Inst* added = swapped ? builder.build_add(&increment, inner) : builder.build_add(inner, &increment);
+      Inst* root = builder.build_select(&c, added, &last);
+      size_t before = builder.allocated.size();
+      assert(!builder.try_simplify(root));
+      for (uint8_t count : {0, 2, 254, 255}) {
+        assert(!builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{added, count}));
+        assert(builder.allocated.size() == before);
+      }
+      SelectInst* result = dynamic_cast<SelectInst*>(
+          builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{added, 1}));
+      assert(result && result->arg(0) == &c && result->arg(2) == &last);
+      AddInst* sum = dynamic_cast<AddInst*>(result->arg(1));
+      assert(sum && sum->arg(0) == &x && sum->arg(1) == &increment);
+      Inst* miss = builder.build_select(&other, added, &last);
+      before = builder.allocated.size();
+      assert(!builder.try_simplify(miss, Generated::RuledslUnknownBits{}, Counts{added, 1}));
+      assert(builder.allocated.size() == before);
+    }
+  }
+}
+""")
+
+    def test_single_use_shifted_zero_comparisons(self):
+        source = (Path(__file__).resolve().parent.parent / "simplify.rules").read_text()
+        rules = {rule.name: source[rule.span.start:rule.span.end] for rule in parse(source)}
+        for name, opcode, masked, operator in (
+                ("eq_masked_shr_u_zero", "shr_u", True, "<<"),
+                ("eq_shr_u_zero", "shr_u", False, "<<"),
+                ("eq_masked_shl_zero", "shl", True, ">>")):
+            with self.subTest(rule=name):
+                code = generate("", simplify_source=rules[name], include_simplify=True)
+                main = """
+struct Counts {
+  Value* matched;
+  uint8_t count;
+  uint8_t at(Value* arg) const { return arg == matched ? count : 255; }
+};
+int main() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t width = type_width(type);
+    for (uint64_t amount : {uint64_t(0), uint64_t(1), width - 1, width, width + 1}) {
+      for (uint64_t bits : {uint64_t(7), uint64_t(1) << (width - 1), type_mask(type)}) {
+        for (unsigned swapped = 0; swapped < 4; swapped++) {
+          Generated builder;
+          Value x(type);
+          Const shift(type, amount), mask(type, bits), zero(type, 0);
+          Inst* shifted = builder.build_OP(&x, &shift);
+          Inst* matched = shifted;
+          if (MASKED) {
+            matched = swapped & 1 ? builder.build_and(&mask, shifted) : builder.build_and(shifted, &mask);
+          }
+          Inst* root = swapped & 2 ? builder.build_eq(&zero, matched) : builder.build_eq(matched, &zero);
+          size_t before = builder.allocated.size();
+          assert(!builder.try_simplify(root));
+          for (uint8_t count : {0, 2, 254, 255}) {
+            assert(!builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{matched, count}));
+            assert(builder.allocated.size() == before);
+          }
+          Value* replacement = builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{matched, 1});
+          if (amount >= width) {
+            assert(!replacement && builder.allocated.size() == before);
+            continue;
+          }
+          EqInst* result = dynamic_cast<EqInst*>(replacement);
+          assert(result && result->type() == Type::Bool);
+          AndInst* tested = dynamic_cast<AndInst*>(result->arg(0));
+          assert(tested && tested->arg(0) == &x);
+          Const* constant = dynamic_cast<Const*>(tested->arg(1));
+          assert(constant && constant->type() == type);
+          uint64_t expected = ((MASKED ? bits : type_mask(type)) OPERATOR amount) & type_mask(type);
+          assert(constant->value() == expected);
+          assert(dynamic_cast<Const*>(result->arg(1))->value() == 0);
+        }
+      }
+    }
+  }
+}
+"""
+                main = main.replace("build_OP", "build_" + opcode).replace("MASKED", str(masked).lower())
+                self.run_cpp(code, main.replace("OPERATOR", operator))
+
+    def test_single_use_constant_collection(self):
+        source = (Path(__file__).resolve().parent.parent / "simplify.rules").read_text()
+        rules = {rule.name: source[rule.span.start:rule.span.end] for rule in parse(source)
+                 if rule.name.endswith("_collect_constants")}
+        for opcode, operator in (("Or", "|"), ("And", "&"), ("Xor", "^")):
+            with self.subTest(opcode=opcode):
+                code = generate("", simplify_source=rules[opcode.lower() + "_collect_constants"],
+                                include_simplify=True)
+                main = """
+struct Counts {
+  Value* middle;
+  uint8_t count;
+  uint8_t at(Value* arg) const { return arg == middle ? count : 255; }
+};
+int main() {
+  for (Type type : {Type::Bool, Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    for (unsigned swapped = 0; swapped < 8; swapped++) {
+      Generated builder;
+      Value x(type), y(type);
+      Const first(type, 5), last(type, 10);
+      Inst* inner = swapped & 1 ? builder.build_OP(&first, &x) : builder.build_OP(&x, &first);
+      Inst* middle = swapped & 2 ? builder.build_OP(&y, inner) : builder.build_OP(inner, &y);
+      Inst* root = swapped & 4 ? builder.build_OP(&last, middle) : builder.build_OP(middle, &last);
+      size_t before = builder.allocated.size();
+      assert(!builder.try_simplify(root));
+      for (uint8_t count : {0, 2, 254, 255}) {
+        assert(!builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{middle, count}));
+        assert(builder.allocated.size() == before);
+      }
+      Value* replacement = builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{middle, 1});
+      OPInst* result = dynamic_cast<OPInst*>(replacement);
+      assert(result);
+      OPInst* combined = dynamic_cast<OPInst*>(result->arg(0));
+      assert(combined && combined->arg(0) == &x && combined->arg(1) == &y);
+      Const* constant = dynamic_cast<Const*>(result->arg(1));
+      assert(constant && constant->type() == type);
+      assert(constant->value() == (first.value() OPERATOR last.value()));
+      assert(inner->arg(swapped & 1 ? 1 : 0) == &x);
+    }
+  }
+}
+"""
+                main = main.replace("OPERATOR", operator).replace("build_OP", "build_" + opcode.lower())
+                self.run_cpp(code, main.replace("OPInst", opcode + "Inst"))
+
+    def test_single_use_matching(self):
+        source = ("shift: Shl(Or(x: T, C1) @single_use, C2)\n"
+                  "    check C2 < width(T)\n    C = C1 << C2\n"
+                  "    => Or(Shl(x, C2), C)\n")
+        checked, = prove(source)
+        self.assertEqual(len(checked.instantiations), 4)
+        program = build_matchers((checked,))
+        for stage in program.matchers["Shl"].stages:
+            for candidate in candidates(stage):
+                self.assertTrue(candidate.pattern.args[0].single_use)
+        with self.assertRaisesRegex(TypeCheckError, "simplification backend"):
+            generate(source)
+        with self.assertRaises(ProofError):
+            prove("wrong: Shl(Or(x, C1) @single_use, C2)\n    => x\n")
+        code = generate("", simplify_source=source, include_simplify=True)
+        self.run_cpp(code, """
+struct Counts {
+  Value* value;
+  uint8_t count;
+  uint8_t at(Value* arg) const { return arg == value ? count : 255; }
+};
+int main() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    Generated builder;
+    Value x(type);
+    Const one(type, 1), shift(type, 3), invalid(type, type_width(type));
+    for (bool swapped : {false, true}) {
+      Inst* inner = swapped ? builder.build_or(&one, &x) : builder.build_or(&x, &one);
+      Inst* root = builder.build_shl(inner, &shift);
+      size_t before = builder.allocated.size();
+      assert(!builder.try_simplify(root));
+      for (uint8_t count : {0, 2, 254, 255}) {
+        assert(!builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{inner, count}));
+        assert(builder.allocated.size() == before);
+      }
+      Value* replacement = builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{inner, 1});
+      OrInst* result = dynamic_cast<OrInst*>(replacement);
+      assert(result);
+      ShlInst* shl = dynamic_cast<ShlInst*>(result->arg(0));
+      Const* constant = dynamic_cast<Const*>(result->arg(1));
+      assert(shl && shl->arg(0) == &x && shl->arg(1) == &shift);
+      assert(constant && constant->value() == 8);
+      root = builder.build_shl(inner, &invalid);
+      before = builder.allocated.size();
+      assert(!builder.try_simplify(root, Generated::RuledslUnknownBits{}, Counts{inner, 1}));
+      assert(builder.allocated.size() == before);
+    }
+  }
+}
+""")
+
     @classmethod
     def setUpClass(cls):
         cls.compiler = shutil.which("clang++") or shutil.which("g++")
@@ -78,7 +346,7 @@ class SimplifyTests(unittest.TestCase):
         source = (Path(__file__).resolve().parent.parent / "fold.rules").read_text()
         rules = [rule for rule in parse(source)
                  if (rule.name.startswith(("bit_reverse_", "mul_high_u_", "eq_masked_xor"))
-                     or rule.name == "select_same")
+                     or rule.name in {"select_same", "eq_masked_impossible"})
                  and rule.name != "mul_high_u_power_of_two"]
         source = "\n".join(source[rule.span.start:rule.span.end] for rule in rules)
         code = generate(source, simplify_source=source,
