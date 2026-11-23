@@ -979,7 +979,7 @@ namespace metajit {
 
   /* ${insts} */
 
-  inline size_t append_closure_field(size_t& size, Type type) {
+  inline size_t add_record_field(size_t& size, Type type) {
     size_t field_size = type_size(type);
     assert(field_size != 0);
     size_t offset = (size + field_size - 1) & ~(field_size - 1);
@@ -4057,7 +4057,7 @@ namespace metajit {
               size_t size = 0;
               for (size_t it = 2; it < call->arg_count(); it++) {
                 Value* value = call->arg(it);
-                size_t offset = append_closure_field(size, value->type());
+                size_t offset = add_record_field(size, value->type());
                 at(value).store(closure + offset);
               }
             }
@@ -6743,7 +6743,7 @@ private:
       size_t size = sizeof(uint32_t);
 
       void add(NamedValue* value) {
-        captures.emplace_back(value, append_closure_field(size, value->type()));
+        captures.emplace_back(value, add_record_field(size, value->type()));
       }
 
       Closure to_cloned(const Clone& clone) const {

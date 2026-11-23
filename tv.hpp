@@ -451,7 +451,7 @@ namespace metajit {
             size_t size = 0;
             for (size_t it = 2; it < call->arg_count(); it++) {
               Value* value = call->arg(it);
-              size_t offset = append_closure_field(size, value->type());
+              size_t offset = add_record_field(size, value->type());
               emit_store(block, ptr_state, value, offset);
             }
           }
