@@ -150,6 +150,7 @@ namespace metajit {
         _builder(section),
         _config(config) {
 
+      assert(_config.min_align <= 16);
       if (!_config.realloc) {
         _config.realloc = _builder.build_const(Type::Ptr, reinterpret_cast<uintptr_t>(&RecordTape::realloc));
       }
