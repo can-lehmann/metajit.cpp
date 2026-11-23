@@ -111,6 +111,27 @@ void test_forward_refresh_after_guard() {
   }
 }
 
+void test_forward_refresh_stops_on_contradiction() {
+  const std::string ir = R"(section {
+b0(%0: Ptr):
+  %1 = Load %0, type=Int8, flags={}, aliasing=0, offset=0
+  %2 = BitReverse %1
+  %3 = LtU %2, 128:Int8
+  Branch %3, true_block=b1, false_block=b2
+b1:
+  %5 = Eq %1, 1:Int8
+  Branch %5, true_block=b3, false_block=b2
+b2:
+  Exit
+b3:
+  Store %0, %2, flags={}, aliasing=0, offset=1
+  Store %0, %1, flags={}, aliasing=0, offset=2
+  Exit
+}
+)";
+  check_trace_simplify(ir, {0, 1, 3}, ir);
+}
+
 void test_forward_refresh_preserves_guard_facts() {
   Context context;
   Allocator allocator;
@@ -666,6 +687,7 @@ int main(int argc, char** argv) {
   suite.test("single use rules across blocks").run(test_single_use_rules_across_blocks);
   suite.test("single use rules fresh values").run(test_single_use_rules_fresh_values);
   suite.test("forward refresh after guard").run(test_forward_refresh_after_guard);
+  suite.test("forward refresh stops on contradiction").run(test_forward_refresh_stops_on_contradiction);
   suite.test("forward refresh preserves guard facts").run(test_forward_refresh_preserves_guard_facts);
   suite.test("signed guard boundaries").run(test_signed_guard_boundaries);
   suite.test("signed guard nonconstant bounds").run(test_signed_guard_nonconstant_bounds);
