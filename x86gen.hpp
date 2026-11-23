@@ -663,6 +663,9 @@ namespace metajit {
         void* last_clobber = block;
         void* last_write = block;
         for (Inst* inst : *block) {
+          if (dynamic_cast<MetadataInst*>(inst)) {
+            continue;
+          }
           for (Value* arg : inst->args()) {
             if (arg->is_named()) {
               _use_counts[(NamedValue*) arg]++;

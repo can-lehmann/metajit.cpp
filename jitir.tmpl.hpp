@@ -902,6 +902,12 @@ namespace metajit {
     constexpr static size_t COUNT = 4;
   };
 
+  enum class MetadataKind : uint32_t {
+    LifetimeStart,
+    LifetimeEnd,
+    LoopBound
+  };
+
   enum class CallConv {
     Default,
     PreserveNone
@@ -974,10 +980,32 @@ metajit::PrettyStream& operator<<(metajit::PrettyStream& stream, const metajit::
   return stream;
 }
 
+std::ostream& operator<<(std::ostream& stream, metajit::MetadataKind kind) {
+  switch (kind) {
+    case metajit::MetadataKind::LifetimeStart: return stream << "LifetimeStart";
+    case metajit::MetadataKind::LifetimeEnd: return stream << "LifetimeEnd";
+    case metajit::MetadataKind::LoopBound: return stream << "LoopBound";
+  }
+  return stream << static_cast<uint32_t>(kind);
+}
+
+metajit::PrettyStream& operator<<(metajit::PrettyStream& stream, metajit::MetadataKind kind) {
+  stream.ostream() << kind;
+  return stream;
+}
+
 namespace metajit {
   using AliasingGroup = int32_t;
 
   /* ${insts} */
+
+  inline bool is_lifetime_marker(Inst* inst) {
+    if (dynmatch(MetadataInst, metadata, inst)) {
+      return metadata->kind() == MetadataKind::LifetimeStart ||
+             metadata->kind() == MetadataKind::LifetimeEnd;
+    }
+    return false;
+  }
 
   inline size_t add_record_field(size_t& size, Type type) {
     size_t field_size = type_size(type);
@@ -1327,6 +1355,14 @@ namespace metajit {
 
     CommentInst* build_comment(const std::string& text) {
       return build_comment(_section->context().alloc_string(text));
+    }
+
+    MetadataInst* build_metadata(const lwir::Span<Value*>& args, MetadataKind kind) {
+      MetadataInst* metadata = build_metadata(args.size(), kind);
+      for (size_t i = 0; i < args.size(); i++) {
+        metadata->set_arg(i, args[i]);
+      }
+      return metadata;
     }
 
     JumpInst* build_jump(Block* block, const lwir::Span<Value*>& args) {
@@ -2401,6 +2437,19 @@ namespace metajit {
       }
     }
 
+    MetadataKind read_metadata_kind() {
+      std::string name = get_word();
+      if (name == "LifetimeStart") {
+        return MetadataKind::LifetimeStart;
+      } else if (name == "LifetimeEnd") {
+        return MetadataKind::LifetimeEnd;
+      } else if (name == "LoopBound") {
+        return MetadataKind::LoopBound;
+      } else {
+        error("Unknown metadata kind '" + name + "'");
+      }
+    }
+
     int32_t read_int32() {
       skip_whitespace();
       std::string int_str;
@@ -2635,7 +2684,8 @@ namespace metajit {
           }
         } else {
           if (dynmatch(Inst, inst, value)) {
-            if (!inst->has_side_effect() && !inst->is_terminator() && !dynamic_cast<CommentInst*>(inst)) {
+            if (!inst->has_side_effect() && !inst->is_terminator() &&
+                !dynamic_cast<CommentInst*>(inst) && !dynamic_cast<MetadataInst*>(inst)) {
               error("Instructions without side effects must be named");
             }
             if (inst->has_side_effect() && inst->type() != Type::Void) {
@@ -2673,14 +2723,19 @@ namespace metajit {
   public:
     DeadCodeElim(Section* section): Pass(section) {
       NameMap<bool> used(section);
+      std::vector<std::pair<Block*, MetadataInst*>> metadata;
 
       for (Block* block : section->rev_range()) {
         for (auto it = block->rbegin(); it != block->rend(); ) {
           Inst* inst = *it;
-          if (used[inst] ||
-              inst->has_side_effect() ||
-              inst->is_terminator() ||
-              dynamic_cast<CommentInst*>(inst)) {
+          if (dynmatch(MetadataInst, marker, inst)) {
+            metadata.emplace_back(block, marker);
+            it++;
+          } else if (used[inst] ||
+                     inst->has_side_effect() ||
+                     inst->is_terminator() ||
+                     dynamic_cast<CommentInst*>(inst)) {
+            used[inst] = true;
             for (Value* arg : inst->args()) {
               if (arg->is_inst()) {
                 used[(Inst*) arg] = true;
@@ -2689,6 +2744,15 @@ namespace metajit {
             it++;
           } else {
             it = it.erase();
+          }
+        }
+      }
+
+      for (auto [block, marker] : metadata) {
+        for (Value* arg : marker->args()) {
+          if (dynmatch(Inst, inst, arg); inst && !used[inst]) {
+            block->remove(marker);
+            break;
           }
         }
       }
@@ -2816,7 +2880,7 @@ namespace metajit {
                 }
               }
             }
-          } else {
+          } else if (!dynamic_cast<MetadataInst*>(inst)) {
             for (Value* arg : inst->args()) {
               escape(arg);
             }
@@ -4140,8 +4204,7 @@ namespace metajit {
         } else {
           _values[_inst] = a;
         }
-      } else if (dynmatch(CommentInst, comment, _inst)) {
-        // Ignore comments
+      } else if (dynamic_cast<CommentInst*>(_inst) || dynamic_cast<MetadataInst*>(_inst)) {
       }
 
       #define binop(name, expr) \
@@ -4375,7 +4438,7 @@ namespace metajit {
           } else {
             if (inst->has_side_effect() || inst->is_terminator() ||
                 dynamic_cast<LoadInst*>(inst) || dynamic_cast<AllocaInst*>(inst) ||
-                _values[inst].used != 0) {
+                dynamic_cast<MetadataInst*>(inst) || _values[inst].used != 0) {
               use_all_args(inst);
             } else {
               for (Value* arg : inst->args()) {
@@ -5011,7 +5074,7 @@ namespace metajit {
             } else if (store->aliasing() == 0) {
               has_unknown_memory_write = true;
             }
-          } else if (dynamic_cast<CallInst*>(inst)) {
+          } else if (dynamic_cast<CallInst*>(inst) || is_lifetime_marker(inst)) {
             has_unknown_memory_write = true;
           }
         }
@@ -5027,7 +5090,8 @@ namespace metajit {
           if (inst->has_side_effect() ||
               inst->is_terminator() ||
               dynamic_cast<StoreInst*>(inst) ||
-              dynamic_cast<CommentInst*>(inst)) {
+              dynamic_cast<CommentInst*>(inst) ||
+              dynamic_cast<MetadataInst*>(inst)) {
             inst_it++;
             continue;
           }
@@ -5927,7 +5991,8 @@ namespace metajit {
              !dynamic_cast<FreezeInst*>(inst) &&
              !dynamic_cast<PromoteInst*>(inst) &&
              !dynamic_cast<AssumeConstInst*>(inst) &&
-             !dynamic_cast<CommentInst*>(inst);
+             !dynamic_cast<CommentInst*>(inst) &&
+             !dynamic_cast<MetadataInst*>(inst);
     }
 
     void find_parents() {
@@ -6209,7 +6274,8 @@ namespace metajit {
 
           dynmatch(StoreInst, store, inst);
           dynmatch(CallInst, call, inst);
-          if ((store && store->aliasing() == 0) || (call && call->aliasing() == 0)) {
+          if ((store && store->aliasing() == 0) || (call && call->aliasing() == 0) ||
+              is_lifetime_marker(inst)) {
             invalidate_all_loads();
             last_stores.clear();
             if (store) {
@@ -6251,6 +6317,7 @@ namespace metajit {
           if (inst->has_side_effect() ||
               inst->is_terminator() ||
               dynamic_cast<CommentInst*>(inst) ||
+              dynamic_cast<MetadataInst*>(inst) ||
               dynamic_cast<AllocaInst*>(inst)) {
             inst_it++;
             continue;
@@ -7316,7 +7383,7 @@ namespace metajit {
                 _alloca_index[alloca] = SIZE_MAX;
               }
             }
-          } else {
+          } else if (!dynamic_cast<MetadataInst*>(inst)) {
             for (Value* arg : inst->args()) {
               if (dynmatch(AllocaInst, alloca, arg)) {
                 _alloca_index[alloca] = SIZE_MAX;
@@ -7462,7 +7529,17 @@ namespace metajit {
             }
           }
 
-          if (dynmatch(LoadInst, load, inst)) {
+          if (dynmatch(MetadataInst, metadata, inst)) {
+            if (std::any_of(metadata->args().begin(), metadata->args().end(), [&](Value* arg) {
+              if (dynmatch(AllocaInst, alloca, arg)) {
+                return _alloca_index[alloca] != SIZE_MAX;
+              }
+              return false;
+            })) {
+              it = it.erase();
+              continue;
+            }
+          } else if (dynmatch(LoadInst, load, inst)) {
             if (_loads.find(load) != _loads.end()) {
               it = it.erase();
               continue;

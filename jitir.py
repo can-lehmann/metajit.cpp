@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from copy import copy
+
 from lwir import *
 
 class CountVarargsValueType(BaseType):
@@ -224,6 +226,8 @@ class InstReadPlugin:
                     code += f"    Type {arg.name} = read_type();\n"
                 elif arg.type == Type("CallConv"):
                     code += f"    CallConv {arg.name} = read_call_conv();\n"
+                elif arg.type == Type("MetadataKind"):
+                    code += f"    MetadataKind {arg.name} = read_metadata_kind();\n"
                 elif arg.type in (Type("LoadFlags"), Type("StoreFlags"), Type("CallFlags")):
                     flag_type = arg.type.format(ir)
                     code += f"    {flag_type} {arg.name} = read_flags<{flag_type}>();\n"
@@ -269,7 +273,7 @@ class PrettyInstWritePlugin(InstWritePlugin):
         code = f"{stream} << Highlight::ArgName << \"{arg.name}=\" << Highlight::None; "
         if arg.type == Type("Block*"):
             code += f"{value}->write_arg({stream});"
-        elif arg.type == Type("Type") or arg.type == Type("CallConv"):
+        elif arg.type in (Type("Type"), Type("CallConv"), Type("MetadataKind")):
             code += f"{stream} << Highlight::Type << {value} << Highlight::None;"
         elif arg.type in (Type("LoadFlags"), Type("StoreFlags"), Type("CallFlags")):
             code += f"{stream} << {value};"
@@ -283,9 +287,12 @@ class PrettyInstWritePlugin(InstWritePlugin):
         return code
 
 class JitirInstWriteJsonPlugin(InstWriteJsonPlugin):
-    def __init__(self):
-        super().__init__()
-    
+    def run(self, inst, ir):
+        if inst.name == "Metadata":
+            inst = copy(inst)
+            inst.args = [*inst.args[:-1], Arg("metadata_kind", Type("MetadataKind"))]
+        return super().run(inst, ir)
+
     def write_misc(self, stream):
         return {
             "name": f"{stream} << name()",
@@ -295,8 +302,10 @@ class JitirInstWriteJsonPlugin(InstWriteJsonPlugin):
     def write_arg(self, arg, value, stream):
         if arg.type == Type("Block*"):
             return f"{stream} << {value}->name()"
-        elif arg.type == Type("Type") or arg.type == Type("CallConv"):
-            return f"{stream} << \"\\\"\" << {value} << \"\\\"\""
+        elif arg.type == Type("MetadataKind"):
+            return f'{stream} << "\\"" << kind() << "\\""'
+        elif arg.type in (Type("Type"), Type("CallConv")):
+            return f'{stream} << "\\"" << {value} << "\\""'
         elif arg.type in (Type("LoadFlags"), Type("StoreFlags"), Type("CallFlags")):
             return f"{value}.write_json({stream})"
         elif arg.type == Type("AliasingGroup") or \
@@ -588,6 +597,15 @@ jitir = IR(
             type_checks = [],
             doc = "Return from section."
         ),
+        Inst("Metadata",
+            args = [
+                Arg("args", type=CountVarargsValueType()),
+                Arg("kind", Type("MetadataKind"))
+            ],
+            type = "Type::Void",
+            type_checks = [],
+            doc = "Optional annotation with a variable operand list. Supported kinds are LifetimeStart, LifetimeEnd, and LoopBound. LLVM emits lifetime intrinsics when the first operand is a stack allocation."
+        ),
         Inst("Comment",
             args = [Arg("text", Type("const char*"), setter=True)],
             type = "Type::Void",
@@ -623,6 +641,7 @@ lwir(
                 Type("uint32_t"): "uint32_t",
                 Type("Type"): "uint32_t",
                 Type("CallConv"): "uint32_t",
+                Type("MetadataKind"): "uint32_t",
                 Type("LoadFlags"): "uint32_t",
                 Type("StoreFlags"): "uint32_t",
                 Type("CallFlags"): "uint32_t",
@@ -644,6 +663,7 @@ llvm_type_substitutions = {
     Type("uint32_t"): "llvm::Type::getInt32Ty(context)",
     Type("Type"): "llvm::Type::getInt32Ty(context)",
     Type("CallConv"): "llvm::Type::getInt32Ty(context)",
+    Type("MetadataKind"): "llvm::Type::getInt32Ty(context)",
     Type("LoadFlags"): "llvm::Type::getInt32Ty(context)",
     Type("StoreFlags"): "llvm::Type::getInt32Ty(context)",
     Type("CallFlags"): "llvm::Type::getInt32Ty(context)",

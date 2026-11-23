@@ -645,6 +645,18 @@ Arguments
 Return Type: `Type::Void`
 
 
+### Metadata
+
+Optional annotation with a variable operand list. Supported kinds are LifetimeStart, LifetimeEnd, and LoopBound. LLVM emits lifetime intrinsics when the first operand is a stack allocation.
+
+Arguments
+
+- **args**: Variable number of arguments
+- **kind**: `MetadataKind`
+
+Return Type: `Type::Void`
+
+
 ### Comment
 
 No-op. Used for adding comments to the IR.

@@ -480,6 +480,7 @@ namespace metajit {
                 dynamic_cast<PromoteInst*>(inst) ||
                 dynamic_cast<AssumeConstInst*>(inst) ||
                 dynamic_cast<CommentInst*>(inst) ||
+                dynamic_cast<MetadataInst*>(inst) ||
                 (reentry_closures && reentry_closures->is_captured(inst))) {
               _can_trace_inst[inst] = true;
               _can_trace_const[inst] = true;
@@ -763,7 +764,8 @@ namespace metajit {
       } else {
         if (inst->has_side_effect() ||
             inst->is_terminator() ||
-            dynamic_cast<CommentInst*>(inst)) {
+            dynamic_cast<CommentInst*>(inst) ||
+            dynamic_cast<MetadataInst*>(inst)) {
           return _builder.build_const(Type::Bool, 0);
         }
 
@@ -1106,7 +1108,9 @@ namespace metajit {
             emit_deps.push_back(emit_groups.at(arg));
           }
         }
-        if (inst->has_side_effect() || dynamic_cast<LoadInst*>(inst)) {
+        bool ordered_emit = inst->has_side_effect() || dynamic_cast<LoadInst*>(inst) ||
+                            is_lifetime_marker(inst);
+        if (ordered_emit) {
           emit_deps.push_back(last_emit_group);
         }
 
@@ -1142,7 +1146,7 @@ namespace metajit {
 
         emit_groups[inst] = emit_group;
         
-        if (inst->has_side_effect() || dynamic_cast<LoadInst*>(inst)) {
+        if (ordered_emit) {
           last_emit_group = emit_group;
         }
 
@@ -1167,6 +1171,7 @@ namespace metajit {
         if (inst->has_side_effect() ||
             dynamic_cast<PromoteInst*>(inst) ||
             dynamic_cast<CommentInst*>(inst) ||
+            dynamic_cast<MetadataInst*>(inst) ||
             (_reentry_closures && _reentry_closures->is_captured(inst))) {
           always_used[inst] = true;
         } else {
