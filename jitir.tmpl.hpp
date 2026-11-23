@@ -1407,7 +1407,7 @@ namespace metajit {
     }
 
     AllocaInst* build_alloca(Type type) {
-      return build_alloca(build_const(Type::Int64, type_size(type)), type_size(type));
+      return build_alloca(type_size(type), type_size(type));
     }
 
     void add_args_to_block(Block* block, const std::vector<Arg*>& args) {
@@ -1877,7 +1877,7 @@ namespace metajit {
     Chain* chain() { return _chain; }
     void set_chain(Chain* chain) { _chain = chain; }
 
-    AllocaInst* build_shared_alloca(const AllocaInst* key, Value* size, uint32_t align) {
+    AllocaInst* build_shared_alloca(const AllocaInst* key, uint64_t size, uint32_t align) {
       AllocaInst*& shared = _shared_allocas[key];
       if (!shared) {
         Block* saved_block = block();
@@ -4150,13 +4150,7 @@ namespace metajit {
           assert(false && "Unsupported call in interpreter");
         }
       } else if (dynmatch(AllocaInst, alloca_inst, _inst)) {
-        Bits size_bits = at(alloca_inst->size());
-        assert(!size_bits.is_poison);
-
-        size_t size = size_bits.value;
-        assert(size > 0 && "Alloca size must be non-zero");
-
-        uint8_t* allocation = new uint8_t[size];
+        uint8_t* allocation = new uint8_t[alloca_inst->size()];
         _alloca_storage.push_back(allocation);
         _values[alloca_inst] = Bits::constant(Type::Ptr, (uint64_t) (uintptr_t) allocation);
       } else if (dynmatch(JumpInst, jump, _inst)) {

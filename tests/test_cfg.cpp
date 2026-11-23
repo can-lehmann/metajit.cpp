@@ -202,7 +202,7 @@ int main(int argc, char** argv) {
     Block* end = builder.build_block();
 
     Value* count = data.input(RandomRange(Type::Int64, 1, 8));
-    Value* counter = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
+    Value* counter = builder.build_alloca(8, 8);
     builder.build_store(counter, count, AliasingGroup(0), 0);
     std::vector<Value*> values;
     for (size_t index = 0; index < 24; index++) {

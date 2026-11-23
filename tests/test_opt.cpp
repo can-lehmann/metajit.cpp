@@ -570,17 +570,6 @@ b0(%0: Ptr, %1: Int64):
   check_simplify_text(input, input);
 }
 
-void test_simplify_used_bits_alloca_size() {
-  const std::string input = R"(section {
-b0(%0: Int64):
-  %1 = Add %0, 1:Int64
-  %2 = Alloca %1, align=8
-  Exit
-}
-)";
-  check_simplify_text(input, input);
-}
-
 void test_simplify_overwritten_bytes_differential(Builder& builder, TestData& data) {
   Value* first = data.input(Type::Int16);
   Value* second = data.input(Type::Int16);
@@ -3538,7 +3527,6 @@ int main(int argc, char** argv) {
   suite.test("narrowing resize normalization").run(test_narrowing_resize_normalization);
   suite.test("simplify widening resize used bits").run(test_simplify_widening_resize_used_bits);
   suite.test("simplify used bits load address").run(test_simplify_used_bits_load_address);
-  suite.test("simplify used bits alloca size").run(test_simplify_used_bits_alloca_size);
   suite.diff_test("simplify overwritten bytes differential").run(test_simplify_overwritten_bytes_differential);
 
   suite.test("freeze_preserves_output_relationship").run([]() {
@@ -4502,9 +4490,8 @@ b3:
     Section* section = new Section(context, allocator);
     Builder builder(section);
     builder.move_to_end(builder.build_block({Type::Ptr}));
-    Value* size = builder.build_const(Type::Int64, 8);
-    Value* a1 = builder.build_alloca(size, 8);
-    Value* a2 = builder.build_alloca(size, 8);
+    Value* a1 = builder.build_alloca(8, 8);
+    Value* a2 = builder.build_alloca(8, 8);
     builder.build_store(a1, builder.build_const(Type::Int64, 1), AliasingGroup(0), 0);
     builder.build_store(a2, builder.build_const(Type::Int64, 2), AliasingGroup(0), 0);
     Value* v1 = builder.build_load(a1, Type::Int64, {}, AliasingGroup(0), 0);
@@ -4514,8 +4501,8 @@ b3:
     section->set_ordering(BlockOrdering::Dominator);
     check_cse(R"(section {
 b0(%0: Ptr):
-  %1 = Alloca 8:Int64, align=8
-  %2 = Alloca 8:Int64, align=8
+  %1 = Alloca size=8, align=8
+  %2 = Alloca size=8, align=8
   Store %1, 1:Int64, flags={}, aliasing=0, offset=0
   Store %2, 2:Int64, flags={}, aliasing=0, offset=0
   %5 = Load %1, type=Int64, flags={}, aliasing=0, offset=0
@@ -4618,8 +4605,7 @@ b3:
     builder.move_to_end(b0);
     Value* cond = b0->arg(0);
     Value* out = b0->arg(1);
-    Value* size = builder.build_const(Type::Int64, 8);
-    Value* alloca = builder.build_alloca(size, 8);
+    Value* alloca = builder.build_alloca(8, 8);
     builder.build_store(alloca, builder.build_const(Type::Int64, 1), AliasingGroup(0), 0);
     Value* l0 = builder.build_load(alloca, Type::Int64, {}, AliasingGroup(0), 0);
 
@@ -4645,7 +4631,7 @@ b3:
     section->set_ordering(BlockOrdering::Dominator);
     check_cse(R"(section {
 b0(%0: Bool, %1: Ptr):
-  %2 = Alloca 8:Int64, align=8
+  %2 = Alloca size=8, align=8
   Store %2, 1:Int64, flags={}, aliasing=0, offset=0
   Branch %0, true_block=b1, false_block=b2
 b1:
@@ -4672,8 +4658,7 @@ b3:
     builder.move_to_end(b0);
     Value* cond = b0->arg(0);
     Value* out = b0->arg(1);
-    Value* size = builder.build_const(Type::Int64, 8);
-    Value* alloca = builder.build_alloca(size, 8);
+    Value* alloca = builder.build_alloca(8, 8);
     builder.build_store(alloca, builder.build_const(Type::Int64, 1), AliasingGroup(0), 0);
     Value* l0 = builder.build_load(alloca, Type::Int64, {}, AliasingGroup(0), 0);
     Value* callee = section->context().build_symbol(Type::Ptr, "cse_call_invalidation_target");
@@ -4700,7 +4685,7 @@ b3:
     section->set_ordering(BlockOrdering::Dominator);
     check_cse(R"(section {
 b0(%0: Bool, %1: Ptr):
-  %2 = Alloca 8:Int64, align=8
+  %2 = Alloca size=8, align=8
   Store %2, 1:Int64, flags={}, aliasing=0, offset=0
   Branch %0, true_block=b1, false_block=b2
 b1:

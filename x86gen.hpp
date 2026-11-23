@@ -1215,13 +1215,7 @@ namespace metajit {
 
         build_store(mem, store->value());
       } else if (dynmatch(AllocaInst, alloca, inst)) {
-        dynmatch(Const, size_const, alloca->size());
-        assert(size_const && "x86 backend currently requires constant-size Alloca");
-
-        size_t size = size_const->value();
-        assert(size > 0 && "Alloca size must be non-zero");
-
-        size_t offset = _stack_offset_alloc.alloc_bytes(size, alloca->align());
+        size_t offset = _stack_offset_alloc.alloc_bytes(alloca->size(), alloca->align());
         Reg rsp = fix_to_preg(vreg(), Reg::X86_RSP());
         _builder.lea64(vreg(inst), X86Inst::Mem(rsp, (int32_t) offset));
       } else if (dynmatch(AddPtrInst, add_ptr, inst)) {

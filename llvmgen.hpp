@@ -99,8 +99,7 @@ namespace metajit {
                 if (_alloca_types.at(alloca) == Type::Void) {
                   _alloca_types.at(alloca) = type;
                 }
-                dynmatch(Const, size, alloca->size());
-                if (offset != 0 || !size || size->value() != type_size(type) || _alloca_types.at(alloca) != type) {
+                if (offset != 0 || alloca->size() != type_size(type) || _alloca_types.at(alloca) != type) {
                   _alloca_types.erase(alloca);
                 }
               }
@@ -289,7 +288,7 @@ namespace metajit {
         if (_alloca_types.find(alloca) != _alloca_types.end() && _alloca_types.at(alloca) != Type::Void) {
           llvm_alloca = _builder.CreateAlloca(emit_type(_alloca_types.at(alloca)));
         } else {
-          llvm_alloca = _builder.CreateAlloca(llvm::Type::getInt8Ty(_context), emit_arg(alloca->size()));
+          llvm_alloca = _builder.CreateAlloca(llvm::Type::getInt8Ty(_context), _builder.getInt64(alloca->size()));
         }
         llvm_alloca->setAlignment(llvm::Align(alloca->align()));
         return llvm_alloca;

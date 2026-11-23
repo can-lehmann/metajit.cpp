@@ -14,6 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <stdexcept>
 #include <unordered_map>
 
 #include "llvm/IR/Function.h"
@@ -258,18 +259,13 @@ namespace metajit {
           fail_lowering("Unable to lower call instruction");
         }
       } else if (llvm::AllocaInst* alloca = llvm::dyn_cast<llvm::AllocaInst>(inst)) {
-        llvm::TypeSize type_size = _data_layout.getTypeAllocSize(alloca->getAllocatedType());
-        Type size_type = int_type_of_width(type_width(Type::Ptr));
-        Value* size = _builder.build_const(size_type, type_size.getFixedValue());
-        if (alloca->getArraySize()) {
-          size = _builder.fold_mul(
-            size,
-            _builder.fold_resize_u(lower_operand(alloca->getArraySize()), size_type)
-          );
+        auto size = alloca->getAllocationSize(_data_layout);
+        if (!size || size->isScalable()) {
+          throw std::runtime_error("Cannot lower LLVM alloca without a fixed size");
         }
         uint64_t align = alloca->getAlign().value();
         assert((uint32_t) align == align);
-        return _builder.build_alloca(size, (uint32_t) align);
+        return _builder.build_alloca(size->getFixedValue(), (uint32_t) align);
       } else {
         fail_lowering("Unable to lower instruction");
       }

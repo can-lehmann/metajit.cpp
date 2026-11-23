@@ -357,7 +357,7 @@ void test_alloca(DiffTestSuite& suite) {
 
   for (Type type : {Type::Int32, Type::Int64, Type::Float32, Type::Float64}) {
     suite.diff_test(std::string("alloca_store_load_") + to_string(type)).run([=](Builder& builder, TestData& data) {
-      Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, type_size(type)), type_size(type));
+      Value* ptr = builder.build_alloca(type_size(type), type_size(type));
       Value* val = data.input(type);
       builder.build_store(ptr, val, AliasingGroup(0), 0);
       Value* loaded = builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), 0);
@@ -366,7 +366,7 @@ void test_alloca(DiffTestSuite& suite) {
   }
 
   suite.diff_test("alloca_multiple_stores").run([](Builder& builder, TestData& data) {
-    Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
+    Value* ptr = builder.build_alloca(8, 8);
     Value* val1 = data.input(Type::Int32);
     Value* val2 = data.input(Type::Int32);
     builder.build_store(ptr, val1, AliasingGroup(0), 0);
@@ -376,7 +376,7 @@ void test_alloca(DiffTestSuite& suite) {
   });
 
   suite.diff_test("alloca_add_ptr_store_load_Int32").run([](Builder& builder, TestData& data) {
-    Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 16), 8);
+    Value* ptr = builder.build_alloca(16, 8);
     Value* ptr_off = builder.build_add_ptr(ptr, builder.build_const(Type::Int64, 4));
     Value* val = data.input(Type::Int32);
     builder.build_store(ptr_off, val, AliasingGroup(0), 0);
@@ -387,14 +387,14 @@ void test_alloca(DiffTestSuite& suite) {
 
 void test_intrinsics(DiffTestSuite& suite) {
   suite.diff_test("intrinsic_memset").aot(false).run([](Builder& builder, TestData& data) {
-    Value* ptr = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
+    Value* ptr = builder.build_alloca(8, 8);
     builder.build_call(Intrinsic::memset, Type::Void, {ptr, data.input(Type::Int8), builder.build_const(Type::Int64, 8)});
     data.output(builder.build_load(ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
   });
 
   suite.diff_test("intrinsic_memcpy").aot(false).run([](Builder& builder, TestData& data) {
-    Value* source = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
-    Value* dest = builder.build_alloca(builder.build_const(Type::Int64, 8), 8);
+    Value* source = builder.build_alloca(8, 8);
+    Value* dest = builder.build_alloca(8, 8);
     builder.build_store(source, data.input(Type::Int64), AliasingGroup(0), 0);
     builder.build_call(Intrinsic::memcpy, Type::Void, {dest, source, builder.build_const(Type::Int64, 8)});
     data.output(builder.build_load(dest, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
