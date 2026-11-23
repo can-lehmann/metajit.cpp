@@ -14,6 +14,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cstddef>
+#include <cstdlib>
+
 #include "jitir.hpp"
 
 namespace metajit {
@@ -51,54 +54,64 @@ namespace metajit {
       int64_t size;
       int64_t capacity;
     };
+
+    static void* realloc(void* ptr, int64_t capacity, int64_t new_capacity) {
+      assert(new_capacity > capacity);
+      void* new_ptr = std::aligned_alloc(alignof(std::max_align_t), new_capacity);
+      std::copy((char*)ptr, (char*)ptr + capacity, (char*)new_ptr);
+      std::free(ptr);
+      return new_ptr;
+    }
   private:
     Section* _section;
     Builder _builder;
     Config _config;
 
-    Value* align_to(Value* value, size_t align) {
-      Value* align_const = _builder.build_const(value->type(), align);
-      Value* current = _builder.fold_mod_u(value, align_const);
-      Value* align_offset = _builder.fold_select(
-        _builder.build_eq(align, _builder.build_const(value->type(), 0)),
-        _builder.build_const(value->type(), 0),
-        _builder.fold_sub(align_const, current)
+    static Value* align_to(Builder& builder, Value* value, size_t align) {
+      Value* align_const = builder.build_const(value->type(), align);
+      Value* current = builder.fold_mod_u(value, align_const);
+      Value* zero = builder.build_const(value->type(), 0);
+      Value* align_offset = builder.fold_select(
+        builder.build_eq(current, zero),
+        zero,
+        builder.fold_sub(align_const, current)
       );
-      return _builder.fold_add(value, align_offset);
+      return builder.fold_add(value, align_offset);
     }
 
     // The tape pointer points to a struct Tape
     void build_tape_store(Value* tape_ptr, Value* value, Block* join_block) {
       size_t load_size = std::max(_config.min_align, type_size(value->type()));
 
-      Value* size = _builder.build_load(tape_ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), offset_of(Tape, size));
-      Value* capacity = _builder.build_load(tape_ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), offset_of(Tape, capacity));
-      
+      Value* size = _builder.build_load(tape_ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), offsetof(Tape, size));
+      Value* capacity = _builder.build_load(tape_ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), offsetof(Tape, capacity));
+
       Value* offset = size;
       if (load_size > 1 && load_size > _config.min_align) {
-        offset = align_to(offset, load_size);
+        offset = align_to(_builder, offset, load_size);
       }
       Value* new_size = _builder.fold_add(offset, _builder.build_const(Type::Int64, load_size));
       Value* needs_realloc = _builder.fold_gt_u(new_size, capacity);
 
       Block* realloc_block = _builder.build_block_after(_builder.block());
-      
+
       _builder.build_branch(needs_realloc, realloc_block, join_block);
-      
+
       _builder.move_to_end(realloc_block);
+      Value* old_data = _builder.build_load(tape_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), offsetof(Tape, data));
       Value* new_capacity = _builder.fold_add(capacity, capacity);
-      Value* new_data = _builder.build_call(_config.realloc, Type::Ptr, {tape_ptr, capacity, new_capacity});
-      _builder.build_store(new_data, tape_ptr, AliasingGroup(0), 0);
-      _builder.build_store(new_capacity, tape_ptr, AliasingGroup(0), offset_of(Tape, capacity));
+      Value* new_data = _builder.build_call(_config.realloc, Type::Ptr, {old_data, capacity, new_capacity});
+      _builder.build_store(tape_ptr, new_data, AliasingGroup(0), offsetof(Tape, data));
+      _builder.build_store(tape_ptr, new_capacity, AliasingGroup(0), offsetof(Tape, capacity));
       _builder.build_jump(join_block);
 
       _builder.move_to_end(join_block);
 
-      Value* data = _builder.build_load(tape_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), offset_of(Tape, data));
+      Value* data = _builder.build_load(tape_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), offsetof(Tape, data));
       Value* ptr = _builder.fold_add_ptr(data, offset);
       _builder.build_store(ptr, value, AliasingGroup(0), 0);
 
-      _builder.build_store(new_size, tape_ptr, AliasingGroup(0), offset_of(Tape, size));
+      _builder.build_store(tape_ptr, new_size, AliasingGroup(0), offsetof(Tape, size));
     }
 
   public:
@@ -107,21 +120,42 @@ namespace metajit {
         _section(section),
         _builder(section),
         _config(config) {
-      
+
+      if (!_config.realloc) {
+        _config.realloc = _builder.build_const(Type::Ptr, reinterpret_cast<uintptr_t>(&RecordTape::realloc));
+      }
       Arg* tape_ptr = _builder.alloc_arg(Type::Ptr, _section->entry()->args().size());
       _builder.add_args_to_block(_section->entry(), {tape_ptr});
-      
-      for (Block* block : *_section) {
-        for (Inst* inst = *block->begin(); inst; inst = inst->next()) {
+
+      for (Block* block = _section->entry(); block; block = block->next()) {
+        for (Inst* inst = *block->begin(); inst;) {
+          Inst* next = inst->next();
           if (dynmatch(LoadInst, load, inst)) {
             if (_config.has(load->aliasing())) {
-              _builder.move_after(block, inst);
-
-              Value* aligned_ptr = build_tape_store(tape_ptr, load);
+              Block* join_block = _builder.build_block_after(block);
+              Inst* last = block->terminator();
+              block->remove(next, last);
+              _builder.move_to_end(block);
+              build_tape_store(tape_ptr, load, join_block);
+              join_block->add(next, last);
+              block = join_block;
             }
           }
+          inst = next;
         }
       }
+    }
+
+    static Value* build_tape_load(Builder& builder, Value* tape_ptr, size_t min_align, Type type) {
+      size_t load_size = std::max(min_align, type_size(type));
+      Value* offset = builder.build_load(tape_ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), offsetof(Tape, size));
+      if (load_size > 1 && load_size > min_align) {
+        offset = align_to(builder, offset, load_size);
+      }
+      Value* data = builder.build_load(tape_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), offsetof(Tape, data));
+      Value* new_size = builder.fold_add(offset, builder.build_const(Type::Int64, load_size));
+      builder.build_store(tape_ptr, new_size, AliasingGroup(0), offsetof(Tape, size));
+      return builder.build_load(builder.fold_add_ptr(data, offset), type, LoadFlags::None, AliasingGroup(0), 0);
     }
   };
 
@@ -533,7 +567,7 @@ namespace metajit {
   class CreateGenExt: public Pass<CreateGenExt> {
   public:
     struct Config {
-      std::optional<AddRecord::Config> record;
+      std::optional<RecordTape::Config> record;
       bool comments;
 
       constexpr Config():
@@ -638,8 +672,7 @@ namespace metajit {
       if (_config.record.has_value()) {
         if (dynmatch(LoadInst, load, inst)) {
           if (_config.record->has(load->aliasing())) {
-            Value* aligned_ptr = AddRecord::build_tape_advance(_builder, _tape_ptr, _config.record->min_align, load->type());
-            return _builder.build_load(aligned_ptr, load->type(), LoadFlags::None, AliasingGroup(0), 0);
+            return RecordTape::build_tape_load(_builder, _tape_ptr, _config.record->min_align, load->type());
           }
         } else if (dynmatch(StoreInst, store, inst)) {
           if (_config.record->has(store->aliasing())) {

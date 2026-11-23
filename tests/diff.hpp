@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <memory>
 #include <fstream>
 #include <filesystem>
@@ -800,13 +801,12 @@ namespace metajit {
       CreateGenExt::Config genext_config;
 
       Section* record_section = nullptr;
-      size_t max_write_size = 0;
       if (record_replay) {
         record_section = new Section(genext_context, genext_allocator);
-        AddRecord::Config config;
+        RecordTape::Config config;
         config.groups.insert(AliasingGroup(0));
         Clone::run(section, record_section);
-        AddRecord::run(record_section, &max_write_size, config);
+        RecordTape::run(record_section, config);
         genext_config.record = config;
       }
 
@@ -889,8 +889,8 @@ namespace metajit {
 
       using GenExtFunc = void(*)(uint8_t*, void*, void*);
 
-      using RecordFunc = void(*)(uint8_t*, uint8_t**);
-      using ReplayGenExtFunc = void(*)(uint8_t*, void*, uint8_t**, void*);
+      using RecordFunc = void(*)(uint8_t*, RecordTape::Tape*);
+      using ReplayGenExtFunc = void(*)(uint8_t*, void*, RecordTape::Tape*, void*);
 
       GenExtFunc genext_func = nullptr;
       RecordFunc record_func = nullptr;
@@ -905,8 +905,13 @@ namespace metajit {
       void* reentry_func = ExitOnErr(jit->lookup("reentry_func")).toPtr<void*>();
 
       uint8_t* static_data = new uint8_t[data.data_size()]();
-      size_t tape_size = max_write_size == SIZE_MAX ? 64 * 1024 : std::max((size_t) 1, max_write_size) * 1024;
-      uint8_t* tape = new uint8_t[tape_size]();
+      RecordTape::Tape tape{};
+      if (record_replay) {
+        constexpr size_t alignment = alignof(std::max_align_t);
+        tape.capacity = std::max(size_t(16), alignment);
+        tape.data = std::aligned_alloc(alignment, tape.capacity);
+        unittest_assert(tape.data != nullptr);
+      }
 
       for (size_t static_sample = 0; static_sample < static_sample_count; static_sample++) {
         // Pick random values for static inputs
@@ -921,12 +926,12 @@ namespace metajit {
         trace_builder.move_to_end(trace_builder.build_block(args));
 
         if (record_replay) {
-          uint8_t* record_tape_ptr = tape;
-          record_func(static_data, &record_tape_ptr);
-          uint8_t* replay_tape_ptr = tape;
-          replay_genext_func(static_data, &trace_builder, &replay_tape_ptr, reentry_func);
-          unittest_assert(record_tape_ptr == replay_tape_ptr);
-          unittest_assert((record_tape_ptr - tape) <= max_write_size);
+          tape.size = 0;
+          record_func(static_data, &tape);
+          RecordTape::Tape replay_tape{tape.data, 0, tape.capacity};
+          replay_genext_func(static_data, &trace_builder, &replay_tape, reentry_func);
+          unittest_assert(tape.size == replay_tape.size);
+          unittest_assert(tape.size <= tape.capacity);
         } else {
           genext_func(static_data, &trace_builder, reentry_func);
         }
@@ -1071,7 +1076,7 @@ namespace metajit {
       }
 
       delete[] static_data;
-      delete[] tape;
+      std::free(tape.data);
       delete genext_section;
     }
 
