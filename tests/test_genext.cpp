@@ -171,6 +171,77 @@ int main(int argc, char** argv) {
       data.output(builder.build_load(dest, Type::Int64, LoadFlags::None, AliasingGroup(0), 0));
     });
 
+    suite.gen_ext_test("record_tape_alloca").samples(1, 1).run([](Builder& builder, TraceTestData& data) {
+      Value* ptr = builder.build_alloca(Type::Int32);
+      builder.build_store(ptr, builder.build_const(Type::Int32, 7), AliasingGroup(1), 0);
+      Value* value = builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(1), 0);
+      builder.build_store(builder.entry_arg(0), value, AliasingGroup(2), data.alloc_output(Type::Int32));
+
+      RecordTape::Config config;
+      config.add_all_groups(builder.section());
+      unittest_assert(config.has(1));
+      config.remove_allocas(builder.section());
+      unittest_assert(!config.has(1));
+      unittest_assert(config.has(2));
+    });
+
+    suite.gen_ext_test("record_tape_shared_alloca_group").samples(1, 1).run([](Builder& builder, TraceTestData& data) {
+      Value* ptr = builder.build_alloca(Type::Int32);
+      builder.build_store(ptr, builder.build_const(Type::Int32, 7), AliasingGroup(1), 0);
+      Value* value = builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(1), 0);
+      builder.build_store(builder.entry_arg(0), value, AliasingGroup(1), data.alloc_output(Type::Int32));
+
+      RecordTape::Config config;
+      config.add_all_groups(builder.section());
+      config.remove_allocas(builder.section());
+      unittest_assert(config.has(1));
+    });
+
+    suite.gen_ext_test("record_tape_alloca_calls").samples(1, 1).run([](Builder& builder, TraceTestData& data) {
+      Value* ptr = builder.build_alloca(Type::Int32);
+      Value* byte = builder.build_const(Type::Int8, 7);
+      Value* size = builder.build_const(Type::Int64, 4);
+      builder.build_call(Intrinsic::memset, Type::Void, {ptr, byte, size}, CallConv::Default, CallFlags::None, 1);
+      Value* value = builder.build_load(ptr, Type::Int32, LoadFlags::None, AliasingGroup(1), 0);
+      builder.build_store(builder.entry_arg(0), value, AliasingGroup(2), data.alloc_output(Type::Int32));
+
+      static const uint32_t source = 11;
+      Value* source_ptr = builder.build_const(Type::Ptr, reinterpret_cast<uintptr_t>(&source));
+      Value* dest = builder.build_alloca(Type::Int32);
+      builder.build_call(Intrinsic::memcpy, Type::Void, {dest, source_ptr, size}, CallConv::Default, CallFlags::None, 3);
+      Value* copied = builder.build_load(dest, Type::Int32, LoadFlags::None, AliasingGroup(3), 0);
+      builder.build_store(builder.entry_arg(0), copied, AliasingGroup(2), data.alloc_output(Type::Int32));
+
+      RecordTape::Config config;
+      config.add_all_groups(builder.section());
+      unittest_assert(config.has(1));
+      config.remove_allocas(builder.section());
+      unittest_assert(!config.has(1));
+      unittest_assert(config.has(3));
+    });
+
+    suite.gen_ext_test("record_tape_alloca_call_flags").samples(1, 0).run([](Builder& builder, TraceTestData& data) {
+      auto is_nonnull = +[](const uint32_t* ptr) -> uint32_t { return ptr != nullptr; };
+      Value* callee = builder.build_const(Type::Ptr, reinterpret_cast<uintptr_t>(is_nonnull));
+      Value* value = builder.build_const(Type::Int32, 7);
+
+      Value* readonly = builder.build_alloca(Type::Int32);
+      builder.build_store(readonly, value, AliasingGroup(1), 0);
+      data.output(builder.build_call(callee, Type::Int32, {readonly}, CallConv::Default, CallFlags::NoEscape | CallFlags::ArgsReadOnly));
+
+      Value* unannotated = builder.build_alloca(Type::Int32);
+      builder.build_store(unannotated, value, AliasingGroup(2), 0);
+      data.output(builder.build_call(callee, Type::Int32, {unannotated}, CallConv::Default, CallFlags::None));
+
+      RecordTape::Config config;
+      config.add_all_groups(builder.section());
+      unittest_assert(config.has(1));
+      unittest_assert(config.has(2));
+      config.remove_allocas(builder.section());
+      unittest_assert(!config.has(1));
+      unittest_assert(config.has(2));
+    });
+
     suite.gen_ext_test("static_select_omitted_arm").samples(2, 4).run(static_select_omitted_arm);
     suite.gen_ext_test("mul_high_u_promoted").samples(4, 16).run(mul_high_u_promoted);
 

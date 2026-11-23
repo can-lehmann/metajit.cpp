@@ -804,7 +804,8 @@ namespace metajit {
       if (record_replay) {
         record_section = new Section(genext_context, genext_allocator);
         RecordTape::Config config;
-        config.groups.insert(AliasingGroup(0));
+        config.add_all_groups(section);
+        config.remove_allocas(section);
         Clone::run(section, record_section);
         RecordTape::run(record_section, config);
         genext_config.record = config;

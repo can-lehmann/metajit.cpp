@@ -45,6 +45,95 @@ namespace metajit {
         }
       }
 
+      void remove_allocas(Section* section) {
+        if (groups.empty() || (groups.size() == 1 && has(0))) {
+          return;
+        }
+        assert(section->ordering() >= BlockOrdering::Dominator);
+        section->autoname();
+
+        struct AllocaInfo {
+          bool eligible = true;
+          std::optional<AliasingGroup> group;
+        };
+
+        NameMap<AllocaInst*> provenance(section);
+        std::unordered_map<AllocaInst*, AllocaInfo> allocas;
+        std::unordered_map<AliasingGroup, AllocaInst*> confined;
+
+        auto prov_at = [&](Value* value) -> AllocaInst* {
+          if (value->is_named()) {
+            return provenance[(NamedValue*) value];
+          }
+          return nullptr;
+        };
+
+        auto access = [&](AliasingGroup group, AllocaInst* alloca) {
+          if (alloca) {
+            AllocaInfo& info = allocas.at(alloca);
+            if (!info.group) {
+              info.group = group;
+            } else if (*info.group != group) {
+              info.eligible = false;
+            }
+          }
+          if (group != 0 && has(group)) {
+            auto [it, inserted] = confined.try_emplace(group, alloca);
+            if (!inserted && it->second != alloca) {
+              it->second = nullptr;
+            }
+          }
+        };
+
+        auto disqualify = [&](Value* value) {
+          if (AllocaInst* alloca = prov_at(value)) {
+            allocas.at(alloca).eligible = false;
+          }
+        };
+
+        for (Block* block : *section) {
+          for (Inst* inst : *block) {
+            if (dynmatch(AllocaInst, alloca, inst)) {
+              allocas.try_emplace(alloca);
+              provenance[alloca] = alloca;
+            } else if (dynmatch(StoreInst, store, inst)) {
+              access(store->aliasing(), prov_at(store->ptr()));
+              disqualify(store->value());
+            } else if (dynmatch(LoadInst, load, inst)) {
+              access(load->aliasing(), prov_at(load->ptr()));
+            } else if (dynmatch(AddPtrInst, add_ptr, inst)) {
+              provenance[add_ptr] = prov_at(add_ptr->arg(0));
+              disqualify(add_ptr->arg(1));
+            } else if (dynmatch(CallInst, call, inst)) {
+              if (call->callee() == Intrinsic::memset || call->callee() == Intrinsic::write_closure) {
+                access(call->aliasing(), prov_at(call->arg(1)));
+                for (size_t i = 2; i < call->arg_count(); i++) {
+                  disqualify(call->arg(i));
+                }
+              } else {
+                access(call->aliasing(), nullptr);
+                disqualify(call->callee());
+                if (!call->flags().has(CallFlags::NoEscape) || !call->flags().has(CallFlags::ArgsReadOnly)) {
+                  for (size_t i = 1; i < call->arg_count(); i++) {
+                    disqualify(call->arg(i));
+                  }
+                }
+              }
+            } else if (!dynamic_cast<MetadataInst*>(inst)) {
+              for (Value* arg : inst->args()) {
+                disqualify(arg);
+              }
+            }
+          }
+        }
+
+        for (auto [group, alloca] : confined) {
+          if (alloca && allocas.at(alloca).eligible) {
+            groups.erase(group);
+          }
+        }
+      }
+
       bool has(AliasingGroup group) const {
         return groups.find(group) != groups.end();
       }
