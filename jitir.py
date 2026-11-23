@@ -285,13 +285,9 @@ class PrettyInstWritePlugin(InstWritePlugin):
         return code
 
 class JitirInstWriteJsonPlugin(InstWriteJsonPlugin):
-    def __init__(self, kind_field="kind"):
-        super().__init__()
-        self.kind_field = kind_field
-
     def run(self, inst, ir):
         fields = {
-            self.kind_field: f'stream << "\\"{self.escape_json(inst.name)}\\""',
+            "inst_kind": f'stream << "\\"{self.escape_json(inst.name)}\\""',
             "args": "write_args_json(stream)",
             "name": "stream << name()",
             "type": 'stream << "\\"" << type() << "\\""',
@@ -635,7 +631,7 @@ lwir(
             InstGetterPlugin(),
             InstSetterPlugin(),
             PrettyInstWritePlugin(),
-            JitirInstWriteJsonPlugin(kind_field="inst_kind"),
+            JitirInstWriteJsonPlugin(),
             InstEqualsPlugin(),
             InstHashPlugin()
         ]),
