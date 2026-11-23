@@ -17,9 +17,11 @@
 #include "jitir.hpp"
 
 namespace metajit {
-  class AddRecord: public Pass<AddRecord> {
+  class RecordTape: public Pass<RecordTape> {
   public:
     struct Config {
+      // realloc(x: Ptr, capacity: Int64, new_capacity: Int64): Ptr
+      Value* realloc = nullptr;
       std::set<AliasingGroup> groups;
       size_t min_align = 1;
 
@@ -43,50 +45,69 @@ namespace metajit {
         return groups.find(group) != groups.end();
       }
     };
+
+    struct Tape {
+      void* data;
+      int64_t size;
+      int64_t capacity;
+    };
   private:
     Section* _section;
     Builder _builder;
     Config _config;
 
-    size_t _max_write_size = 0;
-
-    void find_max_write_size() {
-      assert(_section->ordering() >= BlockOrdering::Natural);
-
-      _max_write_size = 0;
-      size_t max_load_size = 0;
-      std::unordered_map<Block*, size_t> max_entry_sizes;
-      for (Block* block : *_section) {
-        size_t size = max_entry_sizes[block];
-        for (Inst* inst : *block) {
-          if (dynmatch(LoadInst, load, inst)) {
-            if (_config.has(load->aliasing())) {
-              size_t load_size = std::max(_config.min_align, type_size(load->type()));
-              if (size % load_size != 0) {
-                size += load_size - (size % load_size);
-              }
-              size += load_size;
-              max_load_size = std::max(max_load_size, load_size);
-            }
-          }
-        }
-
-        for (Block* succ : block->successors()) {
-          if (succ->name() <= block->name() && size > max_entry_sizes[succ]) {
-            _max_write_size = SIZE_MAX;
-            return;
-          }
-          max_entry_sizes[succ] = std::max(max_entry_sizes[succ], size);
-        }
-
-        _max_write_size = std::max(_max_write_size, size);
-      }
-
-      _max_write_size += max_load_size; // Add padding for worst-case alignment (+1)
-      assert(_max_write_size % _config.min_align == 0);
+    Value* align_to(Value* value, size_t align) {
+      Value* align_const = _builder.build_const(value->type(), align);
+      Value* current = _builder.fold_mod_u(value, align_const);
+      Value* align_offset = _builder.fold_select(
+        _builder.build_eq(align, _builder.build_const(value->type(), 0)),
+        _builder.build_const(value->type(), 0),
+        _builder.fold_sub(align_const, current)
+      );
+      return _builder.fold_add(value, align_offset);
     }
 
-    void apply() {
+    // The tape pointer points to a struct Tape
+    void build_tape_store(Value* tape_ptr, Value* value, Block* join_block) {
+      size_t load_size = std::max(_config.min_align, type_size(value->type()));
+
+      Value* size = _builder.build_load(tape_ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), offset_of(Tape, size));
+      Value* capacity = _builder.build_load(tape_ptr, Type::Int64, LoadFlags::None, AliasingGroup(0), offset_of(Tape, capacity));
+      
+      Value* offset = size;
+      if (load_size > 1 && load_size > _config.min_align) {
+        offset = align_to(offset, load_size);
+      }
+      Value* new_size = _builder.fold_add(offset, _builder.build_const(Type::Int64, load_size));
+      Value* needs_realloc = _builder.fold_gt_u(new_size, capacity);
+
+      Block* realloc_block = _builder.build_block_after(_builder.block());
+      
+      _builder.build_branch(needs_realloc, realloc_block, join_block);
+      
+      _builder.move_to_end(realloc_block);
+      Value* new_capacity = _builder.fold_add(capacity, capacity);
+      Value* new_data = _builder.build_call(_config.realloc, Type::Ptr, {tape_ptr, capacity, new_capacity});
+      _builder.build_store(new_data, tape_ptr, AliasingGroup(0), 0);
+      _builder.build_store(new_capacity, tape_ptr, AliasingGroup(0), offset_of(Tape, capacity));
+      _builder.build_jump(join_block);
+
+      _builder.move_to_end(join_block);
+
+      Value* data = _builder.build_load(tape_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), offset_of(Tape, data));
+      Value* ptr = _builder.fold_add_ptr(data, offset);
+      _builder.build_store(ptr, value, AliasingGroup(0), 0);
+
+      _builder.build_store(new_size, tape_ptr, AliasingGroup(0), offset_of(Tape, size));
+    }
+
+  public:
+    RecordTape(Section* section, Config config):
+        Pass(section),
+        _section(section),
+        _builder(section),
+        _config(config) {
+      
       Arg* tape_ptr = _builder.alloc_arg(Type::Ptr, _section->entry()->args().size());
       _builder.add_args_to_block(_section->entry(), {tape_ptr});
       
@@ -96,57 +117,12 @@ namespace metajit {
             if (_config.has(load->aliasing())) {
               _builder.move_after(block, inst);
 
-              Value* aligned_ptr = build_tape_advance(_builder, tape_ptr, _config.min_align, load->type());
-              inst = _builder.build_store(aligned_ptr, load, AliasingGroup(0), 0);
+              Value* aligned_ptr = build_tape_store(tape_ptr, load);
             }
           }
         }
       }
     }
-  public:
-    AddRecord(Section* section, Config config):
-        Pass(section),
-        _section(section),
-        _builder(section),
-        _config(config) {
-      
-      find_max_write_size();
-      apply();
-    }
-
-    AddRecord(Section* section, size_t* max_write_size, Config config):
-        Pass(section),
-        _section(section),
-        _builder(section),
-        _config(config) {
-
-      find_max_write_size();
-      apply();
-
-      *max_write_size = _max_write_size;
-    }
-
-    static Value* build_tape_advance(Builder& builder, Value* tape_ptr, size_t min_align, Type type) {
-      size_t load_size = std::max(min_align, type_size(type));
-      Value* ptr = builder.build_load(tape_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), 0);
-      Value* size = builder.build_const(Type::Int64, load_size);
-      if (load_size > 1 && load_size > min_align) {
-        Value* align = builder.fold_mod_u(builder.fold_ptr_to_int(ptr, Type::Int64), size);
-        Value* align_offset = builder.fold_select(
-          builder.build_eq(align, builder.build_const(Type::Int64, 0)),
-          builder.build_const(Type::Int64, 0),
-          builder.fold_sub(size, align)
-        );
-        ptr = builder.fold_add_ptr(ptr, align_offset);
-      }
-      Value* aligned_ptr = ptr;
-      ptr = builder.fold_add_ptr(ptr, size);
-      builder.build_store(tape_ptr, ptr, AliasingGroup(0), 0);
-
-      return aligned_ptr;
-    }
-
-    size_t max_write_size() const { return _max_write_size; }
   };
 
   // Codegen for the generating extension uses topological sorting.
