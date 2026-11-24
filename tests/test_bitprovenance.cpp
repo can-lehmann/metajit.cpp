@@ -30,7 +30,11 @@ void check_provenance(const std::string& input, const std::string& expected,
   for (Block* block : *section) { blocks.push_back(block); }
   Chain chain;
   for (size_t index : chain_indices) { chain.add(blocks.at(index)); }
-  BitProvenance::run(section, chain);
+  if (chain_indices.empty()) {
+    BitProvenance::run(section);
+  } else {
+    BitProvenance::run(section, chain);
+  }
   unittest_assert(!section->verify(std::cerr));
   DeadCodeElim::run(section);
   section->autoname();
@@ -109,6 +113,27 @@ b0(%0: Ptr, %1: Int32):
 )");
 }
 
+void test_static_reconstruction() {
+  check_provenance(R"(section {
+b0(%0: Ptr, %1: Int32):
+  %2 = And %1, 4294967040:Int32
+  Jump block=b1
+b1:
+  %3 = And %1, 255:Int32
+  %4 = Or %2, %3
+  Store %0, %4, flags={}, aliasing=0, offset=0
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr, %1: Int32):
+  Jump block=b1
+b1:
+  Store %0, %1, flags={}, aliasing=0, offset=0
+  Exit
+}
+)", {});
+}
+
 void test_sibling_reuse() {
   const std::string input = R"(section {
 b0(%0: Ptr, %1: Int32, %2: Bool):
@@ -124,6 +149,7 @@ b2:
 }
 )";
   check_provenance(input, input, {0, 1});
+  check_provenance(input, input, {});
 }
 
 void test_unrecorded_source() {
@@ -209,6 +235,7 @@ b0(%0: Ptr, %1: Int32):
   Exit
 }
 )";
+  check_provenance(input, input, {});
   check_provenance(input, R"(section {
 b0(%0: Ptr, %1: Int32):
   %2 = And %1, 255:Int32
@@ -466,6 +493,7 @@ int main(int argc, char** argv) {
   suite.test("reverse pair").run(test_reverse_pair);
   suite.test("reconstruction").run(test_reconstruction);
   suite.test("sign extension").run(test_sign_extension);
+  suite.test("static reconstruction").run(test_static_reconstruction);
   suite.test("sibling reuse").run(test_sibling_reuse);
   suite.test("unrecorded source").run(test_unrecorded_source);
   suite.test("trace chain").run(test_trace_chain);

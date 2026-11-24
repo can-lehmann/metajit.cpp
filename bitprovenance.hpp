@@ -367,6 +367,7 @@ private:
     }
   };
 
+  const bool _reuse_values;
   Builder _builder;
   NameMap<Mapping> _facts;
   NameMap<Value*> _substs;
@@ -560,6 +561,10 @@ private:
     if (!mapping.exact(type_width(inst->type()))) {
       return nullptr;
     }
+    if (!_reuse_values) {
+      Value* replacement = extract_from_source(inst, mapping);
+      return replacement == inst ? nullptr : replacement;
+    }
     Key key{mapping, inst->type()};
     if (_available.find(key) != _available.end()) {
       return _available.at(key);
@@ -582,6 +587,9 @@ private:
     _facts.ensure_size(size);
     _substs.ensure_size(size);
     _facts[value] = mapping;
+    if (!_reuse_values) {
+      return;
+    }
     if (mapping.exact(type_width(value->type()))) {
       _available.try_emplace(Key{mapping, value->type()}, value);
     }
@@ -600,11 +608,12 @@ private:
     }
   }
 
-public:
-  BitProvenance(Section* section, const Chain& chain)
-      : Pass(section), _builder(section), _facts(section), _substs(section) {
+  template<class Blocks>
+  BitProvenance(Section* section, Blocks& blocks, bool reuse_values)
+      : Pass(section), _reuse_values(reuse_values), _builder(section), _facts(section), _substs(section) {
+    assert(reuse_values || section->ordering() >= BlockOrdering::Dominator);
     _builder.set_next_name();
-    for (Block* block : chain) {
+    for (Block* block : blocks) {
       for (Arg* arg : block->args()) {
         if (is_int_or_bool(arg->type())) {
           record_value(arg, opaque(arg));
@@ -643,6 +652,10 @@ public:
       }
     }
   }
+
+public:
+  BitProvenance(Section* section, const Chain& chain): BitProvenance(section, chain, true) {}
+  explicit BitProvenance(Section* section): BitProvenance(section, *section, false) {}
 };
 
 }
