@@ -152,6 +152,57 @@ b2:
   check_provenance(input, input, {});
 }
 
+void test_static_reverse() {
+  check_provenance(R"(section {
+b0(%0: Ptr, %1: Int8):
+  %2 = Shl %1, 4:Int8
+  %3 = ShrU %1, 4:Int8
+  %4 = Or %2, %3
+  Jump block=b1
+b1:
+  %5 = Shl %4, 2:Int8
+  %6 = And %5, 204:Int8
+  %7 = ShrU %4, 2:Int8
+  %8 = And %7, 51:Int8
+  %9 = Or %6, %8
+  %10 = Shl %9, 1:Int8
+  %11 = And %10, 170:Int8
+  %12 = ShrU %9, 1:Int8
+  %13 = And %12, 85:Int8
+  %14 = Or %11, %13
+  Store %0, %14, flags={}, aliasing=0, offset=0
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr, %1: Int8):
+  Jump block=b1
+b1:
+  %2 = BitReverse %1
+  Store %0, %2, flags={}, aliasing=0, offset=0
+  Exit
+}
+)", {});
+}
+
+void test_static_reverse_truncated_source() {
+  check_provenance(R"(section {
+b0(%0: Ptr, %1: Int16):
+  %2 = BitReverse %1
+  %3 = ShrU %2, 8:Int16
+  %4 = ResizeU %3, type=Int8
+  Store %0, %4, flags={}, aliasing=0, offset=0
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr, %1: Int16):
+  %2 = ResizeU %1, type=Int8
+  %3 = BitReverse %2
+  Store %0, %3, flags={}, aliasing=0, offset=0
+  Exit
+}
+)", {});
+}
+
 void test_unrecorded_source() {
   check_provenance(R"(section {
 b0(%0: Ptr, %1: Int32):
@@ -494,6 +545,8 @@ int main(int argc, char** argv) {
   suite.test("reconstruction").run(test_reconstruction);
   suite.test("sign extension").run(test_sign_extension);
   suite.test("static reconstruction").run(test_static_reconstruction);
+  suite.test("static reverse").run(test_static_reverse);
+  suite.test("static reverse truncated source").run(test_static_reverse_truncated_source);
   suite.test("sibling reuse").run(test_sibling_reuse);
   suite.test("unrecorded source").run(test_unrecorded_source);
   suite.test("trace chain").run(test_trace_chain);

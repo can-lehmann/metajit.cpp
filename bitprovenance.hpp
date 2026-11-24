@@ -505,11 +505,29 @@ private:
   Value* extract_from_value(Inst* inst, const Mapping& mapping, Value* value) {
     size_t width = type_width(inst->type());
     Mapping input = get(value);
-    if (value->type() != inst->type()) {
-      return extract_resize(inst, mapping, value, input);
-    }
-    if (input.equal(mapping, width)) {
+    size_t from = type_width(value->type());
+    if (from != width) {
+      if (Value* replacement = extract_resize(inst, mapping, value, input)) {
+        return replacement;
+      }
+    } else if (input.equal(mapping, width)) {
       return value;
+    }
+    if (from >= width && input.bits[width - 1] == mapping.bits[0] &&
+        input.bit_reverse(width).equal(mapping, width)) {
+      if (dynamic_cast<BitReverseInst*>(inst)) {
+        Value* operand = inst->arg(0);
+        if (operand == value || (dynamic_cast<ResizeUInst*>(operand) && ((Inst*) operand)->arg(0) == value)) {
+          return inst;
+        }
+      }
+      if (from > width) {
+        value = _builder.fold_resize_u(value, inst->type());
+      }
+      return _builder.fold_bit_reverse(value);
+    }
+    if (from != width) {
+      return nullptr;
     }
     size_t first = 0;
     while (first < width && !reference(mapping.bits[first])) {
