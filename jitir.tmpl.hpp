@@ -1720,6 +1720,7 @@ namespace metajit {
     Interval(size_t offset, Type type) {
       min = offset;
       max = offset + type_size(type);
+      assert(max >= min);
     }
 
     bool intersects(const Interval& other) const {
