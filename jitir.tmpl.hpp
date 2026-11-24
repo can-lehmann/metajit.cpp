@@ -1720,6 +1720,7 @@ namespace metajit {
     Interval(size_t offset, Type type) {
       min = offset;
       max = offset + type_size(type);
+      assert(max >= min);
     }
 
     bool intersects(const Interval& other) const {
@@ -3034,8 +3035,37 @@ namespace metajit {
   private:
     NameMap<bool> _unused;
     ExpandingVector<StoreInst*> _last_store;
+    std::unordered_map<AliasingGroup, std::vector<StoreInst*>> _overwrite_candidates;
+
+    static bool same_store_location(StoreInst* a, StoreInst* b) {
+      return a->ptr() == b->ptr() &&
+             a->offset() == b->offset() &&
+             a->value()->type() == b->value()->type();
+    }
+
+    void record_overwrite(StoreInst* store) {
+      auto& candidates = _overwrite_candidates[store->aliasing()];
+      for (StoreInst*& earlier : candidates) {
+        if (same_store_location(earlier, store)) {
+          _unused[earlier] = true;
+          earlier = store;
+          return;
+        }
+      }
+      candidates.push_back(store);
+    }
+
+    void forget_possibly_read_stores(LoadInst* load) {
+      if (_overwrite_candidates.find(load->aliasing()) == _overwrite_candidates.end()) return;
+      auto& candidates = _overwrite_candidates.at(load->aliasing());
+      auto removed = std::remove_if(candidates.begin(), candidates.end(), [load](StoreInst* store) {
+        return could_alias(load, store);
+      });
+      candidates.erase(removed, candidates.end());
+    }
 
     void mark_stores_live() {
+      _overwrite_candidates.clear();
       for (StoreInst*& store : _last_store) {
         if (store) {
           _unused[store] = false;
@@ -3048,10 +3078,11 @@ namespace metajit {
       for (Block* block : *section) {
         for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst)) {
-            Pointer pointer(store->ptr(), store->offset());
             if (store->aliasing() < 0) {
               _last_store[-store->aliasing()] = store;
               _unused[store] = true;
+            } else if (store->aliasing() > 0) {
+              record_overwrite(store);
             }
           } else if (dynmatch(LoadInst, load, inst)) {
             if (load->aliasing() < 0) {
@@ -3061,6 +3092,8 @@ namespace metajit {
               }
             } else if (load->aliasing() == 0) {
               mark_stores_live();
+            } else {
+              forget_possibly_read_stores(load);
             }
           } else if (dynamic_cast<CallInst*>(inst)) {
             mark_stores_live();
