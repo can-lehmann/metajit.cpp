@@ -5230,16 +5230,10 @@ namespace metajit {
 
           if (invariant) {
             if (dynmatch(LoadInst, load, inst)) {
-              if (has_unknown_memory_write) {
-                invariant = false;
-              } else if (load->flags().has(LoadFlags::InBounds) &&
-                         load->aliasing() < 0) {
-                if (stores[-load->aliasing()]) {
-                  invariant = false;
-                }
-              } else {
-                invariant = false;
-              }
+              invariant = load->flags().has(LoadFlags::InBounds) &&
+                          (load->flags().has(LoadFlags::Pure) ||
+                           (!has_unknown_memory_write && load->aliasing() < 0 &&
+                            !stores[-load->aliasing()]));
             }
           }
 
