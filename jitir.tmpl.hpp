@@ -5187,15 +5187,15 @@ namespace metajit {
       assert(loop->preheader()->terminator());
 
       if (loop->chain()) {
-        hoist(*loop->chain());
+        apply(*loop->chain());
       } else {
-        hoist(loop->range());
+        apply(loop->range());
       }
     }
 
   private:
     template <class Blocks>
-    void hoist(const Blocks& blocks) {
+    void apply(const Blocks& blocks) {
       // ExpandingVector<bool> does not work due to std::vector<bool>
       ExpandingVector<uint8_t> stores;
       bool has_unknown_memory_write = false;
