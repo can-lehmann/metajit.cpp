@@ -344,6 +344,30 @@ void test_first_four_keeps_equivalence() {
   unittest_assert(!section.verify(std::cerr));
 }
 
+void test_shifted_reverse_after_candidate_limit() {
+  check_provenance(R"(section {
+b0(%0: Ptr, %1: Int32):
+  %2 = Shl %1, 1:Int32
+  %3 = Shl %1, 2:Int32
+  %4 = Shl %1, 3:Int32
+  %5 = BitReverse %1
+  Store %0, %5, flags={}, aliasing=0, offset=0
+  %6 = ShrU %1, 1:Int32
+  %7 = BitReverse %6
+  Store %0, %7, flags={}, aliasing=0, offset=4
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr, %1: Int32):
+  %2 = BitReverse %1
+  Store %0, %2, flags={}, aliasing=0, offset=0
+  %3 = Shl %2, 1:Int32
+  Store %0, %3, flags={}, aliasing=0, offset=4
+  Exit
+}
+)");
+}
+
 void test_shift_boundaries() {
   for (size_t width : {8, 16, 32, 64}) {
     std::string type = "Int" + std::to_string(width);
@@ -550,6 +574,7 @@ int main(int argc, char** argv) {
   suite.test("sibling reuse").run(test_sibling_reuse);
   suite.test("unrecorded source").run(test_unrecorded_source);
   suite.test("trace chain").run(test_trace_chain);
+  suite.test("shifted reverse after candidate limit").run(test_shifted_reverse_after_candidate_limit);
   suite.test("shift boundaries").run(test_shift_boundaries);
   suite.test("resize roundtrips").run(test_resize_roundtrips);
   suite.test("resize extraction").run(test_resize_extraction);

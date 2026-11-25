@@ -568,6 +568,29 @@ private:
     return nullptr;
   }
 
+  Value* extract_shifted_reverse(Inst* inst, const Mapping& mapping) {
+    if (mapping.bits[0] != Zero || mapping.source->type() != inst->type()) {
+      return nullptr;
+    }
+    size_t width = type_width(inst->type());
+    size_t shift = 1;
+    while (shift < width && mapping.bits[shift] == Zero) {
+      shift++;
+    }
+    for (size_t i = shift; i < width; i++) {
+      if (mapping.bits[i] != width - 1 - (i - shift)) {
+        return nullptr;
+      }
+    }
+    Key key{opaque(mapping.source).bit_reverse(width), inst->type()};
+    const auto reversed = _available.find(key);
+    if (reversed == _available.end() ||
+        (dynamic_cast<ShlInst*>(inst) && inst->arg(0) == reversed->second)) {
+      return nullptr;
+    }
+    return _builder.build_shl(reversed->second, _builder.build_const(inst->type(), shift));
+  }
+
   Value* find_replacement(Block* block, Inst* inst, const Mapping& mapping) {
     if (inst->has_side_effect() || inst->is_terminator() || dynamic_cast<LoadInst*>(inst)) {
       return nullptr;
@@ -592,10 +615,10 @@ private:
       return replacement;
     }
     replacement = extract_from_candidates(inst, mapping);
-    if (replacement == inst) {
-      return nullptr;
+    if (replacement) {
+      return replacement == inst ? nullptr : replacement;
     }
-    return replacement;
+    return extract_shifted_reverse(inst, mapping);
   }
 
   void record_value(NamedValue* value, const Mapping& mapping) {
