@@ -5186,10 +5186,20 @@ namespace metajit {
       assert(loop->preheader());
       assert(loop->preheader()->terminator());
 
+      if (loop->chain()) {
+        hoist(*loop->chain());
+      } else {
+        hoist(loop->range());
+      }
+    }
+
+  private:
+    template <class Blocks>
+    void hoist(const Blocks& blocks) {
       // ExpandingVector<bool> does not work due to std::vector<bool>
       ExpandingVector<uint8_t> stores;
       bool has_unknown_memory_write = false;
-      for (Block* block : loop->range()) {
+      for (Block* block : blocks) {
         for (Inst* inst : *block) {
           if (dynmatch(StoreInst, store, inst)) {
             if (store->aliasing() < 0) {
@@ -5203,10 +5213,10 @@ namespace metajit {
         }
       }
 
-      Builder builder(loop->section());
-      builder.move_before(loop->preheader(), loop->preheader()->terminator());
+      Builder builder(_loop->section());
+      builder.move_before(_loop->preheader(), _loop->preheader()->terminator());
 
-      for (Block* block : loop->range()) {
+      for (Block* block : blocks) {
         for (auto inst_it = block->begin(); inst_it != block->end(); ) {
           Inst* inst = *inst_it;
 
@@ -5254,6 +5264,7 @@ namespace metajit {
       }
     }
 
+  public:
     bool is_invariant(Value* value) const {
       if (value->is_inst()) {
         Inst* inst = (Inst*) value;
