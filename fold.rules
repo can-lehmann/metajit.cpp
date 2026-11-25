@@ -143,22 +143,92 @@ clz_select: Clz(Select(c, C1, C2))
 rot_l_zero: RotL(x, 0)
     => x
 
+rot_l_zero_value: RotL(0, k)
+    => 0
+
+rot_l_all_ones: RotL(-1, k)
+    => -1
+
+rot_l_inverse: RotL(RotR(x, k), k)
+    => x
+
 rot_l_constants: RotL(C1: T, C2)
     check C2 < width(T)
-    Cleft = C2 & (width(T) - 1)
-    Cright = (-C2) & (width(T) - 1)
-    C = (C1 << Cleft) | (C1 >> Cright)
+    C = rot_l(C1, C2)
     => C
+
+rot_l_select_constant: RotL(Select(c, C1: T, C2), C3)
+    check C3 < width(T)
+    Ctrue = rot_l(C1, C3)
+    Cfalse = rot_l(C2, C3)
+    => Select(c, Ctrue, Cfalse)
+
+rot_l_selects: RotL(Select(c, C1: T, C2), Select(c, C3, C4))
+    check C3 < width(T) and C4 < width(T)
+    Ctrue = rot_l(C1, C3)
+    Cfalse = rot_l(C2, C4)
+    => Select(c, Ctrue, Cfalse)
+
+rot_l_constant_select: RotL(C: T, Select(c, C1, C2))
+    check C1 < width(T) and C2 < width(T)
+    Ctrue = rot_l(C, C1)
+    Cfalse = rot_l(C, C2)
+    => Select(c, Ctrue, Cfalse)
+
+rot_l_combine: RotL(RotL(x: T, C1), C2)
+    check C1 < width(T) and C2 < width(T)
+    Ccount = (C1 + C2) & (width(T) - 1)
+    => RotL(x, Ccount)
+
+rot_l_combine_opposite: RotL(RotR(x: T, C1), C2)
+    check C1 < width(T) and C2 < width(T)
+    Ccount = (C2 - C1) & (width(T) - 1)
+    => RotL(x, Ccount)
 
 rot_r_zero: RotR(x, 0)
     => x
 
+rot_r_zero_value: RotR(0, k)
+    => 0
+
+rot_r_all_ones: RotR(-1, k)
+    => -1
+
+rot_r_inverse: RotR(RotL(x, k), k)
+    => x
+
 rot_r_constants: RotR(C1: T, C2)
     check C2 < width(T)
-    Cleft = (-C2) & (width(T) - 1)
-    Cright = C2 & (width(T) - 1)
-    C = (C1 << Cleft) | (C1 >> Cright)
+    C = rot_r(C1, C2)
     => C
+
+rot_r_select_constant: RotR(Select(c, C1: T, C2), C3)
+    check C3 < width(T)
+    Ctrue = rot_r(C1, C3)
+    Cfalse = rot_r(C2, C3)
+    => Select(c, Ctrue, Cfalse)
+
+rot_r_selects: RotR(Select(c, C1: T, C2), Select(c, C3, C4))
+    check C3 < width(T) and C4 < width(T)
+    Ctrue = rot_r(C1, C3)
+    Cfalse = rot_r(C2, C4)
+    => Select(c, Ctrue, Cfalse)
+
+rot_r_constant_select: RotR(C: T, Select(c, C1, C2))
+    check C1 < width(T) and C2 < width(T)
+    Ctrue = rot_r(C, C1)
+    Cfalse = rot_r(C, C2)
+    => Select(c, Ctrue, Cfalse)
+
+rot_r_combine: RotR(RotR(x: T, C1), C2)
+    check C1 < width(T) and C2 < width(T)
+    Ccount = (C1 + C2) & (width(T) - 1)
+    => RotR(x, Ccount)
+
+rot_r_combine_opposite: RotR(RotL(x: T, C1), C2)
+    check C1 < width(T) and C2 < width(T)
+    Ccount = (C2 - C1) & (width(T) - 1)
+    => RotR(x, Ccount)
 
 # BitReverse
 
@@ -327,6 +397,10 @@ or_resized_select_redundant_mask: Or(ResizeU(Select(c, x: S, C1)): T, Select(c, 
     check bits(C1, T) | C2 == bits(C1, T)
     => ResizeU(Select(c, x, C1)): T
 
+or_rotate: Or(Shl(x: T, Cleft), ShrU(x, Cright))
+    check Cleft < width(T) and Cright < width(T) and Cright == width(T) - Cleft
+    => RotL(x, Cleft)
+
 or_reassoc_constants: Or(Or(x, C1), C2)
     C = C1 | C2
     => Or(x, C)
@@ -419,6 +493,12 @@ xor_reassoc_constants: Xor(Xor(x, C1), C2)
     C = C1 ^ C2
     => Xor(x, C)
 
+xor_rot_l_complement: Xor(RotL(Xor(x, -1), k), -1)
+    => RotL(x, k)
+
+xor_rot_r_complement: Xor(RotR(Xor(x, -1), k), -1)
+    => RotR(x, k)
+
 xor_cancel: Xor(Xor(x, y), y)
     => x
 
@@ -460,6 +540,18 @@ eq_xor_zero: Eq(Xor(x, y), 0)
 eq_xor_constant: Eq(Xor(x, C1), C2)
     C = C1 ^ C2
     => Eq(x, C)
+
+eq_rot_l_zero: Eq(RotL(x, k), 0)
+    => Eq(x, 0)
+
+eq_rot_l_same_count: Eq(RotL(x, k), RotL(y, k))
+    => Eq(x, y)
+
+eq_rot_r_zero: Eq(RotR(x, k), 0)
+    => Eq(x, 0)
+
+eq_rot_r_same_count: Eq(RotR(x, k), RotR(y, k))
+    => Eq(x, y)
 
 eq_sub_zero: Eq(Sub(x, y), 0)
     => Eq(x, y)
@@ -567,6 +659,12 @@ select_equal_arms: Select(Eq(x, y), x, y)
 
 select_eq_true_constant: Select(Eq(x, C), x, y)
     => Select(Eq(x, C), C, y)
+
+select_rot_l_zero_count: Select(Eq(k, 0), x, RotL(x, k))
+    => RotL(x, k)
+
+select_rot_r_zero_count: Select(Eq(k, 0), x, RotR(x, k))
+    => RotR(x, k)
 
 select_equal_resize: Select(Eq(x: S, C1), C2: T, ResizeU(x): T)
     check bits(C1, T) == C2

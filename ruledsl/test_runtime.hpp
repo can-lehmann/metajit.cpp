@@ -40,6 +40,13 @@ inline bool is_int(Type type) { return type != Type::Bool; }
 inline bool is_int_or_bool(Type) { return true; }
 
 namespace metajit {
+  inline uint64_t rotate_left(Type type, uint64_t value, uint64_t count) {
+    uint64_t width = type_width(type);
+    count %= width;
+    value &= type_mask(type);
+    return ((value << count) | (value >> ((width - count) % width))) & type_mask(type);
+  }
+
   inline uint64_t bit_reverse(Type type, uint64_t value) {
     uint64_t result = 0;
     for (uint64_t bit = 0; bit < type_width(type); ++bit) {

@@ -122,6 +122,11 @@ product, with both arguments and the result sharing a type. Unlike ordinary
 DSL multiplication, it retains the full product before extracting the high
 half. Both helpers also work in type conditions with literal arguments.
 
+`rot_l(C, K)` and `rot_r(C, K)` rotate left and right at the inferred width
+of `C`. Both arguments and the result share a type. The calculation reduces
+`K` modulo that width. When folding a JITIR rotate, use `check K < width(T)`
+to preserve its out-of-range poison behavior.
+
 Compile-time Boolean results remain conditions in calculations and guards.
 When used as IR values, including operands of replacement operations, they
 materialize as `0: Bool` or `1: Bool`. They cannot be used as integer constants

@@ -251,6 +251,9 @@ class RuleLowerer:
                 expression = args[0]
             elif node.name in {"bit_reverse", "clz"}:
                 expression = call("metajit::" + node.name, self.type_of(node), *args)
+            elif node.name in {"rot_l", "rot_r"}:
+                count = args[1] if node.name == "rot_l" else ir.Unary("-", args[1])
+                expression = call("metajit::rotate_left", self.type_of(node), args[0], count)
             elif node.name == "mul_high_u":
                 product = ir.Binary("*", call("__uint128_t", args[0]), args[1])
                 expression = call("uint64_t", ir.Binary(">>", product, call("type_width", self.type_of(node))))

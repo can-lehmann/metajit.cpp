@@ -246,6 +246,10 @@ class Prover:
                 value = clz(args[0].value)
             elif node.name == "bit_reverse":
                 value = bit_reverse(args[0].value)
+            elif node.name == "rot_l":
+                value = z3.RotateLeft(args[0].value, args[1].value)
+            elif node.name == "rot_r":
+                value = z3.RotateRight(args[0].value, args[1].value)
             elif node.name == "mul_high_u":
                 value = mul_high_u(args[0].value, args[1].value)
             elif node.name == "ctz":
