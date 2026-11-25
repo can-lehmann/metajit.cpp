@@ -50,6 +50,78 @@ void check_provenance(const std::string& input, const std::string& expected,
   delete section;
 }
 
+void test_synthesize_rotates() {
+  for (size_t width : {8, 16, 32, 64}) {
+    std::string type = "Int" + std::to_string(width);
+    std::string prefix = "section {\nb0(%0: Ptr, %1: " + type + "):\n";
+    std::string suffix = ", flags={}, aliasing=0, offset=0\n  Exit\n}\n";
+    for (size_t left = 1; left < width; left++) {
+      size_t right = width - left;
+      std::string l = std::to_string(left) + ":" + type;
+      std::string r = std::to_string(right) + ":" + type;
+      check_provenance(prefix + "  %2 = Shl %1, " + l + "\n  %3 = ShrU %1, " + r +
+                         "\n  %4 = Or %2, %3\n  Store %0, %4" + suffix,
+                       prefix + "  %2 = " + (left <= right ? "RotL %1, " + l : "RotR %1, " + r) +
+                         "\n  Store %0, %2" + suffix);
+    }
+  }
+}
+
+void test_rotate_across_block() {
+  check_provenance(R"(section {
+b0(%0: Ptr, %1: Int32):
+  %2 = RotR %1, 12:Int32
+  Jump block=b1
+b1:
+  %3 = RotL %2, 8:Int32
+  Store %0, %3, flags={}, aliasing=0, offset=0
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr, %1: Int32):
+  Jump block=b1
+b1:
+  %2 = RotR %1, 4:Int32
+  Store %0, %2, flags={}, aliasing=0, offset=0
+  Exit
+}
+)", {0, 1});
+}
+
+void test_rotate_candidate() {
+  check_provenance(R"(section {
+b0(%0: Ptr, %1: Int8):
+  %2 = BitReverse %1
+  %3 = Shl %2, 5:Int8
+  %4 = ShrU %2, 3:Int8
+  %5 = Or %3, %4
+  Store %0, %5, flags={}, aliasing=0, offset=0
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr, %1: Int8):
+  %2 = BitReverse %1
+  %3 = RotR %2, 3:Int8
+  Store %0, %3, flags={}, aliasing=0, offset=0
+  Exit
+}
+)");
+}
+
+void test_rotate_missing_bit() {
+  const std::string input = R"(section {
+b0(%0: Ptr, %1: Int8):
+  %2 = Shl %1, 3:Int8
+  %3 = And %2, 239:Int8
+  %4 = ShrU %1, 5:Int8
+  %5 = Or %3, %4
+  Store %0, %5, flags={}, aliasing=0, offset=0
+  Exit
+}
+)";
+  check_provenance(input, input);
+}
+
 void test_reverse_pair() {
   check_provenance(R"(section {
 b0(%0: Ptr, %1: Int32):
@@ -567,6 +639,10 @@ void test_random_execution() {
 
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
+  suite.test("synthesize rotates").run(test_synthesize_rotates);
+  suite.test("rotate across block").run(test_rotate_across_block);
+  suite.test("rotate candidate").run(test_rotate_candidate);
+  suite.test("rotate missing bit").run(test_rotate_missing_bit);
   suite.test("reverse pair").run(test_reverse_pair);
   suite.test("reconstruction").run(test_reconstruction);
   suite.test("sign extension").run(test_sign_extension);
