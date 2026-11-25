@@ -198,6 +198,12 @@ namespace metajit {
     return value ? __builtin_clzll(value) - (64 - type_width(type)) : type_width(type);
   }
 
+  inline uint64_t rotate_left(Type type, uint64_t value, uint64_t count) {
+    uint64_t mask = type_width(type) - 1;
+    value &= type_mask(type);
+    return ((value << (count & mask)) | (value >> (-count & mask))) & type_mask(type);
+  }
+
   inline uint64_t bit_reverse(Type type, uint64_t value) {
     value = __builtin_bswap64(value);
     value = ((value >> 4) & 0x0f0f0f0f0f0f0f0full) | ((value & 0x0f0f0f0f0f0f0f0full) << 4);
@@ -1968,6 +1974,14 @@ namespace metajit {
       return Builder::fold_shr_u(a, b);
     }
 
+    Value* build_rot_l(Value* a, Value* b) {
+      return Builder::fold_rot_l(a, b);
+    }
+
+    Value* build_rot_r(Value* a, Value* b) {
+      return Builder::fold_rot_r(a, b);
+    }
+
     Value* build_shr_s(Value* a, Value* b) {
       return Builder::fold_shr_s(a, b);
     }
@@ -3595,6 +3609,15 @@ namespace metajit {
         return unsigned_range(type, metajit::clz(type, umax()), metajit::clz(type, umin()));
       }
 
+      Bits rotate(const Bits& count, bool left) const {
+        uint64_t count_mask = type_width(type) - 1;
+        if (count.umin() >= type_width(type) || (count.mask & count_mask) != count_mask) {
+          return Bits(type, 0, 0);
+        }
+        uint64_t shift = left ? count.value : -count.value;
+        return Bits(type, rotate_left(type, mask, shift), rotate_left(type, value, shift));
+      }
+
       Bits bit_reverse() const {
         return Bits(type, metajit::bit_reverse(type, mask), metajit::bit_reverse(type, value));
       }
@@ -3658,6 +3681,8 @@ namespace metajit {
         binop(OrInst, a | b)
         binop(XorInst, a ^ b)
         
+        binop(RotLInst, a.rotate(b, true))
+        binop(RotRInst, a.rotate(b, false))
         binop(ShlInst, a.shl(b))
         binop(ShrUInst, a.shr_u(b))
         binop(ShrSInst, a.shr_s(b))
@@ -3814,6 +3839,13 @@ namespace metajit {
         return Bits::constant(res);
       }
 
+      static Bits rotate(Type type, uint64_t value, uint64_t count, bool left) {
+        if (count >= type_width(type)) {
+          return Bits::poison(type);
+        }
+        return Bits::constant(type, rotate_left(type, value, left ? count : -count));
+      }
+
       static Bits shl(Type type, uint64_t a, uint64_t b) {
         if (b >= type_width(type)) {
           return Bits::poison(type);
@@ -3894,6 +3926,8 @@ namespace metajit {
       propagating_binop(lt_u, Type::Bool, Bits::constant(Type::Bool, value < other.value))
       propagating_binop(lt_s, Type::Bool, lt_s(type, value, other.value))
 
+      propagating_binop(rot_l, type, rotate(type, value, other.value, true))
+      propagating_binop(rot_r, type, rotate(type, value, other.value, false))
       propagating_binop(shl, type, shl(type, value, other.value))
       propagating_binop(shr_s, type, shr_s(type, value, other.value))
       propagating_binop(shr_u, type, shr_u(type, value, other.value))
@@ -4272,6 +4306,8 @@ namespace metajit {
       binop(OrInst, a | b)
       binop(XorInst, a ^ b)
       
+      binop(RotLInst, a.rot_l(b))
+      binop(RotRInst, a.rot_r(b))
       binop(ShlInst, a.shl(b))
       binop(ShrUInst, a.shr_u(b))
       binop(ShrSInst, a.shr_s(b))
@@ -4406,7 +4442,17 @@ namespace metajit {
             _values[inst] = Bits(inst->type(), 0);
           }
           
-          if (dynmatch(BitReverseInst, bit_reverse, inst)) {
+          if (dynamic_cast<RotLInst*>(inst) || dynamic_cast<RotRInst*>(inst)) {
+            uint64_t used = _values[inst].used;
+            if (dynmatch(Const, count, inst->arg(1))) {
+              uint64_t shift = count->value();
+              use(inst->arg(0), shift < type_width(inst->type()) ?
+                rotate_left(inst->type(), used, dynamic_cast<RotLInst*>(inst) ? -shift : shift) : 0);
+            } else {
+              use(inst->arg(0), used ? type_mask(inst->type()) : 0);
+            }
+            use_all(inst->arg(1));
+          } else if (dynmatch(BitReverseInst, bit_reverse, inst)) {
             use(bit_reverse->arg(0), metajit::bit_reverse(inst->type(), _values[inst].used));
           } else if (dynmatch(ResizeUInst, resize_u, inst)) {
             use(resize_u->arg(0), _values[inst].used);

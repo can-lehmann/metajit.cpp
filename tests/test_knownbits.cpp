@@ -1120,6 +1120,8 @@ int main(int argc, char** argv) {
     ConcreteBits (ConcreteBits::*evaluate)(const ConcreteBits&) const;
   };
   for (UsedBitsOperation operation : {
+      UsedBitsOperation{"RotL", &ConcreteBits::rot_l},
+      UsedBitsOperation{"RotR", &ConcreteBits::rot_r},
       UsedBitsOperation{"Shl", &ConcreteBits::shl},
       UsedBitsOperation{"ShrU", &ConcreteBits::shr_u},
       UsedBitsOperation{"ShrS", &ConcreteBits::shr_s},
@@ -1300,6 +1302,13 @@ int main(int argc, char** argv) {
         unittest_assert(bits.shr_s_arg_0(width - 1) == expected);
       }
     }
+  });
+
+  suite.test("rotate_known_count_bits").run([]() {
+    Bits input(Type::Int8, 0xf0, 0xa0);
+    Bits count(Type::Int8, 7, 1);
+    unittest_assert(input.rotate(count, true) == Bits(Type::Int8, 0xe1, 0x41));
+    unittest_assert(input.rotate(count, false) == Bits(Type::Int8, 0x78, 0x50));
   });
 
   suite.test("bit_reverse").run([]() {

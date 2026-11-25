@@ -500,7 +500,7 @@ void test_random_execution() {
         Value* a = values[rand() % values.size()];
         Value* b = values[rand() % values.size()];
         Const* shift = builder.build_const(type, rand() % type_width(type));
-        switch (rand() % 15) {
+        switch (rand() % 17) {
           case 0: values.push_back(builder.build_and(a, b)); break;
           case 1: values.push_back(builder.build_or(a, b)); break;
           case 2: values.push_back(builder.build_xor(a, b)); break;
@@ -516,6 +516,8 @@ void test_random_execution() {
           case 12: values.push_back(builder.build_resize_s(builder.build_resize_u(a, Type::Int8), type)); break;
           case 13: values.push_back(builder.build_and(a, builder.build_const(type, UINT64_C(0x5555555555555555)))); break;
           case 14: values.push_back(builder.build_xor(a, builder.build_const(type, UINT64_MAX))); break;
+          case 15: values.push_back(builder.build_rot_l(a, shift)); break;
+          case 16: values.push_back(builder.build_rot_r(a, shift)); break;
         }
       }
       for (size_t i = 0; i < 16; i++) { builder.build_store(block->arg(0), values[values.size() - 1 - i], 0, i * 8); }

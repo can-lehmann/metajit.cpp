@@ -28,7 +28,7 @@ class Signature:
 
 SIGNATURES = {}
 
-for name in ("Add", "Sub", "Mul", "MulHighU", "DivS", "DivU", "ModS", "ModU", "Shl", "ShrU", "ShrS"):
+for name in ("Add", "Sub", "Mul", "MulHighU", "DivS", "DivU", "ModS", "ModU", "Shl", "ShrU", "ShrS", "RotL", "RotR"):
     SIGNATURES[name] = Signature(("T", "T"), "T", (("T", INT_TYPES),),
                                  name in {"Add", "Mul", "MulHighU"})
 

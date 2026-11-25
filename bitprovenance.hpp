@@ -163,6 +163,14 @@ private:
       return shr(width, amount, bits[width - 1]);
     }
 
+    Mapping rotate_left(size_t width, uint64_t count) const {
+      Mapping result = *this;
+      for (size_t i = 0; i < width; i++) {
+        result.bits[(i + count) & (width - 1)] = bits[i];
+      }
+      return result;
+    }
+
     Mapping bit_reverse(size_t width) const {
       assert(valid());
       Mapping result = *this;
@@ -425,6 +433,11 @@ private:
       return a.bit_or(b, or_inst);
     } else if (dynmatch(XorInst, xor_inst, inst)) {
       return a.bit_xor(b, xor_inst);
+    } else if (dynamic_cast<RotLInst*>(inst) || dynamic_cast<RotRInst*>(inst)) {
+      if (auto count = b.constant(width); count && *count < width) {
+        return a.rotate_left(width, dynamic_cast<RotLInst*>(inst) ? *count : -*count);
+      }
+      return opaque(inst);
     } else if (dynamic_cast<ShlInst*>(inst) || dynamic_cast<ShrUInst*>(inst) ||
         dynamic_cast<ShrSInst*>(inst)) {
       auto number = b.constant(width);

@@ -140,6 +140,26 @@ clz_select: Clz(Select(c, C1, C2))
     => Select(c, ClzC1, ClzC2)
 
 
+rot_l_zero: RotL(x, 0)
+    => x
+
+rot_l_constants: RotL(C1: T, C2)
+    check C2 < width(T)
+    Cleft = C2 & (width(T) - 1)
+    Cright = (-C2) & (width(T) - 1)
+    C = (C1 << Cleft) | (C1 >> Cright)
+    => C
+
+rot_r_zero: RotR(x, 0)
+    => x
+
+rot_r_constants: RotR(C1: T, C2)
+    check C2 < width(T)
+    Cleft = (-C2) & (width(T) - 1)
+    Cright = C2 & (width(T) - 1)
+    C = (C1 << Cleft) | (C1 >> Cright)
+    => C
+
 # BitReverse
 
 bit_reverse_constant: BitReverse(C)

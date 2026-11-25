@@ -818,6 +818,33 @@ int main(int argc, char** argv) {
   test_clz(suite);
   test_popcount(suite);
   test_bit_reverse(suite);
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    suite.test(std::string("rotate_poison_") + to_string(type)).run([type]() {
+      using Bits = Interpreter::Bits;
+      Bits value = Bits::constant(type, 1);
+      uint64_t width = type_width(type);
+      for (uint64_t amount : {width, width + 1, type_mask(type)}) {
+        Bits count = Bits::constant(type, amount);
+        unittest_assert(value.rot_l(count).is_poison);
+        unittest_assert(value.rot_r(count).is_poison);
+      }
+      Bits poison = Bits::poison(type);
+      unittest_assert(poison.rot_l(value).is_poison && value.rot_l(poison).is_poison);
+      unittest_assert(poison.rot_r(value).is_poison && value.rot_r(poison).is_poison);
+    });
+    suite.diff_test(std::string("rotate_") + to_string(type)).run([type](Builder& builder, TestData& data) {
+      Value* value = data.input(type);
+      Value* count = data.input(RandomRange(type, 0, type_width(type) - 1));
+      data.output(builder.build_rot_l(value, count));
+      data.output(builder.build_rot_r(value, count));
+      size_t width = type_width(type);
+      for (uint64_t amount : {uint64_t(0), uint64_t(1), width - 1}) {
+        Value* immediate = builder.build_const(type, amount & type_mask(type));
+        data.output(builder.build_rot_l(value, immediate));
+        data.output(builder.build_rot_r(value, immediate));
+      }
+    });
+  }
 
   return suite.finish();
 }

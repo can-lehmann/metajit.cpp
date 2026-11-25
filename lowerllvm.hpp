@@ -243,7 +243,14 @@ namespace metajit {
       } else if (llvm::ReturnInst* ret = llvm::dyn_cast<llvm::ReturnInst>(inst)) {
         return _builder.build_exit();
       } else if (llvm::CallInst* call = llvm::dyn_cast<llvm::CallInst>(inst)) {
-        if (call->getIntrinsicID() == llvm::Intrinsic::bitreverse) {
+        if ((call->getIntrinsicID() == llvm::Intrinsic::fshl || call->getIntrinsicID() == llvm::Intrinsic::fshr) &&
+            call->getArgOperand(0) == call->getArgOperand(1) && is_int(lower_type(call->getType()))) {
+          Value* value = lower_operand(call->getArgOperand(0));
+          Value* count = _builder.fold_and(lower_operand(call->getArgOperand(2)),
+            _builder.build_const(value->type(), type_width(value->type()) - 1));
+          return call->getIntrinsicID() == llvm::Intrinsic::fshl
+            ? _builder.fold_rot_l(value, count) : _builder.fold_rot_r(value, count);
+        } else if (call->getIntrinsicID() == llvm::Intrinsic::bitreverse) {
           return _builder.fold_bit_reverse(lower_operand(call->getArgOperand(0)));
         } else if (call->getIntrinsicID() == llvm::Intrinsic::ctlz) {
           return _builder.fold_clz(lower_operand(call->getArgOperand(0)));
