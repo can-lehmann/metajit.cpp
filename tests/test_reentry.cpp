@@ -449,5 +449,29 @@ int main(int argc, char** argv) {
     });
   });
 
+  suite.reentry_test("recompute_pure_load").run([](Builder& builder) {
+    static uint32_t input = 41;
+    static uint32_t* input_ptr = &input;
+    Value* input_ptr_ptr = builder.build_const(Type::Ptr, (uint64_t) &input_ptr);
+    Value* ptr = builder.build_load(input_ptr_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), 0);
+    Inst* a = builder.build_load(ptr, Type::Int32, LoadFlags::Pure, AliasingGroup(0), 0);
+    Inst* b = builder.build_add(a, builder.build_const(Type::Int32, 1));
+
+    builder.build_store(builder.entry_arg(0), b, AliasingGroup(0), 0);
+
+    return std::vector<TestCase> ({
+      TestCase {
+        .reentry_point = a,
+        .closure = { { ptr, Bits::constant(&input) } },
+        .expected = 42
+      },
+      TestCase {
+        .reentry_point = b,
+        .closure = { { ptr, Bits::constant(&input) } },
+        .expected = 42
+      }
+    });
+  });
+
   return suite.finish();
 }

@@ -79,6 +79,6 @@ metajit.cpp uses a generating extension for tracing.
 Make automatically regenerates the JITIR headers.
 
 - When finding a minimal test case for a bug, reduce it as much as possible while preserving the bug reproduction.
-- You can run the entire test suite using `make test`.
+- Do not run the full test suite (`make test`) locally. CI runs all tests for you after you push.
 - You can run individual tests using `make tests/test_* && ./tests/test_*`.
 - You can run the fuzzer using `make fuzz`.
