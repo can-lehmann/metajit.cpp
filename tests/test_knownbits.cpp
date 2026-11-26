@@ -285,6 +285,34 @@ void test_usedbits_constant_shl() {
   }
 }
 
+void test_usedbits_constant_rotates() {
+  for (Type type : {Type::Int8, Type::Int16, Type::Int32, Type::Int64}) {
+    uint64_t width = type_width(type);
+    for (uint64_t shift : {uint64_t(0), uint64_t(1), width - 1, width, width + 1}) {
+      Context context;
+      Allocator allocator;
+      Section section(context, allocator);
+      Builder builder(&section);
+      Block* entry = builder.build_block({Type::Ptr});
+      builder.move_to_end(entry);
+      Value* ptr = entry->arg(0);
+      Value* lhs = builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), 0);
+      Value* rhs = builder.build_load(ptr, type, LoadFlags::None, AliasingGroup(0), 8);
+      Value* count = builder.build_const(type, shift);
+      Value* low_bit = builder.build_const(type, 1);
+      builder.build_store(ptr, builder.build_and(builder.build_rot_l(lhs, count), low_bit), AliasingGroup(0), 16);
+      builder.build_store(ptr, builder.build_and(builder.build_rot_r(rhs, count), low_bit), AliasingGroup(0), 24);
+      builder.build_exit();
+      section.order_blocks(BlockOrdering::Dominator);
+      section.autoname();
+      unittest_assert(!section.verify(std::cout));
+      UsedBits used(&section);
+      unittest_assert(used.at(lhs).used == (shift < width ? uint64_t(1) << ((width - shift) % width) : 0));
+      unittest_assert(used.at(rhs).used == (shift < width ? uint64_t(1) << shift : 0));
+    }
+  }
+}
+
 void test_usedbits_shr_s_bug(unittest::Suite& suite) {
   suite.test("usedbits_shr_s_bug").run([]() {
     using Bits = UsedBits::Bits;
@@ -1070,6 +1098,7 @@ int main(int argc, char** argv) {
   suite.test("signed comparison soundness wide").run(test_signed_comparison_soundness_wide);
 
   suite.test("usedbits_constant_shl").run(test_usedbits_constant_shl);
+  suite.test("usedbits_constant_rotates").run(test_usedbits_constant_rotates);
 
   using ConcreteBits = Interpreter::Bits;
   suite.test("usedbits_select_preserves_definedness").run([]() {
