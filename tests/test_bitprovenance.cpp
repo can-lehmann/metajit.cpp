@@ -513,8 +513,8 @@ void test_signed_comparison_fallback() {
   }
 }
 
-void test_variable_shifts() {
-  for (const std::string op : {"Shl", "ShrU", "ShrS"}) {
+void test_variable_shifts_and_rotates() {
+  for (const std::string op : {"Shl", "ShrU", "ShrS", "RotL", "RotR"}) {
     std::string prefix = "section {\nb0(%0: Ptr, %1: Int32, %2: Int32):\n  %3 = " + op + " %1, %2\n";
     std::string suffix = ", flags={}, aliasing=0, offset=0\n  Exit\n}\n";
     check_provenance(prefix + "  %4 = BitReverse %3\n  %5 = BitReverse %4\n  Store %0, %5" + suffix,
@@ -523,7 +523,8 @@ void test_variable_shifts() {
 }
 
 void test_opaque_transfers() {
-  for (const std::string operation : {"Popcount %1", "Freeze %1", "PtrToInt %0, type=Int32"}) {
+  for (const std::string operation : {"Popcount %1", "Freeze %1", "PtrToInt %0, type=Int32",
+                                      "RotL %1, 32:Int32", "RotR %1, 33:Int32"}) {
     std::string prefix = "section {\nb0(%0: Ptr, %1: Int32):\n  %2 = " + operation + "\n";
     std::string suffix = ", flags={}, aliasing=0, offset=0\n  Exit\n}\n";
     check_provenance(prefix + "  %3 = BitReverse %2\n  %4 = BitReverse %3\n  Store %0, %4" + suffix,
@@ -658,7 +659,7 @@ int main(int argc, char** argv) {
   suite.test("resize extraction").run(test_resize_extraction);
   suite.test("mixed sources").run(test_mixed_sources);
   suite.test("signed comparison fallback").run(test_signed_comparison_fallback);
-  suite.test("variable shifts").run(test_variable_shifts);
+  suite.test("variable shifts and rotates").run(test_variable_shifts_and_rotates);
   suite.test("opaque transfers").run(test_opaque_transfers);
   suite.test("loads across store").run(test_loads_across_store);
   suite.test("random execution").run(test_random_execution);
