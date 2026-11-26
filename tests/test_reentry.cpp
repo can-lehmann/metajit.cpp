@@ -455,7 +455,8 @@ int main(int argc, char** argv) {
     Value* input_ptr_ptr = builder.build_const(Type::Ptr, (uint64_t) &input_ptr);
     Value* ptr = builder.build_load(input_ptr_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), 0);
     Inst* a = builder.build_load(ptr, Type::Int32, LoadFlags::Pure, AliasingGroup(0), 0);
-    Inst* b = builder.build_add(a, builder.build_const(Type::Int32, 1));
+    Value* c = builder.build_load(ptr, Type::Int32, LoadFlags::Pure, AliasingGroup(0), 0);
+    Inst* b = builder.build_add(a, c);
 
     builder.build_store(builder.entry_arg(0), b, AliasingGroup(0), 0);
 
@@ -463,12 +464,12 @@ int main(int argc, char** argv) {
       TestCase {
         .reentry_point = a,
         .closure = { { ptr, Bits::constant(&input) } },
-        .expected = 42
+        .expected = 82
       },
       TestCase {
         .reentry_point = b,
         .closure = { { ptr, Bits::constant(&input) } },
-        .expected = 42
+        .expected = 82
       }
     });
   });
