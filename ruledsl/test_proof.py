@@ -189,6 +189,33 @@ class ProofTests(unittest.TestCase):
         rules = prove("reassoc: Add(Add(x, C1), C2)\n    C = C1 + C2\n    => Add(x, C)")
         self.assertEqual(len(rules[0].instantiations), 4)
 
+    def test_rotate_composition(self):
+        for outer in ("RotL", "RotR"):
+            for inner in ("RotL", "RotR"):
+                op = "+" if inner == outer else "-"
+                rule = (f"combine: {outer}({inner}(x: T, C1), C2)\n"
+                        f"    Ccount = (C2 {op} C1) & (width(T) - 1)\n"
+                        f"    => {outer}(x, Ccount)")
+                with self.subTest(outer=outer, inner=inner):
+                    self.assertEqual(len(prove(rule, timeout_ms=1000)[0].instantiations), 4)
+
+    def test_rotate_counterexample(self):
+        with self.assertRaises(ProofError) as raised:
+            prove("bad: RotL(RotL(x: Int64, a), b)\n    => RotR(x, b)")
+        example = raised.exception.counterexample
+        self.assertFalse(example.before.poison)
+        self.assertFalse(example.after.poison)
+        self.assertNotEqual(example.before.value, example.after.value)
+
+    def test_out_of_range_shift_case_preserves_counterexample(self):
+        with self.assertRaises(ProofError) as raised:
+            prove("bad: Or(Freeze(Shl(x: Int8, C1)), Freeze(ShrU(x, C2)))\n"
+                  "    check C1 >= 8\n    => 0")
+        example = raised.exception.counterexample
+        self.assertGreaterEqual(example.inputs["C1"].value, 8)
+        self.assertFalse(example.before.poison)
+        self.assertNotEqual(example.before.value, example.after.value)
+
     def test_multiply_constant_selects(self):
         rules = prove(
             "multiply: Mul(Select(c, C1, C2), Select(c, C3, C4))\n"
