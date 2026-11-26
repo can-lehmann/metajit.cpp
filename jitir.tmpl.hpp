@@ -1812,8 +1812,17 @@ namespace metajit {
           base = _base;
           stores.clear();
         }
-        // TODO: Overlapping
-        stores[offset] = value;
+        auto next = stores.lower_bound(offset);
+        if (next != stores.begin()) {
+          auto previous = std::prev(next);
+          if (offset - previous->first < type_size(previous->second->type())) {
+            stores.erase(previous);
+          }
+        }
+        while (next != stores.end() && next->first - offset < type_size(value->type())) {
+          next = stores.erase(next);
+        }
+        stores.emplace_hint(next, offset, value);
       }
     };
     
@@ -2043,6 +2052,9 @@ namespace metajit {
         _exact_loads[-aliasing] = nullptr;
         return Builder::build_store(ptr, value, flags, aliasing, offset);
       } else {
+        if (aliasing > 0 && _memory[aliasing].load(ptr, offset, value->type()) == value) {
+          return nullptr;
+        }
         bool noop_store = false;
         for (auto it = _valid_loads[aliasing].begin(); it != _valid_loads[aliasing].end(); ) {
           LoadInst* load = *it;

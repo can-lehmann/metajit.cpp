@@ -783,6 +783,36 @@ void trace_builder_positive_load_reuse() {
   unittest_assert(!section.verify(std::cout));
 }
 
+void trace_builder_positive_store_reuse() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  TraceBuilder builder(&section);
+  Block* entry = builder.build_block(std::vector<Type>{Type::Ptr, Type::Ptr, Type::Int32, Type::Bool});
+  builder.move_to_end(entry);
+  Value* ptr = entry->arg(0);
+  Value* value = entry->arg(2);
+  Value* byte = builder.build_const(Type::Int8, 1);
+  unittest_assert(builder.build_store(ptr, value, 4, 4));
+  unittest_assert(builder.build_store(ptr, byte, 4, 8));
+  unittest_assert(!builder.build_store(ptr, value, 4, 4));
+  unittest_assert(builder.build_guard_begin(entry->arg(3)));
+  unittest_assert(builder.build_store(ptr, byte, 0, 5));
+  builder.build_guard_end();
+  unittest_assert(!builder.build_store(ptr, value, 4, 4));
+  unittest_assert(builder.build_store(ptr, byte, 4, 5));
+  unittest_assert(builder.build_load(ptr, Type::Int32, LoadFlags::None, 4, 4) != value);
+  unittest_assert(builder.build_store(ptr, value, 4, 4));
+  unittest_assert(builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 5) != byte);
+  unittest_assert(!builder.build_store(ptr, byte, 4, 8));
+  builder.build_store(entry->arg(1), byte, 4, 4);
+  unittest_assert(builder.build_store(ptr, value, 4, 4));
+  builder.build_call(builder.build_symbol(Type::Ptr, "callee"), Type::Void, std::vector<Value*>{});
+  unittest_assert(builder.build_store(ptr, value, 4, 4));
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+}
+
 void trace_builder_positive_load_seed() {
   Context context;
   Allocator allocator;
@@ -4808,6 +4838,7 @@ b1:
 
   suite.test("trace_builder_shared_exits").run(trace_builder_shared_exits);
   suite.test("trace_builder_positive_load_reuse").run(trace_builder_positive_load_reuse);
+  suite.test("trace_builder_positive_store_reuse").run(trace_builder_positive_store_reuse);
   suite.test("trace_builder_positive_load_seed").run(trace_builder_positive_load_seed);
   suite.test("trace_builder_positive_load_barriers").run(trace_builder_positive_load_barriers);
   suite.test("trace_builder_failure_store_preserves_forwarding").run(trace_builder_failure_store_preserves_forwarding);
