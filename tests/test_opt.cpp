@@ -813,6 +813,44 @@ void trace_builder_positive_store_reuse() {
   unittest_assert(!section.verify(std::cout));
 }
 
+void trace_builder_positive_wrapping_store() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  TraceBuilder builder(&section);
+  Block* entry = builder.build_block(std::vector<Type>{Type::Ptr});
+  builder.move_to_end(entry);
+  Value* ptr = entry->arg(0);
+  Value* byte = builder.build_const(Type::Int8, 1);
+  Value* word = builder.build_const(Type::Int16, 0);
+  unittest_assert(builder.build_store(ptr, byte, 4, 0));
+  unittest_assert(builder.build_store(ptr, word, StoreFlags::Unaligned, 4, UINT64_MAX));
+  unittest_assert(builder.build_store(ptr, byte, 4, 0));
+  unittest_assert(builder.build_load(ptr, Type::Int16, LoadFlags::Unaligned, 4, UINT64_MAX) != word);
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+}
+
+void trace_builder_positive_wrapping_load() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  TraceBuilder builder(&section);
+  Block* entry = builder.build_block(std::vector<Type>{Type::Ptr});
+  builder.move_to_end(entry);
+  Value* ptr = entry->arg(0);
+  Value* byte = builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 0);
+  Value* adjacent = builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 1);
+  builder.build_store(ptr, builder.build_const(Type::Int16, 0), StoreFlags::Unaligned, 4, UINT64_MAX);
+  unittest_assert(builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 0) != byte);
+  unittest_assert(builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 1) == adjacent);
+  Value* word = builder.build_load(ptr, Type::Int32, LoadFlags::Unaligned, 4, UINT64_MAX - 1);
+  builder.build_store(ptr, builder.build_const(Type::Int8, 1), 4, 0);
+  unittest_assert(builder.build_load(ptr, Type::Int32, LoadFlags::Unaligned, 4, UINT64_MAX - 1) != word);
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+}
+
 void trace_builder_positive_load_seed() {
   Context context;
   Allocator allocator;
@@ -4839,6 +4877,8 @@ b1:
   suite.test("trace_builder_shared_exits").run(trace_builder_shared_exits);
   suite.test("trace_builder_positive_load_reuse").run(trace_builder_positive_load_reuse);
   suite.test("trace_builder_positive_store_reuse").run(trace_builder_positive_store_reuse);
+  suite.test("trace_builder_positive_wrapping_load").run(trace_builder_positive_wrapping_load);
+  suite.test("trace_builder_positive_wrapping_store").run(trace_builder_positive_wrapping_store);
   suite.test("trace_builder_positive_load_seed").run(trace_builder_positive_load_seed);
   suite.test("trace_builder_positive_load_barriers").run(trace_builder_positive_load_barriers);
   suite.test("trace_builder_failure_store_preserves_forwarding").run(trace_builder_failure_store_preserves_forwarding);

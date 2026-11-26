@@ -1714,17 +1714,17 @@ namespace metajit {
   };
 
   struct Interval {
-    size_t min;
-    size_t max; // Exclusive
+    uint64_t offset;
+    uint64_t size;
 
-    Interval(size_t offset, Type type) {
-      min = offset;
-      max = offset + type_size(type);
-      assert(max >= min);
+    Interval(uint64_t offset, Type type): offset(offset), size(type_size(type)) {}
+
+    bool wraps() const {
+      return UINT64_MAX - offset < size - 1;
     }
 
     bool intersects(const Interval& other) const {
-      return max > other.min && min < other.max;
+      return other.offset - offset < size || offset - other.offset < other.size;
     }
   };
 
@@ -1802,7 +1802,7 @@ namespace metajit {
       }
 
       void store(Value* _base, uint64_t offset, Value* value) {
-        if (_base == nullptr) {
+        if (_base == nullptr || Interval(offset, value->type()).wraps()) {
           base = nullptr;
           stores.clear();
           return;
