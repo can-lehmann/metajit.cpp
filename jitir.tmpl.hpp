@@ -6899,17 +6899,10 @@ namespace metajit {
       Capture(NamedValue* value, size_t offset): value(value), offset(offset) {}
     };
 
-    struct Live {
-      LoadInst* load = nullptr;
-      Value* ptr = nullptr;
-
-      Live(LoadInst* load): load(load), ptr(load->ptr()) {}
-    };
-
     struct Closure {
       Inst* reuse = nullptr;
+      std::vector<NamedValue*> live;
       std::vector<Capture> captures;
-      std::vector<Live> live;
       uint32_t id = 0;
       size_t size = sizeof(uint32_t);
 
@@ -6917,38 +6910,14 @@ namespace metajit {
         captures.emplace_back(value, add_record_field(size, value->type()));
       }
 
-      void add_shrunk(NamedValue* value, std::set<NamedValue*>& added) {
-        if (!added.insert(value).second) {
-          return;
-        }
-        if (LoadInst* load = match_pure_load(value)) {
-          if (load->ptr()->is_named()) {
-            add_shrunk((NamedValue*) load->ptr(), added);
-          }
-          live.emplace_back(load);
-        } else {
-          add(value);
-        }
-      }
-
-      void shrink() {
-        std::vector<Capture> collected = std::move(captures);
-        captures.clear();
-        size = sizeof(uint32_t);
-        std::set<NamedValue*> added;
-        for (const Capture& capture : collected) {
-          add_shrunk(capture.value, added);
-        }
-      }
-
       Closure to_cloned(const Clone& clone) const {
         Closure result;
         result.reuse = reuse ? dynamic_cast<Inst*>(clone.at(reuse)) : nullptr;
+        for (NamedValue* value : live) {
+          result.live.push_back((NamedValue*) clone.at(value));
+        }
         for (const Capture& capture : captures) {
           result.captures.emplace_back((NamedValue*) clone.at(capture.value), capture.offset);
-        }
-        for (const Live& value : live) {
-          result.live.emplace_back((LoadInst*) clone.at(value.load));
         }
         result.id = id;
         result.size = size;
@@ -6973,15 +6942,6 @@ namespace metajit {
     std::unordered_map<Inst*, Closure> _closures;
     std::unordered_map<Block*, Frontier> _frontiers;
     std::unordered_set<NamedValue*> _captured;
-
-    static LoadInst* match_pure_load(NamedValue* value) {
-      if (dynmatch(LoadInst, load, value)) {
-        if (load->flags().has(LoadFlags::Pure)) {
-          return load;
-        }
-      }
-      return nullptr;
-    }
 
     void collect_captured() {
       for (const auto& [inst, closure] : _closures) {
@@ -7064,11 +7024,7 @@ namespace metajit {
             if (_closures.find(inst) != _closures.end()) {
               Closure& closure = _closures.at(inst);
               if (!closure.reuse) {
-                closure.captures.clear();
-                closure.size = sizeof(uint32_t);
-                for (NamedValue* value : live) {
-                  closure.add(value);
-                }
+                closure.live.assign(live.begin(), live.end());
               }
             }
           }
@@ -7089,20 +7045,27 @@ namespace metajit {
       }
     }
 
-    void shrink_closures() {
-      for (auto& [inst, closure] : _closures) {
-        if (!closure.reuse) {
-          closure.shrink();
+    static void insert_capture(Value* value, std::set<NamedValue*>& captures) {
+      if (dynmatch(LoadInst, load, value)) {
+        if (load->flags().has(LoadFlags::Pure)) {
+          insert_capture(load->ptr(), captures);
+          return;
         }
       }
+      if (value->is_named()) {
+        captures.insert((NamedValue*) value);
+      }
+    }
 
-      for (auto& [block, frontier] : _frontiers) {
-        std::set<NamedValue*> values(frontier.values.begin(), frontier.values.end());
-        for (size_t it = 0; it < frontier.values.size(); it++) {
-          if (LoadInst* load = match_pure_load(frontier.values[it])) {
-            if (load->ptr()->is_named() && values.insert((NamedValue*) load->ptr()).second) {
-              frontier.values.push_back((NamedValue*) load->ptr());
-            }
+    void populate_captures() {
+      for (auto& [inst, closure] : _closures) {
+        if (!closure.reuse) {
+          std::set<NamedValue*> captures;
+          for (NamedValue* value : closure.live) {
+            insert_capture(value, captures);
+          }
+          for (NamedValue* value : captures) {
+            closure.add(value);
           }
         }
       }
@@ -7157,7 +7120,7 @@ namespace metajit {
       set_ids();
       find_frontiers();
       populate_closures_and_frontiers();
-      shrink_closures();
+      populate_captures();
       collect_captured();
     }
 
@@ -7174,7 +7137,7 @@ namespace metajit {
       set_ids();
       find_frontiers();
       populate_closures_and_frontiers();
-      shrink_closures();
+      populate_captures();
       collect_captured();
     }
 
@@ -7261,10 +7224,6 @@ namespace metajit {
               capture.value->write_arg(stream);
               is_first = false;
             }
-            for (const Live& value : closure.live) {
-              stream << ", live ";
-              value.load->write_arg(stream);
-            }
           }
         }
       };
@@ -7295,16 +7254,16 @@ namespace metajit {
 
     Builder _builder;
     Block* _original_entry;
-    std::unordered_map<Inst*, Block*> _entry_blocks;
+    std::unordered_map<Inst*, JumpInst*> _entry_jumps;
     std::unordered_map<Block*, std::map<Value*, Value*>> _substs_at_entry;
 
     void slice_blocks() {
       _substs_at_entry.emplace(
-        _section->entry(),
+        _original_entry,
         std::map<Value*, Value*>()
       );
 
-      Block* block = _section->entry();
+      Block* block = _original_entry;
       while (block) {
         Block* next_block = block->next();
 
@@ -7344,17 +7303,11 @@ namespace metajit {
             std::vector<Arg*> args;
             std::vector<Value*> jump_args;
             std::map<Value*, Value*> new_substs;
-            auto add_arg = [&](NamedValue* value) {
+            for (NamedValue* value : closure.live) {
               Arg* arg = _builder.alloc_arg(value->type(), args.size());
               new_substs.emplace(value, arg);
               args.push_back(arg);
               jump_args.push_back(value);
-            };
-            for (const ReentryClosures::Capture& capture : closure.captures) {
-              add_arg(capture.value);
-            }
-            for (const ReentryClosures::Live& value : closure.live) {
-              add_arg(value.load);
             }
 
             Block* new_block = _builder.build_block_before(next_block, args);
@@ -7362,7 +7315,7 @@ namespace metajit {
             _builder.build_jump(new_block, jump_args)->substitute_args(substs);
             _builder.move_to_end(new_block);
 
-            _entry_blocks.emplace(inst, new_block);
+            _entry_jumps.at(inst)->set_block(new_block);
 
             substs = new_substs;
           }
@@ -7404,6 +7357,18 @@ namespace metajit {
       }
     }
 
+    void recompute(NamedValue* value, const BlockMap<Block*>& blocks, NameMap<Value*>& values) {
+      if (!values[value]) {
+        Inst* inst = (Inst*) value;
+        for (Value* arg : inst->args()) {
+          if (arg->is_named()) {
+            recompute((NamedValue*) arg, blocks, values);
+          }
+        }
+        values[value] = Clone::clone(inst, _builder, blocks, values);
+      }
+    }
+
     void build_dispatcher() {
       Block* original_entry = _section->entry();
       Block* dispatch_entry = _builder.build_block_before(original_entry, {
@@ -7422,6 +7387,9 @@ namespace metajit {
       _builder.move_to_end(invalid_id);
       _builder.build_exit(); // Unreachable
 
+      BlockMap<Block*> blocks(_section);
+      NameMap<Value*> values(_section);
+
       Block* else_block = invalid_id;
       for (auto& [inst, closure] : _closures) {
         if (!closure.reuse) {
@@ -7436,35 +7404,24 @@ namespace metajit {
           );
 
           _builder.move_to_end(load_block);
-          std::vector<Value*> capture_values;
-          std::map<Value*, Value*> substs;
+          values.fill(nullptr);
           for (const ReentryClosures::Capture& capture : closure.captures) {
-            capture_values.push_back(_builder.build_load(
+            values[capture.value] = _builder.build_load(
               _builder.entry_arg(0),
               capture.value->type(),
               LoadFlags::None,
               AliasingGroup(0),
               capture.offset
-            ));
-            substs.emplace(capture.value, capture_values.back());
-          }
-          for (const ReentryClosures::Live& value : closure.live) {
-            LoadInst* load = value.load;
-            Value* ptr = value.ptr;
-            if (ptr->is_named()) {
-              ptr = substs.at(ptr);
-            }
-            capture_values.push_back(_builder.build_load(
-              ptr,
-              load->type(),
-              load->flags(),
-              load->aliasing(),
-              load->offset()
-            ));
-            substs.emplace(load, capture_values.back());
+            );
           }
 
-          _builder.build_jump(_entry_blocks.at(inst), capture_values);
+          std::vector<Value*> live_values;
+          for (NamedValue* value : closure.live) {
+            recompute(value, blocks, values);
+            live_values.push_back(values[value]);
+          }
+
+          _entry_jumps.emplace(inst, _builder.build_jump(nullptr, live_values));
 
           
           else_block = check_block;
@@ -7479,10 +7436,11 @@ namespace metajit {
         Pass(section),
         _section(section),
         _closures(closures),
-        _builder(section) {
+        _builder(section),
+        _original_entry(section->entry()) {
       
-      slice_blocks();
       build_dispatcher();
+      slice_blocks();
     }
   };
 
