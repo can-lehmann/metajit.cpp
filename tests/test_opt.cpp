@@ -751,6 +751,168 @@ void trace_builder_failure_store_preserves_forwarding() {
   }
 }
 
+void trace_builder_positive_load_reuse() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  TraceBuilder builder(&section);
+  Block* entry = builder.build_block(std::vector<Type>{Type::Ptr, Type::Ptr, Type::Bool});
+  builder.move_to_end(entry);
+  Value* ptr = entry->arg(0);
+  Value* other = entry->arg(1);
+  Value* byte = builder.build_const(Type::Int8, 7);
+  LoadFlags flags = LoadFlags::InBounds;
+  Value* first = builder.build_load(ptr, Type::Int32, flags, 4, 32);
+  builder.build_store(ptr, byte, 4, 84);
+  unittest_assert(builder.build_load(ptr, Type::Int32, flags, 4, 32) == first);
+  unittest_assert(builder.build_load(other, Type::Int32, flags, 4, 32) != first);
+  unittest_assert(builder.build_load(ptr, Type::Int8, flags, 4, 32) != first);
+  unittest_assert(builder.build_load(ptr, Type::Int32, LoadFlags::None, 4, 32) != first);
+  unittest_assert(builder.build_load(ptr, Type::Int32, flags, 4, 36) != first);
+  unittest_assert(builder.build_guard_begin(entry->arg(2)));
+  builder.build_store(ptr, byte, 0, 32);
+  unittest_assert(builder.build_load(ptr, Type::Int32, flags, 4, 32) != first);
+  builder.build_guard_end();
+  unittest_assert(builder.build_load(ptr, Type::Int32, flags, 4, 32) == first);
+  builder.build_store(ptr, byte, 4, 35);
+  Value* after_overlap = builder.build_load(ptr, Type::Int32, flags, 4, 32);
+  unittest_assert(after_overlap != first);
+  builder.build_store(other, byte, 4, 84);
+  unittest_assert(builder.build_load(ptr, Type::Int32, flags, 4, 32) != after_overlap);
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+}
+
+void trace_builder_positive_load_limit() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  TraceBuilder builder(&section);
+  Block* entry = builder.build_block(std::vector<Type>{Type::Ptr});
+  builder.move_to_end(entry);
+  Value* ptr = entry->arg(0);
+  Value* tracked[32];
+  for (size_t offset = 0; offset < 32; ++offset) {
+    tracked[offset] = builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, offset);
+  }
+  Value* overflow = builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 32);
+  unittest_assert(builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 32) != overflow);
+  for (size_t offset = 0; offset < 32; ++offset) {
+    unittest_assert(builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, offset) == tracked[offset]);
+  }
+  builder.build_store(ptr, builder.build_const(Type::Int8, 0), 4, 0);
+  Value* replacement = builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 32);
+  unittest_assert(builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 32) == replacement);
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+}
+
+void trace_builder_positive_store_reuse() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  TraceBuilder builder(&section);
+  Block* entry = builder.build_block(std::vector<Type>{Type::Ptr, Type::Ptr, Type::Int32, Type::Bool});
+  builder.move_to_end(entry);
+  Value* ptr = entry->arg(0);
+  Value* value = entry->arg(2);
+  Value* byte = builder.build_const(Type::Int8, 1);
+  unittest_assert(builder.build_store(ptr, value, 4, 4));
+  unittest_assert(builder.build_store(ptr, byte, 4, 8));
+  unittest_assert(!builder.build_store(ptr, value, 4, 4));
+  unittest_assert(builder.build_guard_begin(entry->arg(3)));
+  unittest_assert(builder.build_store(ptr, byte, 0, 5));
+  builder.build_guard_end();
+  unittest_assert(!builder.build_store(ptr, value, 4, 4));
+  unittest_assert(builder.build_store(ptr, byte, 4, 5));
+  unittest_assert(builder.build_load(ptr, Type::Int32, LoadFlags::None, 4, 4) != value);
+  unittest_assert(builder.build_store(ptr, value, 4, 4));
+  unittest_assert(builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 5) != byte);
+  unittest_assert(!builder.build_store(ptr, byte, 4, 8));
+  builder.build_store(entry->arg(1), byte, 4, 4);
+  unittest_assert(builder.build_store(ptr, value, 4, 4));
+  builder.build_call(builder.build_symbol(Type::Ptr, "callee"), Type::Void, std::vector<Value*>{});
+  unittest_assert(builder.build_store(ptr, value, 4, 4));
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+}
+
+void trace_builder_positive_wrapping_store() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  TraceBuilder builder(&section);
+  Block* entry = builder.build_block(std::vector<Type>{Type::Ptr});
+  builder.move_to_end(entry);
+  Value* ptr = entry->arg(0);
+  Value* byte = builder.build_const(Type::Int8, 1);
+  Value* word = builder.build_const(Type::Int16, 0);
+  unittest_assert(builder.build_store(ptr, byte, 4, 0));
+  unittest_assert(builder.build_store(ptr, word, StoreFlags::Unaligned, 4, UINT64_MAX));
+  unittest_assert(builder.build_store(ptr, byte, 4, 0));
+  unittest_assert(builder.build_load(ptr, Type::Int16, LoadFlags::Unaligned, 4, UINT64_MAX) != word);
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+}
+
+void trace_builder_positive_wrapping_load() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  TraceBuilder builder(&section);
+  Block* entry = builder.build_block(std::vector<Type>{Type::Ptr});
+  builder.move_to_end(entry);
+  Value* ptr = entry->arg(0);
+  Value* byte = builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 0);
+  Value* adjacent = builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 1);
+  builder.build_store(ptr, builder.build_const(Type::Int16, 0), StoreFlags::Unaligned, 4, UINT64_MAX);
+  unittest_assert(builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 0) != byte);
+  unittest_assert(builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 1) == adjacent);
+  Value* word = builder.build_load(ptr, Type::Int32, LoadFlags::Unaligned, 4, UINT64_MAX - 1);
+  builder.build_store(ptr, builder.build_const(Type::Int8, 1), 4, 0);
+  unittest_assert(builder.build_load(ptr, Type::Int32, LoadFlags::Unaligned, 4, UINT64_MAX - 1) != word);
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+}
+
+void trace_builder_positive_load_seed() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  TraceBuilder builder(&section);
+  Block* entry = builder.build_block(std::vector<Type>{Type::Ptr, Type::Ptr});
+  builder.move_to_end(entry);
+  Value* first = builder.build_load(entry->arg(0), Type::Int32, LoadFlags::None, 3, 8);
+  builder.init_store(entry->arg(1), builder.build_const(Type::Int32, 42), 3, 8);
+  unittest_assert(builder.build_load(entry->arg(0), Type::Int32, LoadFlags::None, 3, 8) != first);
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+}
+
+void trace_builder_positive_load_barriers() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  TraceBuilder builder(&section);
+  Block* entry = builder.build_block(std::vector<Type>{Type::Ptr});
+  builder.move_to_end(entry);
+  Value* ptr = entry->arg(0);
+  Value* callee = builder.build_symbol(Type::Ptr, "callee");
+  Value* first = builder.build_load(ptr, Type::Int32, LoadFlags::None, 7, 8);
+  builder.build_call(callee, Type::Void, std::vector<Value*>{}, CallConv::Default, CallFlags::None, 9);
+  unittest_assert(builder.build_load(ptr, Type::Int32, LoadFlags::None, 7, 8) == first);
+  builder.build_call(callee, Type::Void, std::vector<Value*>{}, CallConv::Default, CallFlags::None, 7);
+  Value* after_call = builder.build_load(ptr, Type::Int32, LoadFlags::None, 7, 8);
+  unittest_assert(after_call != first);
+  builder.build_call(callee, Type::Void, std::vector<Value*>{});
+  Value* after_unknown = builder.build_load(ptr, Type::Int32, LoadFlags::None, 7, 8);
+  unittest_assert(after_unknown != after_call);
+  builder.build_store(ptr, builder.build_const(Type::Int8, 1), 0, 8);
+  unittest_assert(builder.build_load(ptr, Type::Int32, LoadFlags::None, 7, 8) != after_unknown);
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+}
+
 void trace_builder_false_guard() {
   Context context;
   Allocator allocator;
@@ -4810,6 +4972,13 @@ b1:
   });
 
   suite.test("trace_builder_shared_exits").run(trace_builder_shared_exits);
+  suite.test("trace_builder_positive_load_reuse").run(trace_builder_positive_load_reuse);
+  suite.test("trace_builder_positive_load_limit").run(trace_builder_positive_load_limit);
+  suite.test("trace_builder_positive_store_reuse").run(trace_builder_positive_store_reuse);
+  suite.test("trace_builder_positive_wrapping_load").run(trace_builder_positive_wrapping_load);
+  suite.test("trace_builder_positive_wrapping_store").run(trace_builder_positive_wrapping_store);
+  suite.test("trace_builder_positive_load_seed").run(trace_builder_positive_load_seed);
+  suite.test("trace_builder_positive_load_barriers").run(trace_builder_positive_load_barriers);
   suite.test("trace_builder_failure_store_preserves_forwarding").run(trace_builder_failure_store_preserves_forwarding);
   suite.test("trace_builder_failure_load_bypasses_forwarding").run(trace_builder_failure_load_bypasses_forwarding);
   suite.test("trace_builder_false_guard").run(trace_builder_false_guard);

@@ -1720,17 +1720,17 @@ namespace metajit {
   };
 
   struct Interval {
-    size_t min;
-    size_t max; // Exclusive
+    uint64_t offset;
+    uint64_t size;
 
-    Interval(size_t offset, Type type) {
-      min = offset;
-      max = offset + type_size(type);
-      assert(max >= min);
+    Interval(uint64_t offset, Type type): offset(offset), size(type_size(type)) {}
+
+    bool wraps() const {
+      return UINT64_MAX - offset < size - 1;
     }
 
     bool intersects(const Interval& other) const {
-      return max > other.min && min < other.max;
+      return other.offset - offset < size || offset - other.offset < other.size;
     }
   };
 
@@ -1808,7 +1808,7 @@ namespace metajit {
       }
 
       void store(Value* _base, uint64_t offset, Value* value) {
-        if (_base == nullptr) {
+        if (_base == nullptr || Interval(offset, value->type()).wraps()) {
           base = nullptr;
           stores.clear();
           return;
@@ -1818,11 +1818,21 @@ namespace metajit {
           base = _base;
           stores.clear();
         }
-        // TODO: Overlapping
-        stores[offset] = value;
+        auto next = stores.lower_bound(offset);
+        if (next != stores.begin()) {
+          auto previous = std::prev(next);
+          if (offset - previous->first < type_size(previous->second->type())) {
+            stores.erase(previous);
+          }
+        }
+        while (next != stores.end() && next->first - offset < type_size(value->type())) {
+          next = stores.erase(next);
+        }
+        stores.emplace_hint(next, offset, value);
       }
     };
     
+    static constexpr size_t MAX_POSITIVE_GROUP_LOADS = 32;
     std::unordered_map<AliasingGroup, std::unordered_set<LoadInst*>> _valid_loads;
     ExpandingVector<LoadInst*> _exact_loads;
 
@@ -2017,8 +2027,19 @@ namespace metajit {
           return value;
         }
 
+        auto& valid_loads = _valid_loads[aliasing];
+        if (aliasing > 0) {
+          for (LoadInst* load : valid_loads) {
+            if (load->ptr() == ptr && load->offset() == offset &&
+                load->type() == type && load->flags() == flags) {
+              return load;
+            }
+          }
+        }
         LoadInst* load = Builder::build_load(ptr, type, flags, aliasing, offset);
-        _valid_loads[aliasing].insert(load);
+        if (aliasing == 0 || valid_loads.size() < MAX_POSITIVE_GROUP_LOADS) {
+          valid_loads.insert(load);
+        }
         return load;
       }
     }
@@ -2048,6 +2069,9 @@ namespace metajit {
         _exact_loads[-aliasing] = nullptr;
         return Builder::build_store(ptr, value, flags, aliasing, offset);
       } else {
+        if (aliasing > 0 && _memory[aliasing].load(ptr, offset, value->type()) == value) {
+          return nullptr;
+        }
         bool noop_store = false;
         for (auto it = _valid_loads[aliasing].begin(); it != _valid_loads[aliasing].end(); ) {
           LoadInst* load = *it;
@@ -2179,6 +2203,7 @@ namespace metajit {
       if (aliasing < 0) {
         _exact_memory[-aliasing] = value;
       } else {
+        _valid_loads.erase(aliasing);
         _memory[aliasing].store(ptr, offset, value);
       }
     }
