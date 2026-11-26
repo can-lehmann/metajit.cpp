@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "diff.hpp"
+#include "../loadforwarding.hpp"
 
 #include "../../unittest.cpp/unittest.hpp"
 
@@ -3336,6 +3337,104 @@ b0(%0: Ptr, %1: Int8):
 )");
 }
 
+enum class ReachingValue { EarlierLoad, StoredArgument, Reload };
+
+void check_exact_load_join(AliasingGroup group, const std::string& left,
+                           const std::string& right, const std::string& type,
+                           ReachingValue reaches) {
+  Context context;
+  Allocator allocator;
+  std::string alias = std::to_string(group);
+  std::istringstream input(
+    "section {\nb0(%0: Ptr, %1: Ptr, %2: Bool, %3: Int32):\n"
+    "  %4 = Load %0, type=Int32, flags={}, aliasing=" + alias + ", offset=4\n"
+    "  Branch %2, true_block=b1, false_block=b2\nb1:\n" + left +
+    "  Jump block=b3\nb2:\n" + right + "  Jump block=b3\nb3:\n"
+    "  %5 = Load " + (group < 0 ? "%1" : "%0") + ", type=" + type +
+    ", flags={}, aliasing=" + alias + ", offset=" + (group < 0 ? "0" : "4") + "\n"
+    "  Store %1, %5, flags={}, aliasing=0, offset=16\n  Exit\n}\n");
+  Section* section = SectionReader<>::read_section(context, allocator, input);
+  Value* first = *section->entry()->begin();
+  Block* join = section->entry()->next()->next()->next();
+  Inst* last = *join->begin();
+  StoreInst* output = (StoreInst*)last->next();
+  Value* expected = last;
+  if (reaches == ReachingValue::EarlierLoad) expected = first;
+  if (reaches == ReachingValue::StoredArgument) expected = section->entry()->arg(3);
+  LoadForwarding::run(section);
+  unittest_assert(output->value() == expected);
+  unittest_assert(!section->verify(std::cerr));
+  delete section;
+}
+
+void test_exact_load_joins() {
+  std::string store = "  Store %0, %3, flags={}, aliasing=-1, offset=4\n";
+  check_exact_load_join(-1, "", "", "Int32", ReachingValue::EarlierLoad);
+  check_exact_load_join(-1, store, store, "Int32", ReachingValue::StoredArgument);
+  check_exact_load_join(-1, store, "", "Int32", ReachingValue::Reload);
+  check_exact_load_join(-1, "", "  Store %0, %3, flags={}, aliasing=-2, offset=8\n", "Int32", ReachingValue::EarlierLoad);
+  check_exact_load_join(-1, "", "  Store %0, %3, flags={}, aliasing=0, offset=4\n", "Int32", ReachingValue::Reload);
+  check_exact_load_join(-1, "", "  Call @external:Ptr, type=Void, call_conv=Default, flags={}, aliasing=0\n", "Int32", ReachingValue::Reload);
+  check_exact_load_join(-1, "", "  Metadata %0, kind=LifetimeEnd\n", "Int32", ReachingValue::Reload);
+  check_exact_load_join(-1, "", "", "Int16", ReachingValue::Reload);
+  check_exact_load_join(0, "", "", "Int32", ReachingValue::Reload);
+  check_exact_load_join(1, "", "", "Int32", ReachingValue::Reload);
+}
+
+void test_exact_load_forwarded_store() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Ptr, Type::Int32, Type::Bool});
+  Block* left = builder.build_block();
+  Block* right = builder.build_block();
+  Block* join = builder.build_block();
+  builder.move_to_end(entry);
+  builder.build_store(entry->arg(0), entry->arg(1), -1, 0);
+  builder.build_branch(entry->arg(2), left, right);
+  builder.move_to_end(left);
+  Value* reload = builder.build_load(entry->arg(0), Type::Int32, {}, -1, 0);
+  builder.build_store(entry->arg(0), reload, -2, 4);
+  builder.build_jump(join);
+  builder.move_to_end(right);
+  builder.build_store(entry->arg(0), entry->arg(1), -2, 4);
+  builder.build_jump(join);
+  builder.move_to_end(join);
+  Value* result = builder.build_load(entry->arg(0), Type::Int32, {}, -2, 4);
+  StoreInst* output = builder.build_store(entry->arg(0), result, -3, 8);
+  builder.build_exit();
+  LoadForwarding::run(&section);
+  unittest_assert(output->value() == entry->arg(1));
+  unittest_assert(!section.verify(std::cerr));
+}
+
+void test_exact_load_backedge() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Block* entry = builder.build_block({Type::Ptr, Type::Bool, Type::Int32});
+  Block* header = builder.build_block();
+  Block* body = builder.build_block();
+  Block* exit = builder.build_block();
+  builder.move_to_end(entry);
+  builder.build_load(entry->arg(0), Type::Int32, {}, -1, 0);
+  builder.build_jump(header);
+  builder.move_to_end(header);
+  Value* reload = builder.build_load(entry->arg(0), Type::Int32, {}, -1, 0);
+  StoreInst* output = builder.build_store(entry->arg(0), reload, -2, 8);
+  builder.build_branch(entry->arg(1), body, exit);
+  builder.move_to_end(body);
+  builder.build_store(entry->arg(0), entry->arg(2), -1, 0);
+  builder.build_jump(header);
+  builder.move_to_end(exit);
+  builder.build_exit();
+  LoadForwarding::run(&section);
+  unittest_assert(output->value() == reload);
+  unittest_assert(!section.verify(std::cerr));
+}
+
 void test_cse_pure_loads_across_guards() {
   Context context;
   Allocator allocator;
@@ -3467,6 +3566,9 @@ int main(int argc, char** argv) {
     CommonSubexprElim::run(&section);
     unittest_assert(output->value() == builder.entry_arg(1));
   });
+  suite.test("exact load forwarding at joins").run(test_exact_load_joins);
+  suite.test("exact load forwarding through predecessor stores").run(test_exact_load_forwarded_store);
+  suite.test("exact load forwarding at loop headers").run(test_exact_load_backedge);
   suite.test("cse pure loads across guards and calls").run(test_cse_pure_loads_across_guards);
   suite.test("fold xor same operand").run(test_fold_xor_same_operand);
   suite.test("fold lt_u same operand").run(test_fold_lt_u_same_operand);
