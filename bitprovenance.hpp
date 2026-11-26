@@ -367,6 +367,7 @@ private:
     }
   };
 
+  const bool _reuse_values;
   Builder _builder;
   NameMap<Mapping> _facts;
   NameMap<Value*> _substs;
@@ -504,11 +505,29 @@ private:
   Value* extract_from_value(Inst* inst, const Mapping& mapping, Value* value) {
     size_t width = type_width(inst->type());
     Mapping input = get(value);
-    if (value->type() != inst->type()) {
-      return extract_resize(inst, mapping, value, input);
-    }
-    if (input.equal(mapping, width)) {
+    size_t from = type_width(value->type());
+    if (from != width) {
+      if (Value* replacement = extract_resize(inst, mapping, value, input)) {
+        return replacement;
+      }
+    } else if (input.equal(mapping, width)) {
       return value;
+    }
+    if (from >= width && input.bits[width - 1] == mapping.bits[0] &&
+        input.bit_reverse(width).equal(mapping, width)) {
+      if (dynamic_cast<BitReverseInst*>(inst)) {
+        Value* operand = inst->arg(0);
+        if (operand == value || (dynamic_cast<ResizeUInst*>(operand) && ((Inst*) operand)->arg(0) == value)) {
+          return inst;
+        }
+      }
+      if (from > width) {
+        value = _builder.fold_resize_u(value, inst->type());
+      }
+      return _builder.fold_bit_reverse(value);
+    }
+    if (from != width) {
+      return nullptr;
     }
     size_t first = 0;
     while (first < width && !reference(mapping.bits[first])) {
@@ -549,6 +568,29 @@ private:
     return nullptr;
   }
 
+  Value* extract_shifted_reverse(Inst* inst, const Mapping& mapping) {
+    if (mapping.bits[0] != Zero || mapping.source->type() != inst->type()) {
+      return nullptr;
+    }
+    size_t width = type_width(inst->type());
+    size_t shift = 1;
+    while (shift < width && mapping.bits[shift] == Zero) {
+      shift++;
+    }
+    for (size_t i = shift; i < width; i++) {
+      if (mapping.bits[i] != width - 1 - (i - shift)) {
+        return nullptr;
+      }
+    }
+    Key key{opaque(mapping.source).bit_reverse(width), inst->type()};
+    const auto reversed = _available.find(key);
+    if (reversed == _available.end() ||
+        (dynamic_cast<ShlInst*>(inst) && inst->arg(0) == reversed->second)) {
+      return nullptr;
+    }
+    return _builder.build_shl(reversed->second, _builder.build_const(inst->type(), shift));
+  }
+
   Value* find_replacement(Block* block, Inst* inst, const Mapping& mapping) {
     if (inst->has_side_effect() || inst->is_terminator() || dynamic_cast<LoadInst*>(inst)) {
       return nullptr;
@@ -560,6 +602,10 @@ private:
     if (!mapping.exact(type_width(inst->type()))) {
       return nullptr;
     }
+    if (!_reuse_values) {
+      Value* replacement = extract_from_source(inst, mapping);
+      return replacement == inst ? nullptr : replacement;
+    }
     Key key{mapping, inst->type()};
     if (_available.find(key) != _available.end()) {
       return _available.at(key);
@@ -569,10 +615,10 @@ private:
       return replacement;
     }
     replacement = extract_from_candidates(inst, mapping);
-    if (replacement == inst) {
-      return nullptr;
+    if (replacement) {
+      return replacement == inst ? nullptr : replacement;
     }
-    return replacement;
+    return extract_shifted_reverse(inst, mapping);
   }
 
   void record_value(NamedValue* value, const Mapping& mapping) {
@@ -582,6 +628,9 @@ private:
     _facts.ensure_size(size);
     _substs.ensure_size(size);
     _facts[value] = mapping;
+    if (!_reuse_values) {
+      return;
+    }
     if (mapping.exact(type_width(value->type()))) {
       _available.try_emplace(Key{mapping, value->type()}, value);
     }
@@ -600,11 +649,12 @@ private:
     }
   }
 
-public:
-  BitProvenance(Section* section, const Chain& chain)
-      : Pass(section), _builder(section), _facts(section), _substs(section) {
+  template<class Blocks>
+  BitProvenance(Section* section, Blocks& blocks, bool reuse_values)
+      : Pass(section), _reuse_values(reuse_values), _builder(section), _facts(section), _substs(section) {
+    assert(reuse_values || section->ordering() >= BlockOrdering::Dominator);
     _builder.set_next_name();
-    for (Block* block : chain) {
+    for (Block* block : blocks) {
       for (Arg* arg : block->args()) {
         if (is_int_or_bool(arg->type())) {
           record_value(arg, opaque(arg));
@@ -643,6 +693,10 @@ public:
       }
     }
   }
+
+public:
+  BitProvenance(Section* section, const Chain& chain): BitProvenance(section, chain, true) {}
+  explicit BitProvenance(Section* section): BitProvenance(section, *section, false) {}
 };
 
 }
