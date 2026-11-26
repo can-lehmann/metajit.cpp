@@ -2003,8 +2003,17 @@ namespace metajit {
           return value;
         }
 
+        auto& valid_loads = _valid_loads[aliasing];
+        if (aliasing > 0) {
+          for (LoadInst* load : valid_loads) {
+            if (load->ptr() == ptr && load->offset() == offset &&
+                load->type() == type && load->flags() == flags) {
+              return load;
+            }
+          }
+        }
         LoadInst* load = Builder::build_load(ptr, type, flags, aliasing, offset);
-        _valid_loads[aliasing].insert(load);
+        valid_loads.insert(load);
         return load;
       }
     }
@@ -2165,6 +2174,7 @@ namespace metajit {
       if (aliasing < 0) {
         _exact_memory[-aliasing] = value;
       } else {
+        _valid_loads.erase(aliasing);
         _memory[aliasing].store(ptr, offset, value);
       }
     }
