@@ -6183,6 +6183,7 @@ namespace metajit {
              _dom_start[dominated] < _dom_end[dominator];
     }
 
+  public:
     static bool can_sink(Inst* inst) {
       return !inst->has_side_effect() && !inst->is_terminator() &&
              !dynamic_cast<LoadInst*>(inst) &&
@@ -6193,7 +6194,7 @@ namespace metajit {
              !dynamic_cast<CommentInst*>(inst) &&
              !dynamic_cast<MetadataInst*>(inst);
     }
-
+  private:
     void find_parents() {
       for (Block* block : *_section) {
         for (Arg* arg : block->args()) {
@@ -6992,6 +6993,75 @@ namespace metajit {
     return value;
   }
 
+  class MinCut {
+  public:
+    using NodeId = size_t;
+    static constexpr size_t INFINITE = SIZE_MAX;
+  private:
+    struct Edge {
+      NodeId to = 0;
+      size_t capacity = 0;
+
+      Edge() {}
+      Edge(NodeId _to, size_t _capacity): to(_to), capacity(_capacity) {}
+    };
+
+    std::vector<Edge> _edges;
+    std::vector<std::vector<size_t>> _outgoing;
+
+    size_t augment(NodeId node, NodeId sink, size_t limit, std::vector<bool>& visited) {
+      if (node == sink) {
+        return limit;
+      }
+      visited[node] = true;
+      for (size_t index : _outgoing[node]) {
+        Edge& edge = _edges[index];
+        if (edge.capacity > 0 && !visited[edge.to]) {
+          size_t flow = augment(edge.to, sink, std::min(limit, edge.capacity), visited);
+          if (flow > 0) {
+            edge.capacity -= flow;
+            _edges[index ^ 1].capacity += flow;
+            return flow;
+          }
+        }
+      }
+      return 0;
+    }
+
+    void find_sink_side(NodeId node, std::vector<bool>& sink_side) const {
+      sink_side[node] = true;
+      for (size_t index : _outgoing[node]) {
+        NodeId from = _edges[index].to;
+        if (_edges[index ^ 1].capacity > 0 && !sink_side[from]) {
+          find_sink_side(from, sink_side);
+        }
+      }
+    }
+  public:
+    NodeId node() {
+      _outgoing.emplace_back();
+      return _outgoing.size() - 1;
+    }
+
+    void edge(NodeId from, NodeId to, size_t cost) {
+      _outgoing[from].push_back(_edges.size());
+      _edges.emplace_back(to, cost);
+      _outgoing[to].push_back(_edges.size());
+      _edges.emplace_back(from, 0);
+    }
+
+    std::vector<bool> solve(NodeId source, NodeId sink) {
+      std::vector<bool> visited(_outgoing.size(), false);
+      while (augment(source, sink, INFINITE, visited) > 0) {
+        visited.assign(_outgoing.size(), false);
+      }
+
+      std::vector<bool> sink_side(_outgoing.size(), false);
+      find_sink_side(sink, sink_side);
+      return sink_side;
+    }
+  };
+
   class ReentryClosures {
   public:
     struct Capture {
@@ -7148,28 +7218,62 @@ namespace metajit {
       }
     }
 
-    static void insert_capture(Value* value, std::set<NamedValue*>& captures) {
-      if (dynmatch(LoadInst, load, value)) {
-        if (load->flags().has(LoadFlags::Pure)) {
-          insert_capture(load->ptr(), captures);
-          return;
+    static bool can_recompute(Inst* inst) {
+      if (dynmatch(LoadInst, load, inst)) {
+        return load->flags().has(LoadFlags::Pure);
+      }
+      return CodeSinking::can_sink(inst);
+    }
+
+    static void populate_captures(Closure& closure) {
+      MinCut min_cut;
+      MinCut::NodeId source = min_cut.node();
+      MinCut::NodeId sink = min_cut.node();
+
+      std::map<NamedValue*, std::pair<MinCut::NodeId, MinCut::NodeId>> nodes;
+      std::vector<NamedValue*> open;
+      auto split_nodes = [&](NamedValue* value) {
+        auto [it, inserted] = nodes.try_emplace(value);
+        if (inserted) {
+          it->second = { min_cut.node(), min_cut.node() };
+          min_cut.edge(it->second.first, it->second.second, 1);
+          open.push_back(value);
+        }
+        return it->second;
+      };
+
+      for (NamedValue* value : closure.live) {
+        min_cut.edge(split_nodes(value).second, sink, MinCut::INFINITE);
+      }
+
+      while (!open.empty()) {
+        NamedValue* value = open.back();
+        open.pop_back();
+
+        MinCut::NodeId input = nodes.at(value).first;
+        if (dynmatch(Inst, inst, value); inst && can_recompute(inst)) {
+          for (Value* arg : inst->args()) {
+            if (arg->is_named()) {
+              min_cut.edge(split_nodes((NamedValue*) arg).second, input, MinCut::INFINITE);
+            }
+          }
+        } else {
+          min_cut.edge(source, input, MinCut::INFINITE);
         }
       }
-      if (value->is_named()) {
-        captures.insert((NamedValue*) value);
+
+      std::vector<bool> sink_side = min_cut.solve(source, sink);
+      for (const auto& [value, split] : nodes) {
+        if (!sink_side[split.first] && sink_side[split.second]) {
+          closure.add(value);
+        }
       }
     }
 
     void populate_captures() {
       for (auto& [inst, closure] : _closures) {
         if (!closure.reuse) {
-          std::set<NamedValue*> captures;
-          for (NamedValue* value : closure.live) {
-            insert_capture(value, captures);
-          }
-          for (NamedValue* value : captures) {
-            closure.add(value);
-          }
+          populate_captures(closure);
         }
       }
     }
