@@ -783,6 +783,30 @@ void trace_builder_positive_load_reuse() {
   unittest_assert(!section.verify(std::cout));
 }
 
+void trace_builder_positive_load_limit() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  TraceBuilder builder(&section);
+  Block* entry = builder.build_block(std::vector<Type>{Type::Ptr});
+  builder.move_to_end(entry);
+  Value* ptr = entry->arg(0);
+  Value* tracked[32];
+  for (size_t offset = 0; offset < 32; ++offset) {
+    tracked[offset] = builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, offset);
+  }
+  Value* overflow = builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 32);
+  unittest_assert(builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 32) != overflow);
+  for (size_t offset = 0; offset < 32; ++offset) {
+    unittest_assert(builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, offset) == tracked[offset]);
+  }
+  builder.build_store(ptr, builder.build_const(Type::Int8, 0), 4, 0);
+  Value* replacement = builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 32);
+  unittest_assert(builder.build_load(ptr, Type::Int8, LoadFlags::None, 4, 32) == replacement);
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cout));
+}
+
 void trace_builder_positive_store_reuse() {
   Context context;
   Allocator allocator;
@@ -4876,6 +4900,7 @@ b1:
 
   suite.test("trace_builder_shared_exits").run(trace_builder_shared_exits);
   suite.test("trace_builder_positive_load_reuse").run(trace_builder_positive_load_reuse);
+  suite.test("trace_builder_positive_load_limit").run(trace_builder_positive_load_limit);
   suite.test("trace_builder_positive_store_reuse").run(trace_builder_positive_store_reuse);
   suite.test("trace_builder_positive_wrapping_load").run(trace_builder_positive_wrapping_load);
   suite.test("trace_builder_positive_wrapping_store").run(trace_builder_positive_wrapping_store);

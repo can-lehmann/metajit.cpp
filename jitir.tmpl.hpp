@@ -1826,6 +1826,7 @@ namespace metajit {
       }
     };
     
+    static constexpr size_t MAX_POSITIVE_GROUP_LOADS = 32;
     std::unordered_map<AliasingGroup, std::unordered_set<LoadInst*>> _valid_loads;
     ExpandingVector<LoadInst*> _exact_loads;
 
@@ -2022,7 +2023,9 @@ namespace metajit {
           }
         }
         LoadInst* load = Builder::build_load(ptr, type, flags, aliasing, offset);
-        valid_loads.insert(load);
+        if (aliasing == 0 || valid_loads.size() < MAX_POSITIVE_GROUP_LOADS) {
+          valid_loads.insert(load);
+        }
         return load;
       }
     }
