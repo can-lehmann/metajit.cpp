@@ -304,6 +304,15 @@ namespace metajit {
           {emit_type(popcount->arg(0)->type())},
           {emit_arg(popcount->arg(0))}
         );
+      } else if (dynamic_cast<RotLInst*>(inst) || dynamic_cast<RotRInst*>(inst)) {
+        llvm::Value* value = emit_arg(inst->arg(0));
+        llvm::Value* count = emit_arg(inst->arg(1));
+        llvm::Value* rotated = _builder.CreateIntrinsic(
+          dynamic_cast<RotLInst*>(inst) ? llvm::Intrinsic::fshl : llvm::Intrinsic::fshr,
+          {value->getType()}, {value, value, count}
+        );
+        llvm::Value* width = llvm::ConstantInt::get(count->getType(), type_width(inst->type()));
+        return _builder.CreateSelect(_builder.CreateICmpULT(count, width), rotated, llvm::PoisonValue::get(value->getType()));
       } else if (dynmatch(BitReverseInst, bit_reverse, inst)) {
         return _builder.CreateIntrinsic(
           llvm::Intrinsic::bitreverse,

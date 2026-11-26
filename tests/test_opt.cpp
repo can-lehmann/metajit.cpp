@@ -2803,6 +2803,60 @@ void test_fold_select_equal_arms() {
   unittest_assert(!section.verify(std::cout));
 }
 
+void test_fold_rotate_patterns() {
+  Context context;
+  Allocator allocator;
+  Section section(context, allocator);
+  Builder builder(&section);
+  Type type = Type::Int32;
+  Block* block = builder.build_block({type, type, type});
+  builder.move_to_end(block);
+  Value* x = block->arg(0);
+  Value* y = block->arg(1);
+  Value* k = block->arg(2);
+  Value* zero = builder.build_const(type, 0);
+  Value* ones = builder.build_const(type, UINT32_MAX);
+  Value* k_zero = builder.build_eq(k, zero);
+  Value* three = builder.build_const(type, 3);
+  Value* twenty = builder.build_const(type, 20);
+  for (bool left : {true, false}) {
+    auto rotate = left ? &Builder::fold_rot_l : &Builder::fold_rot_r;
+    auto inverse = left ? &Builder::fold_rot_r : &Builder::fold_rot_l;
+    Value* rotated = (builder.*rotate)(x, k);
+    unittest_assert((builder.*inverse)(rotated, k) == x);
+    unittest_assert(builder.fold_select(k_zero, x, rotated) == rotated);
+    unittest_assert(builder.fold_select(builder.build_xor(k_zero, builder.build_const(Type::Bool, 1)), rotated, x) == rotated);
+    check_const((builder.*rotate)(zero, k), type, 0);
+    check_const((builder.*rotate)(ones, k), type, UINT32_MAX);
+
+    Inst* compared = dynamic_cast<EqInst*>(builder.fold_eq(rotated, (builder.*rotate)(y, k)));
+    unittest_assert(compared && compared->arg(0) == x && compared->arg(1) == y);
+    compared = dynamic_cast<EqInst*>(builder.fold_eq(rotated, zero));
+    unittest_assert(compared && compared->arg(0) == x && compared->arg(1) == zero);
+
+    Value* complemented = (builder.*rotate)(builder.build_xor(x, ones), k);
+    Inst* result = dynamic_cast<Inst*>(builder.fold_xor(complemented, ones));
+    unittest_assert(result && result->arg(0) == x && result->arg(1) == k);
+    Value* inner = (builder.*rotate)(x, twenty);
+    result = dynamic_cast<Inst*>((builder.*rotate)(inner, twenty));
+    unittest_assert(result && result->arg(0) == x);
+    check_const(result->arg(1), type, 8);
+    result = dynamic_cast<Inst*>((builder.*inverse)(inner, three));
+    unittest_assert(result && result->arg(0) == x);
+    check_const(result->arg(1), type, 15);
+  }
+
+  Value* high = builder.build_shl(x, three);
+  Value* low = builder.build_shr_u(x, builder.build_const(type, 29));
+  for (bool swapped : {false, true}) {
+    auto* result = dynamic_cast<RotLInst*>(builder.fold_or(swapped ? low : high, swapped ? high : low));
+    unittest_assert(result && result->arg(0) == x && result->arg(1) == three);
+  }
+  unittest_assert(dynamic_cast<OrInst*>(builder.fold_or(high, builder.build_shr_u(x, three))));
+  builder.build_exit();
+  unittest_assert(!section.verify(std::cerr));
+}
+
 void test_fold_shift_zero_value() {
   Context context;
   Allocator allocator;
@@ -2880,6 +2934,16 @@ void test_fold_constant_select_propagation() {
       Value* counts = builder.build_select(cond, one, builder.build_const(type, last));
       check_fold_constant_select(builder.fold_shl(left, one), cond, type, mask << 1, 5 << 1);
       check_fold_constant_select(builder.fold_shr_u(left, one), cond, type, mask >> 1, 5 >> 1);
+      check_fold_constant_select(builder.fold_rot_l(left, one), cond, type, mask, 10);
+      check_fold_constant_select(builder.fold_rot_r(left, one), cond, type, mask,
+                                 metajit::rotate_left(type, 5, last));
+      check_fold_constant_select(builder.fold_rot_l(left, counts), cond, type, mask,
+                                 metajit::rotate_left(type, 5, last));
+      check_fold_constant_select(builder.fold_rot_r(left, counts), cond, type, mask, 10);
+      check_fold_constant_select(builder.fold_rot_l(constant, counts), cond, type, 14,
+                                 metajit::rotate_left(type, 7, last));
+      check_fold_constant_select(builder.fold_rot_r(constant, counts), cond, type,
+                                 metajit::rotate_left(type, 7, uint64_t(-1)), 14);
       check_fold_constant_select(builder.fold_shl(constant, counts), cond, type, 7 << 1, uint64_t(7) << last);
       check_fold_constant_select(builder.fold_shr_u(constant, counts), cond, type, 7 >> 1, uint64_t(7) >> last);
       check_fold_constant_select(builder.fold_shl(left, counts), cond, type, mask << 1, uint64_t(5) << last);
@@ -2889,6 +2953,12 @@ void test_fold_constant_select_propagation() {
         Value* bad_counts = builder.build_select(cond, one, amount);
         unittest_assert(dynamic_cast<ShlInst*>(builder.fold_shl(left, amount)));
         unittest_assert(dynamic_cast<ShrUInst*>(builder.fold_shr_u(left, amount)));
+        unittest_assert(dynamic_cast<RotLInst*>(builder.fold_rot_l(constant, bad_counts)));
+        unittest_assert(dynamic_cast<RotLInst*>(builder.fold_rot_l(left, amount)));
+        unittest_assert(dynamic_cast<RotLInst*>(builder.fold_rot_l(left, bad_counts)));
+        unittest_assert(dynamic_cast<RotRInst*>(builder.fold_rot_r(constant, bad_counts)));
+        unittest_assert(dynamic_cast<RotRInst*>(builder.fold_rot_r(left, amount)));
+        unittest_assert(dynamic_cast<RotRInst*>(builder.fold_rot_r(left, bad_counts)));
         unittest_assert(dynamic_cast<ShlInst*>(builder.fold_shl(constant, bad_counts)));
         unittest_assert(dynamic_cast<ShrUInst*>(builder.fold_shr_u(constant, bad_counts)));
         unittest_assert(dynamic_cast<ShlInst*>(builder.fold_shl(left, bad_counts)));
@@ -2896,6 +2966,8 @@ void test_fold_constant_select_propagation() {
       }
       unittest_assert(dynamic_cast<AddInst*>(builder.fold_add(left, unrelated)));
       unittest_assert(dynamic_cast<SubInst*>(builder.fold_sub(left, unrelated)));
+      unittest_assert(dynamic_cast<RotRInst*>(builder.fold_rot_r(left, unrelated)));
+      unittest_assert(dynamic_cast<RotLInst*>(builder.fold_rot_l(left, unrelated)));
       unittest_assert(dynamic_cast<MulInst*>(builder.fold_mul(left, unrelated)));
       unittest_assert(dynamic_cast<AndInst*>(builder.fold_and(left, unrelated)));
       unittest_assert(dynamic_cast<OrInst*>(builder.fold_or(left, unrelated)));
@@ -3422,6 +3494,7 @@ int main(int argc, char** argv) {
   suite.test("rule DSL known select").run(test_rule_dsl_known_select);
   suite.test("rule DSL known resize roundtrip").run(test_rule_dsl_known_resize_roundtrip);
   suite.test("fold constant select propagation").run(test_fold_constant_select_propagation);
+  suite.test("fold rotate patterns").run(test_fold_rotate_patterns);
   suite.test("fold shift zero value").run(test_fold_shift_zero_value);
   suite.test("fold select equal arms").run(test_fold_select_equal_arms);
   suite.test("fold non integer select equality").run(test_fold_non_integer_select_equality);

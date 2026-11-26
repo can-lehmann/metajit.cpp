@@ -1457,6 +1457,31 @@ namespace metajit {
           _builder.shl64(vreg(inst));
         }
         _builder.pseudo_use(rcx);
+      } else if (dynamic_cast<RotLInst*>(inst) || dynamic_cast<RotRInst*>(inst)) {
+        bool left = dynamic_cast<RotLInst*>(inst);
+        Reg dst = vreg(inst);
+        _builder.mov64(dst, vreg(inst->arg(0)));
+        if (dynmatch(Const, count, inst->arg(1))) {
+          uint8_t amount = count->value() & (type_width(inst->type()) - 1);
+          switch (inst->type()) {
+            case Type::Int8: left ? _builder.rol8_imm(dst, amount) : _builder.ror8_imm(dst, amount); break;
+            case Type::Int16: left ? _builder.rol16_imm(dst, amount) : _builder.ror16_imm(dst, amount); break;
+            case Type::Int32: left ? _builder.rol32_imm(dst, amount) : _builder.ror32_imm(dst, amount); break;
+            case Type::Int64: left ? _builder.rol64_imm(dst, amount) : _builder.ror64_imm(dst, amount); break;
+            default: assert(false);
+          }
+          return;
+        }
+        Reg rcx = fix_to_preg(vreg(), Reg::X86_RCX());
+        _builder.mov64(rcx, vreg(inst->arg(1)));
+        switch (inst->type()) {
+          case Type::Int8: left ? _builder.rol8(dst) : _builder.ror8(dst); break;
+          case Type::Int16: left ? _builder.rol16(dst) : _builder.ror16(dst); break;
+          case Type::Int32: left ? _builder.rol32(dst) : _builder.ror32(dst); break;
+          case Type::Int64: left ? _builder.rol64(dst) : _builder.ror64(dst); break;
+          default: assert(false);
+        }
+        _builder.pseudo_use(rcx);
       } else if (dynmatch(ShrUInst, shr_u, inst)) {
         _builder.mov64(vreg(inst), vreg(shr_u->arg(0)));
 

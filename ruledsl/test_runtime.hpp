@@ -40,6 +40,13 @@ inline bool is_int(Type type) { return type != Type::Bool; }
 inline bool is_int_or_bool(Type) { return true; }
 
 namespace metajit {
+  inline uint64_t rotate_left(Type type, uint64_t value, uint64_t count) {
+    uint64_t width = type_width(type);
+    count %= width;
+    value &= type_mask(type);
+    return ((value << count) | (value >> ((width - count) % width))) & type_mask(type);
+  }
+
   inline uint64_t bit_reverse(Type type, uint64_t value) {
     uint64_t result = 0;
     for (uint64_t bit = 0; bit < type_width(type); ++bit) {
@@ -82,6 +89,8 @@ RULEDSL_TEST_INST(Or)
 RULEDSL_TEST_INST(Xor)
 RULEDSL_TEST_INST(Shl)
 RULEDSL_TEST_INST(ShrS)
+RULEDSL_TEST_INST(RotL)
+RULEDSL_TEST_INST(RotR)
 RULEDSL_TEST_INST(ShrU)
 RULEDSL_TEST_INST(Eq)
 RULEDSL_TEST_INST(LtS)
@@ -140,6 +149,8 @@ struct RawBuilder {
   RULEDSL_TEST_BINARY(Xor, xor)
   RULEDSL_TEST_BINARY(Shl, shl)
   RULEDSL_TEST_BINARY(ShrS, shr_s)
+  RULEDSL_TEST_BINARY(RotL, rot_l)
+  RULEDSL_TEST_BINARY(RotR, rot_r)
   RULEDSL_TEST_BINARY(ShrU, shr_u)
   #undef RULEDSL_TEST_BINARY
 

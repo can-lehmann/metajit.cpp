@@ -463,6 +463,38 @@ Type Checks:
 - `a->type() == b->type()`
 - `is_int(a->type())`
 
+### RotL
+
+Rotate left by the unsigned count. A count at least as large as the operand bit width or a poison operand produces poison.
+
+Arguments
+
+- **a**: `Value*`
+- **b**: `Value*`
+
+Return Type: `a->type()`
+
+Type Checks:
+
+- `a->type() == b->type()`
+- `is_int(a->type())`
+
+### RotR
+
+Rotate right by the unsigned count. A count at least as large as the operand bit width or a poison operand produces poison.
+
+Arguments
+
+- **a**: `Value*`
+- **b**: `Value*`
+
+Return Type: `a->type()`
+
+Type Checks:
+
+- `a->type() == b->type()`
+- `is_int(a->type())`
+
 ### AddF
 
 Arguments

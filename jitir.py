@@ -360,13 +360,14 @@ class ClonePlugin:
         code += f"return nullptr;\n"
         return {"clone": code}
 
-def binop(name, type_checks = None, commutative = False):
+def binop(name, type_checks = None, commutative = False, doc = ""):
     if type_checks is None:
         type_checks = ["is_int(a->type())"]
     return Inst(name,
         args = [Arg("a"), Arg("b")],
         type = "a->type()",
         commutative = commutative,
+        doc = doc,
         type_checks = [
             "a->type() == b->type()",
             *type_checks
@@ -554,6 +555,8 @@ jitir = IR(
         binop("ShrU"),
         binop("ShrS"),
         binop("Shl"),
+        binop("RotL", doc = "Rotate left by the unsigned count. A count at least as large as the operand bit width or a poison operand produces poison."),
+        binop("RotR", doc = "Rotate right by the unsigned count. A count at least as large as the operand bit width or a poison operand produces poison."),
         binop_f("AddF"),
         binop_f("SubF"),
         binop_f("MulF"),

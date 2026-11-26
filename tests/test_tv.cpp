@@ -694,6 +694,15 @@ b0(%0: Ptr, %1: Int8):
     suite.tv_test(std::string("clz_") + to_string(type)).run({type}, build_clz_test, clz_reference);
   }
 
+  suite.tv_test("rotate_roundtrip").run_valuestate({Type::Int32, Type::Int32}, [](Builder& builder) {
+    Value* count = builder.entry_arg(1);
+    return builder.build_rot_r(builder.build_rot_l(builder.entry_arg(0), count), count);
+  }, [](z3::context& context, std::vector<tv::ValueState> args) {
+    tv::ValueState result(Type::Int32, args[0].value());
+    result.set_poison(z3::uge(args[1].value(), context.bv_val(32, 32)));
+    return result;
+  });
+
   suite.tv_test("bit_reverse_twice").run({Type::Int32}, [](Builder& builder) {
     return builder.build_bit_reverse(builder.build_bit_reverse(builder.entry_arg(0)));
   }, [](z3::context& context, std::vector<tv::ValueState> args) {

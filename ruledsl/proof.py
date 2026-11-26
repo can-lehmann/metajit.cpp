@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from itertools import product
 import warnings
 
 import z3
@@ -77,6 +78,7 @@ class Prover:
         self.calculations = {}
         self.known_bits = {}
         self.select_condition = None
+        self.shift_counts = []
         self.before = self.pattern(checked.rule.pattern, introduce=True)
         self.used_mask = None
         if checked.used_bits_binding is not None:
@@ -116,15 +118,20 @@ class Prover:
         raise ProofError(message, node, self.source, self.filename,
                          self.assignment, counterexample)
 
-    def query(self, node, *conditions, split=None):
-        if split is not None:
-            for value in (0, 1):
-                concrete = z3.BitVecVal(value, 1)
-                specialized = [z3.simplify(z3.substitute(condition, (split, concrete)))
-                               for condition in conditions]
-                result = self.query(node, split == concrete, *specialized)
-                if result != z3.unsat:
-                    return result
+    def query(self, node, *conditions, splits=()):
+        if splits:
+            outside = z3.Or(*(z3.UGT(term, limit - 1) for term, limit in splits))
+            if self.query(node, outside, *conditions) == z3.sat:
+                return z3.sat
+            condition = z3.And(*conditions)
+            cases = [[(term, z3.BitVecVal(i, term.size())) for i in range(limit)]
+                     for term, limit in splits]
+            for bindings in product(*cases):
+                specialized = z3.simplify(z3.substitute(condition, *bindings))
+                if z3.is_false(specialized):
+                    continue
+                if self.query(node, specialized, *(term == value for term, value in bindings)) == z3.sat:
+                    return z3.sat
             return z3.unsat
         result = self.solver.check(*conditions)
         if result == z3.unknown:
@@ -150,6 +157,11 @@ class Prover:
         args = [self.pattern(arg, introduce) for arg in node.args]
         if introduce and node.name == "Select" and self.select_condition is None:
             self.select_condition = args[0].bits
+        if introduce and node.name in {"Shl", "ShrU", "ShrS", "RotL", "RotR"}:
+            count = args[1].bits
+            if (count.decl().kind() == z3.Z3_OP_UNINTERPRETED and
+                    not any(count.eq(previous) for previous in self.shift_counts)):
+                self.shift_counts.append(count)
         return emit(node.name, args, self.type_of(node))
 
     def expression(self, node):
@@ -246,6 +258,10 @@ class Prover:
                 value = clz(args[0].value)
             elif node.name == "bit_reverse":
                 value = bit_reverse(args[0].value)
+            elif node.name == "rot_l":
+                value = z3.RotateLeft(args[0].value, args[1].value)
+            elif node.name == "rot_r":
+                value = z3.RotateRight(args[0].value, args[1].value)
             elif node.name == "mul_high_u":
                 value = mul_high_u(args[0].value, args[1].value)
             elif node.name == "ctz":
@@ -304,8 +320,13 @@ class Prover:
         if self.used_mask is not None:
             different = ((self.before.bits ^ self.after.bits) & self.used_mask) != 0
         violation = z3.Or(self.after.poison, different)
+        splits = ()
+        if self.select_condition is not None:
+            splits = [(self.select_condition, 2)]
+        elif len(self.shift_counts) >= 2:
+            splits = [(count, count.size()) for count in self.shift_counts[:2]]
         if self.query(self.checked.rule, self.conditions, z3.Not(self.before.poison), violation,
-                      split=self.select_condition) == z3.sat:
+                      splits=splits) == z3.sat:
             self.error(self.checked.rule, "could not prove refinement", self.solver.model())
 
 

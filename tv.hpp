@@ -509,6 +509,8 @@ namespace metajit {
         binop(AndInst, a & b)
         binop(OrInst, a | b)
         binop(XorInst, a ^ b)
+        binop_shift(RotLInst, z3::to_expr(_context, Z3_mk_ext_rotate_left(_context, a, b)))
+        binop_shift(RotRInst, z3::to_expr(_context, Z3_mk_ext_rotate_right(_context, a, b)))
         binop_shift(ShlInst, z3::shl(a, b))
         binop_shift(ShrUInst, z3::lshr(a, b))
         binop_shift(ShrSInst, z3::ashr(a, b))

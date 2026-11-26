@@ -50,6 +50,78 @@ void check_provenance(const std::string& input, const std::string& expected,
   delete section;
 }
 
+void test_synthesize_rotates() {
+  for (size_t width : {8, 16, 32, 64}) {
+    std::string type = "Int" + std::to_string(width);
+    std::string prefix = "section {\nb0(%0: Ptr, %1: " + type + "):\n";
+    std::string suffix = ", flags={}, aliasing=0, offset=0\n  Exit\n}\n";
+    for (size_t left = 1; left < width; left++) {
+      size_t right = width - left;
+      std::string l = std::to_string(left) + ":" + type;
+      std::string r = std::to_string(right) + ":" + type;
+      check_provenance(prefix + "  %2 = Shl %1, " + l + "\n  %3 = ShrU %1, " + r +
+                         "\n  %4 = Or %2, %3\n  Store %0, %4" + suffix,
+                       prefix + "  %2 = " + (left <= right ? "RotL %1, " + l : "RotR %1, " + r) +
+                         "\n  Store %0, %2" + suffix);
+    }
+  }
+}
+
+void test_rotate_across_block() {
+  check_provenance(R"(section {
+b0(%0: Ptr, %1: Int32):
+  %2 = RotR %1, 12:Int32
+  Jump block=b1
+b1:
+  %3 = RotL %2, 8:Int32
+  Store %0, %3, flags={}, aliasing=0, offset=0
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr, %1: Int32):
+  Jump block=b1
+b1:
+  %2 = RotR %1, 4:Int32
+  Store %0, %2, flags={}, aliasing=0, offset=0
+  Exit
+}
+)", {0, 1});
+}
+
+void test_rotate_candidate() {
+  check_provenance(R"(section {
+b0(%0: Ptr, %1: Int8):
+  %2 = BitReverse %1
+  %3 = Shl %2, 5:Int8
+  %4 = ShrU %2, 3:Int8
+  %5 = Or %3, %4
+  Store %0, %5, flags={}, aliasing=0, offset=0
+  Exit
+}
+)", R"(section {
+b0(%0: Ptr, %1: Int8):
+  %2 = BitReverse %1
+  %3 = RotR %2, 3:Int8
+  Store %0, %3, flags={}, aliasing=0, offset=0
+  Exit
+}
+)");
+}
+
+void test_rotate_missing_bit() {
+  const std::string input = R"(section {
+b0(%0: Ptr, %1: Int8):
+  %2 = Shl %1, 3:Int8
+  %3 = And %2, 239:Int8
+  %4 = ShrU %1, 5:Int8
+  %5 = Or %3, %4
+  Store %0, %5, flags={}, aliasing=0, offset=0
+  Exit
+}
+)";
+  check_provenance(input, input);
+}
+
 void test_reverse_pair() {
   check_provenance(R"(section {
 b0(%0: Ptr, %1: Int32):
@@ -441,8 +513,8 @@ void test_signed_comparison_fallback() {
   }
 }
 
-void test_variable_shifts() {
-  for (const std::string op : {"Shl", "ShrU", "ShrS"}) {
+void test_variable_shifts_and_rotates() {
+  for (const std::string op : {"Shl", "ShrU", "ShrS", "RotL", "RotR"}) {
     std::string prefix = "section {\nb0(%0: Ptr, %1: Int32, %2: Int32):\n  %3 = " + op + " %1, %2\n";
     std::string suffix = ", flags={}, aliasing=0, offset=0\n  Exit\n}\n";
     check_provenance(prefix + "  %4 = BitReverse %3\n  %5 = BitReverse %4\n  Store %0, %5" + suffix,
@@ -451,7 +523,8 @@ void test_variable_shifts() {
 }
 
 void test_opaque_transfers() {
-  for (const std::string operation : {"Popcount %1", "Freeze %1", "PtrToInt %0, type=Int32"}) {
+  for (const std::string operation : {"Popcount %1", "Freeze %1", "PtrToInt %0, type=Int32",
+                                      "RotL %1, 32:Int32", "RotR %1, 33:Int32"}) {
     std::string prefix = "section {\nb0(%0: Ptr, %1: Int32):\n  %2 = " + operation + "\n";
     std::string suffix = ", flags={}, aliasing=0, offset=0\n  Exit\n}\n";
     check_provenance(prefix + "  %3 = BitReverse %2\n  %4 = BitReverse %3\n  Store %0, %4" + suffix,
@@ -500,7 +573,7 @@ void test_random_execution() {
         Value* a = values[rand() % values.size()];
         Value* b = values[rand() % values.size()];
         Const* shift = builder.build_const(type, rand() % type_width(type));
-        switch (rand() % 15) {
+        switch (rand() % 17) {
           case 0: values.push_back(builder.build_and(a, b)); break;
           case 1: values.push_back(builder.build_or(a, b)); break;
           case 2: values.push_back(builder.build_xor(a, b)); break;
@@ -516,6 +589,8 @@ void test_random_execution() {
           case 12: values.push_back(builder.build_resize_s(builder.build_resize_u(a, Type::Int8), type)); break;
           case 13: values.push_back(builder.build_and(a, builder.build_const(type, UINT64_C(0x5555555555555555)))); break;
           case 14: values.push_back(builder.build_xor(a, builder.build_const(type, UINT64_MAX))); break;
+          case 15: values.push_back(builder.build_rot_l(a, shift)); break;
+          case 16: values.push_back(builder.build_rot_r(a, shift)); break;
         }
       }
       for (size_t i = 0; i < 16; i++) { builder.build_store(block->arg(0), values[values.size() - 1 - i], 0, i * 8); }
@@ -565,6 +640,10 @@ void test_random_execution() {
 
 int main(int argc, char** argv) {
   unittest::Suite suite(argc, argv);
+  suite.test("synthesize rotates").run(test_synthesize_rotates);
+  suite.test("rotate across block").run(test_rotate_across_block);
+  suite.test("rotate candidate").run(test_rotate_candidate);
+  suite.test("rotate missing bit").run(test_rotate_missing_bit);
   suite.test("reverse pair").run(test_reverse_pair);
   suite.test("reconstruction").run(test_reconstruction);
   suite.test("sign extension").run(test_sign_extension);
@@ -580,7 +659,7 @@ int main(int argc, char** argv) {
   suite.test("resize extraction").run(test_resize_extraction);
   suite.test("mixed sources").run(test_mixed_sources);
   suite.test("signed comparison fallback").run(test_signed_comparison_fallback);
-  suite.test("variable shifts").run(test_variable_shifts);
+  suite.test("variable shifts and rotates").run(test_variable_shifts_and_rotates);
   suite.test("opaque transfers").run(test_opaque_transfers);
   suite.test("loads across store").run(test_loads_across_store);
   suite.test("random execution").run(test_random_execution);

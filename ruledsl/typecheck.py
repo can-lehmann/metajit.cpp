@@ -89,11 +89,21 @@ def bit_reverse(value, width):
     return result
 
 
+def rot_l(value, count, width):
+    count %= width
+    return ((value << count) | (value >> (width - count))) & ((1 << width) - 1)
+
+
+def rot_r(value, count, width):
+    return rot_l(value, -count, width)
+
+
 def mul_high_u(left, right, width):
     return (left * right) >> width
 
 
-CALCULATION_FUNCTIONS = {"clz": clz, "bit_reverse": bit_reverse, "mul_high_u": mul_high_u}
+CALCULATION_FUNCTIONS = {"clz": clz, "bit_reverse": bit_reverse, "mul_high_u": mul_high_u,
+                         "rot_l": rot_l, "rot_r": rot_r}
 
 
 class Checker:
@@ -239,7 +249,7 @@ class Checker:
         if self.used_bits and node.name in KNOWN_BITS_FUNCTIONS:
             self.error(node, "KnownBits queries are not allowed in UsedBits rules")
         arities = {"width": 1, "bits": 2, "min": 2, "max": 2, "ctz": 1,
-                   "bit_reverse": 1, "clz": 1, "mul_high_u": 2,
+                   "bit_reverse": 1, "clz": 1, "mul_high_u": 2, "rot_l": 2, "rot_r": 2,
                    "known_zeros": 1, "known_ones": 1}
         if node.name not in arities:
             self.error(node, f"unknown calculation function {node.name!r}")

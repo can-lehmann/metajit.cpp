@@ -17,6 +17,8 @@ typedef struct {
   uint16_t clz16;
   uint32_t clz32;
   uint64_t clz64;
+  uint32_t rotl32;
+  uint64_t rotr64;
 } test_data_t;
 
 void run(test_data_t* data) {
@@ -24,6 +26,8 @@ void run(test_data_t* data) {
   data->out16 = __builtin_bitreverse16(data->in16);
   data->out32 = __builtin_bitreverse32(data->in32);
   data->out64 = __builtin_bitreverse64(data->in64);
+  data->rotl32 = __builtin_rotateleft32(data->in32, data->in8);
+  data->rotr64 = __builtin_rotateright64(data->in64, data->in16);
   data->pop8 = __builtin_popcountg(data->in8);
   data->pop16 = __builtin_popcountg(data->in16);
   data->pop32 = __builtin_popcountg(data->in32);

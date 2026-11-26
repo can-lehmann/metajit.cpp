@@ -116,6 +116,10 @@ def emit(kind, args, type_):
             bits = boolean_bits(a < b)
         elif kind == "LtU":
             bits = boolean_bits(z3.ULT(a, b))
+        elif kind == "RotL":
+            bits = z3.RotateLeft(a, b)
+        elif kind == "RotR":
+            bits = z3.RotateRight(a, b)
         elif kind == "Shl":
             bits = a << b
         elif kind == "ShrU":
@@ -132,7 +136,7 @@ def emit(kind, args, type_):
             bits = z3.SRem(a, b)
         else:
             raise ValueError(f"unsupported instruction {kind!r}")
-        if kind in {"Shl", "ShrU", "ShrS"}:
+        if kind in {"Shl", "ShrU", "ShrS", "RotL", "RotR"}:
             poison = z3.Or(poison, z3.UGE(b, a.size()))
         if kind in {"DivU", "DivS", "ModU", "ModS"}:
             poison = z3.Or(poison, b == 0)

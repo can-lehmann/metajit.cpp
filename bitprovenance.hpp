@@ -163,6 +163,14 @@ private:
       return shr(width, amount, bits[width - 1]);
     }
 
+    Mapping rotate_left(size_t width, uint64_t count) const {
+      Mapping result = *this;
+      for (size_t i = 0; i < width; i++) {
+        result.bits[(i + count) & (width - 1)] = bits[i];
+      }
+      return result;
+    }
+
     Mapping bit_reverse(size_t width) const {
       assert(valid());
       Mapping result = *this;
@@ -425,6 +433,11 @@ private:
       return a.bit_or(b, or_inst);
     } else if (dynmatch(XorInst, xor_inst, inst)) {
       return a.bit_xor(b, xor_inst);
+    } else if (dynamic_cast<RotLInst*>(inst) || dynamic_cast<RotRInst*>(inst)) {
+      if (auto count = b.constant(width); count && *count < width) {
+        return a.rotate_left(width, dynamic_cast<RotLInst*>(inst) ? *count : -*count);
+      }
+      return opaque(inst);
     } else if (dynamic_cast<ShlInst*>(inst) || dynamic_cast<ShrUInst*>(inst) ||
         dynamic_cast<ShrSInst*>(inst)) {
       auto number = b.constant(width);
@@ -467,8 +480,8 @@ private:
     return _builder.build_resize_s(value, inst->type());
   }
 
-  Value* extract_shift(Inst* inst, const Mapping& mapping, Value* value, const Mapping& input,
-                       size_t first, size_t position) {
+  Value* extract_shift_or_rotate(Inst* inst, const Mapping& mapping, Value* value, const Mapping& input,
+                                 size_t first, size_t position) {
     size_t width = type_width(inst->type());
     assert(input.valid() && mapping.valid());
     if (position >= width || position == first || input.bits[position] != mapping.bits[first]) {
@@ -476,30 +489,42 @@ private:
     }
     if (first > position) {
       size_t amount = first - position;
-      if (!input.shl(width, amount).equal(mapping, width)) {
-        return nullptr;
-      }
-      if (dynamic_cast<ShlInst*>(inst) && inst->arg(0) == value) {
-        if (dynmatch(Const, count, inst->arg(1))) {
-          if (count->value() == amount) {
-            return inst;
+      if (mapping.bits[0] == Zero && input.shl(width, amount).equal(mapping, width)) {
+        if (dynamic_cast<ShlInst*>(inst) && inst->arg(0) == value) {
+          if (dynmatch(Const, count, inst->arg(1))) {
+            if (count->value() == amount) {
+              return inst;
+            }
           }
         }
+        return _builder.build_shl(value, _builder.build_const(inst->type(), amount));
       }
-      return _builder.build_shl(value, _builder.build_const(inst->type(), amount));
+    } else {
+      size_t amount = position - first;
+      if (mapping.bits[width - 1] == Zero && input.shr_u(width, amount).equal(mapping, width)) {
+        if (dynamic_cast<ShrUInst*>(inst) && inst->arg(0) == value) {
+          if (dynmatch(Const, count, inst->arg(1))) {
+            if (count->value() == amount) {
+              return inst;
+            }
+          }
+        }
+        return _builder.build_shr_u(value, _builder.build_const(inst->type(), amount));
+      }
     }
-    size_t amount = position - first;
-    if (!input.shr_u(width, amount).equal(mapping, width)) {
+    size_t left = (first - position) & (width - 1);
+    size_t right = width - left;
+    if (input.bits[right] != mapping.bits[0] || input.bits[right - 1] != mapping.bits[width - 1] ||
+        !input.rotate_left(width, left).equal(mapping, width)) {
       return nullptr;
     }
-    if (dynamic_cast<ShrUInst*>(inst) && inst->arg(0) == value) {
-      if (dynmatch(Const, count, inst->arg(1))) {
-        if (count->value() == amount) {
-          return inst;
-        }
-      }
+    if ((dynamic_cast<RotLInst*>(inst) || dynamic_cast<RotRInst*>(inst)) && inst->arg(0) == value) {
+      return inst;
     }
-    return _builder.build_shr_u(value, _builder.build_const(inst->type(), amount));
+    if (left <= right) {
+      return _builder.build_rot_l(value, _builder.build_const(inst->type(), left));
+    }
+    return _builder.build_rot_r(value, _builder.build_const(inst->type(), right));
   }
 
   Value* extract_from_value(Inst* inst, const Mapping& mapping, Value* value) {
@@ -535,12 +560,12 @@ private:
     }
     assert(first < width);
     if (value == mapping.source) {
-      if (Value* replacement = extract_shift(inst, mapping, value, input, first, mapping.bits[first] & 63)) {
+      if (Value* replacement = extract_shift_or_rotate(inst, mapping, value, input, first, mapping.bits[first] & 63)) {
         return replacement;
       }
     } else {
       for (size_t position = 0; position < width; position++) {
-        if (Value* replacement = extract_shift(inst, mapping, value, input, first, position)) {
+        if (Value* replacement = extract_shift_or_rotate(inst, mapping, value, input, first, position)) {
           return replacement;
         }
       }

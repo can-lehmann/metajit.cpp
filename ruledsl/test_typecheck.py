@@ -60,6 +60,8 @@ class TypeCheckTests(unittest.TestCase):
     def test_bit_operation_calculations_preserve_types_and_dependencies(self):
         for operation, calculation, dependencies in (
                 ("Clz(C)", "clz(C)", {"C"}),
+                ("RotL(C1, C2)", "rot_l(C1, C2)", {"C1", "C2"}),
+                ("RotR(C1, C2)", "rot_r(C1, C2)", {"C1", "C2"}),
                 ("BitReverse(C)", "bit_reverse(C)", {"C"}),
                 ("MulHighU(C1, C2)", "mul_high_u(C1, C2)", {"C1", "C2"})):
             checked = check(f"constant: {operation}\n    Cresult = {calculation}\n    => Cresult")[0]
@@ -72,6 +74,8 @@ class TypeCheckTests(unittest.TestCase):
     def test_bit_operation_helpers_in_type_conditions(self):
         checked = check("same: Add(x: T, 0)\n"
                         "    where clz(bits(0, T)) == width(T) and clz(bits(1, T)) == width(T) - 1\n"
+                        "    where rot_r(bits(1, T), width(T) + 1) == 1 << (width(T) - 1)\n"
+                        "    where rot_l(bits(1, T), width(T) + 1) == 2\n"
                         "    where bit_reverse(bits(1, T)) == 1 << (width(T) - 1)\n"
                         "    where mul_high_u(bits(-1, T), bits(-1, T)) == bits(-2, T)\n"
                         "    => x")[0]
