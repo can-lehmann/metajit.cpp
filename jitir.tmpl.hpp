@@ -6899,13 +6899,34 @@ namespace metajit {
       Capture(NamedValue* value, size_t offset): value(value), offset(offset) {}
     };
 
+    struct Recompute {
+      LoadInst* load = nullptr;
+      Value* ptr = nullptr;
+
+      Recompute() {}
+      Recompute(LoadInst* load): load(load), ptr(load->ptr()) {}
+    };
+
     struct Closure {
       Inst* reuse = nullptr;
       std::vector<Capture> captures;
+      std::vector<Recompute> recomputed;
       uint32_t id = 0;
       size_t size = sizeof(uint32_t);
 
-      void add(NamedValue* value) {
+      void add(NamedValue* value, std::set<NamedValue*>& added) {
+        if (!added.insert(value).second) {
+          return;
+        }
+        if (dynmatch(LoadInst, load, value)) {
+          if (load->flags().has(LoadFlags::Pure)) {
+            if (load->ptr()->is_named()) {
+              add((NamedValue*) load->ptr(), added);
+            }
+            recomputed.push_back(load);
+            return;
+          }
+        }
         captures.emplace_back(value, add_record_field(size, value->type()));
       }
 
@@ -6914,6 +6935,9 @@ namespace metajit {
         result.reuse = reuse ? dynamic_cast<Inst*>(clone.at(reuse)) : nullptr;
         for (const Capture& capture : captures) {
           result.captures.emplace_back((NamedValue*) clone.at(capture.value), capture.offset);
+        }
+        for (const Recompute& recompute : recomputed) {
+          result.recomputed.emplace_back((LoadInst*) clone.at(recompute.load));
         }
         result.id = id;
         result.size = size;
@@ -7021,10 +7045,13 @@ namespace metajit {
               Closure& closure = _closures.at(inst);
               if (!closure.reuse) {
                 closure.captures.clear();
+                closure.recomputed.clear();
                 closure.size = sizeof(uint32_t);
+                std::set<NamedValue*> added;
                 for (NamedValue* value : live) {
-                  closure.add(value);
+                  closure.add(value, added);
                 }
+                live.merge(added);
               }
             }
           }
@@ -7196,6 +7223,10 @@ namespace metajit {
               capture.value->write_arg(stream);
               is_first = false;
             }
+            for (const Recompute& recompute : closure.recomputed) {
+              stream << ", recomputing ";
+              recompute.load->write_arg(stream);
+            }
           }
         }
       };
@@ -7275,11 +7306,17 @@ namespace metajit {
             std::vector<Arg*> args;
             std::vector<Value*> jump_args;
             std::map<Value*, Value*> new_substs;
-            for (const ReentryClosures::Capture& capture : closure.captures) {
-              Arg* arg = _builder.alloc_arg(capture.value->type(), args.size());
-              new_substs.emplace(capture.value, arg);
+            auto add_arg = [&](NamedValue* value) {
+              Arg* arg = _builder.alloc_arg(value->type(), args.size());
+              new_substs.emplace(value, arg);
               args.push_back(arg);
-              jump_args.push_back(capture.value);
+              jump_args.push_back(value);
+            };
+            for (const ReentryClosures::Capture& capture : closure.captures) {
+              add_arg(capture.value);
+            }
+            for (const ReentryClosures::Recompute& recompute : closure.recomputed) {
+              add_arg(recompute.load);
             }
 
             Block* new_block = _builder.build_block_before(next_block, args);
@@ -7361,18 +7398,35 @@ namespace metajit {
           );
 
           _builder.move_to_end(load_block);
-          std::vector<Value*> capture_values;
+          std::vector<Value*> entry_values;
+          std::map<Value*, Value*> substs;
           for (const ReentryClosures::Capture& capture : closure.captures) {
-            capture_values.push_back(_builder.build_load(
+            entry_values.push_back(_builder.build_load(
               _builder.entry_arg(0),
               capture.value->type(),
               LoadFlags::None,
               AliasingGroup(0),
               capture.offset
             ));
+            substs.emplace(capture.value, entry_values.back());
+          }
+          for (const ReentryClosures::Recompute& recompute : closure.recomputed) {
+            LoadInst* load = recompute.load;
+            Value* ptr = recompute.ptr;
+            if (ptr->is_named()) {
+              ptr = substs.at(ptr);
+            }
+            entry_values.push_back(_builder.build_load(
+              ptr,
+              load->type(),
+              load->flags(),
+              load->aliasing(),
+              load->offset()
+            ));
+            substs.emplace(load, entry_values.back());
           }
 
-          _builder.build_jump(_entry_blocks.at(inst), capture_values);
+          _builder.build_jump(_entry_blocks.at(inst), entry_values);
 
           
           else_block = check_block;
