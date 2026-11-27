@@ -7242,15 +7242,6 @@ namespace metajit {
       }
     }
 
-    template <class Fn>
-    static void remove_loads(std::vector<LoadInst*>& loads, const Fn& fn) {
-      loads.erase(std::remove_if(loads.begin(), loads.end(), fn), loads.end());
-    }
-
-    static bool contains(const std::vector<LoadInst*>& loads, LoadInst* load) {
-      return std::find(loads.begin(), loads.end(), load) != loads.end();
-    }
-
     static void update_valid_loads(Inst* inst, std::vector<LoadInst*>& valid_loads) {
       if (dynmatch(LoadInst, load, inst)) {
         if (!load->flags().has(LoadFlags::Pure)) {
@@ -7259,18 +7250,25 @@ namespace metajit {
             valid_loads.erase(valid_loads.begin());
           }
         }
-      } else if (dynmatch(StoreInst, store, inst)) {
-        remove_loads(valid_loads, [&](LoadInst* load) {
-          return could_alias(load, store);
-        });
-      } else if (dynmatch(CallInst, call, inst)) {
-        remove_loads(valid_loads, [&](LoadInst* load) {
-          return call->aliasing() == 0 ||
-                 load->aliasing() == 0 ||
-                 load->aliasing() == call->aliasing();
-        });
-      } else if (is_lifetime_marker(inst)) {
-        valid_loads.clear();
+      } else if (inst->has_side_effect() || is_lifetime_marker(inst)) {
+        dynmatch(StoreInst, store, inst);
+        dynmatch(CallInst, call, inst);
+        for (auto it = valid_loads.begin(); it != valid_loads.end(); ) {
+          LoadInst* load = *it;
+          bool clobbered = true;
+          if (store) {
+            clobbered = could_alias(load, store);
+          } else if (call) {
+            clobbered = call->aliasing() == 0 ||
+                        load->aliasing() == 0 ||
+                        load->aliasing() == call->aliasing();
+          }
+          if (clobbered) {
+            it = valid_loads.erase(it);
+          } else {
+            it++;
+          }
+        }
       }
     }
 
@@ -7296,11 +7294,14 @@ namespace metajit {
           for (Block* succ : block->successors()) {
             std::optional<std::vector<LoadInst*>>& succ_valid = valid_before_block[succ->name()];
             if (succ_valid) {
-              size_t size = succ_valid->size();
-              remove_loads(*succ_valid, [&](LoadInst* load) {
-                return !contains(valid_loads, load);
-              });
-              changed |= succ_valid->size() != size;
+              for (auto it = succ_valid->begin(); it != succ_valid->end(); ) {
+                if (std::find(valid_loads.begin(), valid_loads.end(), *it) == valid_loads.end()) {
+                  it = succ_valid->erase(it);
+                  changed = true;
+                } else {
+                  it++;
+                }
+              }
             } else {
               succ_valid = valid_loads;
               changed = true;
@@ -7312,7 +7313,9 @@ namespace metajit {
 
     static bool can_recompute(Inst* inst, const Closure& closure) {
       if (dynmatch(LoadInst, load, inst)) {
-        return load->flags().has(LoadFlags::Pure) || contains(closure.valid_loads, load);
+        const std::vector<LoadInst*>& valid_loads = closure.valid_loads;
+        return load->flags().has(LoadFlags::Pure) ||
+               std::find(valid_loads.begin(), valid_loads.end(), load) != valid_loads.end();
       }
       return CodeSinking::can_sink(inst);
     }
@@ -7363,7 +7366,6 @@ namespace metajit {
     }
 
     void populate_captures() {
-      find_valid_loads();
       for (auto& [inst, closure] : _closures) {
         if (!closure.reuse) {
           populate_captures(closure);
@@ -7420,6 +7422,7 @@ namespace metajit {
       set_ids();
       find_frontiers();
       populate_closures_and_frontiers();
+      find_valid_loads();
       populate_captures();
       collect_captured();
     }
@@ -7437,6 +7440,7 @@ namespace metajit {
       set_ids();
       find_frontiers();
       populate_closures_and_frontiers();
+      find_valid_loads();
       populate_captures();
       collect_captured();
     }
