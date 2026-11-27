@@ -474,5 +474,35 @@ int main(int argc, char** argv) {
     });
   });
 
+  suite.reentry_test("capture_intermediate_cut").run([](Builder& builder) {
+    Value* a = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+    Value* b = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+    Value* c = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+    Value* d = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+
+    Inst* ab = builder.build_add(a, b);
+    Inst* cd = builder.build_add(c, d);
+
+    Inst* sum = builder.build_add(ab, cd);
+    Inst* product = builder.build_mul(ab, cd);
+    Inst* difference = builder.build_sub(cd, ab);
+
+    Inst* sum_product = builder.build_add(sum, product);
+    Inst* total = builder.build_add(sum_product, difference);
+
+    builder.build_store(builder.entry_arg(0), total, AliasingGroup(0), 0);
+
+    return std::vector<TestCase> ({
+      TestCase {
+        .reentry_point = sum_product,
+        .closure = {
+          { ab, Bits::constant(Type::Int32, 3) },
+          { cd, Bits::constant(Type::Int32, 7) }
+        },
+        .expected = 35
+      }
+    });
+  });
+
   return suite.finish();
 }
