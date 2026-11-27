@@ -7146,10 +7146,15 @@ namespace metajit {
     void find_closure_reuse() {
       std::vector<std::optional<Inst*>> reusable_reentry_points(_section->block_count(), std::nullopt);
       for (Block* block : *_section) {
-        Inst* reuse = nullptr;
-        if (reusable_reentry_points[block->name()].has_value()) {
-          reuse = reusable_reentry_points[block->name()].value();
+        for (Block* succ : block->successors()) {
+          if (succ->name() <= block->name()) {
+            reusable_reentry_points[succ->name()] = nullptr;
+          }
         }
+      }
+
+      for (Block* block : *_section) {
+        Inst* reuse = reusable_reentry_points[block->name()].value_or(nullptr);
         for (Inst* inst : *block) {
           if (_closures.find(inst) != _closures.end()) {
             if (reuse) {
@@ -7164,10 +7169,11 @@ namespace metajit {
         }
 
         for (Block* succ : block->successors()) {
-          if (reusable_reentry_points[succ->name()].has_value()) {
-            if (reusable_reentry_points[succ->name()].value()) {
-              reusable_reentry_points[succ->name()] = reuse;
-            }
+          std::optional<Inst*>& succ_reuse = reusable_reentry_points[succ->name()];
+          if (succ_reuse.value_or(reuse) == reuse) {
+            succ_reuse = reuse;
+          } else {
+            succ_reuse = nullptr;
           }
         }
       }
@@ -7464,6 +7470,10 @@ namespace metajit {
     std::unordered_map<Inst*, JumpInst*> _entry_jumps;
     std::unordered_map<Block*, std::map<Value*, Value*>> _substs_at_entry;
 
+    bool is_split_point(Inst* inst) const {
+      return _closures.has(inst) && !_closures.at(inst).reuse;
+    }
+
     void slice_blocks() {
       _substs_at_entry.emplace(
         _original_entry,
@@ -7494,7 +7504,7 @@ namespace metajit {
         }
 
         Inst* inst = *block->begin();
-        while (inst && !_closures.has(inst)) {
+        while (inst && !is_split_point(inst)) {
           inst->substitute_args(substs);
           inst = inst->next();
         }
@@ -7504,7 +7514,7 @@ namespace metajit {
         while (inst) {
           Inst* next_inst = inst->next();
 
-          if (_closures.has(inst) && !_closures.at(inst).reuse) {
+          if (is_split_point(inst)) {
             ReentryClosures::Closure& closure = _closures.at(inst);
 
             std::vector<Arg*> args;
