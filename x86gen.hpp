@@ -167,7 +167,10 @@ namespace metajit {
     using RM = std::variant<std::monostate, Reg, Mem>;
     using Imm = std::variant<std::monostate, uint64_t, X86Block*, Reg>;
   private:
+    static constexpr uint32_t NO_VREG = ~uint32_t(0);
+
     Kind _kind;
+    uint32_t _completed_vreg = NO_VREG;
     Reg _reg;
     RM _rm;
     Imm _imm;
@@ -197,6 +200,18 @@ namespace metajit {
 
     size_t name() const { return _name; }
     void set_name(size_t name) { _name = name; }
+
+    Reg completed_vreg() const {
+      if (_completed_vreg == NO_VREG) {
+        return Reg();
+      }
+      return Reg::virt(_completed_vreg);
+    }
+
+    void set_completed_vreg(Reg reg) {
+      assert(reg.is_virtual() && reg.id() < NO_VREG);
+      _completed_vreg = reg.id();
+    }
 
     template <class Fn>
     void visit_regs(const Fn& fn) {
@@ -638,6 +653,14 @@ namespace metajit {
       size_t stack_offset = ~size_t(0);
     };
 
+    struct Definition {
+      X86Block* block = nullptr;
+      X86Inst* prev = nullptr;
+      Reg preg;
+      size_t name = 0;
+      bool is_stored = false;
+    };
+
     Section* _section;
     Allocator& _allocator;
     Mode _mode;
@@ -652,6 +675,7 @@ namespace metajit {
     NameMap<Reg> _vregs;
     lwir::Span<Reg> _input_vregs;
     std::vector<VRegInfo> _vreg_info;
+    std::vector<Definition> _definitions;
 
     #ifdef METAJIT_STATS
     Stats _stats;
@@ -1832,7 +1856,8 @@ namespace metajit {
               inst->is_terminator() ||
               !_vregs.at(inst).is_invalid()) {
             
-            _builder.move_before(_builder.block(), _builder.block()->first());
+            X86Inst* next = _builder.block()->first();
+            _builder.move_before(_builder.block(), next);
             
             #ifdef METAJIT_DEBUG
             {
@@ -1848,6 +1873,11 @@ namespace metajit {
             #endif
 
             isel(inst, block);
+
+            Reg result = _vregs.at(inst);
+            if (result.is_virtual()) {
+              next->prev()->set_completed_vreg(result);
+            }
           }
         }
 
@@ -1885,8 +1915,13 @@ namespace metajit {
 
     class StackOffsetAlloc {
     private:
+      struct ReturnedOffset {
+        size_t offset = 0;
+        size_t freed_at = 0;
+      };
+
       size_t _max_offset = 0;
-      std::vector<size_t> _returned_offsets;
+      std::vector<ReturnedOffset> _returned_offsets;
       bool _needs_call_alignment = false;
 
       size_t align_pad(size_t value, size_t align) const {
@@ -1912,16 +1947,17 @@ namespace metajit {
         return size;
       }
 
-      size_t alloc() {
-        if (_returned_offsets.empty()) {
-          size_t offset = _max_offset;
-          _max_offset += 8;
-          return offset;
-        } else {
-          size_t offset = _returned_offsets.back();
-          _returned_offsets.pop_back();
-          return offset;
+      size_t alloc(size_t since = ~size_t(0)) {
+        for (size_t it = _returned_offsets.size(); it-- > 0; ) {
+          if (_returned_offsets[it].freed_at <= since) {
+            size_t offset = _returned_offsets[it].offset;
+            _returned_offsets.erase(_returned_offsets.begin() + it);
+            return offset;
+          }
         }
+        size_t offset = _max_offset;
+        _max_offset += 8;
+        return offset;
       }
 
       size_t alloc_bytes(size_t size, size_t alignment = 8) {
@@ -1933,8 +1969,8 @@ namespace metajit {
         return offset;
       }
 
-      void free(size_t offset) {
-        _returned_offsets.push_back(offset);
+      void free(size_t offset, size_t name) {
+        _returned_offsets.push_back({offset, name});
       }
     };
 
@@ -2084,6 +2120,37 @@ namespace metajit {
 
     StackOffsetAlloc _stack_offset_alloc;
 
+    void spill_to_stack(Reg vreg, Reg preg) {
+      Definition& definition = _definitions[vreg.id()];
+      if (definition.is_stored) {
+        return;
+      }
+
+      X86InstBuilder builder = _builder;
+      size_t since = ~size_t(0);
+      if (definition.block) {
+        X86Inst* before = definition.block->first();
+        if (definition.prev) {
+          before = definition.prev->next();
+        }
+        builder.move_before(definition.block, before);
+        preg = definition.preg;
+        since = definition.name;
+        definition.is_stored = true;
+      }
+
+      VRegInfo& info = _vreg_info[vreg.id()];
+      if (info.stack_offset == ~size_t(0)) {
+        info.stack_offset = _stack_offset_alloc.alloc(since);
+      }
+      X86Inst::Mem mem(Reg::X86_RSP(), (int32_t) info.stack_offset);
+      if (info.reg_class == RegClass::X86_FLOAT()) {
+        builder.movsd_mem(mem, preg);
+      } else {
+        builder.mov64_mem(mem, preg);
+      }
+    }
+
     void spill(RegFileState& reg_file, Reg preg, bool allow_spill_to_reg = true) {
       Reg vreg = reg_file[preg];
       if (vreg.is_virtual()) {
@@ -2096,15 +2163,7 @@ namespace metajit {
           info.current_reg = free_reg;
           reg_file.set(free_reg, vreg);
         } else {
-          if (info.stack_offset == ~size_t(0)) {
-            info.stack_offset = _stack_offset_alloc.alloc();
-          }
-          X86Inst::Mem mem(Reg::X86_RSP(), (int32_t) info.stack_offset);
-          if (info.reg_class == RegClass::X86_FLOAT()) {
-            _builder.movsd_mem(mem, preg);
-          } else {
-            _builder.mov64_mem(mem, preg);
-          }
+          spill_to_stack(vreg, preg);
           reg_file.free(preg);
           info.current_reg = Reg();
         }
@@ -2236,6 +2295,7 @@ namespace metajit {
       }
 
       RegFileState reg_file;
+      _definitions.assign(_vreg_info.size(), Definition());
 
       Reg* initial_state = (Reg*) _allocator.alloc(sizeof(Reg) * reg_file.size(), alignof(Reg));
       std::fill(initial_state, initial_state + reg_file.size(), Reg());
@@ -2246,6 +2306,9 @@ namespace metajit {
         info.interval.incl(0);
         assert(info.fixed.is_physical() && "Entry arguments must be in fixed registers");
         initial_state[info.fixed.id()] = input;
+        if (!_blocks[0]->loop() && _vregs.at(arg) == input) {
+          _definitions[input.id()] = {_blocks[0], nullptr, info.fixed};
+        }
       }
       _blocks[0]->set_regalloc(initial_state);
 
@@ -2255,9 +2318,19 @@ namespace metajit {
           load_state(reg_file, block->regalloc());
         }
 
+        X86Inst* previous = nullptr;
         for (auto it = block->begin(); it != block->end(); ) {
           X86Inst* inst = *it;
           _builder.move_before(block, inst);
+
+          if (previous && previous->completed_vreg().is_virtual()) {
+            size_t id = previous->completed_vreg().id();
+            Reg preg = _vreg_info[id].current_reg;
+            if (preg.is_physical()) {
+              _definitions[id] = {block, inst->prev(), preg, previous->name()};
+            }
+          }
+          previous = inst;
 
           if (inst->kind() == X86Inst::Kind::PseudoUse ||
               inst->kind() == X86Inst::Kind::PseudoDef) {
@@ -2374,7 +2447,7 @@ namespace metajit {
               reg_file.free(info->current_reg);
               info->current_reg = Reg();
               if (info->stack_offset != ~size_t(0)) {
-                _stack_offset_alloc.free(info->stack_offset);
+                _stack_offset_alloc.free(info->stack_offset, inst->name());
               }
             }
           });
@@ -2828,10 +2901,14 @@ namespace metajit {
       for (Arg* arg : _section->entry()->args()) {
         Reg input = _input_vregs.at(arg->index());
         if (!(input == vreg(arg))) {
+          X86Inst* copy = nullptr;
           if (is_float(arg->type())) {
-            _builder.movq(vreg(arg), input);
+            copy = _builder.movq(vreg(arg), input);
           } else {
-            _builder.movq_to_gp(vreg(arg), input);
+            copy = _builder.movq_to_gp(vreg(arg), input);
+          }
+          if (!_blocks[0]->loop()) {
+            copy->set_completed_vreg(vreg(arg));
           }
         }
       }
