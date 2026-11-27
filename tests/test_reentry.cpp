@@ -116,6 +116,10 @@ namespace metajit {
 using namespace metajit;
 using namespace metajit::test;
 
+static void clobber_memory(Builder& builder) {
+  builder.build_store(builder.entry_arg(0), builder.build_const(Type::Int32, 0), AliasingGroup(0), 0);
+}
+
 int main(int argc, char** argv) {
   ReentryTestSuite suite(argc, argv);
 
@@ -124,6 +128,7 @@ int main(int argc, char** argv) {
 
   suite.reentry_test("add1_add1").run([](Builder& builder) {
     Value* a = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+    clobber_memory(builder);
 
     Inst* b = builder.build_add(a, builder.build_const(Type::Int32, 1));
     Inst* c = builder.build_add(b, builder.build_const(Type::Int32, 1));
@@ -149,6 +154,7 @@ int main(int argc, char** argv) {
     Value* b = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
     Value* c = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
     Value* d = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+    clobber_memory(builder);
 
     Inst* ab = builder.build_add(a, b);
     Inst* cd = builder.build_add(c, d);
@@ -192,6 +198,7 @@ int main(int argc, char** argv) {
     Value* b = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
     Value* c = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
     Value* d = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+    clobber_memory(builder);
 
     Inst* ab = builder.build_add(a, b);
     Inst* cd = builder.build_add(c, d);
@@ -214,6 +221,7 @@ int main(int argc, char** argv) {
 
   suite.reentry_test("branch").run([](Builder& builder) {
     Value* cond = builder.build_load(builder.entry_arg(0), Type::Bool, LoadFlags::None, AliasingGroup(0), 0);
+    clobber_memory(builder);
 
     Block* true_block = builder.build_block();
     Block* false_block = builder.build_block();
@@ -254,6 +262,7 @@ int main(int argc, char** argv) {
 
   suite.reentry_test("branch_continue").run([](Builder& builder) {
     Value* cond = builder.build_load(builder.entry_arg(0), Type::Bool, LoadFlags::None, AliasingGroup(0), 0);
+    clobber_memory(builder);
 
     Block* true_block = builder.build_block();
     Block* false_block = builder.build_block();
@@ -289,6 +298,7 @@ int main(int argc, char** argv) {
   suite.reentry_test("branch_join").run([](Builder& builder) {
     Value* cond = builder.build_load(builder.entry_arg(0), Type::Bool, LoadFlags::None, AliasingGroup(0), 0);
     Value* value = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+    clobber_memory(builder);
 
     Block* true_block = builder.build_block();
     Block* false_block = builder.build_block();
@@ -328,6 +338,7 @@ int main(int argc, char** argv) {
     Value* cond1 = builder.build_load(builder.entry_arg(0), Type::Bool, LoadFlags::None, AliasingGroup(0), 0);
     Value* cond2 = builder.build_load(builder.entry_arg(0), Type::Bool, LoadFlags::None, AliasingGroup(0), 0);
     Value* value = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+    clobber_memory(builder);
 
     Block* true_block_outer = builder.build_block();
     Block* true_block_inner = builder.build_block();
@@ -378,6 +389,7 @@ int main(int argc, char** argv) {
   suite.reentry_test("branch_join_arg").run([](Builder& builder) {
     Value* cond = builder.build_load(builder.entry_arg(0), Type::Bool, LoadFlags::None, AliasingGroup(0), 0);
     Value* value = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+    clobber_memory(builder);
 
     Block* true_block = builder.build_block();
     Block* false_block = builder.build_block();
@@ -417,6 +429,7 @@ int main(int argc, char** argv) {
   suite.reentry_test("branch_skip").run([](Builder& builder) {
     Value* cond = builder.build_load(builder.entry_arg(0), Type::Bool, LoadFlags::None, AliasingGroup(0), 0);
     Value* value = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+    clobber_memory(builder);
 
     Block* true_block = builder.build_block();
     Block* cont_block = builder.build_block();
@@ -454,6 +467,7 @@ int main(int argc, char** argv) {
     static uint32_t* input_ptr = &input;
     Value* input_ptr_ptr = builder.build_const(Type::Ptr, (uint64_t) &input_ptr);
     Value* ptr = builder.build_load(input_ptr_ptr, Type::Ptr, LoadFlags::None, AliasingGroup(0), 0);
+    clobber_memory(builder);
     Inst* a = builder.build_load(ptr, Type::Int32, LoadFlags::Pure, AliasingGroup(0), 0);
     Value* c = builder.build_load(ptr, Type::Int32, LoadFlags::Pure, AliasingGroup(0), 0);
     Inst* b = builder.build_add(a, c);
@@ -479,6 +493,7 @@ int main(int argc, char** argv) {
     Value* b = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
     Value* c = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
     Value* d = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
+    clobber_memory(builder);
 
     Inst* ab = builder.build_add(a, b);
     Inst* cd = builder.build_add(c, d);
