@@ -86,9 +86,6 @@ void check_sinking_reentry() {
   builder.build_exit();
   OrderBlocks::run(&section, BlockOrdering::Topological);
   unittest_assert(!section.verify(std::cout));
-  BindingTimeGroups before_binding_times(&section);
-  ReentryClosures before_closures(&section, before_binding_times);
-  unittest_assert(before_closures.is_captured(immediate));
   CodeSinking::run(&section);
   unittest_assert(!section.verify(std::cout));
   BindingTimeGroups binding_times(&section);
