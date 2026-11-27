@@ -638,6 +638,9 @@ namespace metajit {
       size_t stack_offset = ~size_t(0);
     };
 
+    std::unordered_map<X86Block*, std::vector<uint8_t>> _stack_valid_at;
+    std::vector<uint8_t> _stack_valid;
+
     Section* _section;
     Allocator& _allocator;
     Mode _mode;
@@ -2084,6 +2087,20 @@ namespace metajit {
 
     StackOffsetAlloc _stack_offset_alloc;
 
+    void store_to_stack(Reg vreg, Reg preg) {
+      VRegInfo& info = _vreg_info[vreg.id()];
+      if (info.stack_offset == ~size_t(0)) {
+        info.stack_offset = _stack_offset_alloc.alloc();
+      }
+      X86Inst::Mem mem(Reg::X86_RSP(), (int32_t) info.stack_offset);
+      if (info.reg_class == RegClass::X86_FLOAT()) {
+        _builder.movsd_mem(mem, preg);
+      } else {
+        _builder.mov64_mem(mem, preg);
+      }
+      _stack_valid[vreg.id()] = 1;
+    }
+
     void spill(RegFileState& reg_file, Reg preg, bool allow_spill_to_reg = true) {
       Reg vreg = reg_file[preg];
       if (vreg.is_virtual()) {
@@ -2096,14 +2113,8 @@ namespace metajit {
           info.current_reg = free_reg;
           reg_file.set(free_reg, vreg);
         } else {
-          if (info.stack_offset == ~size_t(0)) {
-            info.stack_offset = _stack_offset_alloc.alloc();
-          }
-          X86Inst::Mem mem(Reg::X86_RSP(), (int32_t) info.stack_offset);
-          if (info.reg_class == RegClass::X86_FLOAT()) {
-            _builder.movsd_mem(mem, preg);
-          } else {
-            _builder.mov64_mem(mem, preg);
+          if (!_stack_valid[vreg.id()]) {
+            store_to_stack(vreg, preg);
           }
           reg_file.free(preg);
           info.current_reg = Reg();
@@ -2236,6 +2247,7 @@ namespace metajit {
       }
 
       RegFileState reg_file;
+      _stack_valid.assign(_vreg_info.size(), 0);
 
       Reg* initial_state = (Reg*) _allocator.alloc(sizeof(Reg) * reg_file.size(), alignof(Reg));
       std::fill(initial_state, initial_state + reg_file.size(), Reg());
@@ -2254,6 +2266,9 @@ namespace metajit {
         if (block->regalloc()) {
           load_state(reg_file, block->regalloc());
         }
+        if (_stack_valid_at.find(block) != _stack_valid_at.end()) {
+          _stack_valid = _stack_valid_at.at(block);
+        }
 
         for (auto it = block->begin(); it != block->end(); ) {
           X86Inst* inst = *it;
@@ -2261,6 +2276,9 @@ namespace metajit {
 
           if (inst->kind() == X86Inst::Kind::PseudoUse ||
               inst->kind() == X86Inst::Kind::PseudoDef) {
+            inst->visit_defs([&](Reg reg) {
+              _stack_valid[reg.id()] = 0;
+            });
             it = it.erase(); // Not needed after regalloc
           } else if (is_foldable_mov(inst)) {
             Reg src = std::get<Reg>(inst->rm());
@@ -2275,6 +2293,7 @@ namespace metajit {
             VRegInfo& dst_info = _vreg_info[dst.id()];
 
             dst_info.current_reg = src_info.current_reg;
+            _stack_valid[dst.id()] = 0;
             reg_file.set(src_info.current_reg, dst);
             reg_file.touch(src_info.current_reg);
             src_info.current_reg = Reg();
@@ -2311,6 +2330,7 @@ namespace metajit {
               }
             }
 
+            _stack_valid[data->ret.id()] = 0;
             VRegInfo& ret_info = _vreg_info[data->ret.id()];
             if (ret_info.interval.max > inst->name()) {
               ret_info.current_reg = ret_info.fixed;
@@ -2345,6 +2365,10 @@ namespace metajit {
                 }
                 spill_and_unspill(reg_file, preg, reg, is_def_only(reg, inst));
               }
+            });
+
+            inst->visit_defs([&](Reg reg) {
+              _stack_valid[reg.id()] = 0;
             });
 
             inst->visit_regs([&](Reg& reg) {
@@ -2390,6 +2414,7 @@ namespace metajit {
                   state[it] = reg_file[Reg::phys(it)];
                 }
                 edge->set_regalloc(state);
+                _stack_valid_at.emplace(edge, _stack_valid);
                 _builder.move_before(edge, nullptr);
                 _builder.jmp(target)->set_name(inst->name());
                 _blocks.insert(_blocks.begin() + block_index + 1, edge);
@@ -2415,6 +2440,14 @@ namespace metajit {
                 Reg target_vreg = target->regalloc()[it];
                 if (current_vreg != target_vreg) {
                   spill_and_unspill(reg_file, preg, target_vreg, /*is_def=*/ false, /*allow_spill_to_reg=*/ false);
+                }
+              }
+              const std::vector<uint8_t>& target_valid = _stack_valid_at.at(target);
+              for (size_t it = 0; it < reg_file.size(); it++) {
+                Reg preg = Reg::phys(it);
+                Reg vreg = reg_file[preg];
+                if (vreg.is_virtual() && target_valid[vreg.id()] && !_stack_valid[vreg.id()]) {
+                  store_to_stack(vreg, preg);
                 }
               }
               #ifdef METAJIT_DEBUG
@@ -2448,6 +2481,7 @@ namespace metajit {
                 }
               }
               target->set_regalloc(state);
+              _stack_valid_at.emplace(target, _stack_valid);
             }
           }
         }
