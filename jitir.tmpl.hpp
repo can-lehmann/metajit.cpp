@@ -2167,7 +2167,7 @@ namespace metajit {
       bool reuse = _reusable_guard_failure && block() == _reusable_guard_success;
       if (reuse) {
         for (Inst* inst : *block()) {
-          if (inst->has_side_effect()) {
+          if (inst->has_side_effect() || is_lifetime_marker(inst)) {
             reuse = false;
             break;
           }
@@ -7125,6 +7125,9 @@ namespace metajit {
       }
     };
   private:
+    using ValidLoads = std::vector<LoadInst*>;
+    static constexpr size_t MAX_VALID_LOADS = 64;
+
     Section* _section;
     BindingTimeGroups* _binding_time_groups;
     std::unordered_map<Inst*, Closure> _closures;
@@ -7178,7 +7181,7 @@ namespace metajit {
               reuse = inst;
             }
           }
-          if (inst->has_side_effect()) {
+          if (inst->has_side_effect() || is_lifetime_marker(inst)) {
             reuse = nullptr;
           }
         }
@@ -7239,14 +7242,90 @@ namespace metajit {
       }
     }
 
-    static bool can_recompute(Inst* inst) {
+    static bool compare_names(const LoadInst* a, const LoadInst* b) {
+      return a->name() < b->name();
+    }
+
+    static bool is_valid(const ValidLoads& valid_loads, const LoadInst* load) {
+      return std::binary_search(valid_loads.begin(), valid_loads.end(), load, compare_names);
+    }
+
+    template <class Fn>
+    static void invalidate_loads(ValidLoads& valid_loads, const Fn& is_invalid) {
+      valid_loads.erase(
+        std::remove_if(valid_loads.begin(), valid_loads.end(), is_invalid),
+        valid_loads.end()
+      );
+    }
+
+    static void update_valid_loads(Inst* inst, ValidLoads& valid_loads) {
       if (dynmatch(LoadInst, load, inst)) {
-        return load->flags().has(LoadFlags::Pure);
+        if (!load->flags().has(LoadFlags::Pure)) {
+          valid_loads.insert(
+            std::lower_bound(valid_loads.begin(), valid_loads.end(), load, compare_names),
+            load
+          );
+          if (valid_loads.size() > MAX_VALID_LOADS) {
+            valid_loads.erase(valid_loads.begin());
+          }
+        }
+      } else if (dynmatch(StoreInst, store, inst)) {
+        invalidate_loads(valid_loads, [&](LoadInst* load) {
+          return could_alias(load, store);
+        });
+      } else if (dynmatch(CallInst, call, inst)) {
+        invalidate_loads(valid_loads, [&](LoadInst* load) {
+          return call->aliasing() == 0 ||
+                 load->aliasing() == 0 ||
+                 load->aliasing() == call->aliasing();
+        });
+      } else if (is_lifetime_marker(inst)) {
+        valid_loads.clear();
+      }
+    }
+
+    std::vector<std::optional<ValidLoads>> find_valid_loads() const {
+      std::vector<std::optional<ValidLoads>> valid_before_block(_section->block_count());
+      valid_before_block[_section->entry()->name()].emplace();
+      bool changed;
+      do {
+        changed = false;
+        for (Block* block : *_section) {
+          if (!valid_before_block[block->name()]) {
+            continue;
+          }
+
+          ValidLoads valid_loads = *valid_before_block[block->name()];
+          for (Inst* inst : *block) {
+            update_valid_loads(inst, valid_loads);
+          }
+
+          for (Block* succ : block->successors()) {
+            std::optional<ValidLoads>& succ_valid = valid_before_block[succ->name()];
+            if (succ_valid) {
+              size_t size = succ_valid->size();
+              invalidate_loads(*succ_valid, [&](LoadInst* load) {
+                return !is_valid(valid_loads, load);
+              });
+              changed |= succ_valid->size() != size;
+            } else {
+              succ_valid = valid_loads;
+              changed = true;
+            }
+          }
+        }
+      } while (changed && _section->ordering() < BlockOrdering::Topological);
+      return valid_before_block;
+    }
+
+    static bool can_recompute(Inst* inst, const ValidLoads& valid_loads) {
+      if (dynmatch(LoadInst, load, inst)) {
+        return load->flags().has(LoadFlags::Pure) || is_valid(valid_loads, load);
       }
       return CodeSinking::can_sink(inst);
     }
 
-    static void populate_captures(Closure& closure) {
+    static void populate_captures(Closure& closure, const ValidLoads& valid_loads) {
       MinCut min_cut;
       MinCut::NodeId source = min_cut.node();
       MinCut::NodeId sink = min_cut.node();
@@ -7272,7 +7351,7 @@ namespace metajit {
         open.pop_back();
 
         MinCut::NodeId input = nodes.at(value).first;
-        if (dynmatch(Inst, inst, value); inst && can_recompute(inst)) {
+        if (dynmatch(Inst, inst, value); inst && can_recompute(inst, valid_loads)) {
           for (Value* arg : inst->args()) {
             if (arg->is_named()) {
               min_cut.edge(split_nodes((NamedValue*) arg).second, input, MinCut::INFINITE);
@@ -7292,9 +7371,17 @@ namespace metajit {
     }
 
     void populate_captures() {
-      for (auto& [inst, closure] : _closures) {
-        if (!closure.reuse) {
-          populate_captures(closure);
+      std::vector<std::optional<ValidLoads>> valid_before_block = find_valid_loads();
+      for (Block* block : *_section) {
+        ValidLoads valid_loads = valid_before_block[block->name()].value_or(ValidLoads());
+        for (Inst* inst : *block) {
+          if (_closures.find(inst) != _closures.end()) {
+            Closure& closure = _closures.at(inst);
+            if (!closure.reuse) {
+              populate_captures(closure, valid_loads);
+            }
+          }
+          update_valid_loads(inst, valid_loads);
         }
       }
     }
