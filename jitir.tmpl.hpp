@@ -2182,7 +2182,7 @@ namespace metajit {
       _reusable_guard_success = _guard_success;
       if (reuse) {
         section()->remove(failure);
-        section()->add(failure);
+        section()->insert_before(_guard_success, failure);
         move_to_end(_guard_success);
         _guard_success = nullptr;
         return false;
