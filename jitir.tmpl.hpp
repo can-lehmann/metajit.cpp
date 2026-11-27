@@ -7090,6 +7090,7 @@ namespace metajit {
     struct Closure {
       Inst* reuse = nullptr;
       std::vector<NamedValue*> live;
+      std::vector<LoadInst*> valid_loads;
       std::vector<Capture> captures;
       uint32_t id = 0;
       size_t size = sizeof(uint32_t);
@@ -7125,7 +7126,6 @@ namespace metajit {
       }
     };
   private:
-    using ValidLoads = std::vector<LoadInst*>;
     static constexpr size_t MAX_VALID_LOADS = 64;
 
     Section* _section;
@@ -7242,39 +7242,29 @@ namespace metajit {
       }
     }
 
-    static bool compare_names(const LoadInst* a, const LoadInst* b) {
-      return a->name() < b->name();
-    }
-
-    static bool is_valid(const ValidLoads& valid_loads, const LoadInst* load) {
-      return std::binary_search(valid_loads.begin(), valid_loads.end(), load, compare_names);
-    }
-
     template <class Fn>
-    static void invalidate_loads(ValidLoads& valid_loads, const Fn& is_invalid) {
-      valid_loads.erase(
-        std::remove_if(valid_loads.begin(), valid_loads.end(), is_invalid),
-        valid_loads.end()
-      );
+    static void remove_loads(std::vector<LoadInst*>& loads, const Fn& fn) {
+      loads.erase(std::remove_if(loads.begin(), loads.end(), fn), loads.end());
     }
 
-    static void update_valid_loads(Inst* inst, ValidLoads& valid_loads) {
+    static bool contains(const std::vector<LoadInst*>& loads, LoadInst* load) {
+      return std::find(loads.begin(), loads.end(), load) != loads.end();
+    }
+
+    static void update_valid_loads(Inst* inst, std::vector<LoadInst*>& valid_loads) {
       if (dynmatch(LoadInst, load, inst)) {
         if (!load->flags().has(LoadFlags::Pure)) {
-          valid_loads.insert(
-            std::lower_bound(valid_loads.begin(), valid_loads.end(), load, compare_names),
-            load
-          );
+          valid_loads.push_back(load);
           if (valid_loads.size() > MAX_VALID_LOADS) {
             valid_loads.erase(valid_loads.begin());
           }
         }
       } else if (dynmatch(StoreInst, store, inst)) {
-        invalidate_loads(valid_loads, [&](LoadInst* load) {
+        remove_loads(valid_loads, [&](LoadInst* load) {
           return could_alias(load, store);
         });
       } else if (dynmatch(CallInst, call, inst)) {
-        invalidate_loads(valid_loads, [&](LoadInst* load) {
+        remove_loads(valid_loads, [&](LoadInst* load) {
           return call->aliasing() == 0 ||
                  load->aliasing() == 0 ||
                  load->aliasing() == call->aliasing();
@@ -7284,8 +7274,8 @@ namespace metajit {
       }
     }
 
-    std::vector<std::optional<ValidLoads>> find_valid_loads() const {
-      std::vector<std::optional<ValidLoads>> valid_before_block(_section->block_count());
+    void find_valid_loads() {
+      std::vector<std::optional<std::vector<LoadInst*>>> valid_before_block(_section->block_count());
       valid_before_block[_section->entry()->name()].emplace();
       bool changed;
       do {
@@ -7295,17 +7285,20 @@ namespace metajit {
             continue;
           }
 
-          ValidLoads valid_loads = *valid_before_block[block->name()];
+          std::vector<LoadInst*> valid_loads = *valid_before_block[block->name()];
           for (Inst* inst : *block) {
+            if (has(inst)) {
+              at(inst).valid_loads = valid_loads;
+            }
             update_valid_loads(inst, valid_loads);
           }
 
           for (Block* succ : block->successors()) {
-            std::optional<ValidLoads>& succ_valid = valid_before_block[succ->name()];
+            std::optional<std::vector<LoadInst*>>& succ_valid = valid_before_block[succ->name()];
             if (succ_valid) {
               size_t size = succ_valid->size();
-              invalidate_loads(*succ_valid, [&](LoadInst* load) {
-                return !is_valid(valid_loads, load);
+              remove_loads(*succ_valid, [&](LoadInst* load) {
+                return !contains(valid_loads, load);
               });
               changed |= succ_valid->size() != size;
             } else {
@@ -7315,17 +7308,16 @@ namespace metajit {
           }
         }
       } while (changed && _section->ordering() < BlockOrdering::Topological);
-      return valid_before_block;
     }
 
-    static bool can_recompute(Inst* inst, const ValidLoads& valid_loads) {
+    static bool can_recompute(Inst* inst, const Closure& closure) {
       if (dynmatch(LoadInst, load, inst)) {
-        return load->flags().has(LoadFlags::Pure) || is_valid(valid_loads, load);
+        return load->flags().has(LoadFlags::Pure) || contains(closure.valid_loads, load);
       }
       return CodeSinking::can_sink(inst);
     }
 
-    static void populate_captures(Closure& closure, const ValidLoads& valid_loads) {
+    static void populate_captures(Closure& closure) {
       MinCut min_cut;
       MinCut::NodeId source = min_cut.node();
       MinCut::NodeId sink = min_cut.node();
@@ -7351,7 +7343,7 @@ namespace metajit {
         open.pop_back();
 
         MinCut::NodeId input = nodes.at(value).first;
-        if (dynmatch(Inst, inst, value); inst && can_recompute(inst, valid_loads)) {
+        if (dynmatch(Inst, inst, value); inst && can_recompute(inst, closure)) {
           for (Value* arg : inst->args()) {
             if (arg->is_named()) {
               min_cut.edge(split_nodes((NamedValue*) arg).second, input, MinCut::INFINITE);
@@ -7371,17 +7363,10 @@ namespace metajit {
     }
 
     void populate_captures() {
-      std::vector<std::optional<ValidLoads>> valid_before_block = find_valid_loads();
-      for (Block* block : *_section) {
-        ValidLoads valid_loads = valid_before_block[block->name()].value_or(ValidLoads());
-        for (Inst* inst : *block) {
-          if (_closures.find(inst) != _closures.end()) {
-            Closure& closure = _closures.at(inst);
-            if (!closure.reuse) {
-              populate_captures(closure, valid_loads);
-            }
-          }
-          update_valid_loads(inst, valid_loads);
+      find_valid_loads();
+      for (auto& [inst, closure] : _closures) {
+        if (!closure.reuse) {
+          populate_captures(closure);
         }
       }
     }
