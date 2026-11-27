@@ -7079,6 +7079,13 @@ namespace metajit {
 
   class ReentryClosures {
   public:
+    struct Config {
+      size_t recompute_budget;
+
+      constexpr Config():
+        recompute_budget(128) {}
+    };
+
     struct Capture {
       NamedValue* value = nullptr;
       size_t offset = 0;
@@ -7130,6 +7137,7 @@ namespace metajit {
 
     Section* _section;
     BindingTimeGroups* _binding_time_groups;
+    Config _config;
     std::unordered_map<Inst*, Closure> _closures;
     std::unordered_map<Block*, Frontier> _frontiers;
     std::unordered_set<NamedValue*> _captured;
@@ -7320,7 +7328,7 @@ namespace metajit {
       return CodeSinking::can_sink(inst);
     }
 
-    static void populate_captures(Closure& closure) {
+    void populate_captures(Closure& closure) {
       MinCut min_cut;
       MinCut::NodeId source = min_cut.node();
       MinCut::NodeId sink = min_cut.node();
@@ -7341,12 +7349,12 @@ namespace metajit {
         min_cut.edge(split_nodes(value).second, sink, MinCut::INFINITE);
       }
 
-      while (!open.empty()) {
-        NamedValue* value = open.back();
-        open.pop_back();
+      size_t max_expanded = closure.live.size() + _config.recompute_budget;
+      for (size_t it = 0; it < open.size(); it++) {
+        NamedValue* value = open[it];
 
         MinCut::NodeId input = nodes.at(value).first;
-        if (dynmatch(Inst, inst, value); inst && can_recompute(inst, closure)) {
+        if (dynmatch(Inst, inst, value); inst && it < max_expanded && can_recompute(inst, closure)) {
           for (Value* arg : inst->args()) {
             if (arg->is_named()) {
               min_cut.edge(split_nodes((NamedValue*) arg).second, input, MinCut::INFINITE);
@@ -7411,9 +7419,11 @@ namespace metajit {
     }
   public:
     ReentryClosures(Section* section,
-                    BindingTimeGroups& binding_time_groups):
+                    BindingTimeGroups& binding_time_groups,
+                    const Config& config = Config()):
         _section(section),
-        _binding_time_groups(&binding_time_groups) {
+        _binding_time_groups(&binding_time_groups),
+        _config(config) {
       
       assert(section->ordering() >= BlockOrdering::Natural);
 
@@ -7428,8 +7438,10 @@ namespace metajit {
     }
 
     ReentryClosures(Section* section,
-                    const std::set<Inst*>& reentry_points):
-        _section(section) {
+                    const std::set<Inst*>& reentry_points,
+                    const Config& config = Config()):
+        _section(section),
+        _config(config) {
 
       assert(section->ordering() >= BlockOrdering::Natural);
 
