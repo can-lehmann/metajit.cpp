@@ -7008,34 +7008,55 @@ namespace metajit {
 
     std::vector<Edge> _edges;
     std::vector<std::vector<size_t>> _outgoing;
+    std::vector<size_t> _incoming;
+    std::vector<NodeId> _open;
 
-    size_t augment(NodeId node, NodeId sink, size_t limit, std::vector<bool>& visited) {
-      if (node == sink) {
-        return limit;
-      }
-      visited[node] = true;
-      for (size_t index : _outgoing[node]) {
-        Edge& edge = _edges[index];
-        if (edge.capacity > 0 && !visited[edge.to]) {
-          size_t flow = augment(edge.to, sink, std::min(limit, edge.capacity), visited);
-          if (flow > 0) {
-            edge.capacity -= flow;
-            _edges[index ^ 1].capacity += flow;
-            return flow;
+    bool augment(NodeId source, NodeId sink) {
+      _incoming.assign(_outgoing.size(), SIZE_MAX);
+      _open.assign(1, source);
+      while (!_open.empty() && _incoming[sink] == SIZE_MAX) {
+        NodeId node = _open.back();
+        _open.pop_back();
+        for (size_t index : _outgoing[node]) {
+          const Edge& edge = _edges[index];
+          if (edge.capacity > 0 && edge.to != source && _incoming[edge.to] == SIZE_MAX) {
+            _incoming[edge.to] = index;
+            _open.push_back(edge.to);
           }
         }
       }
-      return 0;
+
+      if (_incoming[sink] == SIZE_MAX) {
+        return false;
+      }
+
+      size_t flow = INFINITE;
+      for (NodeId node = sink; node != source; node = _edges[_incoming[node] ^ 1].to) {
+        flow = std::min(flow, _edges[_incoming[node]].capacity);
+      }
+      for (NodeId node = sink; node != source; node = _edges[_incoming[node] ^ 1].to) {
+        _edges[_incoming[node]].capacity -= flow;
+        _edges[_incoming[node] ^ 1].capacity += flow;
+      }
+      return true;
     }
 
-    void find_sink_side(NodeId node, std::vector<bool>& sink_side) const {
-      sink_side[node] = true;
-      for (size_t index : _outgoing[node]) {
-        NodeId from = _edges[index].to;
-        if (_edges[index ^ 1].capacity > 0 && !sink_side[from]) {
-          find_sink_side(from, sink_side);
+    std::vector<bool> find_sink_side(NodeId sink) const {
+      std::vector<bool> sink_side(_outgoing.size(), false);
+      sink_side[sink] = true;
+      std::vector<NodeId> open = { sink };
+      while (!open.empty()) {
+        NodeId node = open.back();
+        open.pop_back();
+        for (size_t index : _outgoing[node]) {
+          NodeId from = _edges[index].to;
+          if (_edges[index ^ 1].capacity > 0 && !sink_side[from]) {
+            sink_side[from] = true;
+            open.push_back(from);
+          }
         }
       }
+      return sink_side;
     }
   public:
     NodeId node() {
@@ -7051,14 +7072,8 @@ namespace metajit {
     }
 
     std::vector<bool> solve(NodeId source, NodeId sink) {
-      std::vector<bool> visited(_outgoing.size(), false);
-      while (augment(source, sink, INFINITE, visited) > 0) {
-        visited.assign(_outgoing.size(), false);
-      }
-
-      std::vector<bool> sink_side(_outgoing.size(), false);
-      find_sink_side(sink, sink_side);
-      return sink_side;
+      while (augment(source, sink)) {}
+      return find_sink_side(sink);
     }
   };
 
