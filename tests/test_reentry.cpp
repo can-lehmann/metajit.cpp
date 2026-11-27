@@ -488,6 +488,26 @@ int main(int argc, char** argv) {
     });
   });
 
+  suite.reentry_test("recompute_valid_load").run([](Builder& builder) {
+    static uint32_t input[] = { 1, 2 };
+    Value* input_ptr = builder.build_const(Type::Ptr, (uint64_t) input);
+    Value* clobbered = builder.build_load(input_ptr, Type::Int32, LoadFlags::None, AliasingGroup(1), 0);
+    Value* valid = builder.build_load(input_ptr, Type::Int32, LoadFlags::None, AliasingGroup(2), 4);
+    builder.build_store(input_ptr, builder.build_const(Type::Int32, 0), AliasingGroup(1), 0);
+
+    Inst* sum = builder.build_add(clobbered, valid);
+
+    builder.build_store(builder.entry_arg(0), sum, AliasingGroup(0), 0);
+
+    return std::vector<TestCase> ({
+      TestCase {
+        .reentry_point = sum,
+        .closure = { { clobbered, Bits::constant(Type::Int32, 40) } },
+        .expected = 42
+      }
+    });
+  });
+
   suite.reentry_test("capture_intermediate_cut").run([](Builder& builder) {
     Value* a = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
     Value* b = builder.build_load(builder.entry_arg(0), Type::Int32, LoadFlags::None, AliasingGroup(0), 0);
